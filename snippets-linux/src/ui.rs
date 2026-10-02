@@ -257,6 +257,9 @@ impl App {
             .any(|m| m.id == id))
     }
     fn open_secure(self: &Rc<Self>, id: Option<uuid::Uuid>) {
+        self.open_secure_target(id, None);
+    }
+    fn open_secure_target(self: &Rc<Self>, id: Option<uuid::Uuid>, target: Option<PasteTarget>) {
         if !self.ensure_library() {
             return;
         }
@@ -271,7 +274,11 @@ impl App {
             }
         }
         if let Some(workspace) = self.secure.borrow().as_ref() {
-            workspace.present(id);
+            if let (Some(id), Some(target)) = (id, target) {
+                workspace.present_for_insertion(id, target);
+            } else {
+                workspace.present(id);
+            }
         }
     }
     fn main(self: &Rc<Self>) -> Rc<MainWindow> {
@@ -578,7 +585,7 @@ impl App {
         if let Some(workspace) = self.secure.borrow().as_ref()
             && !workspace.prepare_quit()
         {
-            self.toast("Waiting for secure draft recovery to stop. Try Quit again shortly.");
+            self.toast("Waiting for the secure operation to stop. Try Quit again shortly.");
             return;
         }
         if let Some(workspace) = self.secure.borrow().as_ref()
@@ -1753,7 +1760,7 @@ impl Picker {
         if let Some(app) = self.app.upgrade() {
             if app.is_secure(snippet.id).is_ok_and(|secure| secure) {
                 self.window.set_visible(false);
-                app.open_secure(Some(snippet.id));
+                app.open_secure_target(Some(snippet.id), self.target.clone());
                 return;
             }
             app.copy(snippet, self.target.clone());

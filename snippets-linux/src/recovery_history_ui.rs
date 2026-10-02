@@ -51,10 +51,35 @@ fn group(panel: &gtk::Box, title: &str, count: usize, bytes: usize) -> adw::Pref
     panel.append(&group);
     group
 }
+fn remove_button(
+    group: &adw::PreferencesGroup,
+    selection: &Option<crate::key_store::capacity::Selection>,
+    remove: &Rc<dyn Fn(Option<crate::key_store::capacity::Selection>)>,
+    pending: bool,
+) {
+    if pending {
+        return;
+    }
+    let Some(selection) = selection else {
+        return;
+    };
+    let action = adw::ActionRow::builder()
+        .title("Remove Saved Copy")
+        .subtitle("Review the saved entry and any recovery files to discard.")
+        .build();
+    let button = gtk::Button::with_label("Review Removal…");
+    button.set_valign(gtk::Align::Center);
+    let selection = selection.clone();
+    let remove = remove.clone();
+    button.connect_clicked(move |_| remove(Some(selection.clone())));
+    action.add_suffix(&button);
+    group.add(&action);
+}
 pub(super) fn content(
     history: &Catalog,
     restore: Rc<dyn Fn(Selection)>,
     finish: Rc<dyn Fn(bool)>,
+    remove: Rc<dyn Fn(Option<crate::key_store::capacity::Selection>)>,
 ) -> gtk::Box {
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
     layout.append(&adw::HeaderBar::new());
@@ -69,6 +94,18 @@ pub(super) fn content(
     intro.set_wrap(true);
     intro.set_xalign(0.0);
     panel.append(&intro);
+    if history.maintenance.is_some() {
+        let pending = adw::PreferencesGroup::builder().title("History Removal Needs Finishing").description("A reviewed removal was saved. Finish it before changing library keys or restoring saved changes.").build();
+        let action = adw::ActionRow::builder()
+            .title("Finish Saved Removal")
+            .build();
+        let button = gtk::Button::with_label("Review and Finish…");
+        let remove = remove.clone();
+        button.connect_clicked(move |_| remove(None));
+        action.add_suffix(&button);
+        pending.add(&action);
+        panel.append(&pending);
+    }
     let current = adw::PreferencesGroup::builder()
         .title("Current Library Key")
         .build();
@@ -100,6 +137,12 @@ pub(super) fn content(
         );
     }
     for (index, saved) in history.switches.iter().enumerate().rev() {
+        remove_button(
+            &switches,
+            &saved.removal,
+            &remove,
+            history.maintenance.is_some(),
+        );
         row(
             &switches,
             &format!(
@@ -184,6 +227,7 @@ pub(super) fn content(
         );
         if saved.phase != SwitchPhase::Pending
             && matches!(saved.images, RetainedImages::Verified { .. })
+            && history.maintenance.is_none()
         {
             let action = adw::ActionRow::builder()
                 .title("Restore Saved Local Changes")
@@ -213,6 +257,12 @@ pub(super) fn content(
         );
     }
     for (index, saved) in history.restorations.iter().enumerate().rev() {
+        remove_button(
+            &restores,
+            &saved.removal,
+            &remove,
+            history.maintenance.is_some(),
+        );
         row(
             &restores,
             &format!(
@@ -231,7 +281,7 @@ pub(super) fn content(
                 saved.summary.preserved_versions
             ),
         );
-        if saved.needs_completion {
+        if saved.needs_completion && history.maintenance.is_none() {
             let actions = adw::ActionRow::builder()
                 .title("Complete Saved Restoration")
                 .build();
@@ -249,6 +299,65 @@ pub(super) fn content(
             restores.add(&actions);
         }
     }
+    let creations = group(
+        &panel,
+        "Library Creation Receipts",
+        history.creations.len(),
+        history.usage.creations,
+    );
+    creations.set_description(Some(&format!(
+        "{} of {MAX_ENTRIES} saved entries · {} KiB of 64 KiB",
+        history.creations.len(),
+        history.usage.creations.div_ceil(1024)
+    )));
+    if history.creations_unavailable {
+        creations.set_description(Some(&format!(
+            "Protected history retained · {} KiB of 64 KiB",
+            history.usage.creations.div_ceil(1024)
+        )));
+        row(
+            &creations,
+            "Saved creation history cannot be read",
+            "The protected copy is kept. It cannot be removed until its format and ownership are understood.",
+        );
+    } else if history.creations.is_empty() {
+        row(
+            &creations,
+            "No saved creations",
+            "Creating a library keeps its original request until the result is known.",
+        );
+    }
+    for (index, saved) in history.creations.iter().enumerate().rev() {
+        let mut detail = saved.library.as_ref().map(library).unwrap_or_else(|| {
+            "The original request is retained. Reconnect to its account in Account & Recovery to check the result.".into()
+        });
+        if let Some(source) = &saved.source {
+            detail.push_str(&format!("\n\nCreated beside:\n{}", library(source)));
+        }
+        if saved.phase == CreationPhase::Created && saved.removal.is_none() {
+            detail.push_str(
+                "\n\nKept while needed by current library admission or unfinished key setup.",
+            );
+        }
+        row(
+            &creations,
+            &format!(
+                "Creation {} · {}",
+                index + 1,
+                match saved.phase {
+                    CreationPhase::Requested => "result needs checking",
+                    CreationPhase::Created => "library created",
+                }
+            ),
+            &detail,
+        );
+        remove_button(
+            &creations,
+            &saved.removal,
+            &remove,
+            history.maintenance.is_some(),
+        );
+    }
     let pairing = group(
         &panel,
         "Library Key Requests",
@@ -263,6 +372,12 @@ pub(super) fn content(
         );
     }
     for (index, saved) in history.pairing.iter().enumerate().rev() {
+        remove_button(
+            &pairing,
+            &saved.removal,
+            &remove,
+            history.maintenance.is_some(),
+        );
         row(
             &pairing,
             &format!(
@@ -294,6 +409,12 @@ pub(super) fn content(
         );
     }
     for (index, saved) in history.first_keys.iter().enumerate().rev() {
+        remove_button(
+            &first,
+            &saved.removal,
+            &remove,
+            history.maintenance.is_some(),
+        );
         row(
             &first,
             &format!(

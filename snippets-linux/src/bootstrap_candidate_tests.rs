@@ -177,6 +177,121 @@ fn setup() -> (tempfile::TempDir, Store<Faults>, Faults, Peer) {
     };
     (temp, store, backend, peer)
 }
+
+#[test]
+fn unfinished_first_key_keeps_its_creation_receipt_until_the_response_is_retained() {
+    use crate::{
+        auth_store::{Deployment, creation},
+        key_store::{capacity, history},
+    };
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let (_temp, mut store, backend, mut peer) = setup();
+    let deployment =
+        Deployment::from_discovery(peer.core.pin.server.clone(), peer.core.pin.instance);
+    let live = creation::tests::install(
+        &mut store,
+        deployment.clone(),
+        "public-key-setup",
+        "public-creator",
+    );
+    let space: crate::cloud::Space = serde_json::from_value(serde_json::json!({
+        "scope": {"serverInstanceId":peer.core.pin.instance, "spaceId":Uuid::from_u128(1234),
+        "scopeBinding":URL_SAFE_NO_PAD.encode([45;32]), "datasetGeneration":Uuid::from_u128(1235), "feedEpoch":Uuid::from_u128(1236)},
+        "role":"owner", "keyEpoch":1
+    })).unwrap();
+    creation::tests::created_beside(&mut store, deployment.clone(), space.clone(), &live);
+    peer.core.pin = space.key_binding(&deployment).unwrap();
+    peer.lose_post = true;
+    let receipt = backend.memory.slot(Slot::SpaceCreation).unwrap();
+    assert!(matches!(
+        create(&mut store, &mut peer),
+        Err(Failure::Cloud(cloud::Failure::Network))
+    ));
+    assert!(
+        history::inspect(&mut store).unwrap().creations[0]
+            .removal
+            .is_none()
+    );
+    let selection = capacity::Selection::new(capacity::Section::Creations, 0, &receipt);
+    assert!(capacity::prepare(&mut store, selection).is_err());
+    assert!(backend.memory.slot(Slot::SpaceCreation).unwrap() == receipt);
+    assert_eq!(peer.posts, 1);
+    assert!(matches!(
+        create(&mut store, &mut peer).unwrap(),
+        Status::Ready { .. }
+    ));
+    let candidate = backend.memory.slot(Slot::BootstrapCandidate);
+    let catalog = history::inspect(&mut store).unwrap();
+    let review =
+        capacity::prepare(&mut store, catalog.creations[0].removal.clone().unwrap()).unwrap();
+    let (_gate, permit) = authorize(review.authorization_target().unwrap());
+    capacity::apply(&mut store, review, permit).unwrap();
+    assert!(backend.memory.slot(Slot::BootstrapCandidate) == candidate);
+    assert!(history::inspect(&mut store).unwrap().creations.is_empty());
+    assert_eq!(peer.posts, 1);
+}
+
+#[test]
+fn history_capacity_frees_a_full_candidate_archive_without_resetting_generation() {
+    use crate::key_store::{capacity, history};
+    let (_temp, mut store, backend, mut peer) = setup();
+    let active = backend.memory.slot(Slot::LibraryKey);
+    for index in 0..MAX_ENTRIES {
+        peer.core.pin.space = Uuid::from_u128(400 + index as u128);
+        peer.core.pin.dataset = Binding::from_checkpoint([40 + index as u8; 32]);
+        peer.core.public = None;
+        peer.core.recovery = None;
+        assert!(matches!(
+            create(&mut store, &mut peer).unwrap(),
+            Status::Ready { .. }
+        ));
+    }
+    let before = History::load_for_test(&mut store);
+    let selection = history::inspect(&mut store).unwrap().first_keys[3]
+        .removal
+        .clone()
+        .unwrap();
+    let review = capacity::prepare(&mut store, selection).unwrap();
+    assert_eq!(review.summary().encrypted_images, 0);
+    let (_gate, permit) = authorize(review.authorization_target().unwrap());
+    capacity::apply(&mut store, review, permit).unwrap();
+    let saved = store.transaction_with(History::load).unwrap();
+    assert_eq!(saved.entries.len(), 7);
+    assert_eq!(saved.generation, before.0 + 1);
+    for (entry, old) in saved.entries.iter().zip(
+        before
+            .1
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != 3)
+            .map(|(_, v)| v),
+    ) {
+        assert!(entry.value().unwrap() == *old);
+    }
+    assert!(backend.memory.slot(Slot::LibraryKey) == active);
+    peer.core.pin.space = Uuid::from_u128(500);
+    peer.core.public = None;
+    peer.core.recovery = None;
+    create(&mut store, &mut peer).unwrap();
+    assert_eq!(history::inspect(&mut store).unwrap().first_keys.len(), 8);
+}
+impl History {
+    fn load_for_test(store: &mut Store<Faults>) -> (i64, Vec<Value>) {
+        store
+            .transaction_with(|owner| {
+                let saved = Self::load(owner)?;
+                Ok::<_, Failure>((
+                    saved.generation,
+                    saved
+                        .entries
+                        .iter()
+                        .map(Entry::value)
+                        .collect::<super::Result<_>>()?,
+                ))
+            })
+            .unwrap()
+    }
+}
 fn create(store: &mut Store<Faults>, peer: &mut Peer) -> Result<Status> {
     store.transaction_with(|owner| create_locked(owner, peer, &|_| Ok(())))
 }
@@ -1269,7 +1384,7 @@ fn closed_schema_and_forged_ready_without_matching_key_are_refused_before_networ
         };
         match mode {
             0 => {
-                fields.insert("schema".into(), Value::Int(2));
+                fields.insert("schema".into(), Value::Int(3));
             }
             1 => {
                 fields.insert("extra".into(), Value::Bool(true));

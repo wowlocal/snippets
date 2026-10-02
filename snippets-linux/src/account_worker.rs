@@ -7,7 +7,8 @@ use crate::{
     cloud::{self, BoundTransport, CloudClient, ServerURL, Space},
     deletion_review,
     key_store::{
-        self, candidate, disclosure, handover, initial_candidate, mutations, recipient, restoration,
+        self, candidate, capacity, disclosure, handover, initial_candidate, mutations, recipient,
+        restoration,
     },
     local_auth, receiver,
     secret_store::{self, Native, Store},
@@ -27,12 +28,16 @@ use zeroize::Zeroizing;
 #[path = "account_restoration.rs"]
 pub(crate) mod restoration_task;
 
+#[path = "account_history_removal.rs"]
+pub(crate) mod history_removal;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Failure {
     Secret(secret_store::Failure),
     Account(auth_store::Failure),
     Cloud(cloud::Failure),
     Key(key_store::Failure),
+    HistoryRemoval(key_store::Failure),
     Authentication(local_auth::Failure),
     Receive(receiver::Failure),
     SnapshotReview(snapshot_review::Failure),
@@ -147,6 +152,12 @@ impl From<restoration::Failure> for Failure {
 impl Failure {
     pub(crate) fn message(self) -> &'static str {
         match self {
+            Self::HistoryRemoval(_) => {
+                "The saved entry or its encrypted files changed, or an operation is still unfinished. Open Library Recovery History to review or finish removal."
+            }
+            Self::Secret(secret_store::Failure::HistoryMaintenanceRequired) => {
+                "Finish the saved history removal in Library Recovery History before continuing."
+            }
             Self::Automatic(auto_sync::Failure::ScopeChanged) => {
                 "The saved automatic-sync account or library changed. Reconnect and review it before enabling automatic sync again."
             }
@@ -347,6 +358,14 @@ pub(crate) enum Command {
     Automatic(bool),
     Inspect,
     InspectHistory,
+    PrepareHistoryRemoval {
+        selection: Option<capacity::Selection>,
+        preparation: restoration_task::Preparation,
+    },
+    CommitHistoryRemoval {
+        token: uuid::Uuid,
+        permit: local_auth::Permit,
+    },
     PrepareRestoration {
         selection: restoration::Selection,
         credentials: Option<restoration_task::Credentials>,
@@ -480,6 +499,12 @@ impl Automatic {
 pub(crate) enum Reply {
     Automatic(Automatic),
     History(key_store::history::Catalog),
+    HistoryRemovalReview {
+        token: uuid::Uuid,
+        summary: capacity::Summary,
+        target: local_auth::Target,
+    },
+    HistoryRemoved,
     RestorationAuthentication(restoration_task::Authentication),
     RestorationFile {
         token: uuid::Uuid,
@@ -931,6 +956,7 @@ struct Owner {
     handover_review: Option<(uuid::Uuid, Box<handover::Review>)>,
     creation_review: Option<(uuid::Uuid, creation::NewIntent)>,
     restoration: restoration_task::Retained,
+    history_removal: history_removal::Retained,
     control: Arc<Control>,
     preference: Option<Preference>,
     schedule: Option<Schedule>,
@@ -976,6 +1002,7 @@ impl Owner {
             handover_review: None,
             creation_review: None,
             restoration: restoration_task::Retained::default(),
+            history_removal: history_removal::Retained::default(),
             control,
             preference: None,
             schedule: None,
@@ -1526,7 +1553,30 @@ impl Owner {
             self.handover_review = None;
         }
         self.restoration.keep_for(&command);
+        self.history_removal.keep_for(&command);
         match command {
+            Command::PrepareHistoryRemoval {
+                selection,
+                preparation,
+            } => {
+                preparation.validate()?;
+                self.ensure_store(false)?;
+                self.history_removal.prepare(
+                    self.store.as_mut().ok_or(Failure::InvalidState)?,
+                    selection,
+                    preparation,
+                )
+            }
+            Command::CommitHistoryRemoval { token, permit } => {
+                let review = self.history_removal.consume(token)?;
+                capacity::apply(
+                    self.store.as_mut().ok_or(Failure::InvalidState)?,
+                    review,
+                    permit,
+                )
+                .map_err(Failure::HistoryRemoval)?;
+                Ok(Reply::HistoryRemoved)
+            }
             Command::Automatic(true) => self.enable_automatic(),
             Command::Automatic(false) => unreachable!(),
             Command::PrepareRestoration {

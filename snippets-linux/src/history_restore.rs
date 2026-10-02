@@ -1,7 +1,7 @@
 //! Explicit restoration of archived local intent. Old cloud cursors, offers,
 //! versions, permissions and acknowledgements never become current facts.
 use super::*;
-use crate::{journal, merge, primary};
+use crate::{journal, merge, model::Library, primary};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
@@ -146,8 +146,17 @@ pub(super) fn history_locked<B: Backend>(
 ) -> Result<Vec<history::SavedRestoration>> {
     let archive = archive::Archive::load(owner)?;
     let mut rows = Vec::new();
-    for entry in &archive.entries {
+    for (index, entry) in archive.entries.iter().enumerate() {
         rows.push(history::SavedRestoration {
+            removal: (entry.phase != archive::Phase::Pending
+                && !primary::frozen::marker_matches(owner.root(), entry.nonce))
+            .then(|| {
+                capacity::Selection::new(
+                    capacity::Section::Restorations,
+                    index,
+                    archive.snapshot.as_ref().expect("validated archive"),
+                )
+            }),
             library: history::SavedLibrary::new(&entry.binding),
             phase: match entry.phase {
                 archive::Phase::Pending => history::SwitchPhase::Pending,
@@ -161,6 +170,43 @@ pub(super) fn history_locked<B: Backend>(
         });
     }
     Ok(rows)
+}
+pub(super) fn removal_document_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+) -> super::Result<capacity::Document> {
+    let archive = archive::Archive::load(owner).map_err(|_| super::Failure::InvalidState)?;
+    let rows = archive
+        .entries
+        .iter()
+        .map(|entry| capacity::Row {
+            libraries: vec![entry.saved_binding.clone(), entry.binding.clone()],
+            eligible: entry.phase != archive::Phase::Pending
+                && !primary::frozen::marker_matches(owner.root(), entry.nonce),
+            images: Some(capacity::Images {
+                nonce: entry.nonce,
+                hashes: [entry.source_hash, entry.target_hash],
+            }),
+        })
+        .collect();
+    capacity::Document::validated(archive.snapshot, archive.generation, rows)
+}
+pub(super) fn validate_removal_images_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    library: &Library,
+    index: usize,
+) -> super::Result<()> {
+    let archive = archive::Archive::load(owner).map_err(|_| super::Failure::InvalidState)?;
+    let entry = archive
+        .entries
+        .get(index)
+        .ok_or(super::Failure::RecoveryUnavailable)?;
+    let material = owner
+        .checkpoint_material(false)?
+        .ok_or(super::Failure::InvalidState)?;
+    entry
+        .retained(library, &material)
+        .map_err(|_| super::Failure::InvalidState)?;
+    Ok(())
 }
 pub(crate) fn require_idle<B: Backend>(owner: &mut Locked<'_, B>) -> super::Result<()> {
     match archive::Archive::load(owner) {

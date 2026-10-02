@@ -1,6 +1,7 @@
 //! Fictional remote, real cryptography, temporary roots, synthetic local
 //! authorization and injected Secret Service faults. No network or native PAM.
 use super::*;
+use crate::key_store::mutations::retirement_terminal;
 use crate::{
     bootstrap::{Invitation, PairingDraft},
     cloud::{ActionChallenge, Mutation, Pairing, PairingState, Scope, SignedAction},
@@ -309,6 +310,7 @@ fn replacement_retains_candidate_before_nonce_and_promotes_the_same_kit_without_
     let old = server.core.recovery.as_ref().unwrap().ciphertext.clone();
     let target = prepare(&mut store, &mut server, false).unwrap();
     assert!(target.purpose() == Purpose::ReplaceRecovery && phase(&memory) == "prepared");
+    assert!(!retirement_terminal(memory.slot(Slot::KeyMutation)).unwrap());
     assert!(server.challenges == 0 && server.sent.is_empty());
     let candidate = intent(&memory);
     let saved: JSON = serde_json::from_slice(&candidate).unwrap();
@@ -316,6 +318,7 @@ fn replacement_retains_candidate_before_nonce_and_promotes_the_same_kit_without_
     let code = kit.encode_secret_code();
     let (_gate, permit) = authorize(target);
     assert!(execute(&mut store, &mut server, permit).unwrap() == actions::Outcome::RecoveryReady);
+    assert!(retirement_terminal(memory.slot(Slot::KeyMutation)).unwrap());
     let target = store
         .transaction_with::<_, Failure>(|o| Ok(disclosure::prepare_locked(o, &mut server)?.1))
         .unwrap();
@@ -561,6 +564,7 @@ fn confirming_a_promoted_kit_retires_both_owners_and_an_older_journal_cannot_res
             == Some(Failure::Secret(secret_store::Failure::Unavailable))
     );
     assert!(phase(&memory) == "acknowledged");
+    assert!(retirement_terminal(memory.slot(Slot::KeyMutation)).unwrap());
     let old_acknowledgement = memory.slot(Slot::KeyMutation).unwrap();
     let target = store
         .transaction_with::<_, Failure>(|o| Ok(disclosure::prepare_locked(o, &mut server)?.1))

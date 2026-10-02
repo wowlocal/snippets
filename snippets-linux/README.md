@@ -317,8 +317,22 @@ and 128 KiB; encrypted file images share the existing 32-file/512-MiB budget, wi
 no automatic eviction. Pending restoration generations are also capped at eight;
 capacity exhaustion preserves the existing queue. Restoring multiple saved generations
 also uses this budget; a proposal that cannot fit changes no library files or keys.
-Capacity management remains unfinished. The combined native
-GTK/keyring/PAM workflow still needs live verification.
+For a finished entry, choose **Review Removal…** in Library Recovery History.
+Review the affected libraries, saved keys and encrypted-file sizes, then authorize
+with your computer login password. This permanently removes only that selected
+saved copy. It can be the only copy of old keys or historical changes, so keep any
+recovery material you still need first. Current library files, active keys and the
+live sync journal stay unchanged. Pending key requests, unfinished restorations
+and old capabilities without a validated terminal receipt cannot be removed.
+
+Removal saves a small intent in Secret Service before replacing the archive or
+deleting its authenticated encrypted files. After an interruption, choose
+**Review and Finish…** with fresh local authentication. Other key/account operations
+wait for completion. Empty archives keep their generation, so freeing the final
+entry never resets stale-request protection. Unknown, replaced, linked or shared
+recovery files are refused. Unreferenced image cleanup remains unfinished.
+The combined native GTK/keyring/PAM workflow
+still needs live verification.
 
 **Create New Cloud Library…** explicitly creates an
 empty library in the displayed account and server. The worker saves its original
@@ -335,6 +349,18 @@ and receipts remain in Secret Service, bounded to eight entries and 64 KiB witho
 automatic eviction. Resume an unfinished request before creating another in the
 same account. New key setup and the reviewed library switch remain separate actions;
 creation alone preserves current local records and the synchronization checkpoint.
+
+**Library Creation Receipts** in Library Recovery History shows the retained
+requests and completed receipts without reading account credentials. Use
+**Review Removal…** to discard a completed receipt for a separate library with
+fresh computer-password authorization. This frees one of the eight history slots;
+the remote library and its records are kept. The receipt for the currently installed
+library, uncertain creation requests, and receipts supporting unfinished pairing
+or first-key setup remain protected. The removal also checks that the remaining
+history still admits the current library. Unknown old formats stay retained and
+are shown as unreadable. Interrupted removal uses the same **Review and Finish…**
+flow. A final removal keeps an empty document and its generation, so creating
+another library continues the existing sequence.
 
 For an existing Snippets Cloud library, **Pair This Computer with a Trusted
 Device** creates or resumes its retained invitation. On the trusted device, choose
@@ -548,8 +574,8 @@ draft intact. Quit waits for the recovery worker to release its credentials.
 This native dialog is compiled and its core checks pass; live display verification
 remains open. Drafts are retained in memory, not across application restarts.
 
-Direct secure insertion and restoring archived secure records into a different
-vault remain unfinished.
+Direct secure insertion remains unfinished. Archived records from a different
+vault use the separately authenticated saved-history restoration flow described above.
 
 ## Local clipboard history
 

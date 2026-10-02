@@ -1331,12 +1331,13 @@ fn malformed_protected_restore_schema_fences_admission_and_history_without_touch
                         fields.insert("unexpected".into(), Value::Bool(true));
                     }
                     1 => {
-                        fields.insert("schema".into(), Value::Int(2));
+                        fields.insert("schema".into(), Value::Int(3));
                     }
                     2 => {
                         fields.insert("generation".into(), Value::Int(-1));
                     }
                     3 => {
+                        fields.insert("schema".into(), Value::Int(1));
                         fields.insert("entries".into(), Value::Array(vec![]));
                     }
                     _ => {

@@ -2,6 +2,7 @@
 use chrono::{DateTime, Duration, Local, Months};
 use regex::Regex;
 use std::{collections::HashMap, ffi::CString, sync::OnceLock};
+use zeroize::Zeroizing;
 
 unsafe extern "C" {
     fn snippets_format_date(
@@ -20,9 +21,9 @@ fn render(
     pattern: Option<&str>,
     locale: Option<&str>,
 ) -> Option<String> {
-    let pattern: Vec<u16> = pattern.unwrap_or("").encode_utf16().collect();
+    let pattern = Zeroizing::new(pattern.unwrap_or("").encode_utf16().collect::<Vec<_>>());
     let locale = locale.map(CString::new).transpose().ok()?;
-    let mut output = [0u16; 4096];
+    let mut output = Zeroizing::new([0u16; 4096]);
     // All buffers remain alive through this synchronous C call; the shim reads
     // only the declared pattern length and writes within output's capacity.
     let length = unsafe {
@@ -144,4 +145,42 @@ pub fn resolve_at(template: &str, clipboard: &str, now: DateTime<Local>) -> Stri
 }
 pub fn resolve(template: &str, clipboard: &str) -> String {
     resolve_at(template, clipboard, Local::now())
+}
+/// One-pass secure resolution uses owned wipeable buffers and checks growth
+/// before each append. Regex captures borrow the template; no body enters caches.
+#[cfg(any(test, feature = "desktop"))]
+pub(crate) fn resolve_sensitive_at(
+    template: &str,
+    clipboard: &str,
+    now: DateTime<Local>,
+) -> crate::model::Result<Zeroizing<String>> {
+    let regex = Regex::new(r"\{([^{}\r\n]*)\}").expect("static pattern");
+    let mut result = Zeroizing::new(String::new());
+    let mut previous = 0;
+    let append = |result: &mut String, value: &str| -> crate::model::Result<()> {
+        if result
+            .len()
+            .checked_add(value.len())
+            .is_none_or(|n| n > crate::model::MAX_BODY_BYTES)
+        {
+            return Err(crate::model::Error(
+                "Resolved secure text is too large to insert.",
+            ));
+        }
+        result.push_str(value);
+        Ok(())
+    };
+    for capture in regex.captures_iter(template) {
+        let whole = capture.get(0).expect("whole match");
+        append(&mut result, &template[previous..whole.start()])?;
+        if let Some(value) = token(&capture[1], clipboard, now) {
+            let value = Zeroizing::new(value);
+            append(&mut result, &value)?;
+        } else {
+            append(&mut result, whole.as_str())?;
+        }
+        previous = whole.end();
+    }
+    append(&mut result, &template[previous..])?;
+    Ok(result)
 }

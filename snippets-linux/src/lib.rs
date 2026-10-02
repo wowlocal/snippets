@@ -35,6 +35,8 @@ pub mod receiver;
 #[cfg(feature = "desktop")]
 mod recovery_qr;
 pub mod secret_store;
+#[cfg(any(test, feature = "desktop"))]
+pub mod secure_insertion;
 #[cfg(feature = "desktop")]
 mod secure_ui;
 pub mod sender;

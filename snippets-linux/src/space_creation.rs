@@ -171,7 +171,7 @@ impl Journal {
     }
 }
 const MAX_ENTRIES: usize = 8;
-const MAX_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_BYTES: usize = 64 * 1024;
 struct History {
     entries: Vec<Journal>,
     generation: i64,
@@ -180,7 +180,9 @@ struct History {
 }
 impl History {
     fn load<B: Backend>(owner: &mut Locked<'_, B>) -> Result<Self> {
-        let snapshot = owner.read(Slot::SpaceCreation)?;
+        Self::from_snapshot(owner.read(Slot::SpaceCreation)?)
+    }
+    fn from_snapshot(snapshot: Option<Zeroizing<Vec<u8>>>) -> Result<Self> {
         let mut history = Self {
             entries: Vec::new(),
             generation: 0,
@@ -204,7 +206,7 @@ impl History {
                     }
                     history.entries.push(Journal::parse(&value, true)?);
                 }
-                2 => {
+                2 | 3 => {
                     let fields = exact(&value, &["schema", "generation", "entries"])?;
                     history.legacy = false;
                     history.generation = fields["generation"].as_int()?;
@@ -214,6 +216,9 @@ impl History {
                     for entry in fields["entries"].as_array()? {
                         history.entries.push(Journal::parse(entry, false)?);
                     }
+                    if schema == 2 && history.entries.is_empty() {
+                        return Err(Failure::InvalidState);
+                    }
                 }
                 _ => return Err(Failure::InvalidState),
             }
@@ -222,7 +227,7 @@ impl History {
         Ok(history)
     }
     fn validate(&self) -> Result<()> {
-        if self.entries.is_empty() || self.entries.len() > MAX_ENTRIES {
+        if self.entries.len() > MAX_ENTRIES {
             return Err(Failure::InvalidState);
         }
         for (index, entry) in self.entries.iter().enumerate() {
@@ -263,7 +268,7 @@ impl History {
         } else {
             self.legacy = false;
             object([
-                ("schema", Value::Int(2)),
+                ("schema", Value::Int(3)),
                 ("generation", Value::Int(next)),
                 (
                     "entries",
@@ -289,6 +294,13 @@ impl History {
         self.generation = next;
         Ok(())
     }
+}
+
+pub(crate) fn retirement_terminal(snapshot: Option<Zeroizing<Vec<u8>>>) -> Result<bool> {
+    Ok(History::from_snapshot(snapshot)?
+        .entries
+        .iter()
+        .all(|entry| entry.created.is_some()))
 }
 fn account<B: Backend>(
     owner: &mut Locked<'_, B>,
@@ -519,51 +531,208 @@ pub(crate) fn check_target<B: Backend>(
     key_store::handover::require_idle(owner)?;
     let result: Result<()> = (|| {
         let history = History::load(owner)?;
-        if history.entries.is_empty() {
-            return Ok(());
+        check_history_target(owner, &history, binding, None)
+    })();
+    result.map_err(key_failure)
+}
+/// The same admission predicate evaluates the real document and its proposed
+/// remainder. Do not approximate this with a binding hash or matching account.
+fn check_history_target<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    history: &History,
+    binding: &KeyBinding,
+    excluded: Option<usize>,
+) -> Result<()> {
+    let retained = || {
+        history
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| (Some(index) != excluded).then_some(entry))
+    };
+    if retained().next().is_none() {
+        return Ok(());
+    }
+    // A retained creation pins its complete library identity. A changed
+    // account, membership, dataset or epoch requires the separate review.
+    if let Some(journal) = retained().find(|entry| {
+        entry
+            .created
+            .as_ref()
+            .is_some_and(|created| created.same_library(binding))
+    }) {
+        if journal.created.as_ref() != Some(binding)
+            || account(owner, &journal.account.deployment, None)? != journal.account
+        {
+            return Err(Failure::ReviewRequired);
         }
-        // A retained creation pins its complete library identity. A changed
-        // account, membership, dataset or epoch requires the separate review.
-        if let Some(journal) = history.entries.iter().find(|entry| {
-            entry
-                .created
-                .as_ref()
-                .is_some_and(|created| created.same_library(binding))
-        }) {
-            if journal.created.as_ref() != Some(binding)
-                || account(owner, &journal.account.deployment, None)? != journal.account
-            {
-                return Err(Failure::ReviewRequired);
-            }
-            return Ok(());
-        }
-        // Creation beside an existing library must leave its original admission
-        // available while new keys are prepared and reviewed separately.
-        if key_store::installed_binding_locked(owner)?.as_ref() == Some(binding) {
-            for journal in &history.entries {
-                if journal.source.as_ref() == Some(binding) {
-                    match account(owner, &journal.account.deployment, None) {
-                        Ok(current) if current == journal.account => return Ok(()),
-                        Ok(_) | Err(Failure::ReviewRequired) => (),
-                        Err(error) => return Err(error),
-                    }
+        return Ok(());
+    }
+    // Creation beside an existing library must leave its original admission
+    // available while new keys are prepared and reviewed separately.
+    if key_store::installed_binding_locked(owner)?.as_ref() == Some(binding) {
+        for journal in retained() {
+            if journal.source.as_ref() == Some(binding) {
+                match account(owner, &journal.account.deployment, None) {
+                    Ok(current) if current == journal.account => return Ok(()),
+                    Ok(_) | Err(Failure::ReviewRequired) => (),
+                    Err(error) => return Err(error),
                 }
             }
         }
-        if history.entries.iter().any(|entry| entry.created.is_none()) {
-            Err(Failure::Account(super::Failure::Busy))
-        } else {
-            Err(Failure::ReviewRequired)
-        }
-    })();
-    result.map_err(|e| match e {
+    }
+    if retained().any(|entry| entry.created.is_none()) {
+        Err(Failure::Account(super::Failure::Busy))
+    } else {
+        Err(Failure::ReviewRequired)
+    }
+}
+fn key_failure(e: Failure) -> key_store::Failure {
+    match e {
         Failure::Secret(e) => key_store::Failure::Secret(e),
         Failure::Account(super::Failure::Busy) => key_store::Failure::Busy,
         Failure::InvalidState | Failure::Key(key_store::Failure::InvalidState) => {
             key_store::Failure::InvalidState
         }
         _ => key_store::Failure::ReviewRequired,
-    })
+    }
+}
+
+pub(crate) fn verify_retirement_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    retired: &KeyBinding,
+) -> key_store::Result<()> {
+    let active = key_store::installed_binding_locked(owner)?
+        .ok_or(key_store::Failure::RecoveryUnavailable)?;
+    // The receipt for an installed target remains its account/admission guard.
+    // It can be retired with the old library's switch archive after switching.
+    if active.same_library(retired) {
+        return Err(key_store::Failure::Busy);
+    }
+    let history = History::load(owner).map_err(key_failure)?;
+    check_history_target(owner, &history, &active, None).map_err(key_failure)?;
+    if key_store::capacity::creation_candidate_pending_locked(owner, retired)? {
+        return Err(key_store::Failure::Busy);
+    }
+    Ok(())
+}
+fn removable<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    history: &History,
+    index: usize,
+) -> key_store::Result<bool> {
+    if !locally_removable(owner, history, index)? {
+        return Ok(false);
+    }
+    let Some(created) = history.entries[index].created.as_ref() else {
+        return Ok(false);
+    };
+    match verify_retirement_locked(owner, created) {
+        Ok(()) => (),
+        Err(
+            key_store::Failure::Busy
+            | key_store::Failure::ReviewRequired
+            | key_store::Failure::RecoveryUnavailable,
+        ) => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    let active = key_store::installed_binding_locked(owner)?
+        .ok_or(key_store::Failure::RecoveryUnavailable)?;
+    match check_history_target(owner, history, &active, Some(index)).map_err(key_failure) {
+        Ok(()) => Ok(true),
+        Err(key_store::Failure::Busy | key_store::Failure::ReviewRequired) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+/// Catalogue inspection is credential-free. These structural checks only offer
+/// a review action; the complete account/admission predicate runs on prepare,
+/// after fresh authorization and when resuming durable consent.
+fn locally_removable<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    history: &History,
+    index: usize,
+) -> key_store::Result<bool> {
+    let Some(created) = history.entries[index].created.as_ref() else {
+        return Ok(false);
+    };
+    if history.legacy || history.generation.checked_add(1).is_none() {
+        return Ok(false);
+    }
+    let Some(active) = key_store::installed_binding_locked(owner)? else {
+        return Ok(false);
+    };
+    if active.same_library(created)
+        || key_store::capacity::creation_candidate_pending_locked(owner, created)?
+    {
+        return Ok(false);
+    }
+    let witness = |entry: &Journal| {
+        entry.created.as_ref() == Some(&active) || entry.source.as_ref() == Some(&active)
+    };
+    Ok(history.entries.iter().any(witness)
+        && (history.entries.len() == 1
+            || history
+                .entries
+                .iter()
+                .enumerate()
+                .any(|(other, entry)| other != index && witness(entry))))
+}
+pub(crate) fn history_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+) -> key_store::Result<Vec<key_store::history::SavedCreation>> {
+    use key_store::{
+        capacity,
+        history::{CreationPhase, SavedCreation, SavedLibrary},
+    };
+    let history = History::load(owner).map_err(key_failure)?;
+    history
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            Ok(SavedCreation {
+                removal: locally_removable(owner, &history, index)?.then(|| {
+                    capacity::Selection::new(
+                        capacity::Section::Creations,
+                        index,
+                        history
+                            .snapshot
+                            .as_ref()
+                            .expect("validated creation history"),
+                    )
+                }),
+                library: entry.created.as_ref().map(SavedLibrary::new),
+                source: entry.source.as_ref().map(SavedLibrary::new),
+                phase: if entry.created.is_some() {
+                    CreationPhase::Created
+                } else {
+                    CreationPhase::Requested
+                },
+            })
+        })
+        .collect()
+}
+pub(crate) fn removal_document_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+) -> key_store::Result<key_store::capacity::Document> {
+    use key_store::capacity::{Document, Row};
+    let history = History::load(owner).map_err(key_failure)?;
+    if history.legacy {
+        return Err(key_store::Failure::Busy);
+    }
+    let rows = history
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            Ok(Row {
+                libraries: entry.created.iter().cloned().collect(),
+                eligible: removable(owner, &history, index)?,
+                images: None,
+            })
+        })
+        .collect::<key_store::Result<Vec<_>>>()?;
+    Document::validated(history.snapshot, history.generation, rows)
 }
 trait Remote {
     fn deployment(&self) -> Deployment;

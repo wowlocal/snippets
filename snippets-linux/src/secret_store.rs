@@ -26,6 +26,7 @@ pub enum Failure {
     MissingOwner,
     Storage,
     IsolatedRoot,
+    HistoryMaintenanceRequired,
 }
 pub type Result<T> = std::result::Result<T, Failure>;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -41,6 +42,7 @@ pub enum Slot {
     PairingCandidate,
     BootstrapCandidate,
     HistoryRestore,
+    HistoryMaintenance,
     AutomaticSync,
     ClipboardHistory,
 }
@@ -59,6 +61,7 @@ impl Slot {
             Self::PairingCandidate => c"pairing-candidate-v1",
             Self::BootstrapCandidate => c"bootstrap-candidate-v1",
             Self::HistoryRestore => c"history-restore-v1",
+            Self::HistoryMaintenance => c"history-maintenance-v1",
             Self::AutomaticSync => c"automatic-sync-v1",
             Self::ClipboardHistory => c"clipboard-history-key-v1",
         }
@@ -128,6 +131,20 @@ impl<B: Backend> Store<B> {
         &mut self,
         action: impl FnOnce(&mut Locked<'_, B>) -> std::result::Result<T, E>,
     ) -> std::result::Result<T, E> {
+        self.history_transaction_with(|owner| {
+            if owner.read(Slot::HistoryMaintenance)?.is_some() {
+                return Err(Failure::HistoryMaintenanceRequired.into());
+            }
+            action(owner)
+        })
+    }
+    /// Only the read-only history catalogue and its reviewed maintenance owner
+    /// may enter while a durable removal is unfinished. Ordinary key/account
+    /// transitions cannot race a partially committed archive replacement.
+    pub(crate) fn history_transaction_with<T, E: From<Failure>>(
+        &mut self,
+        action: impl FnOnce(&mut Locked<'_, B>) -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E> {
         let guard = owner_lock(&self.root)?;
         if read_owner(&self.root)? != Some(self.namespace) {
             return Err(Failure::MissingOwner.into());
@@ -135,6 +152,18 @@ impl<B: Backend> Store<B> {
         action(&mut Locked {
             store: self,
             _guard: guard,
+            clipboard_only: false,
+        })
+    }
+    /// Clipboard history owns an independent key and never probes account or
+    /// sync secrets. Its bypass is restricted to exactly its own closed slot.
+    pub(crate) fn clipboard_transaction<T>(
+        &mut self,
+        action: impl FnOnce(&mut Locked<'_, B>) -> Result<T>,
+    ) -> Result<T> {
+        self.history_transaction_with(|owner| {
+            owner.clipboard_only = true;
+            action(owner)
         })
     }
 }
@@ -172,6 +201,7 @@ fn owner_lock(root: &Path) -> Result<File> {
 pub struct Locked<'a, B: Backend> {
     store: &'a mut Store<B>,
     _guard: File,
+    clipboard_only: bool,
 }
 impl<B: Backend> Locked<'_, B> {
     pub(crate) fn root(&self) -> &Path {
@@ -231,6 +261,9 @@ impl<B: Backend> Locked<'_, B> {
         Ok(())
     }
     pub fn read(&mut self, slot: Slot) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        if self.clipboard_only && slot != Slot::ClipboardHistory {
+            return Err(Failure::InvalidValue);
+        }
         let value = self.store.backend.read(&self.store.namespace, slot)?;
         if value
             .as_ref()

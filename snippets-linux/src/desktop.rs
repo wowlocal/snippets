@@ -1,5 +1,7 @@
 //! Read-only Omarchy theme adapter and short-lived Hyprland paste destinations.
 use serde_json::Value;
+#[cfg(feature = "desktop")]
+use std::time::SystemTime;
 use std::{
     env,
     io::Read,
@@ -102,6 +104,33 @@ fn hypr(arguments: &[&str]) -> Option<Vec<u8>> {
 }
 fn query(operation: &str) -> Option<Value> {
     serde_json::from_slice(&hypr(&["-j", operation])?).ok()
+}
+#[cfg(feature = "desktop")]
+pub(crate) fn wayland_peer_matches(pid: u64) -> bool {
+    let Some(signature) = env::var("HYPRLAND_INSTANCE_SIGNATURE")
+        .ok()
+        .filter(|s| !s.is_empty())
+    else {
+        return false;
+    };
+    let Some(display) = env::var("WAYLAND_DISPLAY").ok().filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let Some(socket) = std::path::Path::new(&display)
+        .file_name()
+        .and_then(|s| s.to_str())
+    else {
+        return false;
+    };
+    query("instances")
+        .and_then(|v| v.as_array().cloned())
+        .is_some_and(|instances| {
+            instances.iter().any(|i| {
+                i.get("instance").and_then(Value::as_str) == Some(signature.as_str())
+                    && i.get("pid").and_then(Value::as_u64) == Some(pid)
+                    && i.get("wl_socket").and_then(Value::as_str) == Some(socket)
+            })
+        })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -232,6 +261,10 @@ pub struct PasteTarget {
     address: String,
     process: u64,
     terminal: bool,
+    #[cfg(feature = "desktop")]
+    captured: Duration,
+    #[cfg(feature = "desktop")]
+    wall: SystemTime,
 }
 /// Only an ephemeral admission witness. Application classes, addresses and PIDs
 /// are never logged, persisted or returned as history metadata.
@@ -289,6 +322,10 @@ impl PasteTarget {
             address: address.into(),
             process,
             terminal,
+            #[cfg(feature = "desktop")]
+            captured: crate::clock::uptime()?,
+            #[cfg(feature = "desktop")]
+            wall: SystemTime::now(),
         })
     }
     pub fn capture() -> Option<Self> {
@@ -305,6 +342,29 @@ impl PasteTarget {
         query("clients")
             .and_then(|v| v.as_array().cloned())
             .is_some_and(|clients| clients.iter().any(|w| self.matches(w)))
+    }
+    #[cfg(feature = "desktop")]
+    pub(crate) fn is_active_unlocked(&self) -> bool {
+        session_state() == SessionState::Unlocked
+            && query("activewindow").is_some_and(|window| self.matches(&window))
+    }
+    #[cfg(feature = "desktop")]
+    pub(crate) fn is_fresh(&self) -> bool {
+        crate::clock::uptime().is_some_and(|now| {
+            now >= self.captured && now - self.captured < Duration::from_secs(120)
+        }) && SystemTime::now()
+            .duration_since(self.wall)
+            .is_ok_and(|d| d < Duration::from_secs(120))
+    }
+    #[cfg(feature = "desktop")]
+    pub(crate) fn application_label(&self) -> Option<String> {
+        let clients = query("clients")?;
+        let window = clients.as_array()?.iter().find(|w| self.matches(w))?;
+        let class = window.get("class")?.as_str()?;
+        if class.is_empty() || class.len() > 256 || class.chars().any(char::is_control) {
+            return None;
+        }
+        Some(class.to_owned())
     }
     pub fn focus(&self) -> bool {
         if session_state() != SessionState::Unlocked || !self.exists() {

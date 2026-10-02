@@ -18,6 +18,8 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 #[path = "draft_recovery_ui.rs"]
 mod draft_recovery;
+#[path = "secure_insertion_ui.rs"]
+mod insertion;
 
 async fn worker<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T> + Send + 'static,
@@ -75,6 +77,12 @@ pub struct Workspace {
     draft_dialog: RefCell<Option<(adw::AlertDialog, Vec<gtk::PasswordEntry>)>>,
     draft_authorization: RefCell<Option<(draft_recovery::Authorization, u64)>>,
     draft_worker: Cell<bool>,
+    insert: gtk::Button,
+    insertion_target: RefCell<Option<desktop::PasteTarget>>,
+    insertion_authorization: RefCell<Option<crate::secure_insertion::Authorization>>,
+    insertion_dialog: RefCell<Option<(adw::AlertDialog, gtk::PasswordEntry)>>,
+    insertion_worker: Cell<bool>,
+    insertion_armed: Cell<bool>,
 }
 impl Workspace {
     pub fn new(application: &adw::Application, library: &Library) -> Result<Rc<Self>> {
@@ -168,6 +176,11 @@ impl Workspace {
         fields.append(&toggles);
         let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let reveal = gtk::ToggleButton::with_label("Reveal to Edit");
+        let insert = gtk::Button::with_label("Insert into Original Window…");
+        insert.set_visible(false);
+        insert.update_property(&[gtk::accessible::Property::Label(
+            "Authenticate and insert the saved secure snippet into the original window",
+        )]);
         let save = gtk::Button::with_label("Save");
         let discard = gtk::Button::with_label("Discard / Reload");
         let delete = gtk::Button::from_icon_name("user-trash-symbolic");
@@ -177,6 +190,7 @@ impl Workspace {
             &save.clone().upcast(),
             &discard.clone().upcast(),
             &delete.clone().upcast(),
+            &insert.clone().upcast(),
         ] {
             toolbar.append(widget);
         }
@@ -213,6 +227,12 @@ impl Workspace {
             draft_dialog: RefCell::new(None),
             draft_authorization: RefCell::new(None),
             draft_worker: Cell::new(false),
+            insert,
+            insertion_target: RefCell::new(None),
+            insertion_authorization: RefCell::new(None),
+            insertion_dialog: RefCell::new(None),
+            insertion_worker: Cell::new(false),
+            insertion_armed: Cell::new(false),
         });
         let weak = Rc::downgrade(&this);
         this.query.connect_search_changed(move |_| {
@@ -232,6 +252,7 @@ impl Workspace {
                     .get(row.index() as usize)
                     .map(|m| m.id);
                 if id != this.selected.get() && this.save() {
+                    this.cancel_insertion();
                     this.select(id);
                 }
             }
@@ -292,6 +313,12 @@ impl Workspace {
             }
         });
         let weak = Rc::downgrade(&this);
+        this.insert.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.insert_selected();
+            }
+        });
+        let weak = Rc::downgrade(&this);
         recovery.connect_clicked(move |_| {
             if let Some(this) = weak.upgrade() {
                 this.authenticate(true);
@@ -338,7 +365,10 @@ impl Workspace {
             if let Some(this) = weak.upgrade() {
                 if !window.is_active() {
                     this.cancel_draft_recovery();
-                    this.generation.set(this.generation.get().wrapping_add(1));
+                    if !this.insertion_armed.get() {
+                        this.cancel_insertion();
+                        this.generation.set(this.generation.get().wrapping_add(1));
+                    }
                     this.reveal.set_active(false);
                     this.editor.reveal(false);
                 }
@@ -415,6 +445,7 @@ impl Workspace {
         self.overlay.add_toast(adw::Toast::new(message));
     }
     pub fn lock(&self) {
+        self.cancel_insertion();
         self.cancel_draft_recovery();
         self.generation.set(self.generation.get().wrapping_add(1));
         self.vault.borrow_mut().lock();
@@ -436,6 +467,25 @@ impl Workspace {
         let unlocked = self.vault.borrow_mut().is_unlocked() && self.desktop_allowed();
         let foreign = self.editor.is_foreign();
         let editable = unlocked && !foreign && !self.busy.get();
+        let destination = self
+            .insertion_target
+            .borrow()
+            .as_ref()
+            .is_some_and(|t| t.is_fresh());
+        self.insert.set_visible(destination);
+        self.insert.set_sensitive(
+            destination
+                && !self.busy.get()
+                && !self.is_dirty()
+                && self.window.is_active()
+                && self.desktop_allowed()
+                && self.selected.get().is_some_and(|id| {
+                    self.vault
+                        .borrow()
+                        .record(id)
+                        .is_some_and(|r| r.metadata.is_enabled)
+                }),
+        );
         self.editor.allow(editable);
         self.reveal
             .set_sensitive(editable && self.editor.metadata().is_some());
@@ -577,6 +627,8 @@ impl Workspace {
         self.update();
     }
     pub fn present(&self, id: Option<Uuid>) {
+        self.cancel_insertion();
+        self.insertion_target.borrow_mut().take();
         if id.is_some() && id != self.selected.get() && self.save() {
             self.select(id);
         }
@@ -587,8 +639,8 @@ impl Workspace {
         self.dirty.get() || self.editor.is_dirty()
     }
     pub fn save(&self) -> bool {
-        if self.draft_worker.get() {
-            self.toast("Wait for draft recovery to finish or cancel it before saving.");
+        if self.draft_worker.get() || self.insertion_worker.get() {
+            self.toast("Wait for the secure operation to stop before saving.");
             return false;
         }
         if !self.is_dirty() {

@@ -42,6 +42,44 @@ fn main() {
         compiler.compile("snippets_clipboard_wayland");
         println!("cargo:rerun-if-changed=src/clipboard_wayland.c");
         println!("cargo:rerun-if-changed={}", protocol.display());
+        let input_protocol = "data/virtual-keyboard-v1.xml";
+        for (mode, file) in [
+            ("client-header", "snippets-input.h"),
+            ("private-code", "snippets-input-protocol.c"),
+        ] {
+            assert!(
+                std::process::Command::new("wayland-scanner")
+                    .arg(mode)
+                    .arg(input_protocol)
+                    .arg(output.join(file))
+                    .status()
+                    .expect("wayland-scanner is required")
+                    .success()
+            );
+        }
+        let input_wayland = pkg_config::Config::new()
+            .probe("wayland-client")
+            .expect("Wayland client development files are required");
+        let input_xkb = pkg_config::Config::new()
+            .probe("xkbcommon")
+            .expect("xkbcommon development files are required");
+        let mut input = cc::Build::new();
+        input
+            .file("src/input_wayland.c")
+            .file(output.join("snippets-input-protocol.c"))
+            .include(&output)
+            .flag_if_supported("-Wall")
+            .flag_if_supported("-Wextra")
+            .flag_if_supported("-Werror");
+        for include in input_wayland.include_paths {
+            input.include(include);
+        }
+        for include in input_xkb.include_paths {
+            input.include(include);
+        }
+        input.compile("snippets_input_wayland");
+        println!("cargo:rerun-if-changed=src/input_wayland.c");
+        println!("cargo:rerun-if-changed={input_protocol}");
     }
     let icu = pkg_config::Config::new()
         .probe("icu-i18n")

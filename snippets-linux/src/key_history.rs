@@ -10,7 +10,7 @@ pub struct SavedLibrary {
     epoch: u64,
 }
 impl SavedLibrary {
-    pub(super) fn new(binding: &KeyBinding) -> Self {
+    pub(crate) fn new(binding: &KeyBinding) -> Self {
         Self {
             server: binding.server.clone(),
             id: binding.space,
@@ -61,6 +61,7 @@ pub struct PreviousCapabilities {
     pub signed_action: bool,
 }
 pub struct SavedSwitch {
+    pub removal: Option<super::capacity::Selection>,
     pub selection: super::restoration::Selection,
     pub phase: SwitchPhase,
     pub source: SavedKey,
@@ -79,18 +80,34 @@ pub enum PairingPhase {
     Cancelled,
 }
 pub struct SavedPairing {
+    pub removal: Option<super::capacity::Selection>,
     pub library: SavedLibrary,
     pub phase: PairingPhase,
 }
 pub struct SavedFirstKey {
+    pub removal: Option<super::capacity::Selection>,
     pub key: SavedKey,
     pub phase: initial_candidate::Status,
 }
 pub struct SavedRestoration {
+    pub removal: Option<super::capacity::Selection>,
     pub library: SavedLibrary,
     pub phase: SwitchPhase,
     pub summary: super::restoration::Summary,
     pub needs_completion: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreationPhase {
+    Requested,
+    Created,
+}
+/// Creation receipts contain metadata only. Request identifiers, account names
+/// and credentials stay inside the protected owner.
+pub struct SavedCreation {
+    pub removal: Option<super::capacity::Selection>,
+    pub library: Option<SavedLibrary>,
+    pub source: Option<SavedLibrary>,
+    pub phase: CreationPhase,
 }
 /// Exact protected document sizes, rather than estimated free slot capacity.
 #[derive(Default)]
@@ -99,14 +116,18 @@ pub struct Usage {
     pub pairing: usize,
     pub first_keys: usize,
     pub restorations: usize,
+    pub creations: usize,
 }
 #[derive(Default)]
 pub struct Catalog {
+    pub maintenance: Option<super::capacity::Summary>,
     pub active: Option<SavedLibrary>,
     pub switches: Vec<SavedSwitch>,
     pub pairing: Vec<SavedPairing>,
     pub first_keys: Vec<SavedFirstKey>,
     pub restorations: Vec<SavedRestoration>,
+    pub creations: Vec<SavedCreation>,
+    pub creations_unavailable: bool,
     pub usage: Usage,
 }
 pub const MAX_ENTRIES: usize = 8;
@@ -121,7 +142,7 @@ pub(super) fn recovery(
     Ok(archive.presentation.map_or(KitStatus::None, |p| p.status))
 }
 pub fn inspect<B: Backend>(store: &mut Store<B>) -> handover::Result<Catalog> {
-    store.transaction_with(|owner| {
+    store.history_transaction_with(|owner| {
         let library = Library::prepare(owner.root().into())?;
         let _guard = library.lock()?;
         // History inspection never initializes a slot, reads credentials, repairs
@@ -153,19 +174,32 @@ pub fn inspect<B: Backend>(store: &mut Store<B>) -> handover::Result<Catalog> {
                 super::restoration::Failure::Key(error) => handover::Failure::Key(error),
                 _ => handover::Failure::Key(super::Failure::InvalidState),
             })?;
+        let (creations, creations_unavailable) =
+            match crate::auth_store::creation::history_locked(owner) {
+                Ok(rows) => (rows, false),
+                // Unknown old capability bytes stay protected. A read-only catalogue
+                // can still show other archives, but must not call this empty history.
+                Err(Failure::InvalidState) => (Vec::new(), true),
+                Err(error) => return Err(error.into()),
+            };
         let size = |value: Option<Zeroizing<Vec<u8>>>| value.map_or(0, |v| v.len());
         let usage = Usage {
             switches: size(owner.read(Slot::AccountReview)?),
             pairing: size(owner.read(Slot::PairingCandidate)?),
             first_keys: size(owner.read(Slot::BootstrapCandidate)?),
             restorations: size(owner.read(Slot::HistoryRestore)?),
+            creations: size(owner.read(Slot::SpaceCreation)?),
         };
+        let maintenance = super::capacity::pending_locked(owner)?;
         Ok(Catalog {
+            maintenance,
             active: active_info,
             switches,
             pairing,
             first_keys,
             restorations,
+            creations,
+            creations_unavailable,
             usage,
         })
     })

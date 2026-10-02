@@ -23,6 +23,9 @@ mod restoration;
 #[path = "account_vault_header_tests.rs"]
 mod vault_headers;
 
+#[path = "history_capacity_owner_tests.rs"]
+mod history_capacity;
+
 impl receiver::Remote for FakeRemote {
     fn preflight(&mut self) -> receiver::RemoteResult<receiver::Observation> {
         crate::key_store::Remote::preflight(self).map_err(|_| cloud::Failure::InvalidResponse)?;
@@ -702,7 +705,7 @@ fn malformed_handover_schema_fences_normal_admission_without_changing_keys() {
                 archive.insert("unexpected".into(), Value::Bool(true));
             }
             1 => {
-                archive.insert("schema".into(), Value::Int(4));
+                archive.insert("schema".into(), Value::Int(5));
             }
             2 => {
                 archive.insert("generation".into(), Value::Int(0));
@@ -1132,7 +1135,7 @@ fn schema_one_pending_transition_is_authenticated_and_upgrades_without_losing_ca
     assert_complete(&mut s);
     let bytes = s.backend.memory.slot(Slot::AccountReview).unwrap();
     let value = canonical::parse(&bytes).unwrap();
-    assert_eq!(value.as_object().unwrap()["schema"].as_int().unwrap(), 3);
+    assert_eq!(value.as_object().unwrap()["schema"].as_int().unwrap(), 4);
 }
 
 #[cfg(feature = "desktop")]

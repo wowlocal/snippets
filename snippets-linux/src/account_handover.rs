@@ -355,9 +355,9 @@ impl Archive {
             let entries = fields["entries"].as_array()?;
             archive.generation = fields["generation"].as_int()?;
             let schema = fields["schema"].as_int()?;
-            if !matches!(schema, 1..=3)
+            if !matches!(schema, 1..=4)
                 || archive.generation < 1
-                || entries.is_empty()
+                || entries.is_empty() && schema < 4
                 || entries.len() > MAX_ENTRIES
             {
                 return Err(super::Failure::InvalidState.into());
@@ -412,7 +412,7 @@ impl Archive {
             fields.insert("phase".into(), Value::text("completed"));
         }
         let bytes = object([
-            ("schema", Value::Int(3)),
+            ("schema", Value::Int(4)),
             ("generation", Value::Int(generation)),
             ("entries", Value::Array(values)),
         ])
@@ -461,7 +461,7 @@ pub(super) fn history_locked<B: Backend>(
     use super::history::{PreviousCapabilities, SavedKey, SavedSwitch, SwitchPhase, recovery};
     let archive = Archive::load(owner)?;
     let mut rows = Vec::with_capacity(archive.entries.len());
-    for entry in archive.entries {
+    for (index, entry) in archive.entries.into_iter().enumerate() {
         let installed = entry.installed()?;
         let scope = installed.binding.checkpoint_scope();
         let key = RootKey::from_bytes(&entry.checkpoint[..32])
@@ -486,6 +486,13 @@ pub(super) fn history_locked<B: Backend>(
                 .ok_or(super::Failure::InvalidState)?,
         )?;
         rows.push(SavedSwitch {
+            removal: removable(&entry)?.then(|| {
+                capacity::Selection::new(
+                    capacity::Section::Switches,
+                    index,
+                    archive.snapshot.as_ref().expect("validated archive"),
+                )
+            }),
             selection: super::restoration::Selection::new(
                 archive
                     .snapshot
@@ -516,6 +523,87 @@ pub(super) fn history_locked<B: Backend>(
         });
     }
     Ok(rows)
+}
+fn removable(entry: &Entry) -> super::Result<bool> {
+    let source = super::Archive::from_snapshot(entry.source[1].clone())?;
+    // The owning codecs must prove terminal receipts. Unknown legacy bytes stay
+    // retained; no generic JSON inspection can classify a remote request as done.
+    Ok((entry.completed || entry.cancelled)
+        && source.pending.is_none()
+        && recipient::retirement_terminal(entry.source[2].clone()).unwrap_or(false)
+        && crate::auth_store::creation::retirement_terminal(entry.source[3].clone())
+            .unwrap_or(false)
+        && mutations::retirement_terminal(entry.source[4].clone()).unwrap_or(false))
+}
+pub(super) fn removal_document_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+) -> super::Result<capacity::Document> {
+    let archive = Archive::load(owner).map_err(|e| match e {
+        Failure::Key(e) => e,
+        _ => super::Failure::InvalidState,
+    })?;
+    let rows = archive
+        .entries
+        .iter()
+        .map(|entry| {
+            Ok(capacity::Row {
+                libraries: vec![
+                    Installed::decode(
+                        entry.source[0]
+                            .as_ref()
+                            .ok_or(super::Failure::InvalidState)?,
+                    )?
+                    .binding,
+                    entry
+                        .installed()
+                        .map_err(|_| super::Failure::InvalidState)?
+                        .binding,
+                ],
+                eligible: removable(entry)?,
+                images: Some(capacity::Images {
+                    nonce: entry.receipt.transition_id(),
+                    hashes: entry.receipt.image_hashes(),
+                }),
+            })
+        })
+        .collect::<super::Result<Vec<_>>>()?;
+    capacity::Document::validated(archive.snapshot, archive.generation, rows)
+}
+pub(super) fn validate_removal_images_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    library: &Library,
+    index: usize,
+) -> super::Result<()> {
+    let archive = Archive::load(owner).map_err(|_| super::Failure::InvalidState)?;
+    let entry = archive
+        .entries
+        .get(index)
+        .ok_or(super::Failure::RecoveryUnavailable)?;
+    let installed = entry
+        .installed()
+        .map_err(|_| super::Failure::InvalidState)?;
+    let scope = installed.binding.checkpoint_scope();
+    let key =
+        RootKey::from_bytes(&entry.checkpoint[..32]).map_err(|_| super::Failure::InvalidState)?;
+    let salt = entry.checkpoint[32..]
+        .try_into()
+        .map_err(|_| super::Failure::InvalidState)?;
+    let journal = receiver::Owner {
+        library,
+        scope: &scope,
+        key_epoch: installed.binding.epoch,
+        checkpoint_key: &key,
+        checkpoint_salt: &salt,
+        wire_key: &key,
+        wire_salt: &salt,
+        device: None,
+        validate_session: &|| Ok(()),
+    };
+    journal
+        .retained_review_locked(&entry.receipt)
+        .map_err(|_| super::Failure::InvalidState)?
+        .ok_or(super::Failure::RecoveryUnavailable)?;
+    Ok(())
 }
 pub(super) fn saved_local_state_locked<B: Backend>(
     owner: &mut Locked<'_, B>,

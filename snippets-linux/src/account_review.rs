@@ -123,6 +123,9 @@ impl Receipt {
     pub(crate) fn transition_id(&self) -> [u8; 16] {
         self.nonce
     }
+    pub(crate) fn image_hashes(&self) -> [[u8; 32]; 2] {
+        [self.source_hash, self.target_hash]
+    }
     /// Fixed, closed, bounded encoding for the owning Secret Service transition.
     /// This is not a plaintext file, diagnostic record or export format.
     pub fn encode_secret(&self) -> Result<zeroize::Zeroizing<Vec<u8>>> {
@@ -487,7 +490,7 @@ impl Owner<'_> {
         (self.validate_session)()?;
         Ok(receipt.summary)
     }
-    fn retained_review_locked(
+    pub(crate) fn retained_review_locked(
         &self,
         receipt: &Receipt,
     ) -> Result<Option<(Checkpoint, Checkpoint)>> {

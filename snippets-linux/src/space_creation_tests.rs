@@ -1,6 +1,8 @@
 //! Public fictional account/grant fixtures and temporary roots only. This
 //! scripted protocol owner does not contact a server, keyring or PAM service.
 use super::*;
+#[path = "space_creation_history_tests.rs"]
+mod saved_history;
 use crate::auth_store::{CleanupReceipt, Replacement};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::{
@@ -326,6 +328,7 @@ fn lost_reply_and_fresh_session_after_restart_reuse_one_original_request() {
     );
     let request = remote.requests[0];
     assert!(status(&mut store, &live) == Ok(State::Requested));
+    assert!(!retirement_terminal(memory.slot(Slot::SpaceCreation)).unwrap());
     let binding = descriptor(33, 44, 5, 1, "owner")
         .key_binding(&deployment())
         .unwrap();
@@ -338,6 +341,7 @@ fn lost_reply_and_fresh_session_after_restart_reuse_one_original_request() {
     assert_eq!(remote.requests, vec![request, request]);
     assert_eq!(remote.creations, 1);
     assert!(status(&mut restarted, &renewed) == Ok(State::Created));
+    assert!(retirement_terminal(memory.slot(Slot::SpaceCreation)).unwrap());
     assert!(
         memory.slot(Slot::LibraryKey).is_none()
             && memory.slot(Slot::CheckpointKey).is_none()
@@ -920,7 +924,7 @@ fn capacity_and_generation_refuse_new_requests_without_discarding_history() {
 }
 
 #[test]
-fn schema_two_refuses_duplicate_mixed_and_oversize_intents_before_http() {
+fn creation_schemas_refuse_duplicate_mixed_and_oversize_intents_before_http() {
     let (_temp, mut store, memory, live, mut remote) = fixture();
     let proposal = prepare(&mut store, &live).unwrap();
     begin(&mut store, &mut remote, &live, proposal).unwrap();
@@ -931,7 +935,10 @@ fn schema_two_refuses_duplicate_mixed_and_oversize_intents_before_http() {
         match change {
             0 => value["generation"] = serde_json::json!(0),
             1 => value["extra"] = serde_json::json!(true),
-            2 => value["entries"] = serde_json::json!([]),
+            2 => {
+                value["schema"] = serde_json::json!(2);
+                value["entries"] = serde_json::json!([]);
+            }
             3 => value["entries"][0]["extra"] = serde_json::json!(true),
             4 => {
                 let entry = value["entries"][0].clone();
@@ -953,7 +960,7 @@ fn schema_two_refuses_duplicate_mixed_and_oversize_intents_before_http() {
                 entry["request"] = serde_json::json!(Uuid::new_v4().to_string());
                 value["entries"].as_array_mut().unwrap().push(entry);
             }
-            _ => value["schema"] = serde_json::json!(3),
+            _ => value["schema"] = serde_json::json!(4),
         }
         let changed = serde_json::to_vec(&value).unwrap();
         store

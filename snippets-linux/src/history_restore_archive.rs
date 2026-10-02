@@ -206,9 +206,10 @@ impl Archive {
             let fields = exact(&value, &["schema", "generation", "entries"])?;
             let values = fields["entries"].as_array()?;
             archive.generation = fields["generation"].as_int()?;
-            if fields["schema"].as_int()? != 1
+            let schema = fields["schema"].as_int()?;
+            if !matches!(schema, 1..=2)
                 || archive.generation < 1
-                || values.is_empty()
+                || values.is_empty() && schema < 2
                 || values.len() > LIMIT
             {
                 return Err(super::super::Failure::InvalidState.into());
@@ -254,7 +255,7 @@ impl Archive {
             })?);
         }
         let bytes = object([
-            ("schema", Value::Int(1)),
+            ("schema", Value::Int(2)),
             ("generation", Value::Int(generation)),
             ("entries", Value::Array(values)),
         ])

@@ -217,6 +217,49 @@ fn setup() -> (tempfile::TempDir, Store<Faults>, Faults, Peer) {
     };
     (temp, store, backend, peer)
 }
+
+#[test]
+fn history_capacity_only_removes_terminal_pairing_receipts() {
+    use crate::key_store::{capacity, history};
+    for ready in [false, true] {
+        let (_temp, mut store, backend, mut peer) = setup();
+        let active = backend.memory.slot(Slot::LibraryKey);
+        operate(&mut store, &mut peer, Action::Begin).ok().unwrap();
+        assert!(
+            history::inspect(&mut store).unwrap().pairing[0]
+                .removal
+                .is_none()
+        );
+        if ready {
+            peer.approve();
+            operate(&mut store, &mut peer, Action::Check).ok().unwrap();
+        } else {
+            operate(&mut store, &mut peer, Action::Cancel).ok().unwrap();
+        }
+        let archive = store.transaction_with(Archive::load).unwrap();
+        let selection = history::inspect(&mut store).unwrap().pairing[0]
+            .removal
+            .clone()
+            .unwrap();
+        let review = capacity::prepare(&mut store, selection).unwrap();
+        let mut gate = crate::local_auth::Gate::new();
+        gate.set_foreground(true);
+        let request = gate
+            .begin(
+                review.authorization_target().unwrap(),
+                crate::desktop::SessionWitness::test(crate::desktop::SessionState::Unlocked, 1),
+            )
+            .unwrap();
+        let proof = crate::local_auth::authenticate_fixture(request).unwrap();
+        capacity::apply(&mut store, review, gate.accept(proof).unwrap()).unwrap();
+        let empty = store.transaction_with(Archive::load).unwrap();
+        assert!(empty.entries.is_empty());
+        assert_eq!(empty.generation, archive.generation + 1);
+        assert!(backend.memory.slot(Slot::LibraryKey) == active);
+        operate(&mut store, &mut peer, Action::Begin).ok().unwrap();
+        assert_eq!(history::inspect(&mut store).unwrap().pairing.len(), 1);
+    }
+}
 fn operate(store: &mut Store<Faults>, peer: &mut Peer, action: Action) -> Result<Status> {
     store.transaction_with(|owner| operate_locked(owner, peer, action, &|_| Ok(())))
 }
@@ -860,7 +903,7 @@ fn malformed_candidate_schema_and_forged_ready_phase_fail_before_post() {
         };
         match change {
             0 => {
-                fields.insert("schema".into(), Value::Int(2));
+                fields.insert("schema".into(), Value::Int(3));
             }
             1 => {
                 fields.insert("extra".into(), Value::Bool(true));

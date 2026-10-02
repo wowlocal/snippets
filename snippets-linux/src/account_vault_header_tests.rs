@@ -75,7 +75,7 @@ fn completed_switch_keeps_the_reviewed_vault_header_after_vault_replacement() {
     assert!(capabilities(&s) == before);
     let bytes = s.backend.memory.slot(Slot::AccountReview).unwrap();
     let value = canonical::parse(&bytes).unwrap();
-    assert_eq!(value.as_object().unwrap()["schema"].as_int().unwrap(), 3);
+    assert_eq!(value.as_object().unwrap()["schema"].as_int().unwrap(), 4);
     let fields = value.as_object().unwrap()["entries"].as_array().unwrap()[0]
         .as_object()
         .unwrap();
@@ -244,7 +244,7 @@ fn a_full_legacy_archive_migrates_without_adding_empty_header_fields_or_evicting
     let after = s.backend.memory.slot(Slot::AccountReview).unwrap();
     assert_eq!(after.len(), full.len());
     let value = canonical::parse(&after).unwrap();
-    assert_eq!(value.as_object().unwrap()["schema"].as_int().unwrap(), 3);
+    assert_eq!(value.as_object().unwrap()["schema"].as_int().unwrap(), 4);
     let archive = s.store.transaction_with(handover::Archive::load).unwrap();
     assert!(archive.entries[0].completed);
     assert!(archive.entries[0].source[2].as_deref() == Some(&vec![0x55; low]));

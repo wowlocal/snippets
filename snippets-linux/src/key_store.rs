@@ -34,6 +34,9 @@ pub mod initial_candidate;
 #[path = "key_history.rs"]
 pub mod history;
 
+#[path = "history_capacity.rs"]
+pub mod capacity;
+
 #[path = "history_restore.rs"]
 pub mod restoration;
 

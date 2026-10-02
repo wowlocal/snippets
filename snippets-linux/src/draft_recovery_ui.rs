@@ -55,7 +55,7 @@ impl Authorization {
         Ok(())
     }
 }
-fn take_secret(entry: &gtk::PasswordEntry) -> Result<Zeroizing<String>> {
+pub(super) fn take_secret(entry: &gtk::PasswordEntry) -> Result<Zeroizing<String>> {
     let result = unsafe {
         let pointer =
             gtk::ffi::gtk_editable_get_text(entry.upcast_ref::<gtk::Editable>().to_glib_none().0);
@@ -71,7 +71,7 @@ fn take_secret(entry: &gtk::PasswordEntry) -> Result<Zeroizing<String>> {
     entry.set_text("");
     result
 }
-fn usable(entry: &gtk::PasswordEntry) -> bool {
+pub(super) fn usable(entry: &gtk::PasswordEntry) -> bool {
     let length = unsafe {
         CStr::from_ptr(gtk::ffi::gtk_editable_get_text(
             entry.upcast_ref::<gtk::Editable>().to_glib_none().0,
@@ -116,7 +116,8 @@ impl Workspace {
     }
     pub fn prepare_quit(&self) -> bool {
         self.cancel_draft_recovery();
-        !self.draft_worker.get()
+        self.cancel_insertion();
+        !self.draft_worker.get() && !self.insertion_worker.get()
     }
     pub(super) fn recover_draft(self: &Rc<Self>) {
         if self.busy.get() || !self.desktop_allowed() || !self.editor.is_foreign() {

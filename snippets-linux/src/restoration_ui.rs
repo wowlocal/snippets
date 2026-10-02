@@ -432,7 +432,7 @@ impl AccountWindow {
         preparation.validate()?;
         credentials.map(Some)
     }
-    fn new_restoration_preparation(&self) -> Result<Preparation> {
+    pub(super) fn new_restoration_preparation(&self) -> Result<Preparation> {
         Preparation::new(
             self.desktop
                 .as_ref()

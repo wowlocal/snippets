@@ -12,7 +12,7 @@ vaults, including explicitly selected old files for legacy switch history and
 archives containing bodies from several source vaults.
 Missing own vault stamps/hashes in archived records can be recovered only after
 explicit source-vault authentication. Raw v1 carriers remain strict.
-Live legacy-record repair, protected capacity management,
+Live legacy-record repair and unreferenced-image cleanup,
 inline expansion and live desktop verification remain unfinished.
 
 ## Architecture
@@ -111,8 +111,9 @@ current-version preservation and offline finish/cancel. Archived live nested con
 groups now restore together with exact original C0 evidence and selected C1 intent.
 Restoration can queue new ordinary and matching-vault generations behind current
 conflict-owned groups without changing their offers or proofs, and restores an
-archive's pending generations in order. Protected capacity management, creation
-of a new library beside old keys and conflict-owned deletion recovery
+archive's pending generations in order. Terminal protected history can now be
+explicitly retired through reviewed, resumable local authorization. Unreferenced
+image cleanup and remaining conflict-owned deletion recovery
 remain unfinished.
 `src/bootstrap.rs` implements portable key bundles, pairing/recovery cryptography
 and library-action authority. `src/cloud_bootstrap.rs` adds scope-bound authority
@@ -204,12 +205,12 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Omarchy theme | Active XDG state palette, periodic refresh, validated colors | Parser and CSS injection tests pass |
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Target validation tested; actual cross-window delivery still requires verification |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
-| Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; capacity management remains pending; live native GTK/keyring/PAM verification remains unavailable |
+| Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement is wired; unreferenced images remain pending; live native GTK/keyring/PAM verification remains unavailable |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor, foreign-vault retained-draft recovery, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery dialog compiles but display initialization is unavailable; live keyboard/reveal workflow remains open |
 | Secure delivery and transfers | Native portable encrypted-backup export/import with authenticated codec and encrypted redo | Fresh vault authentication, metadata encryption, preserved record seals and exact snapshot checks pass; direct insertion without clipboard exposure, legacy seal repair and fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; current environment cannot run loopback fixtures or initialize the new GTK smoke; complete conflict-owned recovery and live automatic workflow verification remain pending; CloudKit is Apple-only |
 | Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent child deletions and unknown versions remain separate review boundaries; live password-dialog verification remains open |
-| Library-key setup | Portable sync-v1 bundle, P-256 pairing, recovery QR/code and envelope, Ed25519 authority/proofs and request hashes; bound control-plane HTTP; durable first-key, recovery, recipient activation and signed mutations; native setup, recipient pairing, trusted-device approval, recovery replacement, disclosure, library-switch review/resume/cancel/offline finish and empty-target first-key UI wired | Independent vectors, retained proofs, interrupted Secret Service writes, schema migration, response ownership, exact authorization targets, mutation recovery and offline switch cancellation/completion pass; earlier verified loopback TLS passes; independent QR decoder passes for recovery and pairing payloads; combined live UI/HTTPS/keyring verification, capacity management remains pending |
+| Library-key setup | Portable sync-v1 bundle, P-256 pairing, recovery QR/code and envelope, Ed25519 authority/proofs and request hashes; bound control-plane HTTP; durable first-key, recovery, recipient activation and signed mutations; native setup, recipient pairing, trusted-device approval, recovery replacement, disclosure, library-switch review/resume/cancel/offline finish and empty-target first-key UI wired | Independent vectors, retained proofs, interrupted Secret Service writes, schema migration, response ownership, exact authorization targets, mutation recovery and offline switch cancellation/completion pass; earlier verified loopback TLS passes; independent QR decoder passes for recovery and pairing payloads; terminal history retirement is wired; combined live UI/HTTPS/keyring verification remains pending |
 | Library-switch pairing | Separate bounded Secret Service candidate history, request/check/cancel, retained private drafts and claims, fresh authority verification, native public QR/copy and subsequent reviewed activation | Twenty desktop tests (nineteen without desktop features) cover interruption, response ownership, expiry, scope/account changes, capacity/schema/generation refusal, old-key preservation, exact authorized handover and review-only reuse of retained claims across changed pins/accounts; native GTK and private-keyring attempts stop before window/keyring creation |
 | Empty-target first keys | Separate bounded Secret Service candidate history, exact key/envelope before POST, owner-only native create/resume, fresh server reconciliation and reviewed activation | Twenty-seven desktop tests (twenty-six without desktop features) cover writes, races, restart, scope/account/schema/capacity refusal, old-key preservation, reviewed reuse across changed pins/accounts and offline completion/retirement of promoted recovery-code copies; combined live workflow remains unverified |
 | Local owner authorization | Bounded unprivileged PAM worker, exact-purpose/scope/generation gate, single-use permit and revocable disclosure lease; password dialog and focus/lock UI wired | Earlier private-policy libpam and current cancellation/clock tests pass; restricted-context private-policy success and live combined current-user/UI verification remain unavailable |
@@ -1434,7 +1435,7 @@ target snapshot can therefore preserve both conflicting bodies with new CAS fact
 Existing lost-ACK packets and inbound pages remain in the old encrypted image,
 not the new data plane. The checkpoint uses the Linux-only binary schema.
 
-The handover owner's closed schema-3 Secret Service archive keeps at most eight
+The handover owner's closed schema-4 Secret Service archive keeps at most eight
 review entries and 128 KiB; it refuses capacity exhaustion without evicting old
 capabilities. The entry retains exact old LibraryKey, Bootstrap, PairingRecipient,
 SpaceCreation and KeyMutation slot values, the verified new key/presentation,
@@ -1599,11 +1600,11 @@ new locally authorized retry; a lost final receipt is inspected without replay.
 Current credentials need not exist or decode. No server operation or verified
 data-plane key is returned. The native worker drops its selected transport; the UI
 clears selection and disables data/key controls. Fresh reconnect and selection
-own subsequent live verification/review. The closed schema-3 `completed` phase
+own subsequent live verification/review. The closed schema-4 `completed` phase
 records local activation, not current server access. Unpublished transitions still
 use offline cancellation; restoring an advanced/foreign frozen state is separate.
 
-`src/key_history.rs` reads the three protected histories under the key-owner mutex
+`src/key_history.rs` reads the four protected histories under the key-owner mutex
 and common library lock. Its ephemeral catalogue contains library/server/key-version
 metadata, closed phases/recovery statuses, bounded review counts, prior-capability
 presence and exact protected-document sizes. It has no serialization or Debug
@@ -1624,8 +1625,95 @@ an observed desktop lock, cancellation and quit close it; stale asynchronous rep
 are discarded. This read-only view needs no PAM permit and does not relax any
 authorization boundary for disclosure, activation or restoration. Native history
 browsing and separately authorized restoration are wired, including archived
-queued generations. Foreign-vault recovery and protected capacity management
-remain necessary.
+queued generations and multi-source foreign-vault recovery. Terminal key, pairing,
+switch and restoration entries can now be explicitly retired as described below.
+
+### Explicit history retirement
+
+`src/history_capacity.rs` and its native **Review Removal…** flow retire one exact
+terminal entry from the four protected key/recovery archives. The review identifies
+the affected libraries and the protected/encrypted bytes to remove. Fresh computer
+authentication has separate purposes for initial removal and interrupted completion.
+No inspection, automatic sync, cancellation or capacity exhaustion evicts a copy.
+Active slots, primary files, vault data and the current encrypted sync journal remain
+unchanged. A saved copy can contain the only old key or local version; the native
+review explicitly describes that loss before authorization.
+
+Each owning codec validates its entire archive before supplying a removable row.
+First-key candidates must be Ready/Lost; pairing candidates must be Ready/Cancelled.
+Switches and restorations must be terminal, with no pending switch, restoration,
+primary marker or encrypted primary intent. Old recipient, creation and signed-action
+capabilities must have a terminal receipt from their own strict codec. Unknown legacy
+capabilities and still pending remote requests stay retained. Another archive owning
+the same image nonce refuses removal. Selected source/target images are authenticated
+as the exact original reset or frozen redo before they can be scheduled for deletion.
+
+The bounded `HistoryMaintenance` Secret Service slot stores durable consent before
+archive replacement. It binds the exact before/after archive hashes and generation,
+active key/checkpoint owner, selected libraries and authenticated image identities.
+It contains no bodies, root keys or paths, and is never written to a plaintext file.
+All ordinary account/key Secret Service transactions fence while it exists. The
+read-only catalogue and reviewed maintenance owner may enter; clipboard history uses
+a separately restricted owner that can access only its own independent key slot.
+A native worker also refuses to
+prepare removal while an issued HTTP grant still needs retention. The worker's
+one-use review token and existing 120-second preparation guard close on cancellation,
+focus/lock changes, stale tokens and unrelated commands.
+
+File checks use regular, singly linked files, bounded no-follow/nonblocking opens,
+descriptor/path identities and SHA-256 of the encrypted bytes. All remaining files
+are checked before any removal, then checked again individually. Exact missing files
+are accepted only after the archive replacement is confirmed. The directory is synced
+before clearing the intent. This uses the common library/owner locks; it does not claim
+atomic compare-and-unlink against a hostile writer or universal ancestor-symlink safety.
+Changed files halt for review, and unknown orphan images are never inferred to be garbage.
+
+Switch archives now write schema 4; first-key, pairing and restoration archives write
+schema 2. Their prior nonempty schemas remain readable. These versions allow an empty
+archive with a preserved, incremented generation. Older malformed empty documents remain
+refused, and appending after retirement uses the saved generation rather than starting over.
+Isolated tests cover all four archives, a full eight-entry candidate archive, all five
+durable interruption boundaries, ambiguous before/after Secret Service writes, unchanged
+current files/keys/journal, shared references, stale frames, replaced/linked files and the
+production native retention owner. Live GTK/keyring/PAM verification remains outstanding,
+as does unreferenced-image cleanup. Standalone creation receipts use the same reviewed
+retirement protocol, described below.
+
+Standalone creation history participates as a fifth protected section. Its owning
+`space_creation.rs` codec accepts the legacy single-journal schema 1 and nonempty
+schema 2; modern documents write schema 3, including a valid empty document with a
+positive monotonic generation. The 8-entry/64-KiB limit remains unchanged. Each row
+exposes only created/source library metadata and Requested/Created state. Catalogue
+inspection neither reads `Credentials` nor writes protected storage. Unknown old
+capabilities are labelled unreadable and retained, rather than displayed as empty.
+
+Only a completed modern receipt for a different library can offer removal. The
+current installed target's receipt remains its admission guard. The owning typed
+first-key and pairing codecs refuse removal while the selected receipt supports a
+nonterminal request. Preparation and pre-replacement authorization evaluate
+the same current-account admission predicate against both the original history
+and its exact proposed remainder; resume also verifies admission from the confirmed
+after-image. Another account's pending or completed entries
+cannot accidentally strand the current library. The worker reuses its existing
+revocable one-use review and fresh-purpose PAM authorization. The native review
+describes metadata retirement accurately: no remote library is deleted, no saved
+root key or encrypted recovery image belongs to this receipt, and all current local
+files and active keys stay unchanged. Durable consent and exact generation/hash CAS
+are the same as for the four key/recovery sections. A known after-image can finish
+without retrying any HTTP request. Legacy single-journal receipts stay protected
+until normal explicit creation migrates them or a library switch archives them.
+
+Isolated creation tests cover full-history capacity recovery, exact preservation
+of unrelated receipts and current files/slots, schema-2 to schema-3 retirement,
+last-entry generation followed by a new creation, both durable interruption points,
+all six ambiguous write/delete outcomes, changed account/generation/active target,
+pending pairing, loss of the sole current-account admission witness, and a
+credential-free read-only backend. A real first-key lifecycle additionally loses
+its POST reply, preserves the supporting creation receipt while Sent, then permits
+retirement after the response is authenticated and stored as Ready. These fixtures
+use temporary roots, fictional accounts, memory providers and the fixture auth gate;
+they do not contact a real server, keyring or PAM service. Live desktop verification
+remains outstanding.
 
 `src/history_restore.rs` binds an opaque history selection to the exact protected
 switch document and transition. It authenticates both old encrypted images and
@@ -1715,7 +1803,7 @@ life. A missing, changed or incompatible vault rejects the entire proposal.
 before/after ordinary and vault images, including unchanged vault headers. Both
 encrypted source/WAL images are fsynced under the shared non-evicting 32-file/512-MiB
 budget before a `HistoryRestore` Secret Service receipt permits any primary write.
-Its closed schema-1 history retains at most eight entries/128 KiB and reserves both
+Its closed schema-2 history retains at most eight entries/128 KiB and reserves both
 terminal receipts/generations before consent. Failed pre-receipt writes can leave
 encrypted orphan images; they consume capacity and cannot authorize an update.
 
@@ -1731,7 +1819,7 @@ clear selected transport afterward and require fresh reconnect/selection before
 sync. Review, vault-password and computer-password dialogs cancel on focus loss,
 known lock or dismissal. Incompatible copy units and new keyword collisions fail closed
 pending separate group/collision review. Live legacy hash repair,
-capacity management and live combined verification remain unfinished.
+unreferenced-image cleanup and live combined verification remain unfinished.
 
 Durable consent binds the target account/deployment so a legitimate reconnect
 can refresh token generations. Each network boundary still checks the caller's
@@ -1745,7 +1833,7 @@ allows fresh consent after primary changes. Managing protected history capacity
 and combined live verification remain necessary for the complete workflow.
 
 An initialized target's key can now be acquired through `src/pairing_candidate.rs`.
-Its separate `PairingCandidate` Secret Service slot has a closed schema-1 history
+Its separate `PairingCandidate` Secret Service slot has a closed schema-2 history
 with at most eight entries and 128 KiB. Each entry binds account/deployment and
 the full target key pin, retains its private draft before creation, marks the
 non-idempotent request sent before POST, and saves known invitations and claimed
@@ -1772,10 +1860,11 @@ journal and active slots are confirmed. It preserves the original account/pin,
 private proof and ciphertext; no second poll/claim is needed. Unclaimed drafts and
 another server instance or library cannot supply a review key. Once the exact target
 journal is published, locally authorized offline completion can finish activation
-without the original live account/pin. Protected history management remains outstanding.
+without the original live account/pin. Ready/cancelled candidate copies can be retired
+through the separate reviewed history-removal flow.
 
 An existing empty selected target uses `src/bootstrap_candidate.rs` and the separate
-`BootstrapCandidate` Secret Service slot. Its exact schema-1 document has a generation
+`BootstrapCandidate` Secret Service slot. Its exact schema-2 document has a generation
 and at most eight entries, capped at 128 KiB. Each entry binds the account/deployment
 and complete target pin, retains the key plus authenticated recovery presentation,
 and records prepared, sent, ready or lost status. Capacity exhaustion preserves all
@@ -1835,9 +1924,10 @@ presentation, checkpoint material, primary files and journal remain unchanged.
 Original-source admission remains available while the separate target needs its
 existing fresh-key candidate and reviewed handover. Created metadata grants no
 data-plane access or permission to transfer local records. Retention exhaustion
-halts new creation without evicting older intents; capacity management remains
-pending. Combined live GTK/keyring/HTTPS
-verification remains outstanding.
+halts new creation without evicting older intents. Completed standalone receipts can
+now be explicitly retired through Library Recovery History; active admission and
+unfinished requests remain protected. Combined live GTK/keyring/HTTPS verification
+remains outstanding.
 
 This kernel is not a complete sync engine. It still needs live legacy secure hash/stamp
 repair, conflict-owned absent/deleted-copy recovery, account/rekey

@@ -160,9 +160,10 @@ impl Archive {
             let fields = exact(&value, &["schema", "generation", "entries"])?;
             result.generation = fields["generation"].as_int()?;
             let entries = fields["entries"].as_array()?;
-            if fields["schema"].as_int()? != 1
+            let schema = fields["schema"].as_int()?;
+            if !matches!(schema, 1..=2)
                 || result.generation < 1
-                || entries.is_empty()
+                || entries.is_empty() && schema < 2
                 || entries.len() > MAX_ENTRIES
             {
                 return Err(Failure::InvalidState);
@@ -191,7 +192,7 @@ impl Archive {
             return Err(Failure::InvalidState);
         }
         let bytes = object([
-            ("schema", Value::Int(1)),
+            ("schema", Value::Int(2)),
             (
                 "generation",
                 Value::Int(
@@ -282,17 +283,26 @@ pub(super) fn history_locked<B: Backend>(
     owner: &mut Locked<'_, B>,
 ) -> super::Result<Vec<super::history::SavedPairing>> {
     use super::history::{PairingPhase, SavedLibrary, SavedPairing};
-    Ok(Archive::load(owner)?
+    let saved = Archive::load(owner)?;
+    Ok(saved
         .entries
-        .into_iter()
-        .map(|entry| SavedPairing {
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| SavedPairing {
+            removal: (entry.ready || entry.cancelled).then(|| {
+                capacity::Selection::new(
+                    capacity::Section::Pairing,
+                    index,
+                    saved.snapshot.as_ref().expect("validated archive"),
+                )
+            }),
             library: SavedLibrary::new(&entry.binding),
             phase: if entry.cancelled {
                 PairingPhase::Cancelled
             } else if entry.ready {
                 PairingPhase::Ready
             } else {
-                match entry.phase {
+                match &entry.phase {
                     Phase::Creating { .. } => PairingPhase::Creating,
                     Phase::Waiting(_) => PairingPhase::Waiting,
                     Phase::Claimed { .. } => PairingPhase::Claimed,
@@ -301,6 +311,21 @@ pub(super) fn history_locked<B: Backend>(
             },
         })
         .collect())
+}
+pub(super) fn removal_document_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+) -> super::Result<capacity::Document> {
+    let saved = Archive::load(owner)?;
+    let rows = saved
+        .entries
+        .iter()
+        .map(|entry| capacity::Row {
+            libraries: vec![entry.binding.clone()],
+            eligible: entry.ready || entry.cancelled,
+            images: None,
+        })
+        .collect();
+    capacity::Document::validated(saved.snapshot, saved.generation, rows)
 }
 pub(super) fn retained_bundle<B: Backend>(
     owner: &mut Locked<'_, B>,

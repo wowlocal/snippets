@@ -1,4 +1,5 @@
 use super::*;
+use crate::key_store::recipient::retirement_terminal;
 use crate::{
     bootstrap::{Invitation, PairingDraft},
     cloud::{Pairing, PairingState},
@@ -211,6 +212,7 @@ fn recipient_retains_private_draft_before_post_and_claim_before_key_activation()
     assert!(server.creates == 1 && server.claims == 0);
     assert!(memory.slot(Slot::LibraryKey).is_none());
     let saved = memory.slot(Slot::PairingRecipient).unwrap();
+    assert!(!retirement_terminal(Some(saved.clone())).unwrap());
     let v = canonical::parse(&saved).unwrap();
     assert!(v.as_object().unwrap()["generation"] == Value::Int(3));
     let qr = invitation.encode_qr().unwrap();
@@ -222,6 +224,7 @@ fn recipient_retains_private_draft_before_post_and_claim_before_key_activation()
     let mut store = Store::load(temp.path(), memory.clone()).unwrap();
     server.approve();
     assert_ready(good(check(&mut store, &mut server)));
+    assert!(retirement_terminal(memory.slot(Slot::PairingRecipient)).unwrap());
     assert!(server.claims == 1 && memory.0.lock().unwrap().writes == 6);
     let key = store
         .transaction_with(|o| load_locked(o, &mut server))

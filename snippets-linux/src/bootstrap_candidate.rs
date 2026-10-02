@@ -99,10 +99,19 @@ pub(super) fn history_locked<B: Backend>(
     active: Option<&Installed>,
 ) -> Result<Vec<super::history::SavedFirstKey>> {
     use super::history::{SavedFirstKey, SavedKey};
-    Ok(History::load(owner)?
+    let saved = History::load(owner)?;
+    Ok(saved
         .entries
-        .into_iter()
-        .map(|entry| SavedFirstKey {
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| SavedFirstKey {
+            removal: matches!(entry.phase, Status::Ready { .. } | Status::Lost).then(|| {
+                capacity::Selection::new(
+                    capacity::Section::FirstKeys,
+                    index,
+                    saved.snapshot.as_ref().expect("validated archive"),
+                )
+            }),
             key: SavedKey::new(&entry.installed, entry.presentation.status, active),
             phase: entry.status(),
         })
@@ -121,9 +130,10 @@ impl History {
             let fields = exact(&value, &["schema", "generation", "entries"])?;
             saved.generation = fields["generation"].as_int()?;
             let entries = fields["entries"].as_array()?;
-            if fields["schema"].as_int()? != 1
+            let schema = fields["schema"].as_int()?;
+            if !matches!(schema, 1..=2)
                 || saved.generation < 1
-                || entries.is_empty()
+                || entries.is_empty() && schema < 2
                 || entries.len() > MAX_ENTRIES
             {
                 return Err(Failure::InvalidState);
@@ -144,7 +154,7 @@ impl History {
             return Err(Failure::Busy);
         }
         let bytes = object([
-            ("schema", Value::Int(1)),
+            ("schema", Value::Int(2)),
             (
                 "generation",
                 Value::Int(
@@ -180,6 +190,21 @@ impl History {
         self.generation += 1;
         Ok(())
     }
+}
+pub(super) fn removal_document_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+) -> Result<capacity::Document> {
+    let saved = History::load(owner)?;
+    let rows = saved
+        .entries
+        .iter()
+        .map(|entry| capacity::Row {
+            libraries: vec![entry.installed.binding.clone()],
+            eligible: matches!(entry.phase, Status::Ready { .. } | Status::Lost),
+            images: None,
+        })
+        .collect();
+    capacity::Document::validated(saved.snapshot, saved.generation, rows)
 }
 fn account<B: Backend>(
     owner: &mut Locked<'_, B>,

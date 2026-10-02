@@ -493,7 +493,7 @@ fn change<B: Backend>(
         Store::load(root, backend).map_err(|_| KEY)?
     };
     store
-        .transaction(|owner| {
+        .clipboard_transaction(|owner| {
             Ok((|| -> Result<Vec<Entry>> {
                 let library = Library::prepare(root.into())?;
                 let _guard = library.lock()?;

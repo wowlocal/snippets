@@ -198,7 +198,10 @@ struct Journal {
 }
 impl Journal {
     fn load<B: Backend>(owner: &mut Locked<'_, B>) -> super::Result<Option<Self>> {
-        let Some(bytes) = owner.read(Slot::PairingRecipient)? else {
+        Self::from_snapshot(owner.read(Slot::PairingRecipient)?)
+    }
+    fn from_snapshot(snapshot: Option<Zeroizing<Vec<u8>>>) -> super::Result<Option<Self>> {
+        let Some(bytes) = snapshot else {
             return Ok(None);
         };
         let value = canonical::parse(&bytes)?;
@@ -276,6 +279,10 @@ impl Journal {
         }
         Ok(())
     }
+}
+
+pub(crate) fn retirement_terminal(snapshot: Option<Zeroizing<Vec<u8>>>) -> super::Result<bool> {
+    Ok(Journal::from_snapshot(snapshot)?.is_none_or(|journal| journal.phase.is_none()))
 }
 pub(super) fn check_admission<B: Backend>(
     owner: &mut Locked<'_, B>,

@@ -134,6 +134,9 @@ pub struct Document {
 mod recovery_header;
 pub(crate) use recovery_header::MAX_HEADER_BYTES;
 pub use recovery_header::{RecoveryHeader, RecoveryOwner};
+#[path = "vault_insertion.rs"]
+#[cfg(any(test, feature = "desktop"))]
+mod insertion;
 impl Document {
     pub fn decode(data: &[u8]) -> Result<Self> {
         if data.len() > model::MAX_FILE_BYTES {
@@ -1100,7 +1103,7 @@ mod tests {
             serde_json::from_str(include_str!("../tests/fixtures/crypto-v1.json")).unwrap();
         Document::decode(&serde_json::to_vec(&value["document"]).unwrap()).unwrap()
     }
-    fn setup() -> (tempfile::TempDir, Library, Vault) {
+    pub(super) fn setup() -> (tempfile::TempDir, Library, Vault) {
         let directory = tempfile::tempdir().unwrap();
         let library = Library::open(directory.path().into()).unwrap();
         let vault_dir = directory.path().join("Vault");
