@@ -60,6 +60,7 @@ pub(super) fn prepare(
     expected: &ReadSet,
     keys: Option<&Keyring<'_>>,
     discover: bool,
+    retained: Option<&BTreeMap<Uuid, Envelope>>,
 ) -> Result<Vec<Group>> {
     let mut selected = BTreeMap::new();
     let mut originals = BTreeMap::new();
@@ -125,6 +126,14 @@ pub(super) fn prepare(
         }
     }
     let mut frozen = journal.conflict_snapshots();
+    if let Some(retained) = retained {
+        for (id, copy) in retained {
+            if frozen.get(id).is_some_and(|before| before != copy) {
+                return Err(Failure::ReservedCollision);
+            }
+            frozen.insert(*id, copy.clone());
+        }
+    }
     for (id, copy) in &originals {
         if let Some(existing) = frozen.get(id)
             && existing != copy

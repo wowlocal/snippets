@@ -2260,7 +2260,16 @@ impl AccountWindow {
                 };
                 let name=summary.name.chars().take(256).collect::<String>();
                 let keyword=summary.keyword.chars().take(256).collect::<String>();
-                let body=format!("{}{}\n\n{}",name,if keyword.is_empty() {String::new()} else {format!(" · {keyword}")},description);
+                let preservation = if summary.preserved_source_versions > 0 {
+                    format!("\n\nThis decision also preserves {} held source versions as disabled conflict copies. Existing copy edits and cloud requests stay intact.", summary.preserved_source_versions)
+                } else { String::new() };
+                let originals = if summary.restored_conflict_copies > 0 {
+                    format!("\n\nRestore {} missing conflict originals as part of this decision. Their saved versions synchronize before the source decision.", summary.restored_conflict_copies)
+                } else { String::new() };
+                let conflicts = if summary.preserved_conflict_copies > 0 {
+                    format!("\n\nConflict originals to preserve: {}. Their contents are kept before your decision is applied.", summary.preserved_conflict_copies)
+                } else { String::new() };
+                let body=format!("{}{}\n\n{}{}{}{}",name,if keyword.is_empty() {String::new()} else {format!(" · {keyword}")},description,preservation,originals,conflicts);
                 let dialog=adw::AlertDialog::builder().heading(if summary.secure {"Review Secure Snippet Deletion"} else {"Review Snippet Deletion"}).body(body).build();
                 dialog.add_responses(&[("cancel","Cancel"),("keep",if summary.kind==Kind::CloudDeletion {"Keep Local Version"} else {"Restore Retained Version"}),("delete","Confirm Deletion")]);
                 dialog.set_response_enabled("keep",summary.can_keep);
@@ -2278,8 +2287,8 @@ impl AccountWindow {
                     let recovery = gtk::CheckButton::with_label("Use the vault recovery key");
                     let fields = gtk::Box::new(gtk::Orientation::Vertical, 10);
                     fields.append(&password); fields.append(&recovery);
-                    let dialog = adw::AlertDialog::builder().heading(if choice == Choice::Keep { "Unlock the Vault to Restore This Copy" } else { "Unlock the Vault to Preserve Conflict Originals" })
-                        .body("Enter the matching vault's passphrase or recovery key to verify the retained copy and its conflict originals before applying your decision.")
+                    let dialog = adw::AlertDialog::builder().heading(if choice == Choice::Keep { "Unlock the Vault to Restore This Snippet" } else { "Unlock the Vault to Preserve Conflict Originals" })
+                        .body("Enter the matching vault's passphrase or recovery key to verify the retained snippet and its conflict originals before applying your decision.")
                         .extra_child(&fields).build();
                     dialog.add_responses(&[("cancel", "Cancel"), ("restore", if choice == Choice::Keep { "Verify and Restore" } else { "Verify and Delete" })]);
                     dialog.set_default_response(Some("cancel")); dialog.set_close_response("cancel");

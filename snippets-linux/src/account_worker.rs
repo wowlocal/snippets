@@ -848,6 +848,9 @@ impl Handle {
                             can_keep: true,
                             keep_requires_vault: true,
                             delete_requires_vault: true,
+                            preserved_source_versions: 0,
+                            restored_conflict_copies: 0,
+                            preserved_conflict_copies: 0,
                         },
                     }),
                     Command::DecideDeletionReview {

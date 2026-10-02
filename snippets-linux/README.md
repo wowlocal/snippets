@@ -378,9 +378,13 @@ copy whose original was never created can now be reviewed from its retained
 conflict metadata. Both choices ask for the matching vault and authenticate the
 whole connected group before preparing that original. Existing originals and
 requests retain their exact bytes; the chosen later version waits behind them.
-Missing whole library/vault files, selected sources with missing originals, and
-secure records that still carry unresolved conflict evidence require separate
-recovery; this action cannot approve a mass deletion.
+An absent source with resolved retained intent can also recover missing originals.
+The dialog lists how many originals will be restored and how many distinct held
+source versions will become disabled copies. Both choices require the matching
+vault; existing copy edits stay intact while their originals synchronize first.
+Missing whole library/vault files, selected intent that still carries unresolved
+conflict evidence, and independently unresolved or unapproved missing child intent
+require separate recovery; this action cannot approve a mass deletion.
 
 Restoring a protected conflict copy asks for the matching vault's passphrase or
 recovery key. One bounded vault session verifies the latest sealed body and every

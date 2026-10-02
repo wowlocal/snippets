@@ -442,9 +442,20 @@ impl Journal {
             .collect();
         if ids.iter().all(|id| !self.dependency_owns(*id)) {
             let mut next = self.clone();
+            let sources: Vec<_> = fresh.dependencies.keys().copied().collect();
             next.dependencies.extend(fresh.dependencies);
             if historical {
                 next.delivery.extend(targets.clone());
+            } else {
+                for id in sources {
+                    if let Some(target) = targets.get(&id)
+                        && target.deleted
+                        && next.deletion_approved(target)?
+                        && next.known_absence(id)
+                    {
+                        next.delivery.insert(id, target.clone());
+                    }
+                }
             }
             codec::validate(&next)?;
             *self = next;
@@ -479,6 +490,22 @@ impl Journal {
                 })
             });
         if replay {
+            let mut next = self.clone();
+            for id in fresh.dependencies.keys() {
+                if let Some(target) = old_targets.get(id)
+                    && target.deleted
+                    && targets.get(id) == Some(target)
+                    && next.deletion_approved(target)?
+                    && next.can_release_deletion_source(*id)
+                {
+                    // A received tombstone can already equal confirmed state,
+                    // which retires ordinary desired intent. Keep the reviewed
+                    // post-copy source release until its own actual ACK.
+                    next.delivery.insert(*id, target.clone());
+                }
+            }
+            codec::validate(&next)?;
+            *self = next;
             return Ok(());
         }
         if self.generations.len() >= MAX_PRESERVATION_GENERATIONS {

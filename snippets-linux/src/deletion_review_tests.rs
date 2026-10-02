@@ -8,10 +8,14 @@ use crate::{
     snapshot_review::tests::{SALT, Server, cursor, envelope, feed, key, scope, write_primary},
 };
 use std::{cell::Cell, fs};
+#[path = "deletion_current_tests.rs"]
+mod current_recovery;
 #[path = "deletion_missing_tests.rs"]
 mod missing_originals;
 #[path = "deletion_preservation_tests.rs"]
 mod preservation;
+#[path = "deletion_source_tests.rs"]
+mod source_recovery;
 fn owner<'a>(
     library: &'a Library,
     key: &'a RootKey,
@@ -743,12 +747,21 @@ fn missing_original_evidence_and_changed_checkpoints_cannot_be_bypassed_by_confi
     checkpoint.save(&library, &key(), &SALT).unwrap();
     document.records.clear();
     write_vault(&library, &document);
-    assert_eq!(
-        owner(&library, &key(), &scope(), &|| Ok(()))
-            .prepare_deletion_review(&mut server)
-            .err(),
-        Some(Failure::PreservationRequired)
-    );
+    {
+        let key = key();
+        let scope = scope();
+        let owner = owner(&library, &key, &scope, &|| Ok(()));
+        let before = load(&library);
+        let review = owner.prepare_deletion_review(&mut server).unwrap();
+        assert_eq!(review.summary().preserved_source_versions, 1);
+        assert_eq!(
+            owner
+                .decide_deletion_review(&mut server, review, Choice::Delete)
+                .err(),
+            Some(Failure::VaultLocked)
+        );
+        assert!(load(&library).same_snapshot(&before));
+    }
     let (_temp, library, mut server) = setup();
     remove_one(&library);
     let key = key();

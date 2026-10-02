@@ -12,6 +12,9 @@ use crate::{
 };
 use uuid::Uuid;
 
+#[path = "deletion_sources.rs"]
+mod sources;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     LocalAbsence,
@@ -79,6 +82,9 @@ pub struct Summary {
     pub can_keep: bool,
     pub keep_requires_vault: bool,
     pub delete_requires_vault: bool,
+    pub preserved_source_versions: usize,
+    pub restored_conflict_copies: usize,
+    pub preserved_conflict_copies: usize,
 }
 enum Source {
     Local,
@@ -97,6 +103,9 @@ pub struct Review {
     source: Source,
     repair: Option<crate::journal::PreservationRepair>,
     materialize: bool,
+    source_versions: Vec<Envelope>,
+    missing_originals: Vec<Uuid>,
+    current_sources: Vec<Envelope>,
     summary: Summary,
 }
 impl Review {
@@ -137,6 +146,11 @@ fn requires_remote_delete(
         return Ok(false);
     }
     if journal.is_preservation_copy(e.id) {
+        return Ok(true);
+    }
+    if retained_live(journal, snapshot.records.get(&e.id), e.id)
+        .is_some_and(|live| merge::has_unresolved(Some(live)))
+    {
         return Ok(true);
     }
     if !snapshot.records.contains_key(&e.id) {
@@ -242,19 +256,67 @@ impl Owner<'_> {
         };
         let (id, source) = candidate(&checkpoint.journal, &snapshot, self)?;
         let live = retained_live(&checkpoint.journal, snapshot.records.get(&id), id).cloned();
-        let materialize = checkpoint.journal.dependency_owns(id)
-            && !checkpoint.journal.preservation_materialized(id)?;
+        let current_sources = if let Some(live) = &live
+            && merge::has_unresolved(Some(live))
+        {
+            sources::current_group(&checkpoint.journal, &snapshot.records, live)?
+        } else {
+            Vec::new()
+        };
+        let materialize = !current_sources.is_empty()
+            || (checkpoint.journal.dependency_owns(id)
+                && !checkpoint.journal.preservation_materialized(id)?);
         let variant = checkpoint
             .journal
             .unmaterialized_variants()?
             .into_iter()
             .find(|v| v.copy_id == id);
-        if (materialize && checkpoint.journal.is_preservation_source(id))
-            || live
-                .as_ref()
-                .is_some_and(|e| merge::has_unresolved(Some(e)))
-        {
-            return Err(Failure::PreservationRequired);
+        let source_versions = if materialize {
+            sources::versions(&checkpoint.journal, id, live.as_ref())?
+        } else {
+            Vec::new()
+        };
+        let frames = checkpoint.journal.preservation_generations(id)?;
+        let mut identities = sources::identities(&source_versions)?;
+        let mut current_copies = std::collections::BTreeSet::new();
+        for source in &current_sources {
+            for v in merge::secure_variants(source).map_err(|_| Failure::PreservationRequired)? {
+                current_copies.insert(v.copy_id);
+                identities.push((v.copy_id, v.source_id, v.fingerprint));
+            }
+        }
+        for frame in &frames {
+            for (source, copies) in &frame.sources {
+                for copy in copies {
+                    let p = merge::provenance(copy).ok_or(Failure::PreservationRequired)?;
+                    identities.push((copy.id, p.source_id, p.fingerprint));
+                }
+                for v in
+                    merge::secure_variants(source).map_err(|_| Failure::PreservationRequired)?
+                {
+                    identities.push((v.copy_id, v.source_id, v.fingerprint));
+                }
+            }
+        }
+        let mut missing_originals = std::collections::BTreeSet::new();
+        for (copy_id, source_id, fingerprint) in identities {
+            if snapshot
+                .records
+                .get(&copy_id)
+                .is_some_and(|e| !merge::matching_provenance(e, source_id, &fingerprint))
+            {
+                return Err(primary::Failure::ReservedCollision.into());
+            }
+            if materialize
+                && (checkpoint.journal.is_preservation_source(id) || !current_sources.is_empty())
+                && copy_id != id
+                && (checkpoint.journal.is_preservation_copy(copy_id)
+                    || current_copies.contains(&copy_id))
+                && !snapshot.records.contains_key(&copy_id)
+                && !checkpoint.journal.known_absence(copy_id)
+            {
+                missing_originals.insert(copy_id);
+            }
         }
         if let Some(variant) = &variant
             && snapshot.records.get(&id).is_some_and(|e| {
@@ -325,6 +387,9 @@ impl Owner<'_> {
                             || !e.extensions.contains_key("vaultKID"))
                 }),
             delete_requires_vault: materialize || repair_requires_vault,
+            preserved_source_versions: source_versions.len(),
+            restored_conflict_copies: missing_originals.len(),
+            preserved_conflict_copies: current_copies.len(),
         };
         let after = self.review_preflight(remote)?;
         if after.feed != observed.feed {
@@ -341,6 +406,9 @@ impl Owner<'_> {
             source,
             repair,
             materialize,
+            source_versions,
+            missing_originals: missing_originals.into_iter().collect(),
+            current_sources,
             summary,
         })
     }
@@ -404,12 +472,32 @@ impl Owner<'_> {
         }
         let mut next = review.checkpoint.journal.clone();
         next.key_epoch = Some(self.key_epoch);
+        let mut source_copies = Vec::new();
+        let mut group = None;
         if review.materialize {
             let vault = vault.as_deref_mut().ok_or(Failure::VaultLocked)?;
             let _guard = self.library.lock().map_err(|_| journal::Failure::Storage)?;
-            next = vault.with_restoration_keys_locked(self.library, |keys| {
-                next.materialize_preservation(review.id, keys)
-            })??;
+            (next, source_copies, group) =
+                vault.with_restoration_keys_locked(self.library, |keys| {
+                    let next = next.materialize_preservation(review.id, keys)?;
+                    let group = if review.current_sources.is_empty() {
+                        None
+                    } else {
+                        Some(primary::DeletionGroup::prepare(
+                            review.id,
+                            review.current_sources.clone(),
+                            &next,
+                            keys,
+                        )?)
+                    };
+                    let copies = sources::copies(
+                        &review.source_versions,
+                        &next,
+                        keys,
+                        group.as_ref().map(primary::DeletionGroup::originals),
+                    )?;
+                    Ok::<_, primary::Failure>((next, copies, group))
+                })??;
             if review.live.is_none() {
                 review.live = next.preservation_original(review.id).cloned();
             }
@@ -439,7 +527,11 @@ impl Owner<'_> {
                 Source::Local => {
                     let live = review.live.as_ref().ok_or(Failure::RestoreUnavailable)?;
                     let stamp = self.deletion_stamp(&review)?;
-                    live.tombstone(stamp.clone(), stamp.device().into(), true)?
+                    if let Some(group) = &group {
+                        group.tombstone(live, stamp)?
+                    } else {
+                        live.tombstone(stamp.clone(), stamp.device().into(), true)?
+                    }
                 }
             },
             Choice::Keep => {
@@ -456,14 +548,56 @@ impl Owner<'_> {
                 live
             }
         };
-        let outcome = merge::Outcome {
+        let mut outcomes = vec![merge::Outcome {
             survivor: Some(target.clone()),
-            conflict_copies: vec![],
-        };
-        let mut expected: primary::ReadSet =
-            [(review.id, review.snapshot.records.get(&review.id).cloned())]
-                .into_iter()
-                .collect();
+            conflict_copies: source_copies,
+        }];
+        for id in &review.missing_originals {
+            let original = next
+                .local_intent(*id, None)?
+                .or_else(|| {
+                    group
+                        .as_ref()
+                        .and_then(|group| group.sources().iter().find(|source| source.id == *id))
+                })
+                .or_else(|| next.entry(*id).map(|entry| &entry.desired))
+                .or_else(|| next.preservation_original(*id))
+                .or_else(|| group.as_ref().and_then(|group| group.originals().get(id)))
+                .cloned()
+                .ok_or(Failure::PreservationRequired)?;
+            // This review cannot grant another record's deletion permission or
+            // replace its separately unresolved local intent with an ancestor.
+            if original.deleted
+                || (merge::has_unresolved(Some(&original))
+                    && !group.as_ref().is_some_and(|group| {
+                        group.sources().iter().any(|source| *source == original)
+                    }))
+            {
+                return Err(Failure::PreservationRequired);
+            }
+            outcomes.push(merge::Outcome {
+                survivor: Some(original),
+                conflict_copies: vec![],
+            });
+        }
+        if let Some(group) = &group {
+            for source in group
+                .sources()
+                .iter()
+                .filter(|source| source.id != review.id)
+            {
+                if !outcomes
+                    .iter()
+                    .any(|outcome| outcome.survivor.as_ref().is_some_and(|e| e.id == source.id))
+                {
+                    outcomes.push(merge::Outcome {
+                        survivor: Some(source.clone()),
+                        conflict_copies: vec![],
+                    });
+                }
+            }
+        }
+        let mut expected = primary::preservation_read_set(&outcomes, &review.snapshot.records)?;
         if let Some(repair) = &review.repair {
             let frame = repair.frame();
             for e in frame
@@ -475,13 +609,29 @@ impl Owner<'_> {
                 expected.insert(e.id, review.snapshot.records.get(&e.id).cloned());
             }
         }
-        let mut prepared = if let Some(repair) = &review.repair {
+        if let Some(group) = &group {
+            for e in group.sources().iter().chain(group.originals().values()) {
+                expected.insert(e.id, review.snapshot.records.get(&e.id).cloned());
+            }
+        }
+        let mut prepared = if let Some(group) = &group {
+            vault.ok_or(Failure::VaultLocked)?.prepare_deletion_group(
+                self.library,
+                &next,
+                &review.device,
+                &outcomes,
+                &expected,
+                review.id,
+                group,
+                review.repair.as_ref(),
+            )?
+        } else if let Some(repair) = &review.repair {
             if let Some(vault) = vault {
                 vault.prepare_deletion_repair(
                     self.library,
                     &next,
                     &review.device,
-                    &[outcome],
+                    &outcomes,
                     &expected,
                     repair,
                 )?
@@ -490,7 +640,7 @@ impl Owner<'_> {
                     self.library,
                     &next,
                     &review.device,
-                    &[outcome],
+                    &outcomes,
                     &expected,
                     repair,
                     None,
@@ -503,12 +653,12 @@ impl Owner<'_> {
                 self.library,
                 &next,
                 &review.device,
-                &[outcome],
+                &outcomes,
                 &expected,
                 review.id,
             )?
         } else {
-            primary::prepare(self.library, &next, &review.device, &[outcome], &expected)?
+            primary::prepare(self.library, &next, &review.device, &outcomes, &expected)?
         };
         if !prepared.matches_snapshot(&review.snapshot) {
             return Err(Failure::Changed);

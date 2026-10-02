@@ -1,7 +1,7 @@
 //! Actual encrypted WAL and strict positional CAS; fictional fixtures only.
 use super::*;
 
-fn missing_original(
+pub(super) fn missing_original(
     corrupt: bool,
 ) -> (
     tempfile::TempDir,
@@ -48,7 +48,7 @@ fn missing_original(
     assert!(load(&library).journal.preservation_original(id).is_none());
     (temp, library, server, doc, source, id)
 }
-fn finish(owner: &Owner<'_>, library: &Library, server: &mut Server) {
+pub(super) fn finish(owner: &Owner<'_>, library: &Library, server: &mut Server) {
     let mut status = sender::Status::MoreBatches;
     for _ in 0..12 {
         status = owner.send(server, 2).unwrap().status;
@@ -67,7 +67,7 @@ fn finish(owner: &Owner<'_>, library: &Library, server: &mut Server) {
     assert_eq!(status, sender::Status::Settled);
     assert!(!load(library).journal.has_preservation_work());
 }
-struct LostReply<'a>(&'a mut Server);
+pub(super) struct LostReply<'a>(pub(super) &'a mut Server);
 impl sender::Remote for LostReply<'_> {
     fn preflight(&mut self) -> receiver::RemoteResult<sender::SendObservation> {
         <Server as sender::Remote>::preflight(self.0)

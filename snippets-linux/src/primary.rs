@@ -360,6 +360,10 @@ fn equal(a: Option<&Envelope>, b: Option<&Envelope>) -> Result<bool> {
 /// Already-merged outcomes are checked against the latest complete primary
 /// snapshot. Unrelated changes survive; touched records that raced are retried.
 /// Key-dependent secure conflicts defer as a complete preservation unit while locked.
+#[path = "primary_deletion.rs"]
+mod deletion;
+pub(crate) use deletion::DeletionGroup;
+
 pub fn prepare(
     library: &Library,
     journal: &Journal,
@@ -367,7 +371,16 @@ pub fn prepare(
     outcomes: &[Outcome],
     expected: &ReadSet,
 ) -> Result<Prepared> {
-    prepare_impl(library, journal, device, outcomes, expected, None, &[])
+    prepare_impl(
+        library,
+        journal,
+        device,
+        outcomes,
+        expected,
+        None,
+        &[],
+        None,
+    )
 }
 /// The native vault owner borrows its current key for this bounded operation.
 /// The locked snapshot must still have the same wraps, salt and vault identity.
@@ -387,6 +400,7 @@ pub fn prepare_authenticated(
         expected,
         Some(keys),
         &[],
+        None,
     )
 }
 pub(crate) fn prepare_restoration(
@@ -398,7 +412,9 @@ pub(crate) fn prepare_restoration(
     keys: Option<&Keyring<'_>>,
     history: &[crate::journal::RestorationGeneration],
 ) -> Result<Prepared> {
-    prepare_impl(library, journal, device, outcomes, expected, keys, history)
+    prepare_impl(
+        library, journal, device, outcomes, expected, keys, history, None,
+    )
 }
 pub(crate) fn prepare_deletion_repair(
     library: &Library,
@@ -409,7 +425,16 @@ pub(crate) fn prepare_deletion_repair(
     repair: &crate::journal::PreservationRepair,
     keys: Option<&Keyring<'_>>,
 ) -> Result<Prepared> {
-    let mut prepared = prepare_impl(library, journal, device, outcomes, expected, keys, &[])?;
+    let mut prepared = prepare_impl(
+        library,
+        journal,
+        device,
+        outcomes,
+        expected,
+        keys,
+        &[],
+        None,
+    )?;
     let _guard = library.lock().map_err(|_| Failure::Storage)?;
     let snapshot = snapshot_locked(library, journal, device)?;
     if !prepared.matches_snapshot(&snapshot) {
@@ -420,6 +445,39 @@ pub(crate) fn prepare_deletion_repair(
 }
 #[path = "primary_history.rs"]
 mod history;
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_deletion_group(
+    library: &Library,
+    journal: &Journal,
+    device: &str,
+    outcomes: &[Outcome],
+    expected: &ReadSet,
+    group: &DeletionGroup,
+    keys: &Keyring<'_>,
+    repair: Option<&crate::journal::PreservationRepair>,
+) -> Result<Prepared> {
+    let mut prepared = prepare_impl(
+        library,
+        journal,
+        device,
+        outcomes,
+        expected,
+        Some(keys),
+        &[],
+        Some(group),
+    )?;
+    if let Some(repair) = repair {
+        let _guard = library.lock().map_err(|_| Failure::Storage)?;
+        let snapshot = snapshot_locked(library, journal, device)?;
+        if !prepared.matches_snapshot(&snapshot) {
+            return Err(Failure::StalePrimary);
+        }
+        prepared.history =
+            history::prepare_repair(repair, journal, &snapshot.records, expected, Some(keys))?;
+    }
+    Ok(prepared)
+}
+#[allow(clippy::too_many_arguments)]
 fn prepare_impl(
     library: &Library,
     journal: &Journal,
@@ -428,6 +486,7 @@ fn prepare_impl(
     expected: &ReadSet,
     keys: Option<&Keyring<'_>>,
     historical: &[crate::journal::RestorationGeneration],
+    deletion: Option<&DeletionGroup>,
 ) -> Result<Prepared> {
     if journal.primary_intent.is_some() {
         return Err(Failure::RecoveryRequired);
@@ -451,6 +510,15 @@ fn prepare_impl(
         &journal.projection_knowledge(),
     )?;
     let resolutions = journal.carrier_resolutions(&primary)?;
+    if let Some(group) = deletion {
+        group.validate(
+            journal,
+            &primary,
+            expected,
+            outcomes,
+            keys.ok_or(Failure::VaultLocked)?,
+        )?;
+    }
     let administrative = !outcomes.is_empty()
         && outcomes.iter().all(|o| {
             o.conflict_copies.is_empty()
@@ -490,6 +558,7 @@ fn prepare_impl(
         expected,
         if administrative { None } else { keys },
         !administrative,
+        deletion.map(DeletionGroup::originals),
     )? {
         let mut retry = false;
         let mut defer = false;
@@ -527,7 +596,10 @@ fn prepare_impl(
             )? {
                 retry = true;
             }
-            if e.deleted && merge::has_unresolved(primary.get(&e.id)) {
+            if e.deleted
+                && merge::has_unresolved(primary.get(&e.id))
+                && !deletion.is_some_and(|group| group.permits(e.id, primary.get(&e.id)))
+            {
                 return Err(Failure::InvalidState);
             }
             let variants = merge::secure_variants(e).map_err(|_| Failure::InvalidState)?;
@@ -651,6 +723,9 @@ fn prepare_impl(
         }
         prepared.authenticated.extend(group.authenticated);
         prepared.held.extend(group.held);
+    }
+    if let Some(group) = deletion {
+        group.attach(&mut prepared);
     }
     validate_keywords(
         &contents.snippets,

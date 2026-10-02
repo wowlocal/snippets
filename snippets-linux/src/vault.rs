@@ -417,6 +417,11 @@ enum AuthenticatedApply<'a> {
     Restoration(&'a [crate::journal::RestorationGeneration]),
     DeletionDecision(Uuid),
     DeletionRepair(&'a crate::journal::PreservationRepair),
+    DeletionGroup(
+        Uuid,
+        &'a crate::primary::DeletionGroup,
+        Option<&'a crate::journal::PreservationRepair>,
+    ),
 }
 
 /// Workers can prepare creation/authentication, but only the GTK owner may
@@ -722,6 +727,27 @@ impl Vault {
             AuthenticatedApply::DeletionRepair(repair),
         )
     }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_deletion_group(
+        &mut self,
+        library: &Library,
+        journal: &crate::journal::Journal,
+        device: &str,
+        outcomes: &[crate::merge::Outcome],
+        expected: &crate::primary::ReadSet,
+        id: Uuid,
+        group: &crate::primary::DeletionGroup,
+        repair: Option<&crate::journal::PreservationRepair>,
+    ) -> crate::primary::Result<crate::primary::Prepared> {
+        self.prepare_authenticated_apply(
+            library,
+            journal,
+            device,
+            outcomes,
+            expected,
+            AuthenticatedApply::DeletionGroup(id, group, repair),
+        )
+    }
     fn prepare_authenticated_apply(
         &mut self,
         library: &Library,
@@ -744,14 +770,20 @@ impl Vault {
             &self.session.as_ref().expect("unlocked").key,
             document,
         )?;
-        let (history, repair, reviewed_id) = match purpose {
-            AuthenticatedApply::Restoration(history) => (history, None, None),
-            AuthenticatedApply::DeletionDecision(id) => (&[][..], None, Some(id)),
+        let (history, repair, reviewed_id, group) = match purpose {
+            AuthenticatedApply::Restoration(history) => (history, None, None, None),
+            AuthenticatedApply::DeletionDecision(id) => (&[][..], None, Some(id), None),
             AuthenticatedApply::DeletionRepair(repair) => {
-                (&[][..], Some(repair), Some(repair.id()))
+                (&[][..], Some(repair), Some(repair.id()), None)
+            }
+            AuthenticatedApply::DeletionGroup(id, group, repair) => {
+                (&[][..], repair, Some(id), Some(group))
             }
         };
         if let Some(id) = reviewed_id {
+            if group.is_some_and(|group| group.id() != id) {
+                return Err(crate::primary::Failure::InvalidState);
+            }
             if !journal.preservation_materialized(id)? {
                 return Err(crate::primary::Failure::InvalidState);
             }
@@ -760,7 +792,11 @@ impl Vault {
                 &keys,
             )?;
         }
-        let prepared = if let Some(repair) = repair {
+        let prepared = if let Some(group) = group {
+            crate::primary::prepare_deletion_group(
+                library, journal, device, outcomes, expected, group, &keys, repair,
+            )
+        } else if let Some(repair) = repair {
             crate::primary::prepare_deletion_repair(
                 library,
                 journal,

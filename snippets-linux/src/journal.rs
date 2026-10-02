@@ -1203,6 +1203,22 @@ impl Journal {
             .filter(|s| candidate.generation_primary_safe(s))
             .map(|s| s.id)
             .collect();
+        let mut reviewed_deleted = BTreeSet::new();
+        for id in candidate.dependencies.keys() {
+            if current.contains_key(id) || !candidate.known_absence(*id) {
+                continue;
+            }
+            if let Some(target) = candidate
+                .entries
+                .get(id)
+                .map(|entry| &entry.desired)
+                .or_else(|| candidate.delivery.get(id))
+                && target.deleted
+                && candidate.deletion_approved(target)?
+            {
+                reviewed_deleted.insert(*id);
+            }
+        }
         for (source_id, edge) in &mut candidate.dependencies {
             for r in edge.requirements.values_mut() {
                 if r.accepted_version.is_some()
@@ -1231,13 +1247,19 @@ impl Journal {
                 }
                 if r.accepted_version.is_some()
                     && let Some((key, value)) = &r.carrier
-                    && let Some(source) = current.get(source_id).filter(|s| !s.deleted)
                 {
-                    if let Some(actual) = source.extensions.get(key) {
-                        if actual != value {
-                            return Err(Failure::InvalidState);
+                    if let Some(source) = current.get(source_id).filter(|s| !s.deleted) {
+                        if let Some(actual) = source.extensions.get(key) {
+                            if actual != value {
+                                return Err(Failure::InvalidState);
+                            }
+                        } else {
+                            r.carrier = None;
                         }
-                    } else {
+                    } else if reviewed_deleted.contains(source_id) {
+                        // A reviewed source deletion has no physical carrier
+                        // to clean. Retire only after this exact C0's actual
+                        // acceptance; the source still needs its own ACK below.
                         r.carrier = None;
                     }
                 }
