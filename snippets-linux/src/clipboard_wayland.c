@@ -219,6 +219,13 @@ struct snip_control *snip_control_open_fd(int fd, snip_check check, void *contex
     }
     return owner;
 }
+uint64_t snip_control_peer_process(struct snip_control *owner) {
+    struct ucred peer;
+    socklen_t size = sizeof(peer);
+    if (getsockopt(wl_display_get_fd(owner->display), SOL_SOCKET, SO_PEERCRED, &peer, &size)
+        || size != sizeof(peer) || peer.uid != getuid() || peer.pid <= 0) return 0;
+    return (uint64_t)peer.pid;
+}
 struct snip_control *snip_control_open(snip_check check, void *context, int *status) {
     *status = 2;
     if (!admitted(check, context)) return NULL;

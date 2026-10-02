@@ -80,6 +80,37 @@ fn main() {
         input.compile("snippets_input_wayland");
         println!("cargo:rerun-if-changed=src/input_wayland.c");
         println!("cargo:rerun-if-changed={input_protocol}");
+        let ime_protocol = "data/input-method-v2.xml";
+        for (mode, file) in [
+            ("client-header", "snippets-ime.h"),
+            ("private-code", "snippets-ime-protocol.c"),
+        ] {
+            assert!(
+                std::process::Command::new("wayland-scanner")
+                    .arg(mode)
+                    .arg(ime_protocol)
+                    .arg(output.join(file))
+                    .status()
+                    .expect("wayland-scanner is required")
+                    .success()
+            );
+        }
+        let ime_wayland = pkg_config::Config::new()
+            .probe("wayland-client")
+            .expect("Wayland client development files are required");
+        let mut ime = cc::Build::new();
+        ime.file("src/inline_wayland.c")
+            .file(output.join("snippets-ime-protocol.c"))
+            .include(&output)
+            .flag_if_supported("-Wall")
+            .flag_if_supported("-Wextra")
+            .flag_if_supported("-Werror");
+        for include in ime_wayland.include_paths {
+            ime.include(include);
+        }
+        ime.compile("snippets_ime_wayland");
+        println!("cargo:rerun-if-changed=src/inline_wayland.c");
+        println!("cargo:rerun-if-changed={ime_protocol}");
     }
     let icu = pkg_config::Config::new()
         .probe("icu-i18n")

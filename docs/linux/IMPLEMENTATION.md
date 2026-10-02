@@ -12,8 +12,9 @@ vaults, including explicitly selected old files for legacy switch history and
 archives containing bodies from several source vaults.
 Missing own vault stamps/hashes in archived records can be recovered only after
 explicit source-vault authentication. Raw v1 carriers remain strict.
-Live legacy-record repair and unreferenced-image cleanup,
-inline expansion and live desktop verification remain unfinished.
+Live legacy-record repair, unreferenced-image cleanup and live desktop
+verification remain unfinished. Ordinary inline expansion now has a native
+Wayland owner and opt-in GTK settings; live receiving-field verification is open.
 Freshly authenticated secure insertion is now wired to the picker and native
 virtual keyboard. Its core checks pass; live focus, credential-dialog and
 receiving-application verification remain unfinished.
@@ -221,7 +222,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; native toggle smoke compiles but cannot initialize GTK here; live keyring/HTTPS workflow remains unverified |
 | Cloud library creation | Explicit native create/resume/open and create-another actions; bounded retained intents; one-use confirmation binds account session and existing protected state; original idempotency key retained before POST | Twenty-four fault/restart/schema/expiry tests plus bootstrap admission and reviewed-switch integration; combined live GTK/keyring/HTTPS workflow remains unverified; preserves active keys and sync checkpoint |
 | Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, deletion/restore crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; conflict-owned absence/deletion recovery remains pending |
-| Inline expansion | Confirmed-context ordinary matching and move-only chunked replacement owner | Isolated UTF-8, ambiguity, field/privacy, file-change, cancellation and full 256 KiB delivery checks; Wayland input-method transport, opt-in native UI, clipboard-placeholder acquisition and live receiving-field verification remain pending |
+| Inline expansion | Native input-method-v2 owner, per-library opt-in GTK settings, conditional bounded clipboard read and move-only chunked replacement | Core, callback privacy/publication and private socketpair protocol checks cover UTF-8, clipped windows, ambiguity, field/file changes, cancellation and full 256 KiB output; real compositor peer credentials, native GTK settings and live receiving-field behavior remain unverified |
 | Encrypted backup | Portable encrypted-backup export/import and recovery wired to GTK; independent all-layer codec verification | Live backup password/file-dialog workflow and Apple app round trips remain unverified |
 | Clipboard history | Explicit opt-in GTK view, separate local AES-GCM image/key, bounded seven-day retention/search/delete/clear, read-only Wayland data-control worker, foreground exclusions and sensitivity/internal markers, revocable acquisition and quit barriers | Isolated core/worker/privacy tests pass and native backend compiles; private libwayland-server fixture cannot create a client in this restricted environment, GTK cannot initialize a display; full protocol and background/live history verification remain pending |
 
@@ -2017,7 +2018,7 @@ review fixture also stops at display initialization, before creating widgets or
 collecting credentials. Live insertion, focus races and receiving-field behavior
 remain part of the unfinished full port.
 
-## Inline expansion ownership in progress
+## Native ordinary inline expansion
 
 `src/inline_expansion.rs` prepares ordinary replacement from a bounded confirmed
 text-input frame. Initial activation establishes a baseline; only an observed
@@ -2046,10 +2047,13 @@ native compositor or user's text/clipboard. They cover the full 256 KiB Unicode
 body, clipping of surrounding text, byte-count deletion, one-pass placeholders,
 empty replacement, saved-file replacement/removal/aliasing, changed saved records,
 new keyword ambiguity, cancelled/busy admission and incorrect continuation echoes.
-The Wayland transport, per-library opt-in UI, bounded clipboard-placeholder read
-and live end-to-end verification are not connected yet. The transport must drop
-owners on reconnect and bound echo waits; no incomplete or uncertain replacement
-may be retried automatically.
+The Wayland transport, per-library opt-in UI and bounded clipboard-placeholder
+read are wired. Live end-to-end verification remains open. The transport drops
+owners on reconnect and gives each acceptance echo two seconds; no incomplete or
+uncertain replacement is retried automatically. Literal keyword continuation can
+be admitted across shifted UTF-8 surrounding windows only when the retained
+look-behind and look-ahead contexts agree. Unequal short contexts do not authorize
+replacement; keyword folding never authenticates host context.
 
 The [upstream Hyprland commit handler](https://raw.githubusercontent.com/hyprwm/Hyprland/main/src/protocols/InputMethodV2.cpp)
 currently applies pending IME state without comparing the supplied serial. The
@@ -2061,6 +2065,65 @@ behavior has not been verified here.
 `data/input-method-v2.xml` retains all published request/event signatures, including
 unused popup and keyboard-grab interfaces, for native protocol generation. Client
 and server headers generate and the protocol code compiles with strict C warnings;
-the transport is not linked into the app yet. Existing IME ownership must be
-respected when handling the compositor's `unavailable` event; the app must not
-disable or evict another IME.
+the generated client protocol and `src/inline_wayland.c` are linked into the
+Rust desktop app. The native owner respects `unavailable` without evicting another
+IME or grabbing the hardware keyboard.
+
+
+`src/inline_wayland.c` publishes only complete `done` frames. Pending focus/text
+changes prevent replacement before the next done, and private content types wipe
+both native text buffers. The Rust owner wipes frame copies and UTF-8 commit
+buffers. This does not promise erasure of every libwayland or receiving-client
+copy. Flush/sync waits are consent-checked, bounded and based on CLOCK_BOOTTIME;
+cancellation disconnects using local proxy destruction without a cleanup flush.
+Exactly one keyboard seat and input-method manager are required. The socket peer
+must be the same-UID active Hyprland process before requesting an input method.
+
+`src/inline_worker.rs` owns one connection off the GTK thread and reports closed
+status values only. It freezes the desktop environment and unlocked-session epoch,
+rereads the enabled preference and respects the common library lock without
+blocking. A detected lock or lost observation drops all field/delivery state. A
+new unlocked epoch can register a fresh owner; a transport failure requires the
+explicit Retry action. Each admitted delivery captures an external destination
+and expires within two minutes, including sleep. `{clipboard}` opens the native
+read-only data-control reader only when required, verifies its compositor peer,
+accepts plain UTF-8 text (including an explicitly empty selection), and cancels if
+the IME field/context changes during the two-second transfer. It writes no
+clipboard selection or history entry.
+
+The closed schema-1 `inline-expansion.json` preference defaults to disabled without
+creating a file or monitor. Reads reject unknown fields/versions, linked or
+non-regular files and inputs over 1024 bytes; atomic writes use 0600. GTK's enable
+confirmation defaults to Cancel and closes on focus loss, window close or quit.
+Disable revokes before writing; a failed persistence operation explains that the
+saved preference can restart on the next launch. Restart after rapid toggles or
+cancelled quit waits for the former worker to release its seat. Quit fences inline,
+history and automatic-sync admission before checking their remaining workers.
+Only the primary application process starts these services.
+
+`src/inline_wayland_tests.rs` drives the production native client over a private
+socketpair with a fictional wire peer. It checks UTF-8 byte deletion/commit order,
+fresh acceptance echoes, missing/ambiguous/non-keyboard/occupied seats, revocation,
+pending focus and private/unavailable frames. The test-only fd constructor trusts
+its own socketpair and does not exercise compositor identity admission. Its
+separate SO_PEERCRED test requires an unrestricted environment. The strict-C
+`tests/reference/inline-state.c` fixture includes the actual production callbacks
+and checks double buffering, private-buffer wiping, unknown/sensitive types,
+deactivation, serial wrap, field generation, lost capabilities and oversized
+surrounding input without any IPC. Worker tests use locked fictional session
+witnesses and temporary preferences; they never connect to a user's desktop.
+The ignored GTK settings fixture uses an absent temporary library and never enables
+a live worker. Successful private protocol tests do not establish interoperability
+with the installed compositor or any receiving application.
+
+
+Verification of this native integration on 2026-10-02: the default Rust run
+passed 765 library tests (21 ignored, 37 unavailable network/PAM checks excluded),
+23 core integration tests and the owner-helper protocol check. The focused inline
+suite passed 17 tests, with its private peer-credential check ignored. Without
+desktop features, all nine inline tests and 23 core integration tests passed.
+Clippy passed with warnings denied in both feature configurations; native bridge
+compilation uses strict C warnings. The explicit GTK settings smoke stopped at
+GTK initialization before creating its window; the separate private socketpair
+credential test could not obtain SO_PEERCRED in this sandbox. These two checks
+remain open for an unrestricted environment.

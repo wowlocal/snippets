@@ -20,6 +20,8 @@ use std::{
 };
 #[path = "clipboard_history_ui.rs"]
 mod history;
+#[path = "inline_ui.rs"]
+mod inline;
 
 pub(crate) fn internal_clipboard_provider(text: &str) -> gdk::ContentProvider {
     gdk::ContentProvider::new_union(&[
@@ -60,6 +62,7 @@ struct App {
     account_worker: RefCell<Option<Rc<AccountWorker>>>,
     backup: RefCell<Option<Rc<BackupExport>>>,
     history: RefCell<Option<Rc<history::Service>>>,
+    inline: RefCell<Option<Rc<inline::Service>>>,
     hold: RefCell<Option<gio::ApplicationHoldGuard>>,
     copy_serial: Cell<u64>,
     css: gtk::CssProvider,
@@ -130,6 +133,18 @@ fn row(snippet: &Snippet, secure: bool) -> gtk::ListBoxRow {
     gtk::ListBoxRow::builder().child(&content).build()
 }
 impl App {
+    fn start_inline(&self) {
+        if self.inline.borrow().is_none() {
+            *self.inline.borrow_mut() =
+                Some(inline::Service::new(self.library.borrow().root.clone()));
+        }
+    }
+    fn open_inline(&self) {
+        self.start_inline();
+        if let Some(service) = self.inline.borrow().as_ref() {
+            service.present(&self.application);
+        }
+    }
     fn start_history(self: &Rc<Self>) {
         if self.history.borrow().is_some() {
             return;
@@ -546,6 +561,11 @@ impl App {
         });
     }
     fn quit(self: &Rc<Self>) {
+        let inline_idle = self
+            .inline
+            .borrow()
+            .as_ref()
+            .is_none_or(|service| service.prepare_quit());
         // Fence automatic admission before checking any other quit barrier.
         let history_idle = self
             .history
@@ -557,6 +577,10 @@ impl App {
             .borrow()
             .as_ref()
             .is_none_or(|worker| worker.prepare_quit());
+        if !inline_idle {
+            self.toast("Waiting for inline expansion to stop. Try Quit again shortly.");
+            return;
+        }
         if !history_idle {
             self.toast("Waiting for clipboard history to stop. Try Quit again shortly.");
             return;
@@ -597,6 +621,9 @@ impl App {
             if let Some(history) = self.history.borrow().as_ref() {
                 history.cancel_quit();
             }
+            if let Some(service) = self.inline.borrow().as_ref() {
+                service.cancel_quit();
+            }
             workspace.present(None);
             return;
         }
@@ -612,6 +639,9 @@ impl App {
             }
             if let Some(history) = self.history.borrow().as_ref() {
                 history.cancel_quit();
+            }
+            if let Some(service) = self.inline.borrow().as_ref() {
+                service.cancel_quit();
             }
             self.present();
         }
@@ -657,6 +687,7 @@ impl App {
             "new",
             "capture",
             "history",
+            "inline",
             "search",
             "save",
             "copy",
@@ -676,7 +707,15 @@ impl App {
             let weak = Rc::downgrade(self);
             action.connect_activate(move |_, _| {
                 if let Some(app) = weak.upgrade() {
-                    if !["quit", "about", "account", "restore-backup", "history"].contains(&name)
+                    if ![
+                        "quit",
+                        "about",
+                        "account",
+                        "restore-backup",
+                        "history",
+                        "inline",
+                    ]
+                    .contains(&name)
                         && !app.ensure_library()
                     {
                         return;
@@ -692,6 +731,7 @@ impl App {
                     match name {
                         "account" => app.open_account(),
                         "history" => app.open_history(),
+                        "inline" => app.open_inline(),
                         "secure" => app.open_secure(None),
                         "new" => {
                             app.main().new_entry("");
@@ -843,6 +883,7 @@ impl MainWindow {
             ("Secure Snippets…", "secure"),
             ("Capture Clipboard", "capture"),
             ("Clipboard History…", "history"),
+            ("Inline Expansion…", "inline"),
             ("Import…", "import"),
             ("Export…", "export"),
             ("Encrypted Backup…", "backup"),
@@ -1804,6 +1845,7 @@ pub fn run() -> glib::ExitCode {
         account_worker: RefCell::new(None),
         backup: RefCell::new(None),
         history: RefCell::new(None),
+        inline: RefCell::new(None),
         hold: RefCell::new(None),
         copy_serial: Cell::new(0),
         css: gtk::CssProvider::new(),
@@ -1820,6 +1862,7 @@ pub fn run() -> glib::ExitCode {
                 Err(failure) => eprintln!("{}", failure.message()),
             }
             app.start_history();
+            app.start_inline();
             *app.hold.borrow_mut() = Some(application.hold());
             app.actions();
             if let Some(display) = gdk::Display::default() {
@@ -1952,6 +1995,7 @@ mod tests {
             account_worker: RefCell::new(None),
             backup: RefCell::new(None),
             history: RefCell::new(None),
+            inline: RefCell::new(None),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
             last_theme: RefCell::new(String::new()),
@@ -2075,6 +2119,7 @@ mod tests {
             account_worker: RefCell::new(None),
             backup: RefCell::new(None),
             history: RefCell::new(None),
+            inline: RefCell::new(None),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
             last_theme: RefCell::new(String::new()),
@@ -2138,6 +2183,7 @@ mod tests {
             account_worker: RefCell::new(None),
             backup: RefCell::new(None),
             history: RefCell::new(None),
+            inline: RefCell::new(None),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
             last_theme: RefCell::new(String::new()),
@@ -2237,6 +2283,7 @@ mod tests {
             account_worker: RefCell::new(None),
             backup: RefCell::new(None),
             history: RefCell::new(None),
+            inline: RefCell::new(None),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
             last_theme: RefCell::new(String::new()),

@@ -23,6 +23,62 @@ fn plan(ordinary: &[Snippet], query: &str) -> Plan {
 }
 
 #[test]
+fn shifted_utf8_windows_preserve_a_literal_trigger_and_reject_changed_context() {
+    let ordinary = [snippet("café", "Public body")];
+    let prefix = "Public context 🙂中é ".repeat(400);
+    for changed in 0..6 {
+        let mut field = Field::new("caf");
+        field.text.insert_str(0, &prefix);
+        field.cursor += prefix.len();
+        field.text.push_str(&"Public tail ".repeat(150));
+        let mut engine = Engine::default();
+        let old = field.observation(1);
+        assert!(engine.observe(old, &ordinary).is_none());
+        field.text.insert(field.cursor, 'é');
+        field.cursor += 'é'.len_utf8();
+        field.serial += 1;
+        match changed {
+            0 => (),
+            1 => {
+                field
+                    .text
+                    .replace_range(field.cursor - 5..field.cursor, "CAFÉ");
+            }
+            2 => {
+                let mut at = field.cursor - 100;
+                while !field.text.is_char_boundary(at) {
+                    at += 1;
+                }
+                field.text.insert(at, '!');
+                field.cursor += 1;
+            }
+            3 => {
+                field.text.insert(field.cursor + 100, '!');
+            }
+            4 => {
+                field.cursor -= 2;
+            }
+            5 => (),
+            _ => unreachable!(),
+        }
+        let mut new = field.observation(1);
+        if changed == 5 {
+            // An aggressively clipped, short prefix cannot prove continuation.
+            let text = new.text.as_mut().unwrap();
+            let start = new.cursor - 10;
+            let mut start = start;
+            while !text.is_char_boundary(start) {
+                start += 1;
+            }
+            text.drain(..start);
+            new.cursor -= start;
+            new.anchor = new.cursor;
+        }
+        assert_eq!(engine.observe(new, &ordinary).is_some(), changed == 0);
+    }
+}
+
+#[test]
 fn exact_match_folds_unicode_and_refuses_duplicates_or_enabled_longer_prefixes() {
     for (keywords, enabled, allowed) in [
         (vec!["café"], vec![true], true),

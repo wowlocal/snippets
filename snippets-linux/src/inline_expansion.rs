@@ -85,16 +85,55 @@ impl Frame {
     }
 }
 
-fn trigger(text: &str) -> Option<(&str, usize)> {
+fn trailing_query(text: &str) -> Option<(&str, usize)> {
     let start = text.rfind('\\')?;
     let query = &text[start + 1..];
-    if query.is_empty()
-        || query.chars().any(|c| c.is_whitespace() || c.is_control())
+    if query.chars().any(|c| c.is_whitespace() || c.is_control())
         || query.graphemes(true).take(121).count() > 120
     {
         return None;
     }
     Some((query, start))
+}
+fn trigger(text: &str) -> Option<(&str, usize)> {
+    trailing_query(text).filter(|(query, _)| !query.is_empty())
+}
+fn clipped_context(old: &str, new: &str, before: bool) -> bool {
+    if old == new {
+        return true;
+    }
+    let (short, long) = if old.len() < new.len() {
+        (old, new)
+    } else {
+        (new, old)
+    };
+    short.len() >= 256
+        && if before {
+            long.ends_with(short)
+        } else {
+            long.starts_with(short)
+        }
+}
+fn appended(old: &Frame, old_text: &str, frame: &Frame, text: &str) -> bool {
+    if frame.cursor > old.cursor
+        && text.get(..old.cursor) == Some(&old_text[..old.cursor])
+        && text.get(frame.cursor..) == Some(&old_text[old.cursor..])
+    {
+        return true;
+    }
+    // A client may shift its bounded surrounding window while appending. Prove
+    // a literal query extension plus retained context; never search a different
+    // occurrence, fold host text, or accept a truncated short context.
+    let Some((old_query, old_start)) = trailing_query(&old_text[..old.cursor]) else {
+        return false;
+    };
+    let Some((new_query, new_start)) = trigger(&text[..frame.cursor]) else {
+        return false;
+    };
+    new_query.len() > old_query.len()
+        && new_query.starts_with(old_query)
+        && clipped_context(&old_text[..old_start], &text[..new_start], true)
+        && clipped_context(&old_text[old.cursor..], &text[frame.cursor..], false)
 }
 fn matching<'a>(snippets: &'a [Snippet], query: &str) -> Option<&'a Snippet> {
     if snippets.len() > model::MAX_SNIPPETS {
@@ -133,9 +172,7 @@ impl Engine {
             if frame.context.field != old.context.field
                 || frame.context.serial == old.context.serial
                 || frame.change_cause != 1
-                || frame.cursor <= old.cursor
-                || text.get(..old.cursor)? != &old_text[..old.cursor]
-                || text.get(frame.cursor..)? != &old_text[old.cursor..]
+                || !appended(old, old_text, &frame, text)
             {
                 return None;
             }
@@ -353,3 +390,9 @@ impl Delivery {
 #[cfg(test)]
 #[path = "inline_expansion_tests.rs"]
 mod tests;
+#[cfg(feature = "desktop")]
+#[path = "inline_wayland.rs"]
+mod wayland;
+#[cfg(feature = "desktop")]
+#[path = "inline_worker.rs"]
+pub(crate) mod worker;

@@ -579,10 +579,35 @@ saved-history restoration flow described above.
 
 ### Inline expansion
 
-Inline `\keyword` expansion is still in development. Its ordinary matching and
-chunked replacement owners are tested in isolation; the native input-method
-connection and opt-in interface are not connected yet. Use the picker for
-cross-window insertion until that work is verified.
+Open **Inline Expansion…** from the app menu and choose **Enable Expansion…**.
+The confirmation explains which nearby text Snippets reads. Expansion is disabled
+by default; the setting belongs to this library. The window shows whether the
+handler is waiting for an unlocked desktop, a compatible field, or a connection.
+**Disable Expansion** immediately cancels its worker. **Retry Connection** starts
+a fresh connection after the previous worker finishes.
+
+Type `\keyword` in a compatible public field. Only a newly extended, unique
+enabled ordinary keyword expands; enabled longer prefixes or duplicate keywords
+prevent replacement. Initial activation establishes a baseline. Password, PIN,
+sensitive, selected and unrecognized fields are excluded. The compositor must
+support input-method-v2 and have an unused input-method seat; Snippets does not
+evict another input method or grab the hardware keyboard. Some applications do
+not provide the required surrounding-text updates.
+
+Replacement uses native UTF-8 text commits without changing the clipboard.
+`{clipboard}` reads only a requested plain-text selection, bounded to 256 KiB and
+two seconds; placeholders render once. Output also fits 256 KiB and is sent in
+bounded chunks, each followed by a confirming field update. Snippets checks the
+saved record and destination and stops on detected cancellation, lock, changed
+files or uncertain acceptance. An interruption may leave a prefix. Focus checks
+cannot make replacement atomic on Hyprland; text can reach another field during
+a focus race. Check the destination before retrying. Interrupted text is never
+retried automatically. Snippets windows are excluded from this path.
+
+The native bridge, private protocol exchange and core checks are verified in
+isolation. Compositor peer-credential checks and the GTK settings smoke require
+an unrestricted environment; live receiving-application behavior remains
+unverified here. Secure snippets use the separate authenticated picker insertion.
 
 ### Insert saved secure text
 

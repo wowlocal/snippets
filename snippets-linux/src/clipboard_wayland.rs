@@ -12,6 +12,7 @@ unsafe extern "C" {
     ) -> *mut c_void;
     fn snip_control_close(owner: *mut c_void);
     fn snip_control_generation(owner: *mut c_void) -> u64;
+    fn snip_control_peer_process(owner: *mut c_void) -> u64;
     fn snip_control_next(
         owner: *mut c_void,
         previous: u64,
@@ -59,6 +60,9 @@ impl Reader {
     pub fn generation(&self) -> u64 {
         unsafe { snip_control_generation(self.0.as_ptr()) }
     }
+    pub fn peer_process(&self) -> u64 {
+        unsafe { snip_control_peer_process(self.0.as_ptr()) }
+    }
     pub fn next(&mut self, previous: u64, guard: &dyn Fn() -> Result<()>) -> Result<bool> {
         let mut context = Check(guard);
         let status = unsafe {
@@ -103,6 +107,25 @@ impl Reader {
         mime: &str,
         guard: &dyn Fn() -> Result<()>,
     ) -> Result<Zeroizing<String>> {
+        self.receive_inner(generation, mime, guard, false)
+    }
+    /// Explicit placeholder acquisition permits a valid empty text selection.
+    /// Background history continues rejecting empty entries.
+    pub fn receive_text(
+        &mut self,
+        generation: u64,
+        mime: &str,
+        guard: &dyn Fn() -> Result<()>,
+    ) -> Result<Zeroizing<String>> {
+        self.receive_inner(generation, mime, guard, true)
+    }
+    fn receive_inner(
+        &mut self,
+        generation: u64,
+        mime: &str,
+        guard: &dyn Fn() -> Result<()>,
+        allow_empty: bool,
+    ) -> Result<Zeroizing<String>> {
         guard()?;
         let mime = CString::new(mime).map_err(|_| UNAVAILABLE)?;
         let mut bytes = Zeroizing::new(vec![0u8; MAX_ENTRY_BYTES + 1]);
@@ -126,7 +149,7 @@ impl Reader {
         guard()?;
         bytes.truncate(length);
         let text = std::str::from_utf8(&bytes).map_err(|_| CANCELLED)?;
-        if !accepts(text) {
+        if !(accepts(text) || allow_empty && text.is_empty()) {
             return Err(CANCELLED);
         }
         Ok(Zeroizing::new(text.into()))
