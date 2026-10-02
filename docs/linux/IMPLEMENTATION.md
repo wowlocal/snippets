@@ -221,7 +221,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; native toggle smoke compiles but cannot initialize GTK here; live keyring/HTTPS workflow remains unverified |
 | Cloud library creation | Explicit native create/resume/open and create-another actions; bounded retained intents; one-use confirmation binds account session and existing protected state; original idempotency key retained before POST | Twenty-four fault/restart/schema/expiry tests plus bootstrap admission and reviewed-switch integration; combined live GTK/keyring/HTTPS workflow remains unverified; preserves active keys and sync checkpoint |
 | Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, deletion/restore crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; conflict-owned absence/deletion recovery remains pending |
-| Inline expansion | Pending | Wayland input-method or compositor integration |
+| Inline expansion | Confirmed-context ordinary matching and move-only chunked replacement owner | Isolated UTF-8, ambiguity, field/privacy, file-change, cancellation and full 256 KiB delivery checks; Wayland input-method transport, opt-in native UI, clipboard-placeholder acquisition and live receiving-field verification remain pending |
 | Encrypted backup | Portable encrypted-backup export/import and recovery wired to GTK; independent all-layer codec verification | Live backup password/file-dialog workflow and Apple app round trips remain unverified |
 | Clipboard history | Explicit opt-in GTK view, separate local AES-GCM image/key, bounded seven-day retention/search/delete/clear, read-only Wayland data-control worker, foreground exclusions and sensitivity/internal markers, revocable acquisition and quit barriers | Isolated core/worker/privacy tests pass and native backend compiles; private libwayland-server fixture cannot create a client in this restricted environment, GTK cannot initialize a display; full protocol and background/live history verification remain pending |
 
@@ -2016,3 +2016,51 @@ fails with `EPERM` before the private protocol handshake. The dedicated GTK
 review fixture also stops at display initialization, before creating widgets or
 collecting credentials. Live insertion, focus races and receiving-field behavior
 remain part of the unfinished full port.
+
+## Inline expansion ownership in progress
+
+`src/inline_expansion.rs` prepares ordinary replacement from a bounded confirmed
+text-input frame. Initial activation establishes a baseline; only an observed
+append in the same field can admit a trigger. Selection, cursor edits, absent
+content type, password/PIN, hidden/sensitive/preedit hints, unknown enums and invalid
+UTF-8 boundaries do not authorize input. Host text is ephemeral and wipeable;
+these owners have no debug/serialization path. The ordinary catalogue supplies
+the same folded exact-match policy as the Mac engine: a duplicate or enabled
+longer prefix prevents automatic expansion. Vault records are not input to this
+path.
+
+Replacement consumes an owner even on failure. It deletes the trigger's actual
+UTF-8 byte length exactly once and renders placeholders once under the existing
+256 KiB limit. Output is split at UTF-8 boundaries into at most 1024-byte commits,
+below the [input-method-v2 message limit](https://raw.githubusercontent.com/swaywm/wlroots/master/protocol/input-method-unstable-v2.xml).
+Another chunk requires a fresh, collapsed-caret echo in the same field with the
+expected surrounding text. The final chunk also needs an echo before completion.
+A nonblocking common lock admits the exact saved ordinary record and matching
+catalogue. Subsequent chunks check file identity/timestamps and primary readiness;
+the final confirmation rechecks the full bytes. This avoids decoding a potentially
+32 MiB catalogue for every chunk. It does not claim immunity to all hostile
+ancestor-path substitutions or noncooperating writers.
+
+Current tests use a fictional text field and real temporary library files, not a
+native compositor or user's text/clipboard. They cover the full 256 KiB Unicode
+body, clipping of surrounding text, byte-count deletion, one-pass placeholders,
+empty replacement, saved-file replacement/removal/aliasing, changed saved records,
+new keyword ambiguity, cancelled/busy admission and incorrect continuation echoes.
+The Wayland transport, per-library opt-in UI, bounded clipboard-placeholder read
+and live end-to-end verification are not connected yet. The transport must drop
+owners on reconnect and bound echo waits; no incomplete or uncertain replacement
+may be retried automatically.
+
+The [upstream Hyprland commit handler](https://raw.githubusercontent.com/hyprwm/Hyprland/main/src/protocols/InputMethodV2.cpp)
+currently applies pending IME state without comparing the supplied serial. The
+backend therefore cannot treat the protocol's stale-serial rule as proof that
+focus and delivery are atomic on Hyprland. Native frame revalidation and honest
+focus-race reporting remain requirements. The installed compositor's receiving
+behavior has not been verified here.
+
+`data/input-method-v2.xml` retains all published request/event signatures, including
+unused popup and keyboard-grab interfaces, for native protocol generation. Client
+and server headers generate and the protocol code compiles with strict C warnings;
+the transport is not linked into the app yet. Existing IME ownership must be
+respected when handling the compositor's `unavailable` event; the app must not
+disable or evict another IME.

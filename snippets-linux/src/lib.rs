@@ -17,6 +17,8 @@ pub mod crypto;
 pub mod deletion_review;
 pub mod desktop;
 pub mod inbound;
+#[cfg(any(test, feature = "desktop"))]
+pub mod inline_expansion;
 pub mod journal;
 pub mod key_store;
 pub mod local_auth;

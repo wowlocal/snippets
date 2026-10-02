@@ -577,6 +577,13 @@ remains open. Drafts are retained in memory, not across application restarts.
 Archived records from a different vault use the separately authenticated
 saved-history restoration flow described above.
 
+### Inline expansion
+
+Inline `\keyword` expansion is still in development. Its ordinary matching and
+chunked replacement owners are tested in isolation; the native input-method
+connection and opt-in interface are not connected yet. Use the picker for
+cross-window insertion until that work is verified.
+
 ### Insert saved secure text
 
 Open the picker from the destination application and select an enabled secure
