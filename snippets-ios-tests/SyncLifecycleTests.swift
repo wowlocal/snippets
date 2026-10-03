@@ -1736,6 +1736,97 @@ final class SyncLifecycleTests: XCTestCase {
         XCTAssertTrue(stopped)
     }
 
+    func testIOSLaunchWithSnippetsCloudEnabledInspectsCredentialLineageOffMainThread() async {
+        let probe = CredentialKeychainProbe()
+        defer { probe.release() }
+        // The revocation journal is the preflight's last read: holding it keeps the whole
+        // lineage snapshot, and the credential mutation gate around it, in flight.
+        probe.hold([SyncBackendSelectionStore.oauthRevocationAccount])
+        var factoryCalls = 0
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let environment = AppEnvironment(
+            keychain: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            cloudCredentialStore: probe.keychain(),
+            cloudBootstrapSecrets: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            syncTransportFactory: {
+                factoryCalls += 1
+                return SyncLifecycleTransport()
+            },
+            snippetsCloudEnabled: true)
+        XCTAssertTrue(environment.backendSelection.snippetsCloudEnabled)
+        environment.start()
+        let entered = await waitForStartup { probe.hasEnteredHeldRead }
+        XCTAssertTrue(entered, "A Snippets Cloud build must inspect the credential lineage")
+
+        // Security.framework is stuck inside the preflight, yet the main thread is free:
+        // the local library stays editable and the unrelated iCloud data plane starts.
+        XCTAssertNoThrow(try environment.store.addSnippet(name: "Usable during preflight"))
+        let started = await waitForStartup { environment.syncCoordinator.engine != nil }
+        XCTAssertTrue(started)
+        XCTAssertEqual(factoryCalls, 1)
+        XCTAssertEqual(probe.mainThreadLineageReads, [])
+
+        probe.release()
+        let inspected = await waitForStartup {
+            probe.operations.contains {
+                $0.kind == .read && $0.account == SyncBackendSelectionStore.oauthRevocationAccount
+            }
+        }
+        XCTAssertTrue(inspected)
+        for _ in 0..<20 { await Task.yield() }
+        let lineageReads = probe.operations.filter {
+            $0.kind == .read && CredentialKeychainProbe.lineageAccounts.contains($0.account)
+        }
+        XCTAssertEqual(Set(lineageReads.map(\.account)), CredentialKeychainProbe.lineageAccounts)
+        XCTAssertFalse(probe.operations.contains { $0.onMainThread },
+                       "Launch performs no credential Keychain IPC on the main thread")
+        XCTAssertFalse(probe.operations.contains { $0.kind != .read },
+                       "An empty credential lineage schedules no recovery")
+        environment.store.flushPendingWrites()
+        environment.syncCoordinator.setEnabled(false)
+        let stopped = await waitForStartup { environment.syncCoordinator.isQuiescent }
+        XCTAssertTrue(stopped)
+    }
+
+    func testIOSLaunchWithSnippetsCloudDisabledNeverReadsCredentialLineage() async {
+        let probe = CredentialKeychainProbe()
+        defer { probe.release() }
+        probe.hold(CredentialKeychainProbe.lineageAccounts)
+        var factoryCalls = 0
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let environment = AppEnvironment(
+            keychain: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            cloudCredentialStore: probe.keychain(),
+            cloudBootstrapSecrets: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+            syncTransportFactory: {
+                factoryCalls += 1
+                return SyncLifecycleTransport()
+            },
+            snippetsCloudEnabled: false)
+        environment.start()
+        let started = await waitForStartup { environment.syncCoordinator.engine != nil }
+        XCTAssertTrue(started)
+        XCTAssertEqual(factoryCalls, 1)
+        // The local-erase journal is still checked, off the main thread: it is the
+        // crash-safe tail of an already-authorized erase, independent of the feature.
+        let eraseChecked = await waitForStartup {
+            probe.operations.contains {
+                $0.account == SyncBackendSelectionStore.pendingLocalEraseAccount
+            }
+        }
+        XCTAssertTrue(eraseChecked)
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(probe.hasEnteredHeldRead)
+        XCTAssertFalse(probe.operations.contains {
+            CredentialKeychainProbe.lineageAccounts.contains($0.account)
+        }, "An iCloud-only build must not read Snippets Cloud credential markers")
+        XCTAssertFalse(probe.operations.contains { $0.onMainThread })
+        environment.store.flushPendingWrites()
+        environment.syncCoordinator.setEnabled(false)
+        let stopped = await waitForStartup { environment.syncCoordinator.isQuiescent }
+        XCTAssertTrue(stopped)
+    }
+
     private func waitForStartup(_ condition: () -> Bool) async -> Bool {
         for _ in 0..<200 {
             if condition() { return true }

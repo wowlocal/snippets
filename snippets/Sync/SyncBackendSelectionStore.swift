@@ -502,8 +502,10 @@ final class SyncBackendSelectionStore {
                 let pending = try? await keychain.loadItemInBackground(
                     account: Self.pendingLocalEraseAccount)
                 guard let self else { return }
+                // Journal first: an already-authorized local erase finishes before the
+                // credential lineage is inspected or any remote recovery is scheduled.
                 if pending != nil { try? self.resumePendingLocalErase() }
-                self.resumeCredentialLineageIfNeeded()
+                await self.resumeCredentialLineageOffMainActorIfNeeded()
             }
         } else {
             try? resumePendingLocalErase()
@@ -511,18 +513,37 @@ final class SyncBackendSelectionStore {
         }
     }
 
+    /// Shipping builds expose only iCloud. Credential replacement/revocation state
+    /// belongs exclusively to the dark-launched Snippets Cloud data plane, and that
+    /// plane revalidates the same lineage before constructing a transport. Avoid making
+    /// every ordinary iCloud launch read three unrelated Keychain items. The local-erase
+    /// journal remains above this gate because it is the crash-safe tail of an
+    /// already-authorized destructive operation and must finish even if a later build
+    /// disables Snippets Cloud.
     private func resumeCredentialLineageIfNeeded() {
-        // Shipping builds expose only iCloud. Credential replacement/revocation state
-        // belongs exclusively to the dark-launched Snippets Cloud data plane, and that
-        // plane revalidates the same lineage before constructing a transport. Avoid
-        // making every ordinary iCloud launch synchronously read three unrelated
-        // Keychain items. The local-erase journal remains above this gate because it is
-        // the crash-safe tail of an already-authorized destructive operation and must
-        // finish even if a later build disables Snippets Cloud.
         guard snippetsCloudEnabled else { return }
-        let startupLineage = try? SnippetsCloudNativeAuthClient(
+        scheduleCredentialLineageRecovery(try? SnippetsCloudNativeAuthClient(
             keychain: self.keychain
-        ).inspectCredentialLineage()
+        ).inspectCredentialLineage())
+    }
+
+    /// Deferred (iOS launch) variant, likewise skipped when Snippets Cloud is disabled.
+    /// The lineage reads are unbounded Security.framework IPC, so
+    /// they run off MainActor under the credential mutation gate; only the decision and
+    /// the recovery tasks it schedules return to MainActor. The snapshot is advisory:
+    /// both recovery operations take the same gate and re-read and revalidate the
+    /// lineage before mutating anything. An unreadable or invalid lineage schedules
+    /// nothing here; the data plane keeps rejecting it before any transport is built.
+    private func resumeCredentialLineageOffMainActorIfNeeded() async {
+        guard snippetsCloudEnabled else { return }
+        scheduleCredentialLineageRecovery(try? await SnippetsCloudNativeAuthClient(
+            keychain: keychain
+        ).inspectCredentialLineageOffMainActor())
+    }
+
+    private func scheduleCredentialLineageRecovery(
+        _ startupLineage: SnippetsCloudNativeAuthClient.CredentialLineageInspection?
+    ) {
         if startupLineage?.hasRevocation == true {
             // The remote intent journal is written before the first logout request and
             // retained through provider success. A crash in the network/local handoff
@@ -534,9 +555,13 @@ final class SyncBackendSelectionStore {
             // This also covers a crash after a first token exchange journaled its
             // credentials but before AUTH_SESSION was committed. With no current
             // session every journal token is superseded and is remotely revoked.
-            Task { @MainActor [credentialStore = self.keychain] in
+            Task { @MainActor [
+                credentialStore = self.keychain,
+                sessionConfiguration = nativeAuthSessionConfiguration
+            ] in
                 try? await SnippetsCloudNativeAuthClient(
-                    keychain: credentialStore
+                    keychain: credentialStore,
+                    sessionConfiguration: sessionConfiguration
                 ).retireSupersededInteractiveSessions()
             }
         }
@@ -627,12 +652,16 @@ final class SyncBackendSelectionStore {
     private func schedulePendingCredentialCleanup() {
         guard hasPendingCredentialCleanup,
               !hasPendingRemoteRevocation else { return }
-        Task { @MainActor [credentialStore = keychain] in
+        Task { @MainActor [
+            credentialStore = keychain,
+            sessionConfiguration = nativeAuthSessionConfiguration
+        ] in
             // Success removes the durable boundary. Failure deliberately leaves it in
             // place; makeTransport and every token provider keep the data plane closed,
             // while Try Again/startup can schedule another awaited cleanup attempt.
             try? await SnippetsCloudNativeAuthClient(
-                keychain: credentialStore
+                keychain: credentialStore,
+                sessionConfiguration: sessionConfiguration
             ).retireSupersededInteractiveSessions()
         }
     }
@@ -2355,8 +2384,13 @@ final class SnippetsCloudNativeAuthClient {
     }
 
     private func loadSession() throws -> StoredSession? {
-        guard let data = try keychain.loadItem(
-            account: SyncBackendSelectionStore.oauthSessionAccount) else { return nil }
+        try decodeSession(keychain.loadItem(
+            account: SyncBackendSelectionStore.oauthSessionAccount))
+    }
+
+    /// Validation half of `loadSession`, shared with the off-main lineage preflight.
+    private func decodeSession(_ data: Data?) throws -> StoredSession? {
+        guard let data else { return nil }
         guard data.count <= 128 * 1_024,
               let value = try? JSONDecoder().decode(StoredSession.self, from: data),
               value.schemaVersion == Self.storedSessionSchemaVersion,
@@ -2464,12 +2498,54 @@ final class SnippetsCloudNativeAuthClient {
         let hasRevocation: Bool
     }
 
+    private static let credentialLineageAccounts = [
+        SyncBackendSelectionStore.oauthSessionAccount,
+        SyncBackendSelectionStore.oauthSessionReplacementAccount,
+        SyncBackendSelectionStore.oauthRevocationAccount,
+    ]
+
     func inspectCredentialLineage() throws -> CredentialLineageInspection {
-        let current = try loadSession()
-        let replacement = try loadCredentialJournal(
+        try inspectCredentialLineage { [keychain] account in
+            try keychain.loadItem(account: account)
+        }
+    }
+
+    /// Launch preflight variant of `inspectCredentialLineage`.
+    ///
+    /// The three Security.framework reads run in one hop off MainActor, so slow
+    /// Keychain IPC cannot hold up the local library or the main thread. Leaving the
+    /// actor gives up the atomicity a synchronous MainActor read had, so the snapshot
+    /// is taken while holding the process-wide mutation gate: no refresh, sign-in,
+    /// cleanup, or logout can publish a newer generation between the three reads.
+    /// Validation then runs on MainActor in the original order, so read and decode
+    /// failures keep the synchronous variant's precedence and stay fail-closed.
+    func inspectCredentialLineageOffMainActor() async throws -> CredentialLineageInspection {
+        try await Self.credentialMutationGate.run { [self] in
+            let accounts = Self.credentialLineageAccounts
+            let results = await keychain.loadItemsInBackground(accounts: accounts)
+            guard results.count == accounts.count else {
+                throw Failure.invalidStoredSession
+            }
+            let snapshot = Dictionary(uniqueKeysWithValues: zip(accounts, results))
+            return try inspectCredentialLineage { account in
+                guard let result = snapshot[account] else {
+                    throw Failure.invalidStoredSession
+                }
+                return try result.get()
+            }
+        }
+    }
+
+    private func inspectCredentialLineage(
+        reading read: (String) throws -> Data?
+    ) throws -> CredentialLineageInspection {
+        let current = try decodeSession(read(SyncBackendSelectionStore.oauthSessionAccount))
+        let replacement = try decodeCredentialJournal(
+            read(SyncBackendSelectionStore.oauthSessionReplacementAccount),
             account: SyncBackendSelectionStore.oauthSessionReplacementAccount,
             boundTo: current)
-        let revocation = try loadCredentialJournal(
+        let revocation = try decodeCredentialJournal(
+            read(SyncBackendSelectionStore.oauthRevocationAccount),
             account: SyncBackendSelectionStore.oauthRevocationAccount,
             boundTo: current)
         if let replacement, let revocation,
@@ -2594,8 +2670,21 @@ final class SnippetsCloudNativeAuthClient {
         expectedServerURL: URL? = nil,
         boundTo stored: StoredSession? = nil
     ) throws -> RevocationJournal? {
-        guard let data = try keychain.loadItem(
-            account: account) else { return nil }
+        try decodeCredentialJournal(
+            keychain.loadItem(account: account),
+            account: account,
+            expectedServerURL: expectedServerURL,
+            boundTo: stored)
+    }
+
+    /// Validation half of `loadCredentialJournal`, shared with the off-main preflight.
+    private func decodeCredentialJournal(
+        _ data: Data?,
+        account: String,
+        expectedServerURL: URL? = nil,
+        boundTo stored: StoredSession? = nil
+    ) throws -> RevocationJournal? {
+        guard let data else { return nil }
         guard data.count <= 256 * 1_024,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw Failure.invalidStoredSession }

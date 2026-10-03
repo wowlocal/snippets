@@ -271,6 +271,175 @@ final class SnippetsCloudNativeAuthTests: XCTestCase {
         XCTAssertEqual(fixture.auth.driver.requests.count, requestCount, "Durable local erase must finish offline")
     }
 
+    // MARK: - Deferred (iOS) startup credential preflight
+
+    func testDeferredStartupResumesUnfinishedSignOutAfterOffMainLineagePreflight() async throws {
+        let probe = CredentialKeychainProbe()
+        defer { probe.release() }
+        let fixture = try DisconnectFixture(credentialStore: probe.keychain())
+        defer { fixture.removeDefaults() }
+        try await fixture.prepareRotatedAccount()
+        fixture.auth.driver.setRefreshRevocationFailure(true)
+        do { try await fixture.bootstrap.signOutThisDevice(); XCTFail("Expected remote revocation failure") }
+        catch { }
+        XCTAssertNotNil(probe.storedValue(for: SyncBackendSelectionStore.oauthRevocationAccount))
+        XCTAssertNil(probe.storedValue(for: SyncBackendSelectionStore.pendingLocalEraseAccount))
+        fixture.auth.driver.setRefreshRevocationFailure(false)
+        let requestCount = fixture.auth.driver.requests.count
+
+        // The revocation journal is the preflight's last read: holding it keeps the whole
+        // snapshot, and the credential mutation gate around it, in flight.
+        probe.clearLog()
+        probe.hold([SyncBackendSelectionStore.oauthRevocationAccount])
+        let relaunched = fixture.relaunchSelection(defersCredentialRecovery: true)
+        let entered = await waitUntil { probe.hasEnteredHeldRead }
+        XCTAssertTrue(entered, "Snippets Cloud startup must inspect the credential lineage")
+        // Construction returned and MainActor keeps running while Security.framework is
+        // stuck; nothing is revoked or erased before the lineage is known.
+        XCTAssertEqual(probe.mainThreadLineageReads, [])
+        XCTAssertEqual(fixture.auth.driver.requests.count, requestCount)
+        XCTAssertEqual(relaunched.provider, .snippetsCloud)
+        XCTAssertNotNil(probe.storedValue(for: SyncBackendSelectionStore.oauthSessionAccount))
+
+        probe.release()
+        let erased = await waitUntil {
+            relaunched.provider == .iCloud
+                && probe.storedValue(for: SyncBackendSelectionStore.pendingLocalEraseAccount) == nil
+        }
+        XCTAssertTrue(erased, "Startup must still resume the interrupted sign-out")
+        try assertSignedOut(relaunched, fixture: fixture)
+        let refreshRevocations = fixture.auth.driver.requests.filter {
+            $0.path == "/v2/auth/revoke" && $0.body["token"] == fixture.auth.driver.refreshB
+                && $0.body["tokenTypeHint"] == "refresh_token"
+        }
+        XCTAssertEqual(refreshRevocations.count, 2, "Startup must retry the same rotated family")
+        // Journal-first erase: the durable marker precedes credential deletion and is
+        // removed last.
+        let log = probe.operations
+        let markerWritten = try XCTUnwrap(log.firstIndex {
+            $0.kind == .write && $0.account == SyncBackendSelectionStore.pendingLocalEraseAccount
+        })
+        let sessionDeleted = try XCTUnwrap(log.firstIndex {
+            $0.kind == .delete && $0.account == SyncBackendSelectionStore.oauthSessionAccount
+        })
+        let markerDeleted = try XCTUnwrap(log.lastIndex {
+            $0.kind == .delete && $0.account == SyncBackendSelectionStore.pendingLocalEraseAccount
+        })
+        XCTAssertLessThan(markerWritten, sessionDeleted)
+        XCTAssertLessThan(sessionDeleted, markerDeleted)
+    }
+
+    func testDeferredStartupRetiresUnfinishedReplacementAfterOffMainLineagePreflight() async throws {
+        let probe = CredentialKeychainProbe()
+        defer { probe.release() }
+        let fixture = try DisconnectFixture(credentialStore: probe.keychain())
+        defer { fixture.removeDefaults() }
+        // Capture the device state of a process that died after the first grant was
+        // journaled but before AUTH_SESSION was committed.
+        var journalAtCrash: Data?
+        do {
+            _ = try await fixture.auth.signIn { flow in
+                _ = try await flow.createAccount()
+                journalAtCrash = probe.storedValue(
+                    for: SyncBackendSelectionStore.oauthSessionReplacementAccount)
+                throw CancellationError()
+            }
+            XCTFail("Expected cancellation")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        try fixture.auth.keychain.storeItem(
+            try XCTUnwrap(journalAtCrash),
+            account: SyncBackendSelectionStore.oauthSessionReplacementAccount)
+        XCTAssertNil(probe.storedValue(for: SyncBackendSelectionStore.oauthSessionAccount))
+        let requestCount = fixture.auth.driver.requests.count
+
+        probe.clearLog()
+        probe.hold([SyncBackendSelectionStore.oauthSessionReplacementAccount])
+        let relaunched = fixture.relaunchSelection(defersCredentialRecovery: true)
+        let entered = await waitUntil { probe.hasEnteredHeldRead }
+        XCTAssertTrue(entered, "Snippets Cloud startup must inspect the credential lineage")
+        XCTAssertEqual(probe.mainThreadLineageReads, [])
+        XCTAssertEqual(fixture.auth.driver.requests.count, requestCount)
+        XCTAssertNotNil(probe.storedValue(for: SyncBackendSelectionStore.oauthSessionReplacementAccount))
+
+        probe.release()
+        let retired = await waitUntil {
+            probe.storedValue(for: SyncBackendSelectionStore.oauthSessionReplacementAccount) == nil
+        }
+        XCTAssertTrue(retired, "Startup must still retire the superseded grant")
+        let startupRequests = fixture.auth.driver.requests.dropFirst(requestCount)
+        XCTAssertTrue(startupRequests.contains { $0.path == "/v2/session" })
+        XCTAssertTrue(startupRequests.contains {
+            $0.path == "/v2/auth/revoke" && $0.body["token"] == fixture.auth.driver.refreshA
+                && $0.body["tokenTypeHint"] == "refresh_token"
+        })
+        XCTAssertNil(probe.storedValue(for: SyncBackendSelectionStore.oauthSessionAccount))
+        XCTAssertEqual(relaunched.provider, .iCloud)
+    }
+
+    func testSignOutDuringDeferredStartupPreflightIsSerializedBehindLineageSnapshot() async throws {
+        let probe = CredentialKeychainProbe()
+        defer { probe.release() }
+        let fixture = try DisconnectFixture(credentialStore: probe.keychain())
+        defer { fixture.removeDefaults() }
+        try await fixture.prepareRotatedAccount()
+        func revocationRequests() -> Int {
+            fixture.auth.driver.requests.filter {
+                $0.path == "/v2/auth/revoke" || $0.path == "/v2/session"
+            }.count
+        }
+        let revocationsBefore = revocationRequests()
+
+        probe.clearLog()
+        probe.hold([SyncBackendSelectionStore.oauthRevocationAccount])
+        let relaunched = fixture.relaunchSelection(defersCredentialRecovery: true)
+        let entered = await waitUntil { probe.hasEnteredHeldRead }
+        XCTAssertTrue(entered)
+
+        let bootstrap = SnippetsCloudAccountBootstrap(selection: relaunched, secrets: fixture.secrets)
+        let signOut = Task { try await bootstrap.signOutThisDevice() }
+        // The last unserialized step before logout takes the gate is the coordinates
+        // check, which reads the local-erase marker on MainActor.
+        let reachedGate = await waitUntil {
+            probe.operations.filter {
+                $0.onMainThread && $0.account == SyncBackendSelectionStore.pendingLocalEraseAccount
+            }.count >= 2
+        }
+        XCTAssertTrue(reachedGate)
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(probe.operations.contains {
+            $0.kind != .read && $0.account == SyncBackendSelectionStore.oauthRevocationAccount
+        }, "Logout must not publish revocation authority while the preflight snapshot is open")
+        XCTAssertEqual(revocationRequests(), revocationsBefore)
+        XCTAssertEqual(probe.mainThreadLineageReads, [])
+
+        probe.release()
+        try await signOut.value
+        try assertSignedOut(relaunched, fixture: fixture)
+        let log = probe.operations
+        let snapshotCompleted = try XCTUnwrap(log.firstIndex {
+            $0.kind == .read && !$0.onMainThread
+                && $0.account == SyncBackendSelectionStore.oauthRevocationAccount
+        })
+        let journalWritten = try XCTUnwrap(log.firstIndex {
+            $0.kind == .write && $0.account == SyncBackendSelectionStore.oauthRevocationAccount
+        })
+        XCTAssertLessThan(snapshotCompleted, journalWritten)
+        // The preflight saw an ordinary session, so startup adds no second revocation.
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(fixture.auth.driver.requests.filter {
+            $0.path == "/v2/auth/revoke" && $0.body["token"] == fixture.auth.driver.refreshB
+                && $0.body["tokenTypeHint"] == "refresh_token"
+        }.count, 1)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<300 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
+    }
+
     private func assertSignedOut(_ selection: SyncBackendSelectionStore, fixture: DisconnectFixture) throws {
         XCTAssertEqual(selection.provider, .iCloud)
         XCTAssertNil(selection.cloudCoordinates)
@@ -426,11 +595,11 @@ final class SnippetsCloudNativeAuthTests: XCTestCase {
         let client: SnippetsCloudNativeAuthClient
         let origin: URL
 
-        init(mode: NativeAuthTestDriver.Mode = .normal) {
+        init(mode: NativeAuthTestDriver.Mode = .normal, keychain credentialStore: KeychainSecretStore? = nil) {
             origin = URL(string: "https://\(UUID().uuidString.lowercased()).example.test")!
             driver = NativeAuthTestDriver(origin: origin, mode: mode)
             NativeAuthTestProtocol.register(driver, host: origin.host!)
-            keychain = KeychainSecretStore(tier: .deviceOnly, service: "native-auth-tests", itemAccessibility: .afterFirstUnlock, inMemory: true)
+            keychain = credentialStore ?? KeychainSecretStore(tier: .deviceOnly, service: "native-auth-tests", itemAccessibility: .afterFirstUnlock, inMemory: true)
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [NativeAuthTestProtocol.self]
             client = SnippetsCloudNativeAuthClient(keychain: keychain, sessionConfiguration: configuration)
@@ -456,7 +625,7 @@ final class SnippetsCloudNativeAuthTests: XCTestCase {
         }
     }
     private final class DisconnectFixture {
-        let auth = Fixture()
+        let auth: Fixture
         let defaultsName = "NativeAuthDisconnect.\(UUID())"
         let defaults: UserDefaults
         let secrets: KeychainSecretStore
@@ -465,7 +634,8 @@ final class SnippetsCloudNativeAuthTests: XCTestCase {
         let sessionConfiguration: URLSessionConfiguration
         var bootstrap: SnippetsCloudAccountBootstrap { .init(selection: selection, secrets: secrets) }
 
-        init(bootstrapSecrets: KeychainSecretStore? = nil) throws {
+        init(bootstrapSecrets: KeychainSecretStore? = nil, credentialStore: KeychainSecretStore? = nil) throws {
+            auth = Fixture(keychain: credentialStore)
             defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
             secrets = bootstrapSecrets ?? KeychainSecretStore(tier: .deviceOnly,
                 service: "native-disconnect-bootstrap", itemAccessibility: .afterFirstUnlock, inMemory: true)
@@ -494,9 +664,10 @@ final class SnippetsCloudNativeAuthTests: XCTestCase {
                 expectedServerInstanceID: auth.driver.serverID, expectedProtocolMajor: 2, forceRefresh: true)
         }
 
-        func relaunchSelection() -> SyncBackendSelectionStore {
+        func relaunchSelection(defersCredentialRecovery: Bool = false) -> SyncBackendSelectionStore {
             .init(defaults: defaults, keychain: auth.keychain, cloudKeys: cloudKeys,
                 bootstrapSecrets: secrets, snippetsCloudEnabled: true,
+                defersCredentialRecovery: defersCredentialRecovery,
                 nativeAuthSessionConfiguration: sessionConfiguration)
         }
 
