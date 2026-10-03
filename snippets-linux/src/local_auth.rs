@@ -46,12 +46,15 @@ pub enum Purpose {
     ResumeHistoryRemoval,
     RemoveUnusedRecoveryFiles,
     ResumeRecoveryFileCleanup,
+    /// Account-scoped: the saved Snippets Cloud account key, not a library key.
+    RevealAccountKey,
 }
 /// A closed owning-boundary target, including exact saved intent/version bytes.
-/// Fingerprints/bindings never enter logs or serialization.
+/// Fingerprints/bindings never enter logs or serialization. Every library purpose
+/// is bound to its library; only the account-key disclosure has no library.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Target {
-    binding: KeyBinding,
+    binding: Option<KeyBinding>,
     purpose: Purpose,
     generation: i64,
     digest: [u8; 32],
@@ -63,12 +66,25 @@ impl Target {
         generation: i64,
         digest: [u8; 32],
     ) -> Result<Self> {
+        if generation < 1 || purpose == Purpose::RevealAccountKey {
+            return Err(Failure::InvalidState);
+        }
+        Ok(Self {
+            binding: Some(binding),
+            purpose,
+            generation,
+            digest,
+        })
+    }
+    /// The exact saved credential generation and session digest whose account key
+    /// a fresh owner authentication may disclose once.
+    pub(crate) fn account_key(generation: i64, digest: [u8; 32]) -> Result<Self> {
         if generation < 1 {
             return Err(Failure::InvalidState);
         }
         Ok(Self {
-            binding,
-            purpose,
+            binding: None,
+            purpose: Purpose::RevealAccountKey,
             generation,
             digest,
         })

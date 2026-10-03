@@ -1,5 +1,6 @@
 use super::*;
 use crate::{
+    account_key::AccountKey,
     cloud::CloudClient,
     model,
     secret_store::{Native, Slot, Store},
@@ -154,7 +155,10 @@ fn wait_work(window: &AccountWindow) {
     });
 }
 fn authorize(window: &Rc<AccountWindow>, password: &str, response: &str) {
-    press(window.window.upcast_ref(), "Show Pending Recovery Code…");
+    authorize_from(window, "Show Pending Recovery Code…", password, response);
+}
+fn authorize_from(window: &Rc<AccountWindow>, trigger: &str, password: &str, response: &str) {
+    press(window.window.upcast_ref(), trigger);
     until("native password dialog did not map", || {
         window
             .password_dialog
@@ -222,6 +226,135 @@ fn make_window_with_interruption(
     window
 }
 
+/// Create Account, then the one-time Save Your Account Key screen: it shows
+/// exactly the issued key and nothing continues before "I've Saved It".
+fn create_account(window: &Rc<AccountWindow>, fixture: &server::Fixture) {
+    window.server.set_text(fixture.server.for_secure_storage());
+    // Submit from a focused entry: busy() must clear focus before disabling the form.
+    assert!(window.server.grab_focus());
+    until("native server delegate did not acquire focus", || {
+        gtk::prelude::GtkWindowExt::focus(&window.window)
+            .is_some_and(|focus| focus.is_ancestor(&window.server))
+    });
+    press(window.window.upcast_ref(), "Create Account");
+    assert!(window.busy.get() && gtk::prelude::GtkWindowExt::focus(&window.window).is_none());
+    wait_work(window);
+    until("native account key presentation did not map", || {
+        window.key_panel.is_mapped()
+    });
+    let display = AccountKey::from_canonical(server::ACCOUNT_KEY)
+        .unwrap()
+        .display();
+    assert!(
+        window.key_title.label() == "Save Your Account Key"
+            && window.key_label.label() == display.as_str()
+            && window.key_label.is_selectable()
+            && !window.pages.is_visible()
+            && !window.sign_out.is_visible()
+    );
+    press(window.window.upcast_ref(), "I've Saved It");
+    assert!(window.key_label.label().is_empty() && !window.key_panel.is_visible());
+    assert!(window.pages.visible_child_name().as_deref() == Some("libraries"));
+    assert!(window.account_id.label() == "Account ID: 0F1E-2D3C");
+}
+/// Sign In with Account Key: a local typing error is never sent, a rejected
+/// key can be corrected and retried, and loosely typed input is normalized.
+fn sign_in_with_key(window: &Rc<AccountWindow>, fixture: &server::Fixture) {
+    window.server.set_text(fixture.server.for_secure_storage());
+    press(window.window.upcast_ref(), "Sign In with Account Key");
+    assert!(window.pages.visible_child_name().as_deref() == Some("account-key"));
+    let (requests, grants) = {
+        let state = fixture.state.lock().unwrap();
+        (state.requests, state.grants)
+    };
+    window
+        .account_key_input
+        .set_text("7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ8");
+    press(window.window.upcast_ref(), "Sign In");
+    wait_work(window);
+    assert!(window.status.label() == "This isn't a valid account key. Check it for typos.");
+    assert!(fixture.state.lock().unwrap().requests == requests);
+    window
+        .account_key_input
+        .set_text("0123-4567-89AB-CDEF-GHJK-MNPQ-RS45");
+    press(window.window.upcast_ref(), "Sign In");
+    wait_work(window);
+    assert!(window.status.label() == "That account key wasn't accepted. Check it and try again.");
+    assert!(window.account_key_input.text().is_empty());
+    assert!(window.pages.visible_child_name().as_deref() == Some("account-key"));
+    {
+        let state = fixture.state.lock().unwrap();
+        assert!(state.rejected_keys == 1 && state.grants == grants);
+    }
+    // Retrying after a rejection recovers the journal first, like every
+    // interactive issuance; the corrected key then signs in.
+    window
+        .account_key_input
+        .set_text(" 7kqf 9m2x-r4td-h8wb-zn3c-p6ye-iaq7 ");
+    assert!(window.account_key_input.grab_focus());
+    until("native account-key delegate did not acquire focus", || {
+        gtk::prelude::GtkWindowExt::focus(&window.window)
+            .is_some_and(|focus| focus.is_ancestor(&window.account_key_input))
+    });
+    press(window.window.upcast_ref(), "Sign In");
+    assert!(window.busy.get() && gtk::prelude::GtkWindowExt::focus(&window.window).is_none());
+    wait_work(window);
+    assert!(
+        window.account_key_input.text().is_empty()
+            && window.pages.visible_child_name().as_deref() == Some("libraries"),
+        "Native sign-in outcome: {}",
+        window.status.label()
+    );
+    assert!(fixture.state.lock().unwrap().grants == grants + 1);
+}
+/// Sign Out asks first; the confirmation names the account key.
+fn sign_out(window: &Rc<AccountWindow>) {
+    window.sign_out.emit_clicked();
+    until("native sign-out confirmation did not map", || {
+        window
+            .sign_out_dialog
+            .borrow()
+            .as_ref()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let dialog = window.sign_out_dialog.borrow().clone().unwrap();
+    assert!(
+        dialog
+            .body()
+            .contains("You'll need your account key to sign in again.")
+            && dialog.default_response().as_deref() == Some("cancel")
+    );
+    press(dialog.upcast_ref(), "Sign Out");
+    until("native sign-out did not finish", || {
+        !window.busy.get()
+            && window.pages.visible_child_name().as_deref() == Some("login")
+            && !window.reconnect.is_visible()
+    });
+}
+fn root_contains(root: &Path, needle: &str) -> bool {
+    let mut paths = vec![root.to_owned()];
+    while let Some(path) = paths.pop() {
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.is_dir() {
+            paths.extend(
+                fs::read_dir(&path)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path()),
+            );
+        } else if metadata.is_file()
+            && fs::read(&path)
+                .unwrap()
+                .windows(needle.len())
+                .any(|window| window == needle.as_bytes())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn isolated_root() -> PathBuf {
     let bus = std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap();
     assert!(
@@ -274,22 +407,19 @@ fn live_account_onboarding_and_recovery() {
             && !root.join("Vault").exists()
             && !root.join("Sync").exists()
     );
-    window.server.set_text(fixture.server.for_secure_storage());
-    window.email.set_text("fixture@example.invalid");
-    press(window.window.upcast_ref(), "Send Sign-in Code");
-    wait_work(&window);
-    assert!(window.pages.visible_child_name().as_deref() == Some("code"));
-    window.code.set_text("000000");
-    press(window.window.upcast_ref(), "Sign In");
-    wait_work(&window);
-    assert!(window.code.text().is_empty() && fixture.state.lock().unwrap().grants == 0);
-    window.code.set_text("123456");
-    press(window.window.upcast_ref(), "Sign In");
-    wait_work(&window);
+    create_account(&window, &fixture);
+    {
+        let state = fixture.state.lock().unwrap();
+        assert!(state.accounts == 1 && state.grants == 1);
+    }
+    // The key is stored with the session in the keyring, never in a file.
+    let credentials = slot(&root, Slot::Credentials).unwrap();
     assert!(
-        window.code.text().is_empty()
-            && window.pages.visible_child_name().as_deref() == Some("libraries")
+        credentials
+            .windows(server::ACCOUNT_KEY.len())
+            .any(|v| v == server::ACCOUNT_KEY.as_bytes())
     );
+    assert!(!root_contains(&root, server::ACCOUNT_KEY) && !root_contains(&root, "7KQF-"));
     assert!(slot(&root, Slot::LibraryKey).is_none() && slot(&root, Slot::Bootstrap).is_none());
     assert!(window.libraries.selected() == 0 && !window.library_panel.is_sensitive());
     window.libraries.set_selected(1);
@@ -383,17 +513,63 @@ fn live_account_onboarding_and_recovery() {
                 == "Library key ready. Recovery code already confirmed; keep your offline copy."
     );
     assert!(slot(&root, Slot::LibraryKey).is_some_and(|value| value.as_slice() == key.as_slice()));
-    window.sign_out.emit_clicked();
-    wait_work(&window);
+    // Show Account Key uses the same fresh owner authorization as the recovery
+    // code; the reconnected worker read the key from the private keyring.
+    authorize_from(
+        &window,
+        "Show Account Key…",
+        "Public fictional password",
+        "Authorize",
+    );
+    until("authorized account key did not map", || {
+        window.key_panel.is_mapped()
+    });
+    let display = AccountKey::from_canonical(server::ACCOUNT_KEY)
+        .unwrap()
+        .display();
+    assert!(window.key_label.label() == display.as_str());
+    parent.present();
+    until("account did not lose focus", || !window.window.is_active());
+    until("account key survived focus loss", || {
+        window.key_label.label().is_empty() && !window.key_panel.is_visible()
+    });
+    window.window.present();
+    until("account did not regain focus", || window.window.is_active());
+    sign_out(&window);
     assert!(
-        window.pages.visible_child_name().as_deref() == Some("login")
-            && !window.reconnect.is_visible()
-            && !window.sync.is_sensitive()
+        !window.sync.is_sensitive()
+            && slot(&root, Slot::Credentials).is_none_or(|v| {
+                !v.windows(server::ACCOUNT_KEY.len())
+                    .any(|w| w == server::ACCOUNT_KEY.as_bytes())
+            })
     );
     assert!(slot(&root, Slot::LibraryKey).is_some_and(|value| value.as_slice() == key.as_slice()));
     {
         let state = fixture.state.lock().unwrap();
         assert!(state.grants == 2 && state.bootstrap_posts == 1 && state.revokes >= 2);
+    }
+    // Signing in again on this computer: wrong-key retry, then the retained
+    // library key is admitted for the same account without new key setup.
+    sign_in_with_key(&window, &fixture);
+    assert!(window.libraries.selected() == 0 && !window.library_panel.is_sensitive());
+    window.libraries.set_selected(1);
+    wait_work(&window);
+    assert!(
+        window.sync.is_sensitive(),
+        "Native selection after sign-in: {}",
+        window.status.label()
+    );
+    sign_out(&window);
+    assert!(slot(&root, Slot::LibraryKey).is_some_and(|value| value.as_slice() == key.as_slice()));
+    {
+        let state = fixture.state.lock().unwrap();
+        assert!(
+            state.grants == 3
+                && state.accounts == 1
+                && state.rejected_keys == 1
+                && state.bootstrap_posts == 1
+                && state.revokes >= 4
+        );
     }
     assert!(
         CloudClient::discover(fixture.server.clone()).err() == Some(crate::cloud::Failure::Network),
@@ -425,25 +601,7 @@ fn automatic_parent() -> (adw::Application, adw::ApplicationWindow) {
     (app, parent)
 }
 fn connect_keys(window: &Rc<AccountWindow>, fixture: &server::Fixture) {
-    window.server.set_text(fixture.server.for_secure_storage());
-    window.email.set_text("fixture@example.invalid");
-    assert!(window.email.grab_focus());
-    until("native email delegate did not acquire focus", || {
-        gtk::prelude::GtkWindowExt::focus(&window.window)
-            .is_some_and(|focus| focus.is_ancestor(&window.email))
-    });
-    press(window.window.upcast_ref(), "Send Sign-in Code");
-    assert!(window.busy.get() && gtk::prelude::GtkWindowExt::focus(&window.window).is_none());
-    wait_work(window);
-    window.code.set_text("123456");
-    assert!(window.code.grab_focus());
-    until("native sign-in code delegate did not acquire focus", || {
-        gtk::prelude::GtkWindowExt::focus(&window.window)
-            .is_some_and(|focus| focus.is_ancestor(&window.code))
-    });
-    press(window.window.upcast_ref(), "Sign In");
-    assert!(window.busy.get() && gtk::prelude::GtkWindowExt::focus(&window.window).is_none());
-    wait_work(window);
+    create_account(window, fixture);
     assert!(window.libraries.selected() == 0 && !window.library_panel.is_sensitive());
     window.libraries.set_selected(1);
     wait_work(window);
@@ -623,11 +781,13 @@ fn live_automatic_sync() {
     let preference = fs::read(&preference_path).unwrap();
     let public: serde_json::Value = serde_json::from_slice(&preference).unwrap();
     assert!(public.as_object().unwrap().len() == 3 && public["automatic"] == true);
-    assert!(
-        !preference
-            .windows("fixture@example.invalid".len())
-            .any(|v| v == b"fixture@example.invalid")
-    );
+    for private in [server::ACCOUNT_KEY, server::ACCOUNT_ID] {
+        assert!(
+            !preference
+                .windows(private.len())
+                .any(|v| v == private.as_bytes())
+        );
+    }
     assert!(slot(&root, Slot::AutomaticSync).is_some());
     assert!(root.join("Sync").exists() && !root.join("Vault").exists());
     // No wake/tick injection: the real thirty-second scheduler exchanges edits

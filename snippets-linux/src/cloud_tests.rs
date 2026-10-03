@@ -103,6 +103,7 @@ fn fixture_with(
         server,
         agent: agent(false),
         instance: Uuid::from_u128(1),
+        device_sign_in: true,
     };
     let steps = steps(&client);
     let worker = thread::spawn(move || {
@@ -241,28 +242,52 @@ fn configuration_and_discovery_refuse_insecure_or_foreign_authorities() {
     assert!(Credential::new("secret with spaces".into()).is_err());
     let server = ServerURL::parse("https://example.invalid/snippets///").unwrap();
     assert!(server.canonical == "https://example.invalid/snippets");
-    let discovery = json!({"protocolMajor":2,"protocolMinor":1,"serverVersion":"fixture","serverInstanceId":Uuid::from_u128(1),"apiBase":"https://example.invalid/snippets/v2","recordProfile":"snippets-wire-v1","capabilities":["native-email-code-v1","library-action-proof-v1","pairing-v2","offline-recovery-v1","resource-session-revocation"],"limits":{"maxBlobBytes":900000,"maxRevisionBytes":256,"maxBatchRecords":50,"maxPageRecords":50,"maxRequestBytes":16777216,"maxResponseBytes":67108864,"maxKeyEnvelopeBytes":4096,"maxPairingSeconds":600},"nativeAuth":{"flow":"email_code","startEndpoint":"https://example.invalid/snippets/v2/auth/email/start","verifyEndpoint":"https://example.invalid/snippets/v2/auth/email/verify","refreshEndpoint":"https://example.invalid/snippets/v2/auth/refresh","revokeEndpoint":"https://example.invalid/snippets/v2/auth/revoke"}});
+    let discovery = json!({"protocolMajor":2,"protocolMinor":1,"serverVersion":"fixture","serverInstanceId":Uuid::from_u128(1),"apiBase":"https://example.invalid/snippets/v2","recordProfile":"snippets-wire-v1","capabilities":["native-account-key-v1","library-action-proof-v1","pairing-v2","offline-recovery-v1","resource-session-revocation"],"limits":{"maxBlobBytes":900000,"maxRevisionBytes":256,"maxBatchRecords":50,"maxPageRecords":50,"maxRequestBytes":16777216,"maxResponseBytes":67108864,"maxKeyEnvelopeBytes":4096,"maxPairingSeconds":600},"nativeAuth":{"flow":"account_key","createAccountEndpoint":"https://example.invalid/snippets/v2/auth/accounts","signInEndpoint":"https://example.invalid/snippets/v2/auth/sign-in","refreshEndpoint":"https://example.invalid/snippets/v2/auth/refresh","revokeEndpoint":"https://example.invalid/snippets/v2/auth/revoke"}});
     let parsed: Discovery = decode(&serde_json::to_vec(&discovery).unwrap()).unwrap();
     parsed.validate(&server).unwrap();
     let mut null_oidc = discovery.clone();
     null_oidc["oidc"] = Value::Null;
     assert!(decode::<Discovery>(&serde_json::to_vec(&null_oidc).unwrap()).is_err());
-    for mutation in 0..6 {
+    for mutation in 0..12 {
         let mut changed = discovery.clone();
         match mutation {
             0 => {
-                changed["nativeAuth"]["startEndpoint"] =
-                    json!("https://evil.invalid/v2/auth/email/start")
+                changed["nativeAuth"]["createAccountEndpoint"] =
+                    json!("https://evil.invalid/snippets/v2/auth/accounts")
             }
-            1 => changed["capabilities"] = json!(["native-email-code-v1"]),
+            1 => changed["capabilities"] = json!(["native-account-key-v1"]),
             2 => changed["limits"]["maxBlobBytes"] = json!(900001),
             3 => changed["apiBase"] = json!("https://example.invalid/v2"),
             4 => changed["protocolMajor"] = json!(1),
-            _ => changed["serverInstanceId"] = json!(Uuid::nil()),
+            5 => changed["serverInstanceId"] = json!(Uuid::nil()),
+            6 => {
+                changed["nativeAuth"]["signInEndpoint"] =
+                    json!("https://example.invalid/snippets/v2/auth/sign-in/")
+            }
+            7 => {
+                changed["nativeAuth"]["createAccountEndpoint"] =
+                    json!("https://example.invalid/snippets/v2/auth/sign-in")
+            }
+            8 => changed["nativeAuth"]["flow"] = json!("email_code"),
+            9 => {
+                changed["capabilities"][0] = json!("native-email-code-v1");
+            }
+            10 => {
+                changed["nativeAuth"]["signInEndpoint"] =
+                    json!("http://example.invalid/snippets/v2/auth/sign-in")
+            }
+            _ => {
+                changed["nativeAuth"]["revokeEndpoint"] =
+                    json!("https://example.invalid/snippets/v2/auth/accounts")
+            }
         }
         let parsed: Discovery = decode(&serde_json::to_vec(&changed).unwrap()).unwrap();
-        assert!(parsed.validate(&server).is_err());
+        assert!(parsed.validate(&server).is_err(), "{mutation}");
     }
+    // The retired email/code discovery shape is not accepted at all.
+    let mut retired = discovery.clone();
+    retired["nativeAuth"] = json!({"flow":"email_code","startEndpoint":"https://example.invalid/snippets/v2/auth/email/start","verifyEndpoint":"https://example.invalid/snippets/v2/auth/email/verify","refreshEndpoint":"https://example.invalid/snippets/v2/auth/refresh","revokeEndpoint":"https://example.invalid/snippets/v2/auth/revoke"});
+    assert!(decode::<Discovery>(&serde_json::to_vec(&retired).unwrap()).is_err());
     let (mut client, worker) = fixture(vec![Step::json(discovery)]);
     assert_eq!(
         client.load_discovery().err(),
@@ -275,24 +300,27 @@ fn configuration_and_discovery_refuse_insecure_or_foreign_authorities() {
     );
 }
 
+const FIXTURE_KEY: &str = "7KQF9M2XR4TDH8WBZN3CP6YE1AQ7";
+const FIXTURE_ACCOUNT: &str = "0f1e2d3c-4b5a-4968-8776-655443322110";
+fn fixture_grant() -> Value {
+    json!({"access_token":"fixture-issued-access","refresh_token":"fixture-issued-refresh","expires_in":300,"token_type":"Bearer","account":{"id":FIXTURE_ACCOUNT}})
+}
 #[test]
 fn native_auth_uses_camel_case_and_journals_issued_credentials_before_metadata() {
-    let grant = json!({"access_token":"fixture-issued-access","refresh_token":"fixture-issued-refresh","expires_in":300,"token_type":"Bearer","account":{"id":"fictional-account","email":"fixture@example.invalid"}});
-    let challenge =
-        json!({"challengeId":"fixture-challenge","expiresIn":600,"resendAfter":60,"codeLength":6});
+    let grant = fixture_grant();
+    let created = json!({"accountKey":FIXTURE_KEY,"session":grant.clone()});
     let mut empty = Step::json(Value::Null);
     empty.status = 204;
     empty.body.clear();
     let (client, worker) = fixture(vec![
-        Step::json(challenge),
+        Step::json(created),
         Step::json(grant.clone()),
         Step::json(grant.clone()),
         empty,
     ]);
-    let challenge = client.start_email("fixture@example.invalid").unwrap();
-    let issued = client.verify_email(&challenge, "123456").unwrap();
+    let issued = client.create_account().unwrap();
     let journaled = std::cell::Cell::new(false);
-    let session = issued
+    let mut session = issued
         .accept(
             |credentials| {
                 assert!(credentials.access.for_secure_storage() == b"fixture-issued-access");
@@ -305,13 +333,26 @@ fn native_auth_uses_camel_case_and_journals_issued_credentials_before_metadata()
         .ok()
         .unwrap();
     assert!(journaled.get() && session.expires_in() == Duration::from_secs(300));
+    assert!(session.account_for_secure_storage() == FIXTURE_ACCOUNT);
+    let created_key = session.take_issued_account_key().unwrap();
+    assert!(created_key.canonical() == FIXTURE_KEY && session.issued_account_key().is_none());
+    // Typed input is normalized locally; only the canonical form is sent.
+    let typed = AccountKey::parse_input(" 7kqf 9m2x-r4td-h8wb-zn3c-p6ye-IAQ7 ").unwrap();
+    let signed_in = client
+        .sign_in(&typed)
+        .unwrap()
+        .accept(|_| Ok(()), None, None)
+        .ok()
+        .unwrap();
+    assert!(signed_in.issued_account_key() == Some(&created_key));
     let previous = Credential::new("fixture-old-refresh".into()).unwrap();
-    let rotated = client.refresh(&previous).unwrap();
-    assert!(
-        rotated
-            .accept(|_| Ok(()), Some("fictional-account"), Some(&previous))
-            .is_ok()
-    );
+    let rotated = client
+        .refresh(&previous)
+        .unwrap()
+        .accept(|_| Ok(()), Some(FIXTURE_ACCOUNT), Some(&previous))
+        .ok()
+        .unwrap();
+    assert!(rotated.issued_account_key().is_none());
     client.revoke(&session.credentials.refresh, true).unwrap();
     let requests = worker.join().unwrap();
     assert!(
@@ -319,7 +360,18 @@ fn native_auth_uses_camel_case_and_journals_issued_credentials_before_metadata()
             .iter()
             .all(|r| r.method == "POST" && !r.headers.contains_key("authorization"))
     );
-    assert!(requests[1].json() == json!({"challengeId":"fixture-challenge","code":"123456"}));
+    // Account creation has no body: no content type, no chunking, length zero.
+    assert!(requests[0].target == "/v2/auth/accounts" && requests[0].body.is_empty());
+    assert!(
+        !requests[0].headers.contains_key("content-type")
+            && !requests[0].headers.contains_key("transfer-encoding")
+            && requests[0]
+                .headers
+                .get("content-length")
+                .is_none_or(|length| length == "0")
+    );
+    assert!(requests[1].target == "/v2/auth/sign-in");
+    assert!(requests[1].json() == json!({"accountKey":FIXTURE_KEY}));
     assert!(requests[2].json() == json!({"refreshToken":"fixture-old-refresh"}));
     assert!(
         requests[3].json()
@@ -357,12 +409,104 @@ fn native_auth_uses_camel_case_and_journals_issued_credentials_before_metadata()
     let issued = IssuedGrant::parse(&serde_json::to_vec(&grant).unwrap()).unwrap();
     assert!(
         issued
-            .accept(|_| Ok(()), Some("another-fictional-account"), None)
+            .accept(
+                |_| Ok(()),
+                Some("0f1e2d3c-4b5a-4968-8776-655443322111"),
+                None
+            )
             .is_err()
     );
     let issued = IssuedGrant::parse(&serde_json::to_vec(&grant).unwrap()).unwrap();
     let old = Credential::new("fixture-issued-refresh".into()).unwrap();
     assert!(issued.accept(|_| Ok(()), None, Some(&old)).is_err());
+    // Retired email metadata and non-canonical account identities are refused,
+    // always after the issued pair was handed to the journal.
+    for account in [
+        json!({"id":FIXTURE_ACCOUNT,"email":"fixture@example.invalid"}),
+        json!({"id":"fictional-account"}),
+        json!({"id":FIXTURE_ACCOUNT.to_uppercase()}),
+        json!({"id":"00000000-0000-0000-0000-000000000000"}),
+        json!({}),
+    ] {
+        let mut changed = grant.clone();
+        changed["account"] = account;
+        let issued = IssuedGrant::parse(&serde_json::to_vec(&changed).unwrap()).unwrap();
+        journaled.set(false);
+        let rejected = issued
+            .accept(
+                |_| {
+                    journaled.set(true);
+                    Ok(())
+                },
+                None,
+                None,
+            )
+            .err()
+            .unwrap();
+        assert!(journaled.get() && rejected.failure == Failure::InvalidResponse);
+    }
+}
+
+#[test]
+fn account_creation_validates_its_key_and_envelope_only_after_journaling_the_pair() {
+    let grant = fixture_grant();
+    for envelope in [
+        json!({"accountKey":"7KQF9M2XR4TDH8WBZN3CP6YE1AQ8","session":grant.clone()}),
+        json!({"accountKey":"7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ7","session":grant.clone()}),
+        json!({"accountKey":"7kqf9m2xr4tdh8wbzn3cp6ye1aq7","session":grant.clone()}),
+        json!({"accountKey":7,"session":grant.clone()}),
+        json!({"session":grant.clone()}),
+        json!({"accountKey":FIXTURE_KEY,"session":grant.clone(),"email":"fixture@example.invalid"}),
+    ] {
+        let issued = IssuedGrant::fixture_created(&serde_json::to_vec(&envelope).unwrap()).unwrap();
+        let journaled = std::cell::Cell::new(false);
+        let rejected = issued
+            .accept(
+                |_| {
+                    journaled.set(true);
+                    Ok(())
+                },
+                None,
+                None,
+            )
+            .err()
+            .unwrap();
+        assert!(journaled.get() && rejected.failure == Failure::InvalidResponse);
+        assert!(rejected.credentials.refresh.for_secure_storage() == b"fixture-issued-refresh");
+    }
+    // Without a parsable session there is no issued pair to own or revoke.
+    for envelope in [
+        json!({"accountKey":FIXTURE_KEY}),
+        json!({"accountKey":FIXTURE_KEY,"session":{"access_token":"fixture-issued-access"}}),
+        json!([FIXTURE_KEY]),
+    ] {
+        assert!(IssuedGrant::fixture_created(&serde_json::to_vec(&envelope).unwrap()).is_err());
+    }
+    let (client, worker) = fixture(vec![{
+        let mut step = Step::problem("invalid_account_key");
+        step.status = 401;
+        step.body = serde_json::to_vec(&json!({"type":"urn:snippets:error:invalid_account_key","status":401,"code":"invalid_account_key","requestId":Uuid::from_u128(99)})).unwrap();
+        step
+    }]);
+    assert!(
+        client
+            .sign_in(&AccountKey::from_canonical(FIXTURE_KEY).unwrap())
+            .err()
+            == Some(Failure::Server {
+                code: ErrorCode::InvalidAccountKey,
+                retry_after: None
+            })
+    );
+    let requests = worker.join().unwrap();
+    assert!(requests.len() == 1 && requests[0].target == "/v2/auth/sign-in");
+    for retired in [
+        "invalid_email",
+        "invalid_code",
+        "code_expired",
+        "too_many_attempts",
+    ] {
+        assert!(serde_json::from_value::<ErrorCode>(json!(retired)).is_err());
+    }
 }
 
 #[test]
@@ -374,10 +518,10 @@ fn credential_preflight_pins_deployment_without_sending_account_credentials() {
                 "protocolMajor":2,"protocolMinor":1,"serverVersion":"fixture",
                 "serverInstanceId":Uuid::from_u128(instance),"apiBase":format!("{base}/v2"),
                 "recordProfile":"snippets-wire-v1",
-                "capabilities":["native-email-code-v1","library-action-proof-v1","pairing-v2","offline-recovery-v1","resource-session-revocation"],
+                "capabilities":["native-account-key-v1","library-action-proof-v1","pairing-v2","offline-recovery-v1","resource-session-revocation"],
                 "limits":{"maxBlobBytes":900000,"maxRevisionBytes":256,"maxBatchRecords":50,"maxPageRecords":50,"maxRequestBytes":16777216,"maxResponseBytes":67108864,"maxKeyEnvelopeBytes":4096,"maxPairingSeconds":600},
-                "nativeAuth":{"flow":"email_code","startEndpoint":format!("{base}/v2/auth/email/start"),
-                    "verifyEndpoint":format!("{base}/v2/auth/email/verify"),
+                "nativeAuth":{"flow":"account_key","createAccountEndpoint":format!("{base}/v2/auth/accounts"),
+                    "signInEndpoint":format!("{base}/v2/auth/sign-in"),
                     "refreshEndpoint":format!("{base}/v2/auth/refresh"),
                     "revokeEndpoint":format!("{base}/v2/auth/revoke")}
             }))]
@@ -394,12 +538,6 @@ fn credential_preflight_pins_deployment_without_sending_account_credentials() {
         assert_eq!(requests.len(), 1);
         assert!(requests[0].method == "GET" && requests[0].target == "/.well-known/snippets-sync");
         assert!(!requests[0].headers.contains_key("authorization") && requests[0].body.is_empty());
-        // A manually decoded or foreign challenge cannot send a code.
-        let challenge: EmailChallenge = decode(
-            br#"{"challengeId":"fictional","expiresIn":600,"resendAfter":60,"codeLength":6}"#,
-        )
-        .unwrap();
-        assert!(client.verify_email(&challenge, "123456").err() == Some(Failure::AccountReview));
     }
 }
 
@@ -952,4 +1090,275 @@ fn bootstrap_metadata_rejects_weak_noncanonical_authorities_and_malformed_recove
         assert!(bound(client).recovery_state().err() == Some(Failure::InvalidResponse));
         assert_eq!(worker.join().unwrap().len(), 2);
     }
+}
+
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+const DEVICE_POLL: &str = "sn_d_PUBLICfictionalPollTokenOnly0123456789abcde";
+const DEVICE_REQUEST: &str = "7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d";
+fn device_expiry(seconds: i64) -> String {
+    (chrono::Utc::now() + chrono::Duration::seconds(seconds))
+        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+}
+fn problem(status: u16, code: &str, retry: Option<u32>) -> Step {
+    let mut body = json!({"type":format!("urn:snippets:error:{code}"),"status":status,"code":code,"requestId":Uuid::from_u128(99)});
+    if let Some(retry) = retry {
+        body["retryAfterSeconds"] = json!(retry);
+    }
+    let mut step = Step::json(body);
+    step.status = status;
+    step.content_type = "application/problem+json".into();
+    step
+}
+
+#[test]
+fn device_requests_and_claims_use_exact_bodies_members_and_poll_token_shape() {
+    let draft = crate::bootstrap::PairingDraft::generate().unwrap();
+    let pending = json!({"state":"pending","expiresAt":device_expiry(500)});
+    let approved = json!({"state":"approved","expiresAt":device_expiry(500),
+        "spaceId":"11111111-2222-4333-8444-555555555555","pairingId":"66666666-7777-4888-9999-aaaaaaaaaaaa",
+        "session":fixture_grant()});
+    let (client, worker) = fixture(vec![
+        Step::json(
+            json!({"requestId":DEVICE_REQUEST,"pollToken":DEVICE_POLL,"expiresAt":device_expiry(600)}),
+        ),
+        Step::json(pending.clone()),
+        Step::json(approved),
+        problem(410, "pairing_expired", None),
+        problem(429, "rate_limited", Some(30)),
+    ]);
+    let receipt = client.create_device_request(&draft).unwrap();
+    assert!(receipt.request.to_string() == DEVICE_REQUEST);
+    assert!(receipt.poll_token.for_secure_storage() == DEVICE_POLL);
+    assert!((receipt.expires_at - chrono::Utc::now().timestamp() - 600).abs() <= 2);
+    let id = receipt.request;
+    assert!(matches!(
+        client.claim_device_request(id, &receipt.poll_token).unwrap(),
+        DeviceClaim::Pending { expires_at } if expires_at > chrono::Utc::now().timestamp()
+    ));
+    let DeviceClaim::Approved(grant) = client
+        .claim_device_request(id, &receipt.poll_token)
+        .unwrap()
+    else {
+        panic!("expected an approved claim");
+    };
+    let session = grant.accept(|_| Ok(()), None, None).ok().unwrap();
+    let approval = session.device_approval().unwrap();
+    assert!(approval.space.to_string() == "11111111-2222-4333-8444-555555555555");
+    assert!(approval.pairing.to_string() == "66666666-7777-4888-9999-aaaaaaaaaaaa");
+    assert!(session.issued_account_key().is_none());
+    assert!(session.account_for_secure_storage() == FIXTURE_ACCOUNT);
+    assert!(
+        client.claim_device_request(id, &receipt.poll_token).err()
+            == Some(Failure::Server {
+                code: ErrorCode::PairingExpired,
+                retry_after: None
+            })
+    );
+    assert!(
+        client.claim_device_request(id, &receipt.poll_token).err()
+            == Some(Failure::Server {
+                code: ErrorCode::RateLimited,
+                retry_after: Some(30)
+            })
+    );
+    let requests = worker.join().unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.method == "POST" && !r.headers.contains_key("authorization"))
+    );
+    assert!(requests[0].target == "/v2/auth/device-requests");
+    assert!(
+        requests[0].json()
+            == json!({"recipientPublicKey":STANDARD.encode(draft.public_key()),"nonce":STANDARD.encode(draft.nonce())})
+    );
+    for request in &requests[1..] {
+        assert!(request.target == format!("/v2/auth/device-requests/{DEVICE_REQUEST}/claim"));
+        assert!(request.json() == json!({"pollToken":DEVICE_POLL}));
+    }
+}
+
+#[test]
+fn device_responses_with_extra_missing_or_noncanonical_members_are_refused() {
+    let draft = crate::bootstrap::PairingDraft::generate().unwrap();
+    let created =
+        json!({"requestId":DEVICE_REQUEST,"pollToken":DEVICE_POLL,"expiresAt":device_expiry(600)});
+    let mut creations = vec![];
+    for mutation in 0..7 {
+        let mut value = created.clone();
+        match mutation {
+            0 => value["extra"] = json!(1),
+            1 => value["pollToken"] = json!("sn_x_PUBLICfictionalPollTokenOnly0123456789abcde"),
+            2 => value["pollToken"] = json!(&DEVICE_POLL[..47]),
+            3 => value["requestId"] = json!(DEVICE_REQUEST.to_uppercase()),
+            4 => value["expiresAt"] = json!(device_expiry(3600)),
+            5 => value["requestId"] = json!(Uuid::nil()),
+            _ => {
+                value.as_object_mut().unwrap().remove("pollToken");
+            }
+        }
+        creations.push(Step::json(value));
+    }
+    let claims = [
+        json!({"state":"pending","expiresAt":device_expiry(500),"spaceId":Uuid::from_u128(1)}),
+        json!({"state":"pending"}),
+        json!({"state":"denied","expiresAt":device_expiry(500)}),
+        json!({"state":"approved","expiresAt":device_expiry(500)}),
+    ];
+    let steps = creations
+        .into_iter()
+        .chain(claims.iter().cloned().map(Step::json))
+        .collect();
+    let (client, worker) = fixture(steps);
+    for _ in 0..7 {
+        assert!(client.create_device_request(&draft).err() == Some(Failure::InvalidResponse));
+    }
+    let token = PollToken::new(Zeroizing::new(DEVICE_POLL.into())).unwrap();
+    for _ in 0..claims.len() {
+        assert!(matches!(
+            client.claim_device_request(Uuid::from_u128(5), &token),
+            Err(Failure::InvalidResponse)
+        ));
+    }
+    worker.join().unwrap();
+    // Without the advertised capability nothing is sent at all.
+    let mut legacy = client.clone();
+    legacy.device_sign_in = false;
+    assert!(legacy.create_device_request(&draft).err() == Some(Failure::IncompatibleServer));
+    assert!(
+        legacy
+            .claim_device_request(Uuid::from_u128(5), &token)
+            .err()
+            == Some(Failure::IncompatibleServer)
+    );
+}
+
+#[test]
+fn discovery_advertises_device_sign_in_only_through_its_capability() {
+    for advertised in [true, false] {
+        let (mut client, worker) = fixture_with(|client| {
+            let base = &client.server.canonical;
+            let mut capabilities = vec![
+                "native-account-key-v1",
+                "library-action-proof-v1",
+                "pairing-v2",
+                "offline-recovery-v1",
+                "resource-session-revocation",
+            ];
+            if advertised {
+                capabilities.push("native-device-sign-in-v1");
+            }
+            vec![Step::json(json!({
+                "protocolMajor":2,"protocolMinor":1,"serverVersion":"fixture",
+                "serverInstanceId":Uuid::from_u128(1),"apiBase":format!("{base}/v2"),
+                "recordProfile":"snippets-wire-v1","capabilities":capabilities,
+                "limits":{"maxBlobBytes":900000,"maxRevisionBytes":256,"maxBatchRecords":50,"maxPageRecords":50,"maxRequestBytes":16777216,"maxResponseBytes":67108864,"maxKeyEnvelopeBytes":4096,"maxPairingSeconds":600},
+                "nativeAuth":{"flow":"account_key","createAccountEndpoint":format!("{base}/v2/auth/accounts"),
+                    "signInEndpoint":format!("{base}/v2/auth/sign-in"),
+                    "refreshEndpoint":format!("{base}/v2/auth/refresh"),
+                    "revokeEndpoint":format!("{base}/v2/auth/revoke")}
+            }))]
+        });
+        client.device_sign_in = !advertised;
+        client.load_discovery().unwrap();
+        assert_eq!(client.supports_device_sign_in(), advertised);
+        worker.join().unwrap();
+    }
+}
+
+#[test]
+fn approving_device_creates_observes_and_binds_with_bearer_and_exact_bodies() {
+    let draft = crate::bootstrap::PairingDraft::generate().unwrap();
+    let request = Uuid::parse_str(DEVICE_REQUEST).unwrap();
+    let (client, worker) = fixture_with(|client| {
+        let now = chrono::Utc::now().timestamp();
+        let invitation = crate::bootstrap::Invitation::new(
+            client.server.clone(),
+            Uuid::from_u128(2),
+            Uuid::from_u128(0x5a5a),
+            *draft.nonce(),
+            *draft.public_key(),
+            now + 400,
+            now,
+        )
+        .unwrap();
+        let pairing = |state: &str| json!({"scope":scope(),"pairing":{"pairingId":invitation.pairing(),"recipientPublicKey":STANDARD.encode(invitation.public_key()),"nonce":STANDARD.encode(invitation.nonce()),"authenticationTag":invitation.confirmation_code(),"state":state,"expiresAt":chrono::DateTime::from_timestamp(invitation.expires_at(),0).unwrap().to_rfc3339()}});
+        let mut created = Step::json(pairing("pending"));
+        created.status = 201;
+        let mut bound = Step::json(Value::Null);
+        bound.status = 204;
+        bound.body.clear();
+        vec![
+            space(&scope()),
+            created,
+            space(&scope()),
+            Step::json(pairing("approved")),
+            space(&scope()),
+            Step::json(pairing("approved")),
+            space(&scope()),
+            bound,
+            space(&scope()),
+            problem(409, "conflict", None),
+        ]
+    });
+    let mut transport = bound(client);
+    assert!(
+        transport
+            .create_pairing_for(draft.public_key(), draft.nonce(), 59)
+            .err()
+            == Some(Failure::InvalidResponse)
+    );
+    let created = transport
+        .create_pairing_for(draft.public_key(), draft.nonce(), 395)
+        .unwrap();
+    assert!(created.state() == PairingState::Pending);
+    let pairing = created.invitation().pairing();
+    let observed = transport
+        .observe_pairing(pairing, draft.public_key(), draft.nonce())
+        .unwrap();
+    assert!(
+        observed.state() == PairingState::Approved && observed.invitation() == created.invitation()
+    );
+    // The decoder's recipient check refuses another device's key or nonce.
+    let other = crate::bootstrap::PairingDraft::generate().unwrap();
+    assert!(
+        transport
+            .observe_pairing(pairing, other.public_key(), draft.nonce())
+            .err()
+            == Some(Failure::InvalidResponse)
+    );
+    transport.approve_device_request(request, pairing).unwrap();
+    assert!(
+        transport.approve_device_request(request, pairing).err()
+            == Some(Failure::Server {
+                code: ErrorCode::Conflict,
+                retry_after: None
+            })
+    );
+    let requests = worker.join().unwrap();
+    assert!(
+        requests[1]
+            .target
+            .ends_with("/v2/spaces/00000000-0000-0000-0000-000000000002/pairings")
+    );
+    assert!(
+        requests[1].json()
+            == json!({"recipientPublicKey":STANDARD.encode(draft.public_key()),"nonce":STANDARD.encode(draft.nonce()),"expiresInSeconds":395})
+    );
+    assert!(
+        requests[3].method == "GET"
+            && requests[3]
+                .target
+                .ends_with(&format!("/pairings/{pairing}"))
+    );
+    let binding = &requests[7];
+    assert!(binding.method == "POST");
+    assert!(binding.target == format!("/v2/auth/device-requests/{DEVICE_REQUEST}/approval"));
+    assert!(
+        binding.headers.get("authorization").map(String::as_str) == Some("Bearer fixture-access")
+    );
+    assert!(
+        binding.json()
+            == json!({"spaceId":"00000000-0000-0000-0000-000000000002","pairingId":pairing})
+    );
 }

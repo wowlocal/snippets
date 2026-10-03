@@ -564,10 +564,11 @@ fn lost_window_reply_retains_completion_without_admitting_a_data_key() {
                 })
             }
             Command::Inspect => Ok(Reply::Profile {
-                email: None,
+                account: None,
                 server: None,
                 interrupted: false,
                 switching: handover::inspect(&mut store).unwrap(),
+                device: None,
             }),
             _ => panic!("Offline completion must not request a server or data key"),
         };

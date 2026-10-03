@@ -1,9 +1,12 @@
 //! Native account and recovery UI. Tokens remain in one serialized worker.
 //! Recovery material is drawn only while its revocable lease remains valid;
 //! it never enters a GTK text buffer, accessible text or the clipboard.
+//! The account key is the exception the account-key contract requires: its
+//! display form is selectable text with Copy, cleared when the presentation ends.
 use crate::{
+    account_key::AccountKey,
     account_worker::{AutomaticStatus, Command, Failure, Handle, Reply, Result},
-    auth_store::creation,
+    auth_store::{AccountKeyDisclosure, creation},
     bootstrap::Invitation,
     cloud::Role,
     desktop::{SessionMonitor, SessionState},
@@ -88,8 +91,11 @@ fn draw_qr(cr: &gtk::cairo::Context, qr: &Matrix, width: i32) -> f64 {
     let _ = cr.restore();
     side
 }
+/// A public pairing invitation or device sign-in request: no private key, poll
+/// token, account credential or library key is ever part of this payload.
 struct PairingPresentation {
-    invitation: Invitation,
+    payload: Vec<u8>,
+    id: uuid::Uuid,
     qr: Matrix,
     countdown: Option<Countdown>,
 }
@@ -129,9 +135,27 @@ impl PairingView {
         this
     }
     fn show(&self, invitation: Invitation) -> Result<()> {
+        let payload = invitation.encode_qr().map_err(|_| Failure::InvalidState)?;
+        self.present(payload.to_vec(), invitation.pairing(), || {
+            Countdown::new(&invitation)
+        })
+    }
+    fn show_device(&self, request: &crate::bootstrap::DeviceSignIn) -> Result<()> {
+        let payload = request.encode_qr().map_err(|_| Failure::InvalidState)?;
+        self.present(payload.to_vec(), request.request(), || {
+            Countdown::for_device(request)
+        })
+    }
+    fn present(
+        &self,
+        payload: Vec<u8>,
+        id: uuid::Uuid,
+        countdown: impl FnOnce() -> Option<Countdown>,
+    ) -> Result<()> {
         let same = self.value.borrow().as_ref().is_some_and(|v| {
-            v.invitation == invitation
-                && v.countdown.as_ref().is_some_and(|c| c.matches(&invitation))
+            v.payload == payload
+                && v.id == id
+                && v.countdown.as_ref().is_some_and(|c| c.matches_id(id))
         });
         if same {
             // A status refresh cannot restart this invitation's monotonic timer.
@@ -145,11 +169,11 @@ impl PairingView {
             }
             return Ok(());
         }
-        let payload = invitation.encode_qr().map_err(|_| Failure::InvalidState)?;
         let qr = Matrix::new(&payload).map_err(|_| Failure::InvalidState)?;
-        let countdown = Countdown::new(&invitation);
+        let countdown = countdown();
         *self.value.borrow_mut() = Some(PairingPresentation {
-            invitation,
+            payload,
+            id,
             qr,
             countdown,
         });
@@ -174,20 +198,25 @@ impl PairingView {
             .and_then(|v| v.countdown.as_mut())
             .is_some_and(Countdown::poll_due)
     }
+    fn defer(&self, delay: Duration) {
+        if let Some(countdown) = self
+            .value
+            .borrow_mut()
+            .as_mut()
+            .and_then(|v| v.countdown.as_mut())
+        {
+            countdown.defer(delay);
+        }
+    }
     fn copy(&self) -> Result<()> {
         if self.remaining().is_zero() {
             return Err(Failure::InvalidState);
         }
         let value = self.value.borrow();
-        let payload = value
-            .as_ref()
-            .ok_or(Failure::InvalidState)?
-            .invitation
-            .encode_qr()
-            .map_err(|_| Failure::InvalidState)?;
-        // This public invitation contains no library key, private key or recovery
-        // capability. It is safe to transfer to the trusted device for approval.
-        let text = std::str::from_utf8(&payload).map_err(|_| Failure::InvalidState)?;
+        let payload = &value.as_ref().ok_or(Failure::InvalidState)?.payload;
+        // This public payload contains no library key, private key, poll token or
+        // recovery capability. It is safe to transfer to the approving device.
+        let text = std::str::from_utf8(payload).map_err(|_| Failure::InvalidState)?;
         self.area
             .clipboard()
             .set_content(Some(&crate::ui::internal_clipboard_provider(text)))
@@ -281,6 +310,47 @@ impl RecoveryView {
     }
 }
 
+const CREATED_KEY_MESSAGE: &str = "This key is the only way to sign in to this account on another device. Snippets can't recover it or send it to you. Store it in your password manager.";
+const CLIPBOARD_KEY_LIFETIME: Duration = Duration::from_secs(120);
+/// The single account-key presentation. A created key is shown once after its
+/// session is committed; a disclosed key is readable only under its lease.
+enum KeyPresentation {
+    Created(AccountKey),
+    Disclosed(AccountKeyDisclosure),
+}
+impl KeyPresentation {
+    fn display(&self) -> Result<Zeroizing<String>> {
+        match self {
+            Self::Created(key) => Ok(key.display()),
+            Self::Disclosed(disclosure) => Ok(disclosure.display()?),
+        }
+    }
+}
+/// The created presentation's retained continuation: shown after "I've Saved It".
+type CreatedNext = (Option<Box<Reply>>, Option<Failure>);
+/// Copies the key with the internal history marker and the password-manager hint
+/// so clipboard managers skip it, then clears it after two minutes only if the
+/// clipboard still holds this exact copy.
+fn copy_account_key(widget: &impl IsA<gtk::Widget>, text: &str) -> Result<()> {
+    let clipboard = widget.clipboard();
+    let provider = gtk::gdk::ContentProvider::new_union(&[
+        crate::ui::internal_clipboard_provider(text),
+        gtk::gdk::ContentProvider::for_bytes(
+            "x-kde-passwordManagerHint",
+            &glib::Bytes::from_static(b"secret"),
+        ),
+    ]);
+    clipboard
+        .set_content(Some(&provider))
+        .map_err(|_| Failure::InvalidState)?;
+    glib::timeout_add_local_once(CLIPBOARD_KEY_LIFETIME, move || {
+        if clipboard.content().as_ref() == Some(&provider) {
+            let _ = clipboard.set_content(None::<&gtk::gdk::ContentProvider>);
+        }
+    });
+    Ok(())
+}
+
 pub(crate) struct AccountWindow {
     pub(crate) window: adw::ApplicationWindow,
     worker: Rc<Handle>,
@@ -307,8 +377,28 @@ pub(crate) struct AccountWindow {
     panel: gtk::Box,
     pages: gtk::Stack,
     server: gtk::Entry,
-    email: gtk::Entry,
-    code: gtk::PasswordEntry,
+    account_key_input: gtk::PasswordEntry,
+    account_panel: gtk::Box,
+    account_id: gtk::Label,
+    account_display: RefCell<Option<String>>,
+    show_key: gtk::Button,
+    key_panel: gtk::Box,
+    key_title: gtk::Label,
+    key_message: gtk::Label,
+    key_label: gtk::Label,
+    key_copy: gtk::Button,
+    key_done: gtk::Button,
+    key_presentation: RefCell<Option<KeyPresentation>>,
+    created_next: RefCell<Option<CreatedNext>>,
+    sign_out_dialog: RefCell<Option<adw::AlertDialog>>,
+    device_view: Rc<PairingView>,
+    device_code: gtk::Label,
+    device_status: gtk::Label,
+    device_copy: gtk::Button,
+    device_cancel: gtk::Button,
+    device_continue: gtk::Button,
+    device_poll: Cell<bool>,
+    device_backoff: Cell<u64>,
     libraries: gtk::DropDown,
     create: gtk::Button,
     create_another: gtk::Button,
@@ -450,8 +540,34 @@ impl AccountWindow {
         automatic_button.set_sensitive(false);
         automatic_panel.append(&automatic_button);
         automatic_panel.append(&label("While enabled, Snippets checks for changes in the background and reconnects this saved library after restart. Reconnecting, signing out, switching libraries or beginning recovery turns it off. Enable it again after reviewing the library."));
-        let status = label("Open an existing account or request a sign-in code.");
+        let status = label("Create an account or sign in with your account key.");
         panel.append(&status);
+        let key_panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        key_panel.set_visible(false);
+        panel.append(&key_panel);
+        let key_title = label("Save Your Account Key");
+        key_title.add_css_class("title-4");
+        key_panel.append(&key_title);
+        let key_message = label(CREATED_KEY_MESSAGE);
+        key_panel.append(&key_message);
+        let key_label = label("");
+        key_label.set_selectable(true);
+        key_label.add_css_class("monospace");
+        key_label.update_property(&[gtk::accessible::Property::Label("Account key")]);
+        key_panel.append(&key_label);
+        let key_copy = gtk::Button::with_label("Copy");
+        key_panel.append(&key_copy);
+        let key_done = gtk::Button::with_label("I've Saved It");
+        key_done.add_css_class("suggested-action");
+        key_panel.append(&key_done);
+        let account_panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        account_panel.set_visible(false);
+        panel.append(&account_panel);
+        let account_id = label("");
+        account_id.set_selectable(true);
+        account_panel.append(&account_id);
+        let show_key = gtk::Button::with_label("Show Account Key…");
+        account_panel.append(&show_key);
         let history = gtk::Button::with_label("Library Recovery History…");
         panel.append(&history);
         let switch_panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -512,29 +628,56 @@ impl AccountWindow {
             "Snippets Cloud HTTPS server",
         )]);
         login.append(&server);
-        let email = gtk::Entry::builder()
-            .placeholder_text("Email address")
-            .input_purpose(gtk::InputPurpose::Email)
-            .max_length(320)
-            .build();
-        email.update_property(&[gtk::accessible::Property::Label("Account email")]);
-        login.append(&email);
-        let send = gtk::Button::with_label("Send Sign-in Code");
-        send.add_css_class("suggested-action");
-        login.append(&send);
+        let create_account = gtk::Button::with_label("Create Account");
+        create_account.add_css_class("suggested-action");
+        login.append(&create_account);
+        let use_key = gtk::Button::with_label("Sign In with Account Key");
+        login.append(&use_key);
+        let use_device = gtk::Button::with_label("Sign In with Another Device");
+        login.append(&use_device);
         pages.add_named(&login, Some("login"));
-        let code_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        code_page.append(&label("Enter the code from your sign-in email."));
-        let code = gtk::PasswordEntry::builder()
-            .placeholder_text("Sign-in code")
-            .show_peek_icon(false)
+        let device_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        device_page.append(&label("On a device that's already signed in to this account and opens its library, choose Add device and scan this code or paste the copied request. Approve only if both devices show the same confirmation code. That device signs this computer in and gives it the library key."));
+        let device_view = PairingView::new();
+        device_view
+            .area
+            .update_property(&[gtk::accessible::Property::Label(
+                "Public device sign-in request QR",
+            )]);
+        device_page.append(&device_view.area);
+        let device_code = label("");
+        device_code.set_selectable(true);
+        device_code.add_css_class("monospace");
+        device_page.append(&device_code);
+        let device_status = label("");
+        device_page.append(&device_status);
+        let device_copy = gtk::Button::with_label("Copy Sign-In Request");
+        device_page.append(&device_copy);
+        let device_continue = gtk::Button::with_label("Finish Signing In");
+        device_continue.add_css_class("suggested-action");
+        device_continue.set_visible(false);
+        device_page.append(&device_continue);
+        let device_cancel = gtk::Button::with_label("Cancel");
+        device_page.append(&device_cancel);
+        pages.add_named(&device_page, Some("device"));
+        let key_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        key_page.append(&label(
+            "Enter the account key you saved when you created your account.",
+        ));
+        let account_key_input = gtk::PasswordEntry::builder()
+            .placeholder_text("Account key")
+            .show_peek_icon(true)
             .build();
-        code_page.append(&code);
-        let verify = gtk::Button::with_label("Sign In");
-        code_page.append(&verify);
-        let back = gtk::Button::with_label("Use Another Account");
-        code_page.append(&back);
-        pages.add_named(&code_page, Some("code"));
+        account_key_input.update_property(&[gtk::accessible::Property::Label("Account key")]);
+        key_page.append(&account_key_input);
+        let sign_in = gtk::Button::with_label("Sign In");
+        sign_in.add_css_class("suggested-action");
+        key_page.append(&sign_in);
+        let back = gtk::Button::with_label("Back");
+        key_page.append(&back);
+        pages.add_named(&key_page, Some("account-key"));
+        // A saved but disconnected account offers Reconnect or Sign Out only.
+        pages.add_named(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("saved"));
         let libraries_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
         libraries_page.append(&label(
             "Select a library or create a new one. Keys remain in your system keyring.",
@@ -696,8 +839,28 @@ impl AccountWindow {
             panel,
             pages,
             server,
-            email,
-            code,
+            account_key_input,
+            account_panel,
+            account_id,
+            account_display: RefCell::new(None),
+            show_key,
+            key_panel,
+            key_title,
+            key_message,
+            key_label,
+            key_copy,
+            key_done,
+            key_presentation: RefCell::new(None),
+            created_next: RefCell::new(None),
+            sign_out_dialog: RefCell::new(None),
+            device_view,
+            device_code,
+            device_status,
+            device_copy,
+            device_cancel,
+            device_continue,
+            device_poll: Cell::new(false),
+            device_backoff: Cell::new(0),
             libraries,
             create,
             create_another,
@@ -777,23 +940,66 @@ impl AccountWindow {
             }
         });
         let weak = Rc::downgrade(&this);
-        send.connect_clicked(move |_| {
+        create_account.connect_clicked(move |_| {
             if let Some(this) = weak.upgrade() {
-                let command = Command::SendCode {
+                let command = Command::CreateAccount {
                     server: Zeroizing::new(this.server.text().to_string()),
-                    email: Zeroizing::new(this.email.text().to_string()),
                 };
                 this.library_panel.set_sensitive(false);
                 this.run(command);
             }
         });
         let weak = Rc::downgrade(&this);
-        verify.connect_clicked(move |_| {
+        use_key.connect_clicked(move |_| {
             if let Some(this) = weak.upgrade() {
-                match secret(&this.code) {
-                    Ok(code) => this.run(Command::Verify(code)),
-                    Err(e) => this.failure(e),
-                }
+                this.cancel_sensitive();
+                this.pages.set_visible_child_name("account-key");
+                this.status
+                    .set_label("Enter your account key to sign in on this computer.");
+                this.account_key_input.grab_focus();
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        use_device.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                let command = Command::BeginDeviceSignIn {
+                    server: Zeroizing::new(this.server.text().to_string()),
+                };
+                this.run(command);
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        this.device_cancel.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.clear_device();
+                this.run(Command::CancelDeviceSignIn);
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        this.device_continue.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.device_continue.set_visible(false);
+                this.run(Command::CheckDeviceSignIn);
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        this.device_copy.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade()
+                && let Err(e) = this.device_view.copy()
+            {
+                this.failure(e);
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        sign_in.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.sign_in();
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        this.account_key_input.connect_activate(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.sign_in();
             }
         });
         let weak = Rc::downgrade(&this);
@@ -801,11 +1007,36 @@ impl AccountWindow {
             if let Some(this) = weak.upgrade() {
                 this.cancel_sensitive();
                 this.pages.set_visible_child_name("login");
+                this.status
+                    .set_label("Create an account or sign in with your account key.");
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        this.show_key.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.show_account_key();
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        this.key_copy.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.copy_key();
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        this.key_done.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.end_key_presentation(true);
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        this.sign_out.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.confirm_sign_out();
             }
         });
         for (button, make) in [
             (&this.reconnect, (|| Command::Refresh) as fn() -> Command),
-            (&this.sign_out, || Command::SignOut),
             (&this.resume, || Command::Resume),
             (&this.retry, || Command::Retain),
             (&setup, || Command::Setup),
@@ -863,7 +1094,7 @@ impl AccountWindow {
             if let Some(this) = weak.upgrade() {
                 let payload = Zeroizing::new(this.approval_input.text().to_string());
                 this.approval_input.set_text("");
-                this.run(Command::PrepareApproval(payload));
+                this.review_added_device(payload);
             }
         });
         let weak = Rc::downgrade(&this);
@@ -1021,6 +1252,9 @@ impl AccountWindow {
         this.window.connect_close_request(move |window| {
             if let Some(this) = weak.upgrade() {
                 this.cancel_sensitive();
+                // Hiding ends even the creation presentation; the saved key stays
+                // available through Show Account Key.
+                this.end_key_presentation(false);
             }
             window.set_visible(false);
             glib::Propagation::Stop
@@ -1041,7 +1275,26 @@ impl AccountWindow {
                 this.status
                     .set_label("File selection ended. Review the saved changes again.");
             }
+            // A created key stays visible on focus loss so it can be stored in a
+            // password manager; an observed desktop lock still ends it.
+            if this.created_key_visible()
+                && this
+                    .desktop
+                    .as_ref()
+                    .is_some_and(|m| m.snapshot().0 != SessionState::Unlocked)
+            {
+                this.end_key_presentation(false);
+            }
+            if this
+                .key_presentation
+                .borrow()
+                .as_ref()
+                .is_some_and(|p| matches!(p, KeyPresentation::Disclosed(d) if !d.valid()))
+            {
+                this.end_key_presentation(false);
+            }
             let active_secret = this.view.visible()
+                || this.disclosed_key_visible()
                 || this.authorization.borrow().is_some()
                 || this.password_dialog.borrow().is_some()
                 || this.restoration_preparation.borrow().is_some()
@@ -1142,6 +1395,34 @@ impl AccountWindow {
                     this.candidate_poll.set(false);
                 }
             }
+            if this.device_view.value.borrow().is_some() {
+                let remaining = this.device_view.remaining();
+                this.device_copy.set_sensitive(!remaining.is_zero());
+                if remaining.is_zero() {
+                    this.device_status.set_label(
+                        "This request expired. Cancel it, then sign in with another device again.",
+                    );
+                    this.device_view.area.queue_draw();
+                    this.device_poll.set(false);
+                } else if this.device_poll.get() {
+                    this.device_status.set_label(&format!(
+                        "Waiting for approval · {} seconds left",
+                        remaining.as_secs()
+                    ));
+                }
+            }
+            if this.device_poll.get()
+                && !this.busy.get()
+                && !this.worker.retention_required()
+                && this.window.is_visible()
+                && this
+                    .desktop
+                    .as_ref()
+                    .is_some_and(|d| d.snapshot().0 == SessionState::Unlocked)
+                && this.device_view.poll_due()
+            {
+                this.run(Command::CheckDeviceSignIn);
+            }
             if this.candidate_poll.get()
                 && !this.busy.get()
                 && !this.worker.retention_required()
@@ -1161,12 +1442,14 @@ impl AccountWindow {
     }
     pub(crate) fn present(self: &Rc<Self>) {
         self.window.present();
-        if !self.busy.get() {
+        // Re-presenting must not replace a new account's unsaved key screen.
+        if !self.busy.get() && !self.created_key_visible() {
             self.run(Command::Inspect);
         }
     }
     pub(crate) fn prepare_quit(self: &Rc<Self>) -> bool {
         self.cancel_sensitive();
+        self.end_key_presentation(false);
         if self.worker.prepare_quit() {
             return true;
         }
@@ -1275,6 +1558,13 @@ impl AccountWindow {
             password.set_text("");
             dialog.force_close();
         }
+        let sign_out_dialog = self.sign_out_dialog.borrow_mut().take();
+        if let Some(dialog) = sign_out_dialog {
+            dialog.force_close();
+        }
+        if self.disclosed_key_visible() {
+            self.end_key_presentation(false);
+        }
         let snapshot_dialog = self.snapshot_dialog.borrow_mut().take();
         if let Some(dialog) = snapshot_dialog {
             dialog.force_close();
@@ -1288,7 +1578,7 @@ impl AccountWindow {
         self.suffix.set_text("");
         self.recorded.set_active(false);
         self.confirm.set_sensitive(false);
-        self.code.set_text("");
+        self.account_key_input.set_text("");
         self.recovery_input.set_text("");
         self.switch_recovery.set_text("");
         self.mutation_target.borrow_mut().take();
@@ -1309,6 +1599,7 @@ impl AccountWindow {
     fn failure(&self, failure: Failure) {
         self.pairing_poll.set(false);
         self.candidate_poll.set(false);
+        self.stop_device_polling();
         self.status.set_label(failure.message());
         self.retry.set_visible(self.worker.retention_required());
     }
@@ -1334,8 +1625,10 @@ impl AccountWindow {
                 | Command::Select(_)
                 | Command::Refresh
                 | Command::SignOut
-                | Command::SendCode { .. }
-                | Command::Verify(_)
+                | Command::CreateAccount { .. }
+                | Command::SignIn { .. }
+                | Command::BeginDeviceSignIn { .. }
+                | Command::CancelDeviceSignIn
                 | Command::CreateLibrary
                 | Command::CreateNewLibrary(_)
         ) {
@@ -1381,22 +1674,42 @@ impl AccountWindow {
                 self.update_automatic();
             },
             Reply::History(_) => self.status.set_label("Open Library Recovery History to inspect saved recovery states."),
-            Reply::Profile { email,server,interrupted,switching } => {
+            Reply::Profile { account,server,interrupted,switching,device } => {
                 self.create_another.set_sensitive(false);
-                self.pages.set_visible_child_name("login");
+                let saved = account.is_some();
+                self.pages.set_visible_child_name(if saved { "saved" } else { "login" });
+                if device.is_none() { self.clear_device(); }
                 if let Some(server)=server { self.server.set_text(server.for_secure_storage()); }
-                if let Some(email)=email.as_ref() { self.email.set_text(email); }
-                self.reconnect.set_visible(email.is_some()); self.sign_out.set_visible(email.is_some()); self.resume.set_visible(interrupted);
-                self.status.set_label(if interrupted {"Resume the retained account operation before signing in."} else if email.is_some() {"Account saved. Reconnect to choose a library."} else {"Enter your HTTPS server and email to sign in."});
+                self.set_account(account);
+                self.reconnect.set_visible(saved); self.sign_out.set_visible(saved); self.resume.set_visible(interrupted);
+                self.status.set_label(if interrupted {"Resume the retained account operation before signing in."} else if saved {"Account saved. Reconnect to choose a library."} else {"Enter your HTTPS server, then create an account or sign in with your account key."});
                 self.set_switching(switching, false, false);
+                if let Some(device)=device { self.set_device(Some(device), None, None); }
             }
-            Reply::CodeRequired=>{ self.pages.set_visible_child_name("code"); self.status.set_label("Sign-in code requested. Check your email."); self.code.grab_focus(); }
-            Reply::Libraries { email,server,spaces,creation,can_create_new,created,switching }=>{
-                self.creation_status.set_label(&format!("{} · {}",email.as_str(),server.for_secure_storage()));
+            Reply::AccountCreated { key,next,failure } => self.show_created_key(key, next, failure),
+            Reply::DeviceSignIn { state,retry_after,failure } => self.set_device(state, retry_after, failure),
+            Reply::DeviceSignedIn { libraries,library,selected,keys,failure } => {
+                self.clear_device();
+                // The worker already selected the approved library; show it after
+                // the "Select a library…" placeholder row without re-selecting.
+                let row = match (&*libraries, library) {
+                    (Reply::Libraries { spaces, .. }, Some(id)) => spaces.iter().position(|space| space.id() == id),
+                    _ => None,
+                };
+                self.apply(*libraries);
+                if let Some(row)=row { self.loading.set(true); self.libraries.set_selected(row as u32 + 1); self.loading.set(false); }
+                if let Some(selected)=selected { self.apply(*selected); }
+                let ready = matches!(keys, Some(Ok(Outcome::Ready { .. })));
+                if let Some(keys)=keys { self.apply_library(keys); }
+                if let Some(failure)=failure { self.failure(failure); }
+                else if ready { self.status.set_label("Signed in with another device. This computer received the library key; choose Sync Now to continue."); }
+            }
+            Reply::Libraries { account,server,spaces,creation,can_create_new,created,switching }=>{
+                self.creation_status.set_label(&format!("Account ID {} · {}",account,server.for_secure_storage()));
                 self.server.set_text(server.for_secure_storage());
                 self.set_creation(creation);
                 self.set_new_creation(can_create_new);
-                self.email.set_text(&email); self.reconnect.set_visible(true); self.sign_out.set_visible(true); self.resume.set_visible(false);
+                self.set_account(Some(account)); self.reconnect.set_visible(true); self.sign_out.set_visible(true); self.resume.set_visible(false);
                 // GtkDropDown's single selection cannot be cleared on a nonempty
                 // model. Keep a real first row so the first/only library still
                 // requires an explicit change and its notify signal can fire.
@@ -1579,6 +1892,7 @@ impl AccountWindow {
                     self.status.set_label(match outcome {
                         mutations::Outcome::RecoveryReady=>"Recovery code replaced. Show the pending recovery code and save a new offline copy; the previous copy no longer opens the current recovery envelope.",
                         mutations::Outcome::ApprovalAcknowledged=>"Device approved. Finish key installation on the new device.",
+                        mutations::Outcome::DeviceSignedIn=>"The new device is signed in.",
                         mutations::Outcome::ReviewRequired=>"The outcome could not be confirmed. Keep this operation for account review; retry only while its authorization is still accepted by the server.",
                     });
                 }
@@ -1611,6 +1925,7 @@ impl AccountWindow {
                 Purpose::ApprovePairing => self.mutation_matched.is_active(),
                 Purpose::ReplaceRecovery => true,
                 Purpose::RevealRecovery
+                | Purpose::RevealAccountKey
                 | Purpose::SwitchLibrary
                 | Purpose::CancelLibrarySwitch
                 | Purpose::FinishLocalLibrarySwitch
@@ -1814,6 +2129,396 @@ impl AccountWindow {
             }
         });
     }
+    /// Validates locally first: a key that fails normalization or its check is a
+    /// typing error, stays in the field for correction and is never sent.
+    fn sign_in(self: &Rc<Self>) {
+        if self.busy.get() {
+            return;
+        }
+        let key = match secret(&self.account_key_input) {
+            Ok(entered) => match AccountKey::parse_input(&entered) {
+                Some(key) => key,
+                None => {
+                    self.account_key_input.set_text(&entered);
+                    self.failure(Failure::InvalidAccountKey);
+                    return;
+                }
+            },
+            Err(_) => {
+                self.failure(Failure::InvalidAccountKey);
+                return;
+            }
+        };
+        self.library_panel.set_sensitive(false);
+        self.run(Command::SignIn {
+            server: Zeroizing::new(self.server.text().to_string()),
+            key,
+        });
+    }
+    fn set_account(&self, account: Option<String>) {
+        self.account_panel.set_visible(account.is_some());
+        self.account_id.set_label(
+            &account
+                .as_deref()
+                .map_or_else(String::new, |id| format!("Account ID: {id}")),
+        );
+        *self.account_display.borrow_mut() = account;
+    }
+    fn created_key_visible(&self) -> bool {
+        matches!(
+            self.key_presentation.borrow().as_ref(),
+            Some(KeyPresentation::Created(_))
+        )
+    }
+    fn disclosed_key_visible(&self) -> bool {
+        matches!(
+            self.key_presentation.borrow().as_ref(),
+            Some(KeyPresentation::Disclosed(_))
+        )
+    }
+    /// Shown once after the new session and its key are committed. Nothing else
+    /// continues until the owner explicitly acknowledges saving the key.
+    fn show_created_key(
+        &self,
+        key: AccountKey,
+        next: Option<Box<Reply>>,
+        failure: Option<Failure>,
+    ) {
+        self.end_key_presentation(false);
+        self.key_label.set_label(&key.display());
+        *self.key_presentation.borrow_mut() = Some(KeyPresentation::Created(key));
+        *self.created_next.borrow_mut() = Some((next, failure));
+        self.key_title.set_label("Save Your Account Key");
+        self.key_message.set_label(CREATED_KEY_MESSAGE);
+        self.key_done.set_label("I've Saved It");
+        self.key_panel.set_visible(true);
+        self.pages.set_visible(false);
+        self.account_panel.set_visible(false);
+        self.reconnect.set_visible(false);
+        self.sign_out.set_visible(false);
+        self.status
+            .set_label("Account created. Save your account key before continuing.");
+    }
+    fn show_disclosed_key(&self, disclosure: AccountKeyDisclosure) -> Result<()> {
+        let display = disclosure.display()?;
+        self.end_key_presentation(false);
+        self.key_label.set_label(&display);
+        drop(display);
+        *self.key_presentation.borrow_mut() = Some(KeyPresentation::Disclosed(disclosure));
+        self.key_title.set_label("Your Account Key");
+        self.key_message.set_label(&format!(
+            "{CREATED_KEY_MESSAGE} The key hides when this window loses focus, the desktop locks, or authorization expires."
+        ));
+        self.key_done.set_label("Hide Key");
+        self.key_panel.set_visible(true);
+        Ok(())
+    }
+    /// Ends either presentation. Ending a created key continues with the reply
+    /// retained from account creation; without the explicit acknowledgement the
+    /// owner is reminded where to find the saved key.
+    fn end_key_presentation(&self, acknowledged: bool) {
+        let Some(presentation) = self.key_presentation.borrow_mut().take() else {
+            return;
+        };
+        self.key_label.set_label("");
+        self.key_panel.set_visible(false);
+        self.pages.set_visible(true);
+        let created = matches!(presentation, KeyPresentation::Created(_));
+        drop(presentation);
+        if !created {
+            return;
+        }
+        if let Some((next, failure)) = self.created_next.borrow_mut().take() {
+            if let Some(next) = next {
+                self.apply(*next);
+            }
+            if let Some(failure) = failure {
+                self.failure(failure);
+                return;
+            }
+        }
+        if !acknowledged {
+            self.status.set_label("Your account key is saved in this computer's keyring. Choose Show Account Key to save it before you sign in on another device.");
+        }
+    }
+    fn copy_key(&self) {
+        let copied = self
+            .key_presentation
+            .borrow()
+            .as_ref()
+            .ok_or(Failure::InvalidState)
+            .and_then(KeyPresentation::display)
+            .and_then(|text| copy_account_key(&self.key_label, &text));
+        match copied {
+            Ok(()) => self.status.set_label(
+                "Account key copied. Snippets clears it from the clipboard after two minutes if it is still there.",
+            ),
+            Err(failure) => {
+                if self.disclosed_key_visible() {
+                    self.end_key_presentation(false);
+                }
+                self.failure(failure);
+            }
+        }
+    }
+    /// Gated by the same fresh computer-password authorization as recovery-code
+    /// disclosure. The worker rereads the exact saved session before disclosure.
+    fn show_account_key(self: &Rc<Self>) {
+        if self.busy.get() {
+            return;
+        }
+        self.cancel_sensitive();
+        self.busy(true);
+        self.status.set_label("Checking the saved account…");
+        let generation = self.generation.get();
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let result = this.authorize_and_show_key(generation).await;
+            this.busy(false);
+            if generation == this.generation.get() {
+                match result {
+                    Ok(()) => this
+                        .status
+                        .set_label("Store your account key in your password manager."),
+                    Err(e) => {
+                        this.cancel_sensitive();
+                        this.failure(e);
+                    }
+                }
+            }
+        });
+    }
+    async fn authorize_and_show_key(&self, generation: u64) -> Result<()> {
+        let Reply::Target(target) = self.execute(Command::PrepareAccountKeyDisclosure).await?
+        else {
+            return Err(Failure::InvalidState);
+        };
+        let permit = self.authorize_target(target, generation).await?;
+        let Reply::AccountKey(disclosure) = self.execute(Command::RevealAccountKey(permit)).await?
+        else {
+            return Err(Failure::InvalidState);
+        };
+        if generation != self.generation.get() || !self.window.is_active() {
+            return Err(Failure::Authentication(
+                crate::local_auth::Failure::Cancelled,
+            ));
+        }
+        self.show_disclosed_key(disclosure)
+    }
+    fn confirm_sign_out(self: &Rc<Self>) {
+        if self.busy.get() {
+            return;
+        }
+        self.cancel_sensitive();
+        let generation = self.generation.get();
+        let dialog = adw::AlertDialog::builder()
+            .heading("Sign Out?")
+            .body("Snippets stops syncing with this account on this computer. Your local snippets stay here. You'll need your account key to sign in again.")
+            .build();
+        dialog.add_responses(&[("cancel", "Cancel"), ("sign-out", "Sign Out")]);
+        dialog.set_response_appearance("sign-out", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            if generation != this.generation.get() {
+                return;
+            }
+            *this.sign_out_dialog.borrow_mut() = Some(dialog.clone());
+            let response = dialog.clone().choose_future(Some(&this.window)).await;
+            let current = this
+                .sign_out_dialog
+                .borrow()
+                .as_ref()
+                .is_some_and(|open| *open == dialog);
+            if current {
+                this.sign_out_dialog.borrow_mut().take();
+            }
+            if response == "sign-out" && current && generation == this.generation.get() {
+                this.run(Command::SignOut);
+            }
+        });
+    }
+    /// A hard failure stops automatic claims; the owner checks again explicitly.
+    fn stop_device_polling(&self) {
+        if self.device_poll.replace(false) && self.device_view.value.borrow().is_some() {
+            self.device_continue.set_label("Check Again");
+            self.device_continue.set_visible(true);
+        }
+    }
+    fn clear_device(&self) {
+        self.device_poll.set(false);
+        self.device_view.clear();
+        self.device_code.set_label("");
+        self.device_status.set_label("");
+        self.device_continue.set_visible(false);
+    }
+    /// The new device's request. Poll failures keep the request on screen; a
+    /// server delay or a network backoff postpones the next two-second poll.
+    fn set_device(
+        &self,
+        state: Option<crate::auth_store::device::Status>,
+        retry_after: Option<u32>,
+        failure: Option<Failure>,
+    ) {
+        use crate::auth_store::device::Status;
+        match state {
+            None => {
+                self.clear_device();
+                self.pages.set_visible_child_name("login");
+            }
+            Some(Status::Waiting(request)) => {
+                if let Err(e) = self.device_view.show_device(&request) {
+                    self.clear_device();
+                    self.failure(e);
+                    return;
+                }
+                self.pages.set_visible_child_name("device");
+                self.device_view.area.set_visible(true);
+                self.device_continue.set_visible(false);
+                self.device_continue.set_label("Finish Signing In");
+                self.device_code.set_label(&format!(
+                    "Confirmation code: {}",
+                    request.confirmation_code()
+                ));
+                let live = !self.device_view.remaining().is_zero();
+                self.device_copy.set_sensitive(live);
+                self.device_poll
+                    .set(live && !self.worker.retention_required());
+                let network = matches!(
+                    failure,
+                    Some(Failure::Cloud(crate::cloud::Failure::Network))
+                );
+                let backoff = if network {
+                    (self.device_backoff.get() * 2).clamp(4, 60)
+                } else {
+                    0
+                };
+                self.device_backoff.set(backoff);
+                let delay = retry_after.map_or(backoff, u64::from).max(backoff);
+                if delay > 0 {
+                    self.device_view.defer(Duration::from_secs(delay));
+                }
+                self.status
+                    .set_label("Approve this computer from a device that's already signed in.");
+                if let Some(failure) = failure {
+                    self.device_status.set_label(failure.message());
+                    // A definitive refusal ends this request; network trouble retries.
+                    if !network
+                        && !matches!(
+                            failure,
+                            Failure::Cloud(crate::cloud::Failure::Server {
+                                code: crate::cloud::ErrorCode::RateLimited
+                                    | crate::cloud::ErrorCode::DependencyUnavailable
+                                    | crate::cloud::ErrorCode::InternalError,
+                                ..
+                            })
+                        )
+                    {
+                        self.stop_device_polling();
+                        self.status.set_label(failure.message());
+                    }
+                }
+            }
+            Some(Status::Approved) => {
+                self.device_poll.set(false);
+                self.device_view.clear();
+                self.device_view.area.set_visible(false);
+                self.device_code.set_label("");
+                self.pages.set_visible_child_name("device");
+                self.device_copy.set_sensitive(false);
+                self.device_continue.set_label("Finish Signing In");
+                self.device_continue.set_visible(true);
+                self.device_status.set_label(
+                    "Another device approved this computer. Finish signing in to receive the library key.",
+                );
+                self.status
+                    .set_label("Finish signing in with another device.");
+                if let Some(failure) = failure {
+                    self.failure(failure);
+                }
+            }
+        }
+    }
+    /// The add-device entry accepts a pairing invitation or a new device's
+    /// sign-in request. A sign-in request shows its confirmation code and asks
+    /// before any network call; the approval then needs fresh owner authority.
+    fn review_added_device(self: &Rc<Self>, payload: Zeroizing<String>) {
+        if self.busy.get() {
+            return;
+        }
+        let decoded = crate::bootstrap::AddDevice::decode_qr(
+            payload.as_bytes(),
+            chrono::Utc::now().timestamp(),
+        );
+        let request = match decoded {
+            Ok(crate::bootstrap::AddDevice::SignIn(request)) => request,
+            // Invitations keep the existing review path, including its errors.
+            _ => {
+                self.run(Command::PrepareApproval(payload));
+                return;
+            }
+        };
+        if request.server().for_secure_storage() != self.server.text().as_str() {
+            self.failure(Failure::InvalidDeviceRequest);
+            return;
+        }
+        self.cancel_sensitive();
+        let generation = self.generation.get();
+        let desktop_epoch = self
+            .desktop
+            .as_ref()
+            .map_or(0, |monitor| monitor.snapshot().1);
+        if !self.creation_review_active(generation, desktop_epoch) {
+            self.failure(Failure::Authentication(
+                crate::local_auth::Failure::DesktopUnavailable,
+            ));
+            return;
+        }
+        let dialog = adw::AlertDialog::builder()
+            .heading("Sign In a New Device?")
+            .body(format!(
+                "Confirmation code: {}\n\nSign in a new device to this account? It will also receive this library's key. Continue only if this code matches the code on the new device.",
+                request.confirmation_code()
+            ))
+            .build();
+        dialog.add_responses(&[("cancel", "Cancel"), ("continue", "Continue")]);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            *this.snapshot_dialog.borrow_mut() = Some(dialog.clone());
+            let response = dialog.clone().choose_future(Some(&this.window)).await;
+            this.snapshot_dialog.borrow_mut().take();
+            if response != "continue" || !this.creation_review_active(generation, desktop_epoch) {
+                return;
+            }
+            this.busy(true);
+            this.status
+                .set_label("Checking the library before approval…");
+            let result = async {
+                let Reply::Target(target) = this
+                    .execute(Command::PrepareDeviceApproval(payload))
+                    .await?
+                else {
+                    return Err(Failure::InvalidState);
+                };
+                let permit = this.authorize_target(target, generation).await?;
+                this.status.set_label("Approving the new device…");
+                this.execute(Command::ApproveDevice(permit)).await
+            }
+            .await;
+            this.busy(false);
+            if generation != this.generation.get() {
+                return;
+            }
+            this.cancel_sensitive();
+            match result {
+                Ok(reply) => this.apply(reply),
+                Err(e) => this.failure(e),
+            }
+        });
+    }
     fn create_library(self: &Rc<Self>) {
         if self.busy.get() {
             return;
@@ -1873,7 +2578,7 @@ impl AccountWindow {
                 return;
             }
             let dialog=adw::AlertDialog::builder().heading("Create New Cloud Library?")
-                .body(format!("Create an empty library for {} at {}? Your local snippets, current keys and sync history are kept. {retained} earlier creation requests remain saved. Set up new keys and review the switch afterward.", this.email.text(), this.server.text())).build();
+                .body(format!("Create an empty library for account {} at {}? Your local snippets, current keys and sync history are kept. {retained} earlier creation requests remain saved. Set up new keys and review the switch afterward.", this.account_display.borrow().as_deref().unwrap_or(""), this.server.text())).build();
             dialog.add_responses(&[("cancel", "Cancel"), ("create", "Create Library")]);
             dialog.set_default_response(Some("cancel"));
             dialog.set_close_response("cancel");
@@ -2438,6 +3143,7 @@ impl AccountWindow {
                 Purpose::ResumeHistoryRemoval => "Authorize History Removal Completion",
                 Purpose::RemoveUnusedRecoveryFiles => "Authorize Recovery File Cleanup",
                 Purpose::ResumeRecoveryFileCleanup => "Authorize Recovery File Cleanup Completion",
+                Purpose::RevealAccountKey => "Authorize Account Key",
             })
             .body(match purpose {
                 Purpose::RevealRecovery => "Enter your computer login password to show this library's pending recovery code.",
@@ -2453,6 +3159,7 @@ impl AccountWindow {
                 Purpose::ResumeHistoryRemoval => "Enter your computer login password to finish the saved removal of this history entry and its encrypted recovery files.",
                 Purpose::RemoveUnusedRecoveryFiles => "Enter your computer login password to discard the reviewed encrypted recovery files that no saved history references. Their previous contents may have no other copy. Saved history, current files and active keys are kept.",
                 Purpose::ResumeRecoveryFileCleanup => "Enter your computer login password to finish only the saved recovery-file cleanup. Newly created files and saved history are kept.",
+                Purpose::RevealAccountKey => "Enter your computer login password to show this account's key. Anyone with the key can sign in to this account.",
             })
             .extra_child(&password)
             .build();
@@ -3038,7 +3745,9 @@ mod tests {
         window.view.show(disclosure(&window)).unwrap();
         window.recovery_panel.set_visible(true);
         window.suffix.set_text("12345678");
-        window.code.set_text("public OTP");
+        window
+            .account_key_input
+            .set_text("7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ7");
         window
             .recovery_input
             .set_text("public fixture recovery input");
@@ -3050,7 +3759,7 @@ mod tests {
         assert!(held.long_code().is_err() && held.qr_payload().is_err());
         assert!(
             window.suffix.text().is_empty()
-                && window.code.text().is_empty()
+                && window.account_key_input.text().is_empty()
                 && window.recovery_input.text().is_empty()
                 && window.switch_recovery.text().is_empty()
         );
@@ -3059,6 +3768,385 @@ mod tests {
         window.recovery_panel.set_visible(true);
         window.window.close();
         assert!(!window.window.is_visible() && !window.view.visible());
+        assert!(window.worker.can_quit());
+        window.window.destroy();
+        parent.destroy();
+        let context = glib::MainContext::default();
+        while context.pending() {
+            context.iteration(false);
+        }
+    }
+    #[test]
+    #[ignore = "requires a graphical display; synthetic worker and authorization, public ADR test key, no keyring/PAM/network"]
+    fn native_account_key_screens_validate_locally_require_acknowledgement_and_clear() {
+        use std::sync::{Arc, Mutex};
+        const KEY: &str = "7KQF9M2XR4TDH8WBZN3CP6YE1AQ7";
+        const DISPLAY: &str = "7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ7";
+        adw::init().expect("graphical display");
+        let application = adw::Application::builder()
+            .application_id("com.khm.snippets.linux.AccountKeySmoke")
+            .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        application
+            .register(None::<&gtk::gio::Cancellable>)
+            .unwrap();
+        let parent = adw::ApplicationWindow::builder()
+            .application(&application)
+            .title("Public account-key fixture")
+            .build();
+        let sent = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let observed = sent.clone();
+        let profile = |account: Option<&str>| Reply::Profile {
+            account: account.map(Into::into),
+            server: Some(ServerURL::parse("https://public.example.test").unwrap()),
+            interrupted: false,
+            switching: handover::Status::default(),
+            device: None,
+        };
+        let worker = Rc::new(Handle::controlled(move |command| {
+            let reply = match command {
+                Command::Inspect => Ok(profile(None)),
+                Command::SignIn { server, key } => {
+                    assert!(server.as_str() == "https://public.example.test");
+                    assert!(key.canonical() == KEY);
+                    observed.lock().unwrap().push("sign-in");
+                    Err(Failure::Cloud(crate::cloud::Failure::Server {
+                        code: crate::cloud::ErrorCode::InvalidAccountKey,
+                        retry_after: None,
+                    }))
+                }
+                Command::SignOut => {
+                    observed.lock().unwrap().push("sign-out");
+                    Ok(profile(None))
+                }
+                _ => Err(Failure::InvalidState),
+            };
+            (reply, false)
+        }));
+        let window = AccountWindow::with_worker(&application, &parent, worker, None).unwrap();
+        window.present();
+        settle_until(|| !window.busy.get());
+        assert!(window.pages.visible_child_name().as_deref() == Some("login"));
+        assert!(!window.account_panel.is_visible() && !window.key_panel.is_visible());
+        // A local typing error stays in the field and is never sent.
+        window.pages.set_visible_child_name("account-key");
+        window
+            .account_key_input
+            .set_text("7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ8");
+        window.sign_in();
+        assert!(window.status.label() == "This isn't a valid account key. Check it for typos.");
+        assert!(window.account_key_input.text() == "7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ8");
+        assert!(sent.lock().unwrap().is_empty());
+        // Valid input is normalized locally; the refusal has its own copy.
+        window
+            .account_key_input
+            .set_text(" 7kqf 9m2x-r4td-h8wb-zn3c-p6ye-IAQ7 ");
+        window.sign_in();
+        settle_until(|| !window.busy.get());
+        assert!(
+            window.status.label() == "That account key wasn't accepted. Check it and try again."
+        );
+        assert!(window.account_key_input.text().is_empty());
+        assert!(*sent.lock().unwrap() == ["sign-in"]);
+        // A created key blocks every continuation until explicitly acknowledged.
+        window.apply(Reply::AccountCreated {
+            key: AccountKey::from_canonical(KEY).unwrap(),
+            next: Some(Box::new(profile(Some("1A2B-3C4D")))),
+            failure: None,
+        });
+        assert!(window.key_panel.is_visible() && !window.pages.is_visible());
+        assert!(window.key_label.label() == DISPLAY && window.key_label.is_selectable());
+        assert!(window.key_label.has_css_class("monospace"));
+        assert!(window.key_title.label() == "Save Your Account Key");
+        assert!(window.key_message.label() == CREATED_KEY_MESSAGE);
+        assert!(window.key_done.label().as_deref() == Some("I've Saved It"));
+        assert!(!window.sign_out.is_visible() && !window.account_panel.is_visible());
+        // Focus-loss cancellation keeps it for a password manager; quit/close do not.
+        window.cancel_sensitive();
+        assert!(window.created_key_visible() && window.key_label.label() == DISPLAY);
+        window.present();
+        assert!(window.created_key_visible() && !window.busy.get());
+        window.key_done.emit_clicked();
+        assert!(!window.key_panel.is_visible() && window.key_label.label().is_empty());
+        assert!(window.pages.is_visible());
+        assert!(window.pages.visible_child_name().as_deref() == Some("saved"));
+        assert!(window.account_panel.is_visible() && window.sign_out.is_visible());
+        assert!(window.account_id.label() == "Account ID: 1A2B-3C4D");
+        window.apply(Reply::AccountCreated {
+            key: AccountKey::from_canonical(KEY).unwrap(),
+            next: None,
+            failure: Some(Failure::Cloud(crate::cloud::Failure::Network)),
+        });
+        assert!(window.created_key_visible());
+        window.window.close();
+        assert!(!window.created_key_visible() && window.key_label.label().is_empty());
+        assert!(window.status.label() == "The server could not be reached. Try again.");
+        window.window.present();
+        // A disclosed key is readable only while its authorization lease lasts.
+        window.gate.borrow_mut().set_foreground(true);
+        let target = Target::account_key(1, [7; 32]).unwrap();
+        let request = window
+            .gate
+            .borrow_mut()
+            .begin(
+                target.clone(),
+                SessionWitness::test(SessionState::Unlocked, 1),
+            )
+            .unwrap();
+        let permit = window
+            .gate
+            .borrow_mut()
+            .accept(local_auth::authenticate_fixture(request).unwrap())
+            .unwrap();
+        window
+            .show_disclosed_key(AccountKeyDisclosure::fixture(permit, &target, KEY))
+            .unwrap();
+        assert!(window.key_panel.is_visible() && window.key_label.label() == DISPLAY);
+        assert!(window.key_done.label().as_deref() == Some("Hide Key"));
+        window.cancel_sensitive();
+        assert!(!window.key_panel.is_visible() && window.key_label.label().is_empty());
+        // Sign-out asks first, defaults to Cancel and names the account key.
+        window.set_account(Some("1A2B-3C4D".into()));
+        window.sign_out.set_visible(true);
+        window.sign_out.emit_clicked();
+        settle_until(|| window.sign_out_dialog.borrow().is_some());
+        let dialog = window.sign_out_dialog.borrow().as_ref().unwrap().clone();
+        assert!(
+            dialog
+                .body()
+                .contains("You'll need your account key to sign in again.")
+        );
+        assert!(dialog.default_response().as_deref() == Some("cancel"));
+        press_response(&dialog, "Cancel");
+        settle_until(|| window.sign_out_dialog.borrow().is_none());
+        assert!(*sent.lock().unwrap() == ["sign-in"]);
+        window.sign_out.emit_clicked();
+        settle_until(|| window.sign_out_dialog.borrow().is_some());
+        let dialog = window.sign_out_dialog.borrow().as_ref().unwrap().clone();
+        press_response(&dialog, "Sign Out");
+        settle_until(|| sent.lock().unwrap().len() == 2 && !window.busy.get());
+        assert!(*sent.lock().unwrap() == ["sign-in", "sign-out"]);
+        assert!(!window.account_panel.is_visible() && !window.sign_out.is_visible());
+        assert!(window.worker.can_quit());
+        window.window.destroy();
+        parent.destroy();
+        let context = glib::MainContext::default();
+        while context.pending() {
+            context.iteration(false);
+        }
+    }
+    #[test]
+    #[ignore = "requires a graphical display; synthetic worker, public fictional request, no keyring/PAM/network"]
+    fn native_device_sign_in_shows_public_request_polls_and_hands_off_to_the_library() {
+        use crate::auth_store::device::Status;
+        use std::sync::{Arc, Mutex};
+        adw::init().expect("graphical display");
+        let application = adw::Application::builder()
+            .application_id("com.khm.snippets.linux.DeviceSignInSmoke")
+            .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        application
+            .register(None::<&gtk::gio::Cancellable>)
+            .unwrap();
+        let parent = adw::ApplicationWindow::builder()
+            .application(&application)
+            .title("Public device sign-in fixture")
+            .build();
+        let draft = crate::bootstrap::PairingDraft::generate().unwrap();
+        let now = chrono::Utc::now().timestamp();
+        let request = crate::bootstrap::DeviceSignIn::new(
+            ServerURL::parse("https://public.example.test").unwrap(),
+            uuid::Uuid::from_u128(0x7a6b5c4d),
+            *draft.nonce(),
+            *draft.public_key(),
+            now + 600,
+            now,
+        )
+        .unwrap();
+        let code = request.confirmation_code();
+        let sent = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let observed = sent.clone();
+        let shown = request.clone();
+        let worker = Rc::new(Handle::controlled(move |command| {
+            let waiting = |retry_after, failure| Reply::DeviceSignIn {
+                state: Some(Status::Waiting(shown.clone())),
+                retry_after,
+                failure,
+            };
+            let reply = match command {
+                Command::Inspect => Ok(Reply::Profile {
+                    account: None,
+                    server: Some(ServerURL::parse("https://public.example.test").unwrap()),
+                    interrupted: false,
+                    switching: handover::Status::default(),
+                    device: None,
+                }),
+                Command::BeginDeviceSignIn { server } => {
+                    assert!(server.as_str() == "https://public.example.test");
+                    observed.lock().unwrap().push("begin");
+                    Ok(waiting(None, None))
+                }
+                Command::CheckDeviceSignIn => {
+                    let mut calls = observed.lock().unwrap();
+                    calls.push("check");
+                    if calls.iter().filter(|c| **c == "check").count() == 1 {
+                        Ok(waiting(
+                            Some(30),
+                            Some(Failure::Cloud(crate::cloud::Failure::Server {
+                                code: crate::cloud::ErrorCode::RateLimited,
+                                retry_after: Some(30),
+                            })),
+                        ))
+                    } else {
+                        let space = |id: u128| -> crate::cloud::Space {
+                            serde_json::from_value(serde_json::json!({
+                                "scope":{"serverInstanceId":uuid::Uuid::from_u128(1),"spaceId":uuid::Uuid::from_u128(id),
+                                    "scopeBinding":"public-device-fixture-membership-binding",
+                                    "datasetGeneration":uuid::Uuid::from_u128(3),"feedEpoch":uuid::Uuid::from_u128(4)},
+                                "role":"writer","keyEpoch":1
+                            }))
+                            .unwrap()
+                        };
+                        Ok(Reply::DeviceSignedIn {
+                            libraries: Box::new(Reply::Libraries {
+                                account: "0F1E-2D3C".into(),
+                                server: ServerURL::parse("https://public.example.test").unwrap(),
+                                spaces: vec![space(10), space(20)],
+                                creation: Ok(creation::State::ExistingLibrary),
+                                can_create_new: Ok(false),
+                                created: None,
+                                switching: handover::Status::default(),
+                            }),
+                            library: Some(uuid::Uuid::from_u128(20)),
+                            selected: None,
+                            keys: Some(Ok(Outcome::Ready {
+                                kit: KitStatus::None,
+                            })),
+                            failure: None,
+                        })
+                    }
+                }
+                Command::PrepareAccountKeyDisclosure => Err(Failure::Account(
+                    crate::auth_store::Failure::AccountKeyUnavailable,
+                )),
+                Command::PrepareApproval(_) => {
+                    observed.lock().unwrap().push("pairing-approval");
+                    Err(Failure::InvalidState)
+                }
+                Command::Select(_) => {
+                    observed.lock().unwrap().push("select");
+                    Err(Failure::InvalidState)
+                }
+                _ => Err(Failure::InvalidState),
+            };
+            (reply, false)
+        }));
+        let window = AccountWindow::with_worker(&application, &parent, worker, None).unwrap();
+        window.present();
+        settle_until(|| !window.busy.get());
+        // Sign In with Another Device: public request, its code and polling.
+        let button = {
+            let mut found = None;
+            let mut widgets = vec![window.pages.clone().upcast::<gtk::Widget>()];
+            while let Some(widget) = widgets.pop() {
+                if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                    && button.label().as_deref() == Some("Sign In with Another Device")
+                {
+                    found = Some(button.clone());
+                }
+                let mut child = widget.first_child();
+                while let Some(widget) = child {
+                    child = widget.next_sibling();
+                    widgets.push(widget);
+                }
+            }
+            found.expect("signed-out device sign-in action")
+        };
+        button.emit_clicked();
+        settle_until(|| !window.busy.get() && !sent.lock().unwrap().is_empty());
+        assert!(window.pages.visible_child_name().as_deref() == Some("device"));
+        assert!(window.device_code.label() == format!("Confirmation code: {code}"));
+        assert!(window.device_code.is_selectable());
+        assert!(window.device_copy.is_sensitive() && window.device_poll.get());
+        assert!(!window.device_view.remaining().is_zero());
+        // The displayed payload is the public request only.
+        let payload = window
+            .device_view
+            .value
+            .borrow()
+            .as_ref()
+            .map(|v| String::from_utf8(v.payload.clone()).unwrap())
+            .unwrap();
+        assert!(payload.contains("snippets-device-sign-in") && !payload.contains("sn_d_"));
+        // A rate-limited poll keeps the request and waits for Retry-After.
+        window.run(Command::CheckDeviceSignIn);
+        settle_until(|| !window.busy.get());
+        assert!(window.device_poll.get() && window.device_view.value.borrow().is_some());
+        assert!(!window.device_view.poll_due());
+        // Approval hands off to the selected library without a chooser.
+        window.run(Command::CheckDeviceSignIn);
+        settle_until(|| !window.busy.get());
+        assert!(window.pages.visible_child_name().as_deref() == Some("libraries"));
+        // The worker-selected library follows the placeholder row; showing it
+        // does not ask the worker to select again.
+        assert_eq!(window.libraries.selected(), 2);
+        assert!(!sent.lock().unwrap().contains(&"select"));
+        assert!(!window.device_poll.get() && window.device_view.value.borrow().is_none());
+        assert!(
+            window
+                .status
+                .label()
+                .starts_with("Signed in with another device")
+        );
+        assert!(window.account_id.label() == "Account ID: 0F1E-2D3C");
+        // This device cannot show the account key.
+        window.show_key.emit_clicked();
+        settle_until(|| !window.busy.get());
+        assert!(
+            window.status.label()
+                == "This device was signed in by another device. View the account key on a device that has it."
+        );
+        // Approving side: a request for another server is refused before any
+        // network call; a pairing invitation keeps the existing review path.
+        let foreign = crate::bootstrap::DeviceSignIn::new(
+            ServerURL::parse("https://foreign.example.test").unwrap(),
+            uuid::Uuid::from_u128(5),
+            *draft.nonce(),
+            *draft.public_key(),
+            now + 600,
+            now,
+        )
+        .unwrap();
+        let before = sent.lock().unwrap().len();
+        window.review_added_device(Zeroizing::new(
+            String::from_utf8(foreign.encode_qr().unwrap().to_vec()).unwrap(),
+        ));
+        assert!(
+            window
+                .status
+                .label()
+                .starts_with("This sign-in request is invalid")
+        );
+        // Without a session monitor the confirmation dialog is never offered.
+        window.review_added_device(Zeroizing::new(payload));
+        assert!(window.snapshot_dialog.borrow().is_none());
+        assert!(window.status.label() == "Unlock the desktop before authorizing this action.");
+        assert_eq!(sent.lock().unwrap().len(), before);
+        let invitation = Invitation::new(
+            ServerURL::parse("https://public.example.test").unwrap(),
+            uuid::Uuid::from_u128(1),
+            uuid::Uuid::from_u128(2),
+            *draft.nonce(),
+            *draft.public_key(),
+            now + 300,
+            now,
+        )
+        .unwrap();
+        window.review_added_device(Zeroizing::new(
+            String::from_utf8(invitation.encode_qr().unwrap().to_vec()).unwrap(),
+        ));
+        settle_until(|| !window.busy.get() && sent.lock().unwrap().len() > before);
+        assert!(sent.lock().unwrap().last() == Some(&"pairing-approval"));
         assert!(window.worker.can_quit());
         window.window.destroy();
         parent.destroy();
