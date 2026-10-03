@@ -77,6 +77,7 @@ struct App {
     usage: RefCell<Option<crate::usage_store::Handle>>,
     usage_settings: RefCell<Option<Rc<usage_settings::Settings>>>,
     settings: RefCell<Option<Rc<settings::Settings>>>,
+    tray: RefCell<Option<Rc<crate::tray::Tray>>>,
     usage_quitting: Cell<bool>,
     hold: RefCell<Option<gio::ApplicationHoldGuard>>,
     copy_serial: Cell<u64>,
@@ -274,6 +275,44 @@ impl App {
             history.present(&self.application);
         }
     }
+    fn start_tray(self: &Rc<Self>) {
+        if self.tray.borrow().is_some() {
+            return;
+        }
+        let Some(connection) = self.application.dbus_connection() else {
+            return;
+        };
+        let enabled = Rc::downgrade(self);
+        let activate = Rc::downgrade(self);
+        match crate::tray::Tray::new(
+            connection,
+            move |action| {
+                enabled.upgrade().is_some_and(|app| {
+                    !app.usage_quitting.get()
+                        && action
+                            .name()
+                            .is_none_or(|name| app.application.is_action_enabled(name))
+                })
+            },
+            move |action| {
+                if let Some(app) = activate.upgrade()
+                    && !app.usage_quitting.get()
+                {
+                    if let Some(name) = action.name() {
+                        app.application.activate_action(name, None);
+                    } else {
+                        app.present();
+                    }
+                }
+            },
+        ) {
+            Ok(tray) => {
+                tray.refresh(self.recovery_required.get());
+                *self.tray.borrow_mut() = Some(tray);
+            }
+            Err(error) => eprintln!("{}", error.0),
+        }
+    }
     fn update_actions(&self) {
         for name in [
             "new", "capture", "search", "save", "copy", "picker", "import", "export", "undo",
@@ -296,6 +335,9 @@ impl App {
                 !self.recovery_required.get()
                     || crate::backup::import::pending(&self.library.borrow().root).unwrap_or(false),
             );
+        }
+        if let Some(tray) = self.tray.borrow().as_ref() {
+            tray.refresh(self.recovery_required.get());
         }
     }
     fn ensure_library(self: &Rc<Self>) -> bool {
@@ -2099,6 +2141,7 @@ pub fn run() -> glib::ExitCode {
         usage: RefCell::new(None),
         usage_settings: RefCell::new(None),
         settings: RefCell::new(None),
+        tray: RefCell::new(None),
         usage_quitting: Cell::new(false),
         hold: RefCell::new(None),
         copy_serial: Cell::new(0),
@@ -2122,6 +2165,7 @@ pub fn run() -> glib::ExitCode {
             app.start_control();
             *app.hold.borrow_mut() = Some(application.hold());
             app.actions();
+            app.start_tray();
             if let Some(display) = gdk::Display::default() {
                 gtk::style_context_add_provider_for_display(
                     &display,
@@ -2296,6 +2340,7 @@ mod tests {
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
+            tray: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2425,6 +2470,7 @@ mod tests {
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
+            tray: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2494,6 +2540,7 @@ mod tests {
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
+            tray: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2599,6 +2646,7 @@ mod tests {
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
+            tray: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),

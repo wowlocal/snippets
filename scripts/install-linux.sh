@@ -60,7 +60,7 @@ for TASK_BINARY in snippets snippets-cli; do
 done
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/com.khm.snippets.linux.desktop" "$TASK_INSTALL_PREFIX/share/applications/com.khm.snippets.linux.desktop" 644
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/com.khm.snippets.linux.metainfo.xml" "$TASK_INSTALL_PREFIX/share/metainfo/com.khm.snippets.linux.metainfo.xml" 644
-install_atomic "$TASK_REPO_ROOT/snippets/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" "$TASK_INSTALL_PREFIX/share/icons/hicolor/256x256/apps/com.khm.snippets.linux.png" 644
+install_atomic "$TASK_REPO_ROOT/snippets-linux/data/snippets-icon.png" "$TASK_INSTALL_PREFIX/share/icons/hicolor/256x256/apps/com.khm.snippets.linux.png" 644
 if command -v update-desktop-database >/dev/null; then
   update-desktop-database "$TASK_INSTALL_PREFIX/share/applications"
 fi

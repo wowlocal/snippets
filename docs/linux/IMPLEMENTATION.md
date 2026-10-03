@@ -30,6 +30,9 @@ receiving-application verification remain unfinished.
 conflict checks, and ordinary undo/redo. `src/bin/cli.rs` uses the same model; build
 with `--no-default-features` to omit GTK. `src/ui.rs` owns native widgets, keyboard
 actions, asynchronous clipboard/file dialogs, and single-instance activation.
+`src/tray.rs` exports a bounded StatusNotifierItem and DBusMenu on that primary
+application's existing authenticated GIO connection. It forwards fixed public
+commands to the same native actions and observes watcher restarts.
 `src/desktop.rs` reads the Omarchy palette, guards short-lived Hyprland targets,
 and observes session locks off the GTK thread. `src/crypto.rs`, `src/vault.rs`, and
 `src/clock.rs` implement encrypted bodies, bounded owner sessions, durable vault
@@ -218,6 +221,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Area | Rust implementation | Verification / next work |
 | --- | --- | --- |
 | Native workspace | GTK list/editor, search, tags, pins, autosave, keyboard actions, searchable settings, configurable close behavior, explicit background login startup and gated startup recovery | Earlier native lifecycle smoke passes with fatal GTK warnings; recovery crash/access checks pass, new recovery UI compiles and needs a live display check |
+| Native desktop tray | Primary-process StatusNotifierItem, fixed DBusMenu actions, public ARGB icon, recovery/enable-state updates and watcher restart registration | Eight isolated menu/icon tests pass, including an independent C/GIO/Cairo decoder; authenticated private-bus fixture cannot bind its Unix socket here; live panel rendering, registration, restart, action routing and focus remain unverified |
 | Library | CRUD, bounded/strict JSON, file permissions, process lock, atomic replacement, CAS conflicts, undo/redo | Rust core and concurrent CLI writer tests pass |
 | Editor assistance | Safe derived keyword buttons, existing metadata references, shared next-part Tab completion, duplicate and bidirectional prefix warnings, explicit bounded ordinary placeholder preview | Frozen Mac examples, Unicode boundary, reservation, disabled-keyword and preview grammar/limit tests pass; native widget smoke requires a live display |
 | Transfers | Native and Raycast JSON import, ordinary sharing export and native portable encrypted-backup export/import with interrupted-import recovery | Round-trip, timestamps, collisions, exact-key authentication, encrypted two-file redo, cancellation and independent OpenSSL backup format checks pass; live native dialogs and Apple app round trips remain unverified |
@@ -2891,3 +2895,67 @@ into a temporary prefix verified bytes, modes and isolated CLI refusals. The new
 public, isolated GTK smoke was attempted and
 failed at display initialization before creating a window. Live buttons, Tab
 focus routing, popover layout and actual clipboard preview remain unverified.
+
+## Native Omarchy status item and menu
+
+The installed Omarchy shell's
+`/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml` uses Quickshell's
+`SystemTray`: left-click invokes `Activate`, middle-click invokes
+`SecondaryActivate`, and right-click opens the exported menu. This was source
+inspection only. The app implements the public
+[StatusNotifierItem](https://raw.githubusercontent.com/KDE/kstatusnotifieritem/master/src/org.kde.StatusNotifierItem.xml),
+[watcher registration](https://raw.githubusercontent.com/KDE/kstatusnotifieritem/master/src/org.kde.StatusNotifierWatcher.xml)
+and [DBusMenu interface](https://raw.githubusercontent.com/quickshell-mirror/quickshell/master/src/dbus/dbusmenu/com.canonical.dbusmenu.xml)
+with the pinned native GIO/GLib bindings. It adds no shell configuration or script
+bridge. `GApplication` startup creates the tray after installing actions; secondary
+invocations do not create another tray owner. The production constructor requires
+the existing open message-bus connection and its unique name. It does not start a
+bus or change `DBUS_SESSION_BUS_ADDRESS`.
+
+The nine fixed menu rows contain eight commands and a separator. Each click
+rechecks the existing native action's enabled state before dispatch. Open,
+picker, capture, history, settings, secure workspace, account/recovery and quit
+retain their existing owners. A picker opened from the tray has no captured
+receiving target; targeted paste remains the separate `--picker` path. Recovery
+updates the public status/tooltip and action availability. Menu changes emit
+typed property/layout signals. No snippet metadata, clipboard text, credentials,
+record identifiers or user paths enter the exported item or menu.
+
+Requests use the closed introspection shapes. Layout has one bounded level;
+property-name, request-byte and group-count limits are applied before dispatch.
+Unknown, malformed or disabled clicks refuse with fixed errors. Navigation events
+do not invoke actions, and grouped requests report the exact invalid row IDs.
+Watcher appearance registers the object path against the watcher's unique owner
+without autostart, with a two-second call deadline and at most three attempts.
+Watcher loss cancels the attempt; its generation fences late replies. Owner
+teardown removes the watch and both object registrations.
+
+The existing public 256-pixel brand icon is copied byte-for-byte into the Linux
+package, so building the tray no longer depends on the Apple asset directory.
+The installer reads that packaged copy. Cairo creates 16/32/64-pixel images;
+the exporter converts native-endian premultiplied pixels into straight-alpha
+network-order A,R,G,B. Empty `IconName` makes the host use those pixmaps even
+when an installation's prefix is outside its icon search path. The existing
+locked Cairo 0.22.9 gains the PNG feature and a direct optional dependency;
+no package versions were upgraded, and headless builds omit it.
+
+Verification on 2026-10-03: eight default tray tests passed, with one ignored
+authenticated-bus fixture. The independent strict C/GIO/Cairo client decoded
+the actual serialized pixmaps into a PNG; the rendered public icon was inspected.
+Nine editor-assistance tests, seven settings tests, the background/settings
+command test and 26 core integration tests passed. Default and headless
+all-target Clippy passed with warnings denied, formatting passed, and all three
+release binaries built. Two installations into a temporary prefix preserved the
+sentinel and verified binaries, modes and isolated CLI refusals; the installed
+icon matched the packaged image and retained mode `0644`.
+
+The ignored native fixture was explicitly attempted. Its private `dbus-daemon`
+failed before announcing an address; a direct isolated daemon check confirmed
+`Failed to bind socket … Operation not permitted`. No authenticated connection,
+watcher or item was created. The fixture retains real native authentication and
+checks registration/restart plus an independent client on an unrestricted host;
+no alternate identity, anonymous bus or session-environment replacement was
+introduced. Actual panel rendering, watcher restart, native action routing,
+compositor activation and window focus remain part of the unfinished desktop
+verification. No user desktop settings, clipboard, input, login entry, account,
+keyring or library were changed by these checks.

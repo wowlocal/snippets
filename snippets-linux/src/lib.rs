@@ -55,6 +55,8 @@ mod sensitive_clipboard;
 pub mod snapshot_review;
 pub mod sync;
 #[cfg(feature = "desktop")]
+mod tray;
+#[cfg(feature = "desktop")]
 pub mod ui;
 pub mod usage;
 pub mod usage_store;

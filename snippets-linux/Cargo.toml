@@ -9,7 +9,7 @@ default-run = "snippets"
 
 [features]
 default = ["desktop"]
-desktop = ["dep:gtk", "dep:adw", "dep:pangocairo", "secret-service", "local-auth"]
+desktop = ["dep:gtk", "dep:adw", "dep:pangocairo", "dep:cairo", "secret-service", "local-auth"]
 secret-service = []
 local-auth = []
 
@@ -42,6 +42,7 @@ ed25519-dalek = { version = "3", default-features = false, features = ["fast", "
 gtk = { package = "gtk4", version = "0.11", features = ["v4_12"], optional = true }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_5"], optional = true }
 pangocairo = { version = "0.22", optional = true }
+cairo = { package = "cairo-rs", version = "0.22", features = ["png"], optional = true }
 
 [build-dependencies]
 cc = "1"

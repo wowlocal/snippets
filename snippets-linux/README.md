@@ -65,8 +65,29 @@ percent signs are checked with independent native launchers.
 
 Omarchy's UWSM handles [XDG autostart](https://raw.githubusercontent.com/Vladimir-csp/uwsm/master/README.md).
 The registration follows the [desktop autostart specification](https://specifications.freedesktop.org/autostart/latest/).
-The native window compiles and isolated registration/launch checks pass. A live
+The native window compiles and isolated login-entry/launch checks pass. A live
 GTK session and actual sign-in trial remain unverified in this environment.
+
+## Desktop tray
+
+The primary desktop process publishes a native status item for Omarchy's panel.
+Left-click opens the library, middle-click opens the copy picker, and right-click
+offers **Open Snippets**, **Find a Snippet…**, **Capture Clipboard**, **Clipboard
+History…**, **Settings…**, **Secure Snippets…**, **Account & Recovery…** and **Quit
+Snippets**. The picker opened here copies ordinary text; `snippets --picker`
+captures a receiving window for targeted paste.
+
+The menu uses the same actions as the application. Recovery disables unavailable
+library actions; Quit keeps the existing save and worker-completion checks. Opening
+history or account controls preserves their existing opt-in and authorization
+steps. The tray exposes only fixed public labels and a generic recovery status.
+
+This requires a running StatusNotifier host, supplied by the current Omarchy
+shell. The app uses its existing session connection and re-registers when the
+host restarts. If the host is absent, open Snippets through the application
+launcher or `snippets`. The public icon and menu checks pass; live panel rendering,
+registration, host restart, menu activation and window focus remain unverified
+in the restricted development environment.
 
 ## Library
 
@@ -890,8 +911,9 @@ The app rereads Omarchy's active XDG state `colors.toml` every two seconds. Colo
 are validated before CSS generation; light/dark mode follows the palette. No theme
 files or hooks are changed. Other desktops use standard libadwaita styling.
 
-Closing the main window saves and hides it. The application stays alive for
-activation and clipboard ownership; Ctrl+Q or `snippets --quit` saves and quits.
+Closing the main window saves and follows **When Library Window Closes** in
+Settings. By default it hides while the app remains available through the tray,
+launcher and CLI; Ctrl+Q or `snippets --quit` saves and quits.
 
 For a global shortcut on current Omarchy, choose an unused key after checking
 `omarchy menu keybindings --print`, then add to `~/.config/hypr/bindings.lua`:
@@ -994,6 +1016,9 @@ in the restricted tool environment; see the implementation evidence.
 ```sh
 cargo test --locked --manifest-path snippets-linux/Cargo.toml
 cargo test --locked --manifest-path snippets-linux/Cargo.toml --no-default-features
+# Private authenticated bus and independent GIO client; requires Unix socket binding.
+cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib tray::tests::isolated_native_tray_registration -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib ui::tests::native_lifecycle -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
@@ -1061,6 +1086,13 @@ of an interrupted write. They do not
 establish an interactive password-dialog workflow. See the
 [implementation evidence](../docs/linux/IMPLEMENTATION.md) for current test counts
 and authorization limits.
+
+The default tray tests include an independent C/GIO/Cairo reader of the public
+ARGB icon. The separate ignored tray fixture creates its own authenticated
+`dbus-daemon`, a watcher and an independent client; it never changes the session
+bus environment or contacts the user's bus. Its current attempt stopped before
+connection creation because Unix socket binding was denied. It does not establish
+live Omarchy panel or application-action behavior.
 
 The native Secret Service fixture requires GNOME Keyring, `dbus-run-session`,
 `gdbus`, and `rg`. After building library tests, invoke
