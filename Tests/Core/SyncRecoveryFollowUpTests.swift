@@ -155,7 +155,12 @@ struct SyncRecoveryFollowUpTests {
     }
 
     /// accepted-but-unacknowledged A → recovery A → B receives A and edits → A receives B.
-    @Test func resealRecoveryUploadsTheEditBeforeAnotherDeviceBuildsOnIt() async throws {
+    /// The audit's recovery launch reported `key_changed` again (the killed process never
+    /// persisted its fingerprint), so it is also exercised with a second reseal staging.
+    @Test(arguments: [false, true])
+    func resealRecoveryUploadsTheEditBeforeAnotherDeviceBuildsOnIt(
+        restagedAtRecovery: Bool
+    ) async throws {
         let backend = InMemoryTransport()
         let transport = WithheldReplyTransport(backend)
         let sealer = SnippetCryptoSealer(
@@ -184,6 +189,9 @@ struct SyncRecoveryFollowUpTests {
                 "the withheld batch was the byte-identical reseal, not the edit")
 
         // Recovery is one ordinary sync of the same installation.
+        if restagedAtRecovery {
+            try a.stageWireKeyReseal(now: Date(timeIntervalSince1970: 1_791_000_012))
+        }
         let recovered = a.engine(transport, sealer: sealer)
         let recoveredState = await recovered.sync()
         guard case .idle = recoveredState else {

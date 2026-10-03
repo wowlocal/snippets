@@ -221,6 +221,11 @@ them did not.
    (`productionFollowUpRounds`) while each round settles offers, instead of reporting Synced with
    the user's edit still unsent until the next trigger.
 
+Known divergence: Apple and Linux pick the surviving body by envelope HLC (ties by canonical
+rank), while Android's plain reconciliation still ranks the two snippets by `updatedAt`. Both
+bodies are preserved either way, but when Android and another device resolve the same pair
+concurrently they can choose different winners and leave one additional disabled copy.
+
 **Tags** are merged as a three-way set. With an ancestor, the add-vs-remove conflict an OR-Set
 exists to solve cannot arise — removing needs the tag in base, adding needs it absent from base.
 The ancestor *is* the causal context an OR-Set carries per element, already paid for.
