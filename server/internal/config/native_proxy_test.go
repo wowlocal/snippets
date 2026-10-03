@@ -10,8 +10,6 @@ func TestNativeTrustedProxyConfigurationIsExplicitAndBounded(t *testing.T) {
 	values := productionEnvironment()
 	values["AUTH_MODE"] = "native"
 	values["NATIVE_AUTH_SECRET"] = base64.RawURLEncoding.EncodeToString(make([]byte, 32))
-	values["SMTP_HOST"] = "smtp.example.test"
-	values["SMTP_FROM"] = "snippets@example.test"
 	for _, raw := range []string{"", " ", "127.0.0.1/32, ::1/128", strings.TrimSuffix(strings.Repeat("10.0.0.0/24,", 32), ",")} {
 		values["AUTH_TRUSTED_PROXY_CIDRS"] = raw
 		configuration, err := LoadFrom(mapLookup(values))

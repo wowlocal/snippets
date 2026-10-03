@@ -63,17 +63,22 @@ snippet plaintext or library keys. It stores a keyed pseudonymous account identi
 space membership and bounded routing, quota, cursor, and concurrency metadata needed to
 operate synchronization.
 
-Account sign-in uses native email and one-time-code screens. The app sends the email
-address and the code you enter to its build-pinned Snippets Cloud server over HTTPS.
-The server stores the verified email and an opaque, immutable account ID. Pending
-challenges also contain the delivery address, a keyed code digest, expiry and attempt
-state; access and refresh credentials are stored as keyed digests. Abuse controls use
-bounded counters keyed from the email address and network address. The operator's
-configured email service receives the destination address and sign-in code, and its
-retention is governed by that service's policy. Email-code sign-in is not a passkey or
-multifactor authentication.
+Snippets Cloud does not ask for an email address or any other personal identifier.
+Creating an account makes the server generate a random account key, which is shown once
+and is the only way to sign in on another device. Sign-in sends that key to the
+build-pinned Snippets Cloud server over HTTPS. The server stores an opaque, immutable
+account ID and a keyed digest of the account key, never the key itself; access and
+refresh credentials are stored as keyed digests. Abuse controls use bounded counters
+keyed from the network address. No email or messaging service is involved. Because the
+service holds no contact details, it cannot recover a lost account key or contact you.
+Account-key sign-in is not a passkey or multifactor authentication.
 
-Each app keeps its pinned server and selected library coordinates, verified email,
+A new device can also be signed in by a device that already has the library. For up to
+ten minutes, plus an hour before automatic deletion, the server keeps that request's
+public pairing key, a random nonce, a keyed digest of its claim token and, once approved,
+the approving account and library. No account key is transferred.
+
+Each app keeps its pinned server and selected library coordinates, account key,
 opaque account ID, short-lived access token, refresh token and expiry time. Account
 profile and session secrets stay in device-bound secret storage: the device-only
 Keychain on Apple platforms, or storage encrypted with a non-exportable Android
@@ -82,24 +87,24 @@ has a separate refresh credential. Credential replacement and sign-out can tempo
 retain old and rotated access/refresh generations in encrypted cleanup journals until
 the required revocation completes. A separate cleanup journal removes the local
 library-key copy before account credentials; interrupted cleanup resumes on launch.
-Email addresses, sign-in codes, account IDs and tokens are not included in app diagnostics.
+Account keys, account IDs and tokens are not included in app diagnostics.
 
 Account access and library decryption are separate. The library encryption key is
 created locally. A new device receives it through short-lived, one-time encrypted QR
 pairing approved by a device that already has the key, or decrypts it with the user's
 offline recovery kit. Pairing approval and recovery replacement require device-owner
-authentication and a cryptographic proof made with the existing library key; an email
-code alone cannot authorize them. Pairing invitations contain public routing and
+authentication and a cryptographic proof made with the existing library key; an account
+key alone cannot authorize them. Pairing invitations contain public routing and
 handshake material, never the plaintext library key. Recovery QR codes and long random
 codes are secrets that should be stored offline; the service keeps their encrypted
 envelope. A pending recovery kit stays encrypted on the device, and later on-screen
 reveal requires Face ID, Touch ID, or the device's equivalent authentication. If every
 approved device and the recovery kit are lost, restoring account access does not restore
-the old library encryption key. The service and email provider cannot decrypt that library.
+the old library encryption key. The service cannot decrypt that library.
 
 A custom-server distribution pins its own HTTPS origin at build time. Its operator
-receives the same account, email-delivery and synchronization data as the hosted service
-and controls its infrastructure, email provider and retention. Review that operator's
+receives the same account and synchronization data as the hosted service and controls
+its infrastructure and retention. Review that operator's
 policy before installing that distribution.
 
 ## Diagnostics

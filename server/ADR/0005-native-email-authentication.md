@@ -1,6 +1,6 @@
 # ADR 0005: Native email and one-time code authentication
 
-- Status: implemented behind the Snippets Cloud feature flag
+- Status: superseded by ADR 0006 before any deployment; email login was removed
 - Date: 2026-09-06
 - Supersedes: ADR 0004's browser/provider account login
 

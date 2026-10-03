@@ -275,7 +275,8 @@ func TestOperationPoliciesMatchOpenAPIContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := map[string]string{
-		"startEmailAuthentication": "native_email_start", "verifyEmailAuthentication": "native_email_verify", "refreshNativeSession": "native_refresh", "revokeNativeSession": "native_revoke",
+		"createNativeAccount": "native_account_create", "signInWithAccountKey": "native_sign_in",
+		"createDeviceSignInRequest": "native_device_request", "approveDeviceSignInRequest": "native_device_approval", "claimDeviceSignInRequest": "native_device_claim", "refreshNativeSession": "native_refresh", "revokeNativeSession": "native_revoke",
 		"getDiscovery": "discovery", "getLiveness": "liveness", "getReadiness": "readiness",
 		"revokeCurrentSession": "revoke_session", "listSpaces": "list_spaces", "createSpace": "create_space",
 		"getSpace": "get_space", "getChanges": "get_changes", "submitRecords": "submit_records",
@@ -287,7 +288,7 @@ func TestOperationPoliciesMatchOpenAPIContract(t *testing.T) {
 	}
 	seen := 0
 	for path, pathItem := range document.Paths.Map() {
-		concretePath := strings.ReplaceAll(strings.ReplaceAll(path, "{space}", "00000000-0000-4000-8000-000000000001"), "{pairing}", "00000000-0000-4000-8000-000000000002")
+		concretePath := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(path, "{space}", "00000000-0000-4000-8000-000000000001"), "{pairing}", "00000000-0000-4000-8000-000000000002"), "{deviceRequest}", "00000000-0000-4000-8000-000000000003")
 		for method, operation := range pathItem.Operations() {
 			policy := policyForRequest(method, concretePath)
 			operationID := operation.OperationID

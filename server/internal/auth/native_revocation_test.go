@@ -18,9 +18,9 @@ func TestNativePostgresExpiredAdmittedPrincipalCannotWriteAfterRevocation(t *tes
 				name += "_after_family_cleanup"
 			}
 			t.Run(name, func(t *testing.T) {
-				n, owner, sender := nativeFixture(t)
+				n, owner := nativeFixture(t)
 				ctx := context.Background()
-				tokens := loginNative(t, n, sender, nativeEmail(), uuid.NewString())
+				tokens := loginNative(t, n, uuid.NewString())
 				digest := n.digest("credential", tokens.AccessToken)
 				var expires time.Time
 				var family uuid.UUID
@@ -79,9 +79,9 @@ func TestNativePostgresExpiredAdmittedPrincipalCannotWriteAfterRevocation(t *tes
 func TestNativePostgresOldRetainedAccessRevocationIsIdempotent(t *testing.T) {
 	for _, hint := range []string{"access_token", "refresh_token"} {
 		t.Run(hint, func(t *testing.T) {
-			n, owner, sender := nativeFixture(t)
+			n, owner := nativeFixture(t)
 			ctx := context.Background()
-			tokens := loginNative(t, n, sender, nativeEmail(), uuid.NewString())
+			tokens := loginNative(t, n, uuid.NewString())
 			digest := n.digest("credential", tokens.AccessToken)
 			if _, err := owner.Exec(ctx, "UPDATE snippets_private.native_tokens SET expires_at=clock_timestamp()-interval '6 minutes' WHERE digest=$1", digest[:]); err != nil {
 				t.Fatal("cannot age test access token")

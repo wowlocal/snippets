@@ -50,7 +50,7 @@ func main() {
 	}
 	var validator auth.Validator
 	if configuration.AuthMode == "native" {
-		validator, err = auth.NewNative(pool, configuration.NativeAuth, auth.SMTPSender{Configuration: configuration.NativeAuth})
+		validator, err = auth.NewNative(pool, configuration.NativeAuth)
 	} else {
 		validator, err = auth.NewOIDCValidator(ctx, configuration.OIDC, nil)
 	}

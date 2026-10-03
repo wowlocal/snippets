@@ -582,7 +582,9 @@ work remain; see [implementation status](docs/android/IMPLEMENTATION.md).
 
 The alternative **Snippets Cloud** implementation includes:
 
-- Native email and six-digit-code sign-in on Apple and Android, with rotating sessions.
+- Native sign-in on Apple, Android and Linux with a server-generated account key (no email),
+  or by approval from an already signed-in device without typing the key, with rotating
+  sessions.
 - Trusted-device pairing through a short-lived QR invitation and comparison code,
   plus an offline recovery kit. Signing in alone does not unlock an existing library.
 - One active writable sync provider, with provider switching designed to retain local

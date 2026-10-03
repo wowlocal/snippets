@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exchange disposable encrypted records across macOS, iPhone/iPad simulators and Android.
 
-Uses the configured native email/SMTP test server and existing app integration phases.
+Uses the configured native account-key test server and existing app integration phases.
 Never points app storage at a live support directory. Android must be an explicitly
 provided disposable emulator: the Android phase harness erases that test installation.
 Credentials are kept in private fixtures/logs and never printed.
@@ -9,6 +9,7 @@ Credentials are kept in private fixtures/logs and never printed.
 import argparse
 import base64
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,16 @@ import uuid
 REPO = Path(__file__).resolve().parents[1]
 os.umask(0o077)
 class Failed(Exception): pass
+
+ACCOUNT_KEY_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+def valid_account_key(value):
+    """Canonical server ADR 0006 form: 26 random symbols plus a ten-bit SHA-256 check."""
+    if not isinstance(value, str) or len(value) != 28 or any(c not in ACCOUNT_KEY_ALPHABET for c in value):
+        return False
+    digest = hashlib.sha256(('snippets-account-key-check-v1\n' + value[:26]).encode()).digest()
+    check = (digest[0] << 2) | (digest[1] >> 6)
+    return value[26:] == ACCOUNT_KEY_ALPHABET[check >> 5] + ACCOUNT_KEY_ALPHABET[check & 31]
 
 def require(value, label):
     if not value: raise Failed(label)
@@ -85,32 +96,32 @@ class Suite:
             return error.code, body
 
     def authenticate(self):
-        self.stage = 'native_email_authentication'
+        self.stage = 'native_account_key_authentication'
         status, discovery = self.request('/.well-known/snippets-sync')
-        require(status == 200 and discovery.get('nativeAuth', {}).get('flow') == 'email_code', 'native_discovery')
+        native = (discovery or {}).get('nativeAuth', {})
+        require(status == 200 and native.get('flow') == 'account_key'
+                and 'native-account-key-v1' in discovery.get('capabilities', []), 'native_discovery')
         self.instance = discovery['serverInstanceId']
-        email = 'native-sync-' + secrets.token_hex(12) + '@snippets.test'
-        status, challenge = self.request('/v2/auth/email/start', 'POST', {'email': email})
-        require(status == 200, 'send_code')
-        code = None
-        for _ in range(40):
-            status, mailbox = self.request('/api/v1/messages?limit=100', base=self.args.mailpit)
-            require(status == 200, 'mailpit_available')
-            for message in mailbox.get('messages', []):
-                if any(recipient.get('Address', '').lower() == email for recipient in message.get('To', [])):
-                    match = re.search(r'(?<![0-9])([0-9]{6})(?![0-9])', message.get('Subject', ''))
-                    if match: code = match.group(1); break
-            if code: break
-            time.sleep(.25)
-        require(code is not None, 'smtp_delivery')
-        status, issued = self.request('/v2/auth/email/verify', 'POST', {'challengeId': challenge['challengeId'], 'code': code})
-        require(status == 200 and issued['account']['email'] == email, 'verify_code')
+        # Account creation is bodyless; the key is held only in memory and never written
+        # to fixtures or logs. The disposable account is abandoned with the run.
+        status, created = self.request('/v2/auth/accounts', 'POST')
+        require(status == 200 and set(created) == {'accountKey', 'session'}, 'create_account')
+        key = created['accountKey']
+        require(valid_account_key(key), 'account_key_format')
+        require(set(created['session']['account']) == {'id'}, 'account_has_no_personal_data')
+        status, issued = self.request('/v2/auth/sign-in', 'POST', {'accountKey': key})
+        require(status == 200 and issued['account']['id'] == created['session']['account']['id'], 'sign_in')
+        status, _ = self.request('/v2/auth/revoke', 'POST', {'token': created['session']['refresh_token'], 'tokenTypeHint': 'refresh_token'})
+        require(status == 204, 'retire_creation_session')
+        status, _ = self.request('/v2/auth/sign-in', 'POST', {'accountKey': key[:-1] + ('0' if key[-1] != '0' else '1')})
+        require(status == 401, 'reject_wrong_key')
+        del key, created
         self.tokens = issued
         self.initial_refresh = issued['refresh_token']
         self.store_tokens()
         status, self.space = self.request('/v2/spaces', 'POST', token=self.tokens['access_token'])
         require(status == 201 and self.space['scope']['serverInstanceId'] == self.instance, 'create_disposable_space')
-        self.report['native_email_authentication'] = 'passed'
+        self.report['native_account_key_authentication'] = 'passed'
 
     def store_tokens(self):
         atomic_json(self.root / 'credentials.json', {'initialRefreshToken': self.initial_refresh, 'current': self.tokens})
@@ -343,7 +354,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     fixture = REPO / 'build/cloud-test'
     parser.add_argument('--origin-file', type=Path, default=fixture / 'origin')
-    parser.add_argument('--mailpit', default='http://127.0.0.1:8027')
     parser.add_argument('--macos-derived', type=Path, default=Path('/tmp/snippets-native-sync-macos-derived'))
     parser.add_argument('--ios-derived', type=Path, default=Path('/tmp/snippets-native-sync-ios-derived'))
     parser.add_argument('--skip-build', action='store_true')
