@@ -74,3 +74,10 @@ Origin должен совпадать с origin в обеих сборках. �
 3. **Android, лишняя запись.** `AndroidBridge.reconcileLibraryImpl` сохранял проигравшую версию под снимочным id `conflict|content|updatedAt` без `conflictCopy.v1`, поэтому одну и ту же версию Mac Android и Linux сохранили как `4388d2c6…` и `5d85adc5…` (6 записей вместо 5).
 
 Исправление: слияние с авторитетным удалённым значением уточняет активную эпоху copy-before-source (как `SyncJournal.stageConflictDependency` на Apple), отклонённое предложение снимается до фиксации слияния; приёмник пропускает поколение, предшествующее в той же странице версии, уже подтверждённой квитанцией; Android выпускает канонические копии конвертов и сохраняет `x` при правке. Контракт записан в `docs/cloud-sync.md` («Conflict-copy identity across clients»), общие векторы — `snippets-linux/tests/fixtures/conflict-copy-v1.json`.
+
+
+## Повторная проверка 2026-10-03–04
+
+HEAD `4acbecfce5048cf5d5412547525dd8ffd41062ab`. 16/16 живых прогонов Mac/Android/Linux (10 concurrent + 6 send orders) прошли с 5 одинаковыми записями и всеми тремя текстами. Отдельный чистый пятисторонний прогон прошёл с 7 записями и всеми пятью текстами. Потеря Android-версии не воспроизвелась.
+
+[Полный отчёт второго раунда](../../cloud-account-key-integration-round2-2026-10-03.md).

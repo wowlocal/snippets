@@ -1,0 +1,122 @@
+{
+  "status": "failed",
+  "phases": [
+    {
+      "role": "macos",
+      "stage": "seed",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "prepare",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "prepare",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "prepare",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "prepare",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "prepare",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "review-keep",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "review-keep",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "review-keep",
+      "status": "passed"
+    }
+  ],
+  "same_remote_ancestor_verified": true,
+  "linux_deletion_review": "required",
+  "cycles": 2,
+  "equal": true,
+  "counts": [
+    8,
+    8,
+    8,
+    8,
+    8
+  ],
+  "failure": "delete_swallowed_edit"
+}

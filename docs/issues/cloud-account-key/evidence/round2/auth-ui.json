@@ -1,0 +1,21 @@
+[
+  {
+    "role": "iphone",
+    "exit": 0,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0
+  },
+  {
+    "role": "ipad",
+    "exit": 0,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0
+  },
+  {
+    "role": "android",
+    "exit": 0,
+    "passed": true
+  }
+]
