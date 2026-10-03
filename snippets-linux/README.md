@@ -1079,10 +1079,13 @@ D-Bus tray registration/restart, private Wayland clipboard/input protocols, PAM,
 verified HTTPS and an isolated Secret Service fixture. A real release primary also
 registers with the Omarchy tray host, accepts activation and mirrors its exact
 sanitized diagnostics to the system journal. Native library/recovery and Settings
-checks pass after fixing GTK markup handling. Ordinary live paste reached a field
-in a separate test window and restored the clipboard. Combined account workflows,
-a separate receiving application, secure/inline insertion and remaining native
-interactions are still under review; see the latest implementation milestone.
+checks pass after fixing GTK markup handling. Eight current native window tests
+pass, including account cancellation, backup credentials and ordinary paste into
+an independent GTK receiving process with clipboard restoration. The installed
+primary registers three real global actions and exits on one Quit request; its
+installed CLI also verifies that primary. Combined account workflows, secure/inline
+insertion and remaining native interactions are still under review; see the latest
+implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
 
 ```sh
@@ -1099,6 +1102,9 @@ G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.
 # Native peer authentication requires unrestricted SO_PEERCRED.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib native_shortcut_peer_credentials_match -- --ignored --test-threads=1
+# Real compositor registration and a single Quit; no running Snippets primary.
+G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --test desktop-quit -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib ui::tests::native_lifecycle -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
@@ -1145,10 +1151,13 @@ bounds and cancellation with public fictional text; it uses no vault keys,
 keyring, PAM, clipboard or account. These fixtures do not establish a live
 keyboard/reveal or credential-dialog workflow. The separate live
 paste test requires an unlocked session before any clipboard change or input.
-The latest completed receiving-field verification remains open; an unlocked
-attempt exposed a teardown warning, and the retry stopped at the locked-session
-preflight. The picker-only teardown regression passes independently. The test guards
-the fictional target, refuses non-text clipboards, and restores prior text.
+It compiles a separate C/GTK receiving application, verifies its exact owned
+window and process before sending input, and observes the expected public text
+in that application's field. It refuses non-text clipboards and restores prior
+text. The current live run passes. The primary-process Quit regression copies
+Cargo executables into a temporary installation, enables global shortcuts only
+in its private library, verifies ownership on D-Bus, and observes release of all
+three registrations and exit after exactly one Quit request.
 
 Local-owner tests exercise libpam against a disposable private policy and a
 public fictional password module. They cover incorrect passwords, account
@@ -1158,7 +1167,9 @@ helper is tested only with malformed requests that cannot authenticate a real
 account. The account-window lifecycle fixture injects its worker and authorization,
 uses only public visual/input material, and never accesses a real keyring, account,
 PAM service or server. It must run on the normal host bus, separately from the
-keyring harness; its current restricted-context run cannot initialize GTK.
+keyring harness. Its current unlocked run passes after waiting for the parent
+window to map before presenting its child and applying the selected-library
+state before testing pairing controls.
 The independent QR reader test uses public payloads and explicitly disables
 zbar's D-Bus publication. Recovery-disclosure/confirmation tests use an explicitly synthetic proof;
 they cover suffix normalization, secret retirement, schema migration and both sides

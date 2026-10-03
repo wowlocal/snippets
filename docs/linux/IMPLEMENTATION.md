@@ -229,17 +229,17 @@ keywords, including during imports and undo. Tests use temporary directories.
 
 | Area | Rust implementation | Verification / next work |
 | --- | --- | --- |
-| Native workspace | GTK list/editor, search, tags, pins, autosave, keyboard actions, searchable settings, configurable close behavior, explicit background login startup and gated startup recovery | Earlier native lifecycle smoke passes with fatal GTK warnings; recovery crash/access checks pass, new recovery UI compiles and needs a live display check |
+| Native workspace | GTK list/editor, search, tags, pins, autosave, keyboard actions, searchable settings, configurable close behavior, explicit background login startup and gated startup recovery | Current native lifecycle, startup recovery, searchable Settings and local-learning windows pass with fatal GTK warnings; single Quit waits for native workers, while save conflicts cancel exit |
 | Native desktop tray | Primary-process StatusNotifierItem, fixed DBusMenu actions, public ARGB icon, recovery/enable-state updates and watcher restart registration | Independent C/GIO/Cairo and authenticated private-bus registration/restart checks pass; a release primary also registers on the real Omarchy host and accepts tray activation; panel rendering, menu interactions and focus remain under live review |
-| Global keyboard shortcuts | Explicit local enable preference, primary native Wayland registration for open/picker/capture, native setup/status/retry controls, captured receiving target, bounded revocable dispatch and quit fence | Independent socketpair protocol, worker/consent and native peer authentication checks pass; native GTK shortcut controls pass; real primary registration, actual key assignment and receiving-field focus remain under live review |
+| Global keyboard shortcuts | Explicit local enable preference, primary native Wayland registration for open/picker/capture, native setup/status/retry controls, captured receiving target, bounded revocable dispatch and quit fence | Independent socketpair protocol, worker/consent and native peer authentication checks pass; native GTK shortcut controls pass; real installed primary registers three actions and one Quit revokes them and exits; physical key assignment remains under live review |
 | Library | CRUD, bounded/strict JSON, file permissions, process lock, atomic replacement, CAS conflicts, undo/redo | Rust core and concurrent CLI writer tests pass |
-| Editor assistance | Safe derived keyword buttons, existing metadata references, shared next-part Tab completion, duplicate and bidirectional prefix warnings, explicit bounded ordinary placeholder preview | Frozen Mac examples, Unicode boundary, reservation, disabled-keyword and preview grammar/limit tests pass; native widget smoke requires a live display |
-| Transfers | Native and Raycast JSON import, ordinary sharing export and native portable encrypted-backup export/import with interrupted-import recovery | Round-trip, timestamps, collisions, exact-key authentication, encrypted two-file redo, cancellation and independent OpenSSL backup format checks pass; live native dialogs and Apple app round trips remain unverified |
+| Editor assistance | Safe derived keyword buttons, existing metadata references, shared next-part Tab completion, duplicate and bidirectional prefix warnings, explicit bounded ordinary placeholder preview | Frozen Mac examples, Unicode boundary, reservation, disabled-keyword and preview grammar/limit tests pass; current native editor-assistance window/popover smoke passes in the unlocked session |
+| Transfers | Native and Raycast JSON import, ordinary sharing export and native portable encrypted-backup export/import with interrupted-import recovery | Round-trip, timestamps, collisions, exact-key authentication, encrypted two-file redo, cancellation and independent OpenSSL backup format checks pass; native backup/restore credential cancellation/confirmation checks pass; actual file-dialog and Apple app round trips remain unverified |
 | Placeholders | Native ICU date/time formats, one-pass clipboard, locale, calendar offsets | Fixed-date, month-end, literal grammar tests pass |
 | CLI | Ordinary mutations/get/import and combined metadata catalogue | Concurrent writer and secure output/refusal tests pass |
-| Approved secure CLI | App-owned `reveal`, `secure-status` and `add --secure`; native default-deny consent, fresh vault credentials, private bounded input, same-user pidfd/executable proof, source-bound disclosure and quit cancellation | Isolated stream/owner/CLI tests and private hidden-input PTY pass; native GTK and actual SO_PEERCRED/SO_PEERPIDFD session checks remain unavailable in the restricted environment |
+| Approved secure CLI | App-owned `reveal`, `secure-status` and `add --secure`; native default-deny consent, fresh vault credentials, private bounded input, same-user pidfd/executable proof, source-bound disclosure and quit cancellation | Isolated stream/owner/CLI tests and private hidden-input PTY pass; native GTK cancellation and private SO_PEERCRED/SO_PEERPIDFD checks pass; the installed CLI verifies the real owned primary for secure-status; actual disclosure/add consent remains under live review |
 | Omarchy theme | Active XDG state palette, periodic refresh, validated colors | Parser and CSS injection tests pass |
-| Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Target validation tested; actual cross-window delivery still requires verification |
+| Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Live ordinary paste reaches the expected field in an independent C/GTK application and restores the clipboard; secure insertion remains under live review |
 | Local suggestion learning | Frozen picker snapshots; relevance/keyword/pin priority before bounded prefix memory and 14-day frecency; successful copy/paste/inline/secure insertion recording; native toggles and independent resets; separate private debounced persistence | Isolated math/schema/concurrency/privacy tests and compiled native controls; live picker/settings/input behavior remains unverified |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; live native GTK/keyring/PAM verification remains unavailable |
@@ -3193,3 +3193,48 @@ Both desktop/headless Clippy checks, formatting, desktop settings/options tests,
 release GUI/CLI/auth-helper builds and two isolated installations pass on the
 unchanged native source fingerprint. Apple application/shared source and package
 dependencies are unchanged. The full live acceptance list above remains open.
+
+
+## Unlocked focus, cross-process paste and single Quit, 2026-10-03
+
+The user enabled Stay Awake for the live session. Native Wayland/D-Bus sockets,
+DNS and certificate-verified HTTPS pass again. Eight current native window tests
+pass with `G_DEBUG=fatal-warnings`: main lifecycle, editor assistance, searchable
+Settings, local learning, account cancellation, backup/restore credentials and
+ordinary live paste. Account tests now map the parent before presenting its child
+and apply the selected-library state before checking pairing controls; the worker
+and authorization remain synthetic and use no real account, keyring or PAM.
+
+The ordinary paste fixture now launches a separate C/GTK application. It verifies
+the receiving window's exact title and owned process, captures that target, opens
+the picker without an editor, and observes the expected public text in the other
+process's actual field. The fixture reports only a match marker. It observes the
+production clipboard lease restore the fixture and then restores the user's prior
+plain text before teardown. This closes the ordinary cross-application delivery
+check; it does not establish secure or inline insertion.
+
+Real global registration exposed a Quit defect: cancellation could still be
+outstanding when the first request checked service readiness, and the UI then
+required a second request. Quit now fences new application actions and schedules
+an owned weak-reference retry while native workers/save operations drain. Backup
+and secure insertion are cancelled on the first pass too. The existing draft is
+saved before exit; a save conflict or retained recovery material cancels the
+pending exit and keeps the review interface usable. A native lifecycle check
+also verifies that a conflicting unsaved draft survives Quit with no retry left.
+
+The ignored `desktop-quit` integration test uses temporary installed executable
+copies, private library state and the real compositor/session bus. It observes
+all three shortcut registrations, verifies the primary's D-Bus process ownership,
+sends one Quit, and checks normal exit and complete registration removal. A
+separate release-install run also passes and its installed CLI verifies the owned
+primary through `secure-status`. Direct Cargo artifacts have two hard links and
+correctly fail installed-executable peer admission; normal installation copies
+have the supported identity without weakening that check.
+
+Desktop/headless all-target Clippy, formatting, seven desktop-settings checks,
+the command-options check, the native Quit regression, all three release builds
+and two temporary-prefix installations pass. Native source fingerprints stay
+unchanged across those gates. No user library, vault, key binding, login entry or
+Stay Awake setting was modified. The remaining full acceptance items include
+physical shortcuts, tray interaction, inline/secure delivery, background history,
+combined native account workflows and Apple backup interoperability.

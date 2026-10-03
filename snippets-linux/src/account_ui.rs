@@ -2673,6 +2673,7 @@ mod tests {
             .title("Public account fixture")
             .build();
         parent.present();
+        settle_until(|| parent.is_active());
         let window =
             AccountWindow::with_worker(&application, &parent, Handle::fixture(), None).unwrap();
         window.present();
@@ -2909,6 +2910,9 @@ mod tests {
         window.selected_role.set(Some(Role::Reader));
         window.set_candidate_pairing(Ok(None), None);
         assert!(!window.candidate_pair.is_sensitive());
+        // A selected-library reply restores the current-library controls before
+        // applying its pairing state; leave the previous candidate review first.
+        window.apply_library(Ok(Outcome::NeedsTrustedDeviceOrRecovery));
         window.set_switching(handover::Status::default(), false, false);
         window.set_pairing(
             Ok(Some(RetainedStatus::Waiting {

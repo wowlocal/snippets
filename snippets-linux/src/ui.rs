@@ -84,6 +84,8 @@ struct App {
     diagnostics: RefCell<Option<std::sync::Arc<crate::diagnostics_service::Service>>>,
     tray: RefCell<Option<Rc<crate::tray::Tray>>>,
     shortcuts: RefCell<Option<Rc<shortcuts::Service>>>,
+    quit_pending: Cell<bool>,
+    quit_retry: RefCell<Option<glib::SourceId>>,
     usage_quitting: Cell<bool>,
     hold: RefCell<Option<gio::ApplicationHoldGuard>>,
     copy_serial: Cell<u64>,
@@ -155,6 +157,9 @@ fn row(snippet: &Snippet, secure: bool) -> gtk::ListBoxRow {
     gtk::ListBoxRow::builder().child(&content).build()
 }
 impl App {
+    fn is_quitting(&self) -> bool {
+        self.quit_pending.get() || self.usage_quitting.get()
+    }
     fn start_control(self: &Rc<Self>) {
         if self.control.borrow().is_some() {
             return;
@@ -169,7 +174,7 @@ impl App {
                 let Some(app) = before.upgrade() else {
                     return false;
                 };
-                if !app.ensure_library() || app.usage_quitting.get() {
+                if !app.ensure_library() || app.is_quitting() {
                     return false;
                 }
                 if app.main.borrow().as_ref().is_some_and(|main| !main.save()) {
@@ -229,7 +234,7 @@ impl App {
         }
     }
     fn open_settings(self: &Rc<Self>) {
-        if self.usage_quitting.get() {
+        if self.is_quitting() {
             return;
         }
         if self.settings.borrow().is_none() {
@@ -252,7 +257,7 @@ impl App {
         let service =
             shortcuts::Service::new(self.library.borrow().root.clone(), move |action, target| {
                 if let Some(app) = weak.upgrade()
-                    && !app.usage_quitting.get()
+                    && !app.is_quitting()
                 {
                     match action {
                         crate::global_shortcuts::Action::Open => app.present(),
@@ -330,7 +335,7 @@ impl App {
             connection,
             move |action| {
                 enabled.upgrade().is_some_and(|app| {
-                    !app.usage_quitting.get()
+                    !app.is_quitting()
                         && action
                             .name()
                             .is_none_or(|name| app.application.is_action_enabled(name))
@@ -338,7 +343,7 @@ impl App {
             },
             move |action| {
                 if let Some(app) = activate.upgrade()
-                    && !app.usage_quitting.get()
+                    && !app.is_quitting()
                 {
                     if let Some(name) = action.name() {
                         app.application.activate_action(name, None);
@@ -383,6 +388,12 @@ impl App {
         }
     }
     fn ensure_library(self: &Rc<Self>) -> bool {
+        if self.is_quitting() {
+            return false;
+        }
+        self.check_library()
+    }
+    fn check_library(self: &Rc<Self>) -> bool {
         let readiness = self.library.borrow().readiness();
         match readiness {
             Ok(Readiness::Ready) if !self.recovery_required.get() => true,
@@ -501,6 +512,9 @@ impl App {
         window
     }
     fn present(self: &Rc<Self>) {
+        if self.is_quitting() {
+            return;
+        }
         self.wake_sync(Wake::Foreground);
         self.main().window.present();
     }
@@ -770,10 +784,55 @@ impl App {
         });
     }
     fn quit(self: &Rc<Self>) {
+        if self.is_quitting() {
+            return;
+        }
+        self.quit_pending.set(true);
         if let Some(main) = self.main.borrow().as_ref() {
             main.assistance.invalidate();
         }
-        if self.usage_quitting.get() {
+        self.continue_quit();
+    }
+    fn wait_to_quit(self: &Rc<Self>) {
+        if let Some(main) = self.main.borrow().as_ref() {
+            main.status
+                .set_label("Finishing background work before quitting…");
+        }
+        let weak = Rc::downgrade(self);
+        let source = glib::timeout_add_local_once(Duration::from_millis(100), move || {
+            if let Some(app) = weak.upgrade() {
+                app.quit_retry.borrow_mut().take();
+                app.continue_quit();
+            }
+        });
+        *self.quit_retry.borrow_mut() = Some(source);
+    }
+    fn cancel_quit(&self) {
+        if let Some(source) = self.quit_retry.borrow_mut().take() {
+            source.remove();
+        }
+        self.quit_pending.set(false);
+        if let Some(service) = self.control.borrow().as_ref() {
+            service.cancel_quit();
+        }
+        if let Some(worker) = self.account_worker.borrow().as_ref() {
+            worker.cancel_quit();
+        }
+        if let Some(history) = self.history.borrow().as_ref() {
+            history.cancel_quit();
+        }
+        if let Some(service) = self.inline.borrow().as_ref() {
+            service.cancel_quit();
+        }
+        if let Some(settings) = self.settings.borrow().as_ref() {
+            settings.cancel_quit();
+        }
+        if let Some(service) = self.shortcuts.borrow().as_ref() {
+            service.cancel_quit();
+        }
+    }
+    fn continue_quit(self: &Rc<Self>) {
+        if !self.quit_pending.get() || self.usage_quitting.get() {
             return;
         }
         let shortcuts_idle = self
@@ -811,37 +870,41 @@ impl App {
             .borrow()
             .as_ref()
             .is_none_or(|worker| worker.prepare_quit());
-        if !settings_idle {
-            self.toast("Waiting for desktop settings to save. Try Quit again shortly.");
-            return;
-        }
-        if !shortcuts_idle {
-            self.toast("Waiting for global shortcuts to stop. Try Quit again shortly.");
-            return;
-        }
-        if !control_idle {
-            self.toast("Waiting for the CLI request to stop. Try Quit again shortly.");
-            return;
-        }
-        if !inline_idle {
-            self.toast("Waiting for inline expansion to stop. Try Quit again shortly.");
-            return;
-        }
-        if !history_idle {
-            self.toast("Waiting for clipboard history to stop. Try Quit again shortly.");
-            return;
-        }
-        if self
+        let backup_idle = self
             .backup
             .borrow()
             .as_ref()
-            .is_some_and(|backup| !backup.prepare_quit())
+            .is_none_or(|backup| backup.prepare_quit());
+        let secure_idle = self
+            .secure
+            .borrow()
+            .as_ref()
+            .is_none_or(|workspace| workspace.prepare_quit());
+        if !settings_idle
+            || !shortcuts_idle
+            || !control_idle
+            || !inline_idle
+            || !history_idle
+            || !backup_idle
+            || !secure_idle
         {
-            self.toast("Waiting for backup cancellation to finish. Try Quit again shortly.");
+            self.wait_to_quit();
             return;
         }
         if !account_idle {
-            self.toast("Waiting for synchronization to stop. Try Quit again shortly.");
+            // Retained recovery material requires a user's decision; keep its UI
+            // usable rather than automatically exiting when it is dismissed.
+            if self
+                .account_worker
+                .borrow()
+                .as_ref()
+                .is_some_and(|worker| worker.retention_required())
+            {
+                self.cancel_quit();
+                self.open_account();
+            } else {
+                self.wait_to_quit();
+            }
             return;
         }
         if self
@@ -850,35 +913,13 @@ impl App {
             .as_ref()
             .is_some_and(|account| !account.prepare_quit())
         {
-            return;
-        }
-        if let Some(workspace) = self.secure.borrow().as_ref()
-            && !workspace.prepare_quit()
-        {
-            self.toast("Waiting for the secure operation to stop. Try Quit again shortly.");
+            self.wait_to_quit();
             return;
         }
         if let Some(workspace) = self.secure.borrow().as_ref()
             && !workspace.save()
         {
-            if let Some(service) = self.control.borrow().as_ref() {
-                service.cancel_quit();
-            }
-            if let Some(worker) = self.account_worker.borrow().as_ref() {
-                worker.cancel_quit();
-            }
-            if let Some(history) = self.history.borrow().as_ref() {
-                history.cancel_quit();
-            }
-            if let Some(service) = self.inline.borrow().as_ref() {
-                service.cancel_quit();
-            }
-            if let Some(settings) = self.settings.borrow().as_ref() {
-                settings.cancel_quit();
-            }
-            if let Some(service) = self.shortcuts.borrow().as_ref() {
-                service.cancel_quit();
-            }
+            self.cancel_quit();
             workspace.present(None);
             return;
         }
@@ -920,24 +961,7 @@ impl App {
                 self.finish_quit();
             }
         } else {
-            if let Some(service) = self.control.borrow().as_ref() {
-                service.cancel_quit();
-            }
-            if let Some(worker) = self.account_worker.borrow().as_ref() {
-                worker.cancel_quit();
-            }
-            if let Some(history) = self.history.borrow().as_ref() {
-                history.cancel_quit();
-            }
-            if let Some(service) = self.inline.borrow().as_ref() {
-                service.cancel_quit();
-            }
-            if let Some(settings) = self.settings.borrow().as_ref() {
-                settings.cancel_quit();
-            }
-            if let Some(service) = self.shortcuts.borrow().as_ref() {
-                service.cancel_quit();
-            }
+            self.cancel_quit();
             self.present();
         }
     }
@@ -1027,6 +1051,9 @@ impl App {
             let weak = Rc::downgrade(self);
             action.connect_activate(move |_, _| {
                 if let Some(app) = weak.upgrade() {
+                    if name != "quit" && app.is_quitting() {
+                        return;
+                    }
                     if ![
                         "quit",
                         "about",
@@ -1701,7 +1728,8 @@ impl MainWindow {
         let Some(app) = self.app.upgrade() else {
             return false;
         };
-        if !app.ensure_library() {
+        // Quit fences new actions, but must still save the existing draft.
+        if !app.check_library() {
             return false;
         }
         let Some(snippet) = self.draft() else {
@@ -2241,6 +2269,8 @@ pub fn run() -> glib::ExitCode {
         diagnostics: RefCell::new(None),
         tray: RefCell::new(None),
         shortcuts: RefCell::new(None),
+        quit_pending: Cell::new(false),
+        quit_retry: RefCell::new(None),
         usage_quitting: Cell::new(false),
         hold: RefCell::new(None),
         copy_serial: Cell::new(0),
@@ -2307,6 +2337,9 @@ pub fn run() -> glib::ExitCode {
         let Ok(options) = Options::try_parse_from(command.arguments()) else {
             return glib::ExitCode::FAILURE;
         };
+        if app.is_quitting() && !options.quit {
+            return glib::ExitCode::FAILURE;
+        }
         if options.quit {
             app.quit();
         } else if options.background {
@@ -2389,6 +2422,15 @@ mod tests {
         previous: Option<glib::GString>,
         owned: RefCell<Vec<gdk::ContentProvider>>,
     }
+    struct PasteReceiver(std::process::Child);
+    impl Drop for PasteReceiver {
+        fn drop(&mut self) {
+            if self.0.try_wait().ok().flatten().is_none() {
+                let _ = self.0.kill();
+            }
+            let _ = self.0.wait();
+        }
+    }
     impl Drop for ClipboardRestore {
         fn drop(&mut self) {
             if self
@@ -2405,7 +2447,7 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "live Hyprland receiving-field test; briefly opens a fictional target"]
+    #[ignore = "live Hyprland receiving-field test in a separate GTK process; briefly opens a fictional target"]
     fn live_paste() {
         assert!(
             desktop::session_state() == desktop::SessionState::Unlocked,
@@ -2435,6 +2477,27 @@ mod tests {
             owned: RefCell::new(vec![]),
         };
         let directory = tempfile::tempdir().unwrap();
+        let receiver_binary = directory.path().join("paste-receiver");
+        let receiver_result = directory.path().join("paste-result");
+        let flags = std::process::Command::new("pkg-config")
+            .args(["--cflags", "--libs", "gtk4"])
+            .output()
+            .expect("GTK development files");
+        assert!(flags.status.success());
+        assert!(
+            std::process::Command::new("cc")
+                .args(["-Wall", "-Wextra", "-Werror"])
+                .arg(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/reference/paste-receiver.c")
+                )
+                .args(String::from_utf8(flags.stdout).unwrap().split_whitespace())
+                .arg("-o")
+                .arg(&receiver_binary)
+                .status()
+                .expect("native receiving fixture compilation")
+                .success()
+        );
         let application = adw::Application::builder()
             .application_id("com.khm.snippets.linux.PasteSmoke")
             .flags(gio::ApplicationFlags::NON_UNIQUE)
@@ -2460,21 +2523,21 @@ mod tests {
             diagnostics: RefCell::new(None),
             tray: RefCell::new(None),
             shortcuts: RefCell::new(None),
+            quit_pending: Cell::new(false),
+            quit_retry: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
             last_theme: RefCell::new(String::new()),
         });
-        let receiver = gtk::TextView::new();
-        let window = adw::ApplicationWindow::builder()
-            .application(&application)
-            .title("Snippets Smoke Paste Target")
-            .default_width(440)
-            .default_height(200)
-            .content(&receiver)
-            .build();
-        window.present();
-        receiver.grab_focus();
+        let receiver = PasteReceiver(
+            std::process::Command::new(receiver_binary)
+                .env("SNIPPETS_TEST_PASTE_RESULT", &receiver_result)
+                .env("G_DEBUG", "fatal-warnings")
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .expect("separate receiving application"),
+        );
         settle(Duration::from_millis(750));
         let clients = std::process::Command::new("hyprctl")
             .args(["-j", "clients"])
@@ -2490,7 +2553,7 @@ mod tests {
                 client.get("title").and_then(serde_json::Value::as_str)
                     == Some("Snippets Smoke Paste Target")
                     && client.get("pid").and_then(serde_json::Value::as_u64)
-                        == Some(std::process::id() as u64)
+                        == Some(receiver.0.id() as u64)
             })
             .expect("fictional receiving window mapped");
         let target = PasteTarget::from_window(fixture).expect("fixture window");
@@ -2509,7 +2572,7 @@ mod tests {
             active.get("title").and_then(serde_json::Value::as_str)
                 == Some("Snippets Smoke Paste Target")
                 && active.get("pid").and_then(serde_json::Value::as_u64)
-                    == Some(std::process::id() as u64),
+                    == Some(receiver.0.id() as u64),
             "The fictional receiving window did not gain focus; no keys were sent."
         );
         let provider = gdk::ContentProvider::for_value(&"fictional clipboard fixture".to_value());
@@ -2530,15 +2593,10 @@ mod tests {
             restore.owned.borrow_mut().push(provider);
         }
         settle(Duration::from_millis(2300));
-        let received = receiver.buffer().text(
-            &receiver.buffer().start_iter(),
-            &receiver.buffer().end_iter(),
-            true,
-        );
         let restored = glib::MainContext::default()
             .block_on(clipboard.read_text_future())
             .expect("clipboard read");
-        let delivered = received == "fictional snippet fictional clipboard fixture"
+        let delivered = std::fs::read(&receiver_result).ok().as_deref() == Some(b"matched\n")
             && restored.as_deref() == Some("fictional clipboard fixture");
         // The production lease creates a third provider when it restores the
         // fixture. Include that provider, then restore the user's text *before*
@@ -2555,7 +2613,7 @@ mod tests {
         if let Some(main) = app.main.borrow().as_ref() {
             main.window.destroy();
         }
-        window.destroy();
+        drop(receiver);
         // Neither received text nor the original clipboard can enter failure output.
         assert!(
             delivered,
@@ -2592,6 +2650,8 @@ mod tests {
             diagnostics: RefCell::new(None),
             tray: RefCell::new(None),
             shortcuts: RefCell::new(None),
+            quit_pending: Cell::new(false),
+            quit_retry: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2664,6 +2724,8 @@ mod tests {
             diagnostics: RefCell::new(None),
             tray: RefCell::new(None),
             shortcuts: RefCell::new(None),
+            quit_pending: Cell::new(false),
+            quit_retry: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2772,6 +2834,8 @@ mod tests {
             diagnostics: RefCell::new(None),
             tray: RefCell::new(None),
             shortcuts: RefCell::new(None),
+            quit_pending: Cell::new(false),
+            quit_retry: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2820,6 +2884,8 @@ mod tests {
         external.save(changed, Some(&current)).unwrap();
         main.buffer.insert_at_cursor(" stale");
         assert!(!main.save());
+        app.quit();
+        assert!(!app.is_quitting() && app.quit_retry.borrow().is_none());
         assert!(main.dirty.get());
         assert!(main.status.label().contains("changed outside"));
         main.dirty.set(false);
