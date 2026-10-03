@@ -42,6 +42,8 @@ object LibraryKeyBootstrap {
     const val DEFAULT_PAIRING_SECONDS = 300
 
     private const val PAIRING_SCHEMA = 2
+    private const val DEVICE_SIGN_IN_SCHEMA = 1
+    private const val DEVICE_SIGN_IN_KIND = "snippets-device-sign-in"
     private const val RECOVERY_SCHEMA = 1
     private const val MAX_QR_BYTES = 4_096
     private const val MAX_ENVELOPE_BYTES = 4_096
@@ -161,6 +163,156 @@ object LibraryKeyBootstrap {
             }
         }
     }
+
+    /**
+     * ADR 0007 `snippets-device-sign-in` payload shown by a signed-out device. It carries
+     * only pairing recipient material and the request ID, never the poll token. Encoding
+     * follows the pairing invitation conventions: sorted keys, unescaped slashes, unpadded
+     * Base64url, lowercase UUID, canonical HTTPS origin and at most 4,096 bytes.
+     */
+    data class DeviceSignInRequest(
+        val serverURL: String,
+        val requestID: String,
+        val nonce: ByteArray,
+        val recipientPublicKey: ByteArray,
+        val expiresAtEpochSeconds: Long,
+    ) {
+        /** Unchanged pairing derivation: equals the server tag of the approver's pairing. */
+        val confirmationCode: String
+            get() = confirmationCode(nonce, recipientPublicKey)
+
+        fun toPayload(): String = canonicalJSON(sortedMapOf<String, Any>(
+            "expiresAt" to expiresAtEpochSeconds,
+            "kind" to DEVICE_SIGN_IN_KIND,
+            "nonce" to nonce.base64URL(),
+            "recipientPublicKey" to recipientPublicKey.base64URL(),
+            "requestId" to requestID,
+            "schemaVersion" to DEVICE_SIGN_IN_SCHEMA,
+            "server" to serverURL,
+        )).also { require(it.toByteArray(Charsets.UTF_8).size <= MAX_QR_BYTES) }
+
+        override fun toString(): String = "DeviceSignInRequest(<redacted>)"
+
+        companion object {
+            fun fromPayload(raw: String, nowEpochSeconds: Long = Instant.now().epochSecond): DeviceSignInRequest {
+                val value = strictObject(
+                    raw,
+                    setOf("expiresAt", "kind", "nonce", "recipientPublicKey", "requestId",
+                        "schemaVersion", "server"),
+                )
+                require(value.get("schemaVersion") == DEVICE_SIGN_IN_SCHEMA)
+                require(value.get("kind") == DEVICE_SIGN_IN_KIND)
+                val expiresAt = value.get("expiresAt")
+                require(expiresAt is Int || expiresAt is Long)
+                val server = value.get("server") as? String ?: throw IllegalArgumentException()
+                val requestID = value.get("requestId") as? String ?: throw IllegalArgumentException()
+                val request = DeviceSignInRequest(
+                    serverURL = canonicalServer(server).also { require(it == server) },
+                    requestID = canonicalUUID(requestID).also { require(it == requestID) },
+                    nonce = (value.get("nonce") as? String ?: throw IllegalArgumentException())
+                        .base64URLBytes(PAIRING_NONCE_BYTES),
+                    recipientPublicKey = (value.get("recipientPublicKey") as? String
+                        ?: throw IllegalArgumentException()).base64URLBytes(P256_PUBLIC_KEY_BYTES),
+                    expiresAtEpochSeconds = (expiresAt as Number).toLong(),
+                )
+                require(request.nonce.size == PAIRING_NONCE_BYTES)
+                require(request.recipientPublicKey.size == P256_PUBLIC_KEY_BYTES)
+                require(request.expiresAtEpochSeconds > nowEpochSeconds - 30)
+                require(request.expiresAtEpochSeconds <= nowEpochSeconds + 630)
+                // KeyFactory validates that the point is on the P-256 curve.
+                decodePublicKey(request.recipientPublicKey)
+                return request
+            }
+
+            /** `kind` only; full validation happens in [fromPayload]. */
+            fun isDeviceSignInPayload(raw: String): Boolean = runCatching {
+                raw.toByteArray(Charsets.UTF_8).size <= MAX_QR_BYTES &&
+                    JSONObject(raw.trim()).opt("kind") == DEVICE_SIGN_IN_KIND
+            }.getOrDefault(false)
+        }
+    }
+
+    /**
+     * New-device state for a device-approved sign-in. The recipient private key and the
+     * poll token (a claim credential) live only in the device-bound encrypted store.
+     */
+    class PendingDeviceSignIn(
+        val draft: PairingDraft,
+        val request: DeviceSignInRequest,
+        val pollToken: String,
+    ) {
+        init {
+            require(draft.nonce.contentEquals(request.nonce))
+            require(draft.recipientPublicKey.contentEquals(request.recipientPublicKey))
+            require(isDevicePollToken(pollToken))
+        }
+
+        fun toJSON(): String = JSONObject()
+            .put("schemaVersion", DEVICE_SIGN_IN_SCHEMA)
+            .put("draft", JSONObject(draft.toJSON()))
+            .put("request", request.toPayload())
+            .put("pollToken", pollToken)
+            .toString()
+
+        override fun toString(): String = "PendingDeviceSignIn(<redacted>)"
+
+        companion object {
+            fun fromJSON(raw: String, nowEpochSeconds: Long = Instant.now().epochSecond): PendingDeviceSignIn {
+                val value = strictObject(raw, setOf("schemaVersion", "draft", "request", "pollToken"))
+                require(value.get("schemaVersion") == DEVICE_SIGN_IN_SCHEMA)
+                return PendingDeviceSignIn(
+                    PairingDraft.fromJSON(value.getJSONObject("draft").toString()),
+                    DeviceSignInRequest.fromPayload(value.getString("request"), nowEpochSeconds),
+                    value.getString("pollToken"),
+                )
+            }
+        }
+    }
+
+    /**
+     * Approver state, written only after fresh device-owner authentication starts the
+     * approval. [pairing] is recorded before approval so a retry reuses the same pairing.
+     */
+    class PendingDeviceApproval(
+        val request: DeviceSignInRequest,
+        val pairing: PairingInvitation?,
+    ) {
+        init {
+            pairing?.let {
+                require(it.serverURL == request.serverURL)
+                require(it.nonce.contentEquals(request.nonce))
+                require(it.recipientPublicKey.contentEquals(request.recipientPublicKey))
+            }
+        }
+
+        fun toJSON(): String = JSONObject()
+            .put("schemaVersion", DEVICE_SIGN_IN_SCHEMA)
+            .put("request", request.toPayload())
+            .put("pairing", pairing?.toQRPayload() ?: JSONObject.NULL)
+            .toString()
+
+        override fun toString(): String = "PendingDeviceApproval(<redacted>)"
+
+        companion object {
+            fun fromJSON(raw: String, nowEpochSeconds: Long = Instant.now().epochSecond): PendingDeviceApproval {
+                val value = strictObject(raw, setOf("schemaVersion", "request", "pairing"))
+                require(value.get("schemaVersion") == DEVICE_SIGN_IN_SCHEMA)
+                return PendingDeviceApproval(
+                    DeviceSignInRequest.fromPayload(value.getString("request"), nowEpochSeconds),
+                    if (value.isNull("pairing")) null
+                    else PairingInvitation.fromQRPayload(value.getString("pairing"), nowEpochSeconds),
+                )
+            }
+        }
+    }
+
+    /** ADR 0007: `expiresInSeconds = clamp(expiresAt − now − 5, 60, 600)`. */
+    fun deviceSignInPairingSeconds(requestExpiresAtEpochSeconds: Long, nowEpochSeconds: Long): Int =
+        (requestExpiresAtEpochSeconds - nowEpochSeconds - 5).coerceIn(60L, 600L).toInt()
+
+    /** `sn_d_` plus 43 unpadded Base64url symbols encoding 32 bytes. */
+    fun isDevicePollToken(value: String): Boolean = value.length == 48 && value.startsWith("sn_d_") &&
+        runCatching { value.substring(5).base64URLBytes(32).size == 32 }.getOrDefault(false)
 
     data class RecoveryKit(
         val serverURL: String,
@@ -416,6 +568,14 @@ object LibraryKeyBootstrap {
             BigInteger(1, raw.copyOfRange(1, 33)),
             BigInteger(1, raw.copyOfRange(33, 65)),
         )
+        // Not every KeyFactory provider checks the point, so verify y² = x³ + ax + b (mod p).
+        val curve = parameters.curve
+        val prime = (curve.field as java.security.spec.ECFieldFp).p
+        val x = point.affineX
+        val y = point.affineY
+        require(x < prime && y < prime)
+        require(y.multiply(y).mod(prime) ==
+            x.pow(3).add(curve.a.multiply(x)).add(curve.b).mod(prime))
         return KeyFactory.getInstance("EC").generatePublic(ECPublicKeySpec(point, parameters))
     }
 
@@ -499,6 +659,29 @@ object LibraryKeyBootstrap {
         val decoded = Base64.getUrlDecoder().decode(this)
         require(decoded.size <= maximumBytes && decoded.base64URL() == this)
         return decoded
+    }
+
+    /** Compact JSON with sorted keys and no escaped slashes, for flat string/number maps. */
+    private fun canonicalJSON(fields: java.util.SortedMap<String, Any>): String =
+        fields.entries.joinToString(",", "{", "}") { (key, value) ->
+            jsonString(key) + ":" + when (value) {
+                is String -> jsonString(value)
+                is Int, is Long -> value.toString()
+                else -> throw IllegalArgumentException()
+            }
+        }
+
+    private fun jsonString(value: String): String = buildString(value.length + 2) {
+        append('"')
+        for (character in value) {
+            when {
+                character == '"' -> append("\\\"")
+                character == '\\' -> append("\\\\")
+                character < ' ' -> append("\\u%04x".format(character.code))
+                else -> append(character)
+            }
+        }
+        append('"')
     }
 
     private fun strictObject(raw: String, expectedKeys: Set<String>): JSONObject {

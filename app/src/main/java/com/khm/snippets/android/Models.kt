@@ -90,7 +90,18 @@ data class LibraryState(
     val librarySwitchFromID: String? = null,
     val recoveryKitStatus: RecoveryKitStatus = RecoveryKitStatus.NEVER_VERIFIED,
     val hasPendingRecoveryKit: Boolean = false,
-    val accountDisplayName: String = "Snippets Cloud account",
+    /** Display form `XXXX-XXXX` of the native account UUID; never the account key. */
+    val accountID: String? = null,
+    /** False on a device another device signed in (ADR 0007): it has no key to show. */
+    val accountKeyAvailable: Boolean = false,
+    /** New-device request being shown; never contains the poll token or private key. */
+    val deviceSignIn: DeviceSignInPresentation? = null,
+    /** Discovery advertised `native-device-sign-in-v1` on the pinned origin. */
+    val deviceSignInAvailable: Boolean = false,
+    /** The pending approval signs a new device in to this account (ADR 0007). */
+    val approvalSignsInDevice: Boolean = false,
+    /** One-shot confirmation, such as "The new device is signed in." */
+    val notice: String? = null,
     val hasLibraryKey: Boolean = false,
     val hasCloudSession: Boolean = false,
     val setupStage: CloudSetupStage = CloudSetupStage.SIGNED_OUT,
@@ -399,7 +410,45 @@ internal data class CloudSignInCompletion(
     val retryAfterSeconds: Int? = null,
     val errorCode: String? = null,
     val recoveryKit: RecoveryKitPresentation? = null,
-)
+    /**
+     * Canonical key of a newly created account, returned once for Save Your Account Key.
+     * Like the recovery kit it is a one-screen value, never placed in LibraryState.
+     */
+    val accountKey: String? = null,
+) {
+    override fun toString(): String = "CloudSignInCompletion(succeeded=$succeeded, " +
+        "needsLibrarySelection=$needsLibrarySelection, errorCode=$errorCode, <secrets redacted>)"
+}
+
+/** The `snippets-device-sign-in` payload, confirmation code and expiry shown by a new device. */
+data class DeviceSignInPresentation(
+    val payload: String,
+    val confirmationCode: String,
+    val expiresAtEpochSeconds: Long,
+) {
+    override fun toString(): String = "DeviceSignInPresentation(<redacted>)"
+}
+
+/** One claim poll by a new device. */
+internal sealed class DeviceSignInPoll {
+    object Pending : DeviceSignInPoll()
+
+    /** The request was approved and processed; [completion] says whether setup finished. */
+    class Finished(val completion: CloudSignInCompletion) : DeviceSignInPoll()
+
+    /** A transient failure keeps polling with backoff; a terminal one ended the request. */
+    class Failed(val errorCode: String, val retryAfterSeconds: Int?, val terminal: Boolean) :
+        DeviceSignInPoll()
+}
+
+/** An account key on screen. It must never be placed in LibraryState or saved by Compose. */
+internal class AccountKeyPresentation(
+    val accountKey: String,
+    /** True right after Create Account: the user must explicitly confirm it was saved. */
+    val requiresAcknowledgement: Boolean,
+) {
+    override fun toString(): String = "AccountKeyPresentation(<redacted>)"
+}
 
 fun parseLibrary(json: String): List<SnippetItem> {
     val array = JSONArray(json)

@@ -21,13 +21,38 @@ ordinary application, not a keyboard, Accessibility service, or overlay.
 - Snippets Cloud pull/push with paged cursors, per-record CAS generations, batch
   outcomes, response limits, TLS-only URLs, bearer authentication, and sticky scope
   coordinates. A binding/dataset/feed mismatch stops instead of applying data.
-- Native email and six-digit-code sign-in. The email screen opens before discovery;
-  resend cooldown, email editing, cancellation and errors stay in Compose. Discovery
-  requires `native-email-code-v1` and validates every authentication endpoint against
-  the build-pinned HTTPS origin. Redirects are disabled. The app stores opaque access
-  and rotating refresh tokens, the immutable account ID, verified email and expiry in
-  device-bound encrypted storage; refresh must preserve the account ID. Old browser
-  sessions are not imported. A self-hosted distribution pins its own service origin;
+- Native generated-account-key sign-in (server ADR 0006). Signed out, the account screen
+  offers **Create Account** and **Sign In with Account Key**; dialogs, cancellation,
+  errors and rate-limit waits stay in Compose and never use a browser or WebView.
+  Discovery requires `native-account-key-v1` and `flow=account_key`, and pins the create,
+  sign-in, refresh and revoke endpoints to `/v2/auth/accounts`, `/v2/auth/sign-in`,
+  `/v2/auth/refresh` and `/v2/auth/revoke` on the build-pinned HTTPS origin. Redirects
+  are disabled. Typed keys are normalized locally (separators, ASCII whitespace, case,
+  O/I/L look-alikes, a 64-byte limit and the ten-bit check); a locally invalid key is
+  never sent. Account creation sends an empty body and shows **Save Your Account Key**
+  (monospaced selectable display form, **Copy** with the recovery-kit clipboard rules, and
+  an explicit **I've Saved It**). Create and sign-in grants share one repository path:
+  mutex, journal-first replacement grant, library selection and commit. The app stores
+  opaque access and rotating refresh tokens, the immutable account UUID, the canonical
+  account key and expiry in device-bound encrypted storage (session schema 2); refresh
+  must preserve the account ID, and an older schema reads as signed out. Old browser
+  sessions are not imported.
+- Device-approved sign-in (server ADR 0007), offered as **Sign In with Another Device**
+  only when discovery advertises `native-device-sign-in-v1`. The new device generates
+  ordinary pairing recipient material, opens `POST /v2/auth/device-requests`, keeps the
+  recipient key, request ID and poll token in the encrypted store, and shows the
+  `snippets-device-sign-in` QR/copyable payload (sorted keys, unescaped slashes, unpadded
+  Base64url) with the pairing confirmation code and a countdown. It polls the claim
+  endpoint about every two seconds with Retry-After and backoff. An approved claim takes
+  the account-key grant path (journal, pending session without an account key, commit),
+  selects the returned library only if `GET /v2/spaces` lists it, requires the server's
+  pairing to carry this device's own recipient key and nonce, and claims the library key
+  through the existing recipient pairing claim. Such a device's **Show Account Key**
+  explains that the key lives on another device. On an approving device, scan or paste
+  accepts the payload, shows the code and consequence before any network call, requires
+  the pairing approval's device-owner authentication, creates a pairing clamped to the
+  request lifetime, checks its tag, approves it through the library-challenge proof and
+  envelope path, and binds the request with a retried, idempotent approval. A self-hosted distribution pins its own service origin;
   an unconfigured build keeps cloud sign-in disabled.
 - Approved-device or offline-recovery onboarding. A new device displays a five-minute
   QR invitation for approval by a trusted device, or restores from an offline recovery
@@ -36,7 +61,7 @@ ordinary application, not a keyboard, Accessibility service, or overlay.
   HKDF/AES-GCM domain. Invitations never contain the plaintext library key. The server's
   approved envelope is redacted from polling and atomically taken once.
 - Device-owner authentication and a proof derived from the existing library key protect
-  pairing approval and recovery replacement. Email-code sign-in alone cannot unlock an
+  pairing approval and recovery replacement. An account key alone cannot unlock an
   existing library or grant its key. Each installation has a distinct refresh family.
   Sign-out and interactive replacement use encrypted credential journals; cleanup revokes
   exact access tokens and superseded refresh families without revoking the committed
@@ -46,7 +71,9 @@ ordinary application, not a keyboard, Accessibility service, or overlay.
   a resumable save flow with QR, clipboard expiry, Save/Share, and an eight-character
   saved-copy challenge. Later disclosure requires device-owner authentication.
 - A dedicated Snippets Cloud account screen separates account identity, library-key
-  access, active storage, and sync status. It shows the verified email and a cross-device Library ID,
+  access, active storage, and sync status. It shows the **Account ID** (`XXXX-XXXX`, the
+  first eight hex digits of the account UUID), **Show Account Key** behind the same
+  device-owner authentication as recovery-kit disclosure, a cross-device Library ID,
   local snippet count, recovery status, and explicit account actions. Provider changes
   have a destination/account/library preflight instead of behaving like an immediate
   radio-button change.
@@ -100,8 +127,8 @@ Apple builds use the equivalent public build settings `SNIPPETS_CLOUD_ENABLED=YE
 every platform. The native flow needs no OAuth client ID, client secret, callback host,
 App Links, associated-domain callback or Account Center. Omitting the flag or pinned
 origin disables sign-in; there is no runtime textbox that can redirect credentials to
-an arbitrary origin. The server must advertise the native flow and have email delivery
-configured before sign-in can succeed.
+an arbitrary origin. The server must advertise the native account-key flow before
+sign-in can succeed.
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. The Gradle module
 builds `arm64-v8a` and `x86_64`, generates the Java JNI wrapper, and packages the Swift,
@@ -125,6 +152,6 @@ swift test --package-path CorePackage
 
 Before production rollout, add WorkManager scheduling,
 run the existing instrumentation boundary suite on the supported phone/tablet matrix,
-complete size optimization and release signing, and configure the production email sender,
-native-auth secrets and canonical HTTPS service URL. macOS and iOS keep unchanged CloudKit
-while sharing the native Snippets Cloud email-code flow and automatic token refresh.
+complete size optimization and release signing, and configure the native-auth secrets,
+identity pepper and canonical HTTPS service URL. macOS and iOS keep unchanged CloudKit
+while sharing the native Snippets Cloud account-key flow and automatic token refresh.

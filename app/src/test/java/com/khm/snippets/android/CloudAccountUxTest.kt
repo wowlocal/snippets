@@ -313,4 +313,29 @@ class CloudAccountUxTest {
         assertEquals("Retry cleanup", error.actionTitle)
         assertTrue(disconnectBlockedForRecovery(CloudKeyStatus.SETUP_INTERRUPTED))
     }
+
+    @Test
+    fun accountKeyErrorsUseTheNativeCopyAndKeepRateLimitCopy() {
+        assertEquals(
+            "This isn't a valid account key. Check it for typos.",
+            nativeCloudSignInError("account_key_malformed"),
+        )
+        assertEquals(
+            "That account key wasn't accepted. Check it and try again.",
+            nativeCloudSignInError("invalid_account_key"),
+        )
+        assertEquals("Please wait before trying again.", nativeCloudSignInError("rate_limited"))
+        assertEquals(CloudErrorAction.SIGN_IN, cloudErrorPresentation("invalid_account_key").action)
+        for (removed in listOf("invalid_email", "invalid_code", "code_expired", "too_many_attempts")) {
+            assertEquals(cloudErrorPresentation("unknown").message, nativeCloudSignInError(removed))
+        }
+    }
+
+    @Test
+    fun accountKeyNeverAppearsInDebugDescriptions() {
+        val key = "7KQF9M2XR4TDH8WBZN3CP6YE1AQ7"
+        assertFalse(CloudSignInCompletion(succeeded = true, accountKey = key).toString().contains(key))
+        assertFalse(AccountKeyPresentation(key, requiresAcknowledgement = true).toString().contains(key))
+        assertTrue(ACCOUNT_KEY_SAVE_COPY.startsWith("This key is the only way to sign in"))
+    }
 }

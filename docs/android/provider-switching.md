@@ -178,7 +178,7 @@ The safe default is always loss-preserving:
 
 After a provider has been attached successfully, switching back does not repeat pairing,
 recovery-key entry, or a full upload. It reuses the locally wrapped portable bundle and
-provider state after binding validation; normal email-code/iCloud reauthentication may still be
+provider state after binding validation; normal account-key/iCloud reauthentication may still be
 required when the platform account session has expired.
 
 An explicit destructive **Replace target from backup** may exist under advanced recovery,

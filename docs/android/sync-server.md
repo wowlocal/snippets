@@ -12,7 +12,7 @@ api/snippets-sync-v2.yaml       normative OpenAPI 3.1 contract
 server/cmd/                     server command
 server/internal/api/            generated strict net/http interface
 server/internal/domain/         reference behavior and opaque token codec
-server/internal/auth/           native email-code sessions; optional legacy OIDC adapter
+server/internal/auth/           native account-key sessions; optional legacy OIDC adapter
 server/internal/httpapi/        admission, strict JSON, DTO mapping
 server/internal/postgres/       explicit transactions and SQL
 server/Container/postgres-init/ first-boot role and schema initialization
@@ -27,13 +27,16 @@ before committing cursor, CAS, or ciphertext state.
 
 `GET /.well-known/snippets-sync` returns protocol 2.1, a stable server instance UUID,
 `apiBase=<PUBLIC_BASE_URL>/v2`, current limits, capabilities, and
-`recordProfile=snippets-wire-v1`. Native mode advertises `native-email-code-v1` and
-`nativeAuth` with `flow=email_code` plus the start, verify, refresh and revoke endpoints
-on that same HTTPS origin. Native clients do not require OIDC discovery fields.
+`recordProfile=snippets-wire-v1`. Native mode advertises `native-account-key-v1` and
+`nativeAuth` with `flow=account_key` plus the create-account, sign-in, refresh and revoke
+endpoints on that same HTTPS origin. Native clients do not require OIDC discovery fields.
 
 ```text
-POST   /v2/auth/email/start
-POST   /v2/auth/email/verify
+POST   /v2/auth/accounts                  no body
+POST   /v2/auth/sign-in
+POST   /v2/auth/device-requests            ADR 0007; unauthenticated
+POST   /v2/auth/device-requests/{id}/approval
+POST   /v2/auth/device-requests/{id}/claim
 POST   /v2/auth/refresh
 POST   /v2/auth/revoke
 DELETE /v2/session
@@ -70,24 +73,36 @@ retry/limit values—never arbitrary exception text.
 
 ## Authentication and authorization
 
-In native mode the server normalizes an email address, sends a six-digit code through
-its configured SMTP service, and checks a bounded challenge with expiry, attempt limits
-and resend/rate controls. Verification creates or resolves an immutable account ID and
-returns the verified email plus opaque access and rotating refresh tokens. The account
-email is retained; challenge codes and session credentials use keyed digests in server
-storage. The email sender necessarily receives the address and code.
+In native mode (server ADR 0006) an account is an immutable UUID plus one
+server-generated account key: 26 random Crockford Base32 symbols and two check symbols.
+`POST /v2/auth/accounts` takes no body, creates the account and returns its key exactly
+once together with opaque access and rotating refresh tokens. `POST /v2/auth/sign-in`
+exchanges a canonical key for a session; a malformed or unknown key returns
+`401 invalid_account_key`. Responses carry only `account.id`. The server stores a
+peppered HMAC of the key and keyed digests of session credentials, and holds no email or
+other personal identifier. Account creation and sign-in have per-IP and deployment rate
+budgets.
+
+Device-approved sign-in (server ADR 0007, capability `native-device-sign-in-v1`) lets an
+approved device sign a new one in without the key. The new device opens a ten-minute
+request holding its pairing recipient key and nonce and polls with a one-time poll
+token. The approver creates and approves an ordinary pairing for that key and nonce, then
+binds the request to its own account; the server binds only when that caller can write
+the space and holds an approved pairing whose recipient key hash and nonce match. The
+approved claim returns a new session family plus the space and pairing to claim.
 
 Access tokens last up to five minutes. Refresh rotation requires a new credential;
 reuse revokes the family. `POST /v2/auth/revoke` with an access-token hint revokes that
-exact access token, while a refresh-token hint revokes its whole family. Email-code login
-does not claim passkey or multifactor assurance. The clients use native email/code forms
-and pin every authentication request to their configured HTTPS origin.
+exact access token, while a refresh-token hint revokes its whole family. Account-key login
+does not claim passkey or multifactor assurance. The clients use native create/sign-in
+dialogs, validate typed keys locally before sending them, and pin every authentication
+request to their configured HTTPS origin.
 
 Server account access remains separate from end-to-end library access. Pairing approval
 and recovery-envelope replacement verify a signed action proof derived from the existing
 library key. The server stores the public verifier and encrypted envelopes, not that key.
-A new device must receive an approved envelope or use the offline recovery kit; verifying
-an email address does not bypass this requirement. Optional legacy OIDC support remains
+A new device must receive an approved envelope or use the offline recovery kit; holding
+the account key does not bypass this requirement. Optional legacy OIDC support remains
 a server integration seam and is not used by the current native clients.
 
 Logout writes a keyed token digest to a shared PostgreSQL denylist. Both logout and all

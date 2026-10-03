@@ -293,11 +293,23 @@ class HttpSyncClient {
         draft: LibraryKeyBootstrap.PairingDraft,
         expectedServerInstanceID: String,
         expiresInSeconds: Int = LibraryKeyBootstrap.DEFAULT_PAIRING_SECONDS,
+    ): PairingRecord = createPairing(serverURL, spaceID, accessToken, draft.recipientPublicKey,
+        draft.nonce, expectedServerInstanceID, expiresInSeconds)
+
+    /** A pairing for another device's recipient material (ADR 0007 approver). */
+    fun createPairing(
+        serverURL: String,
+        spaceID: String,
+        accessToken: String,
+        recipientPublicKey: ByteArray,
+        nonce: ByteArray,
+        expectedServerInstanceID: String,
+        expiresInSeconds: Int,
     ): PairingRecord {
         require(expiresInSeconds in 60..600)
         val body = JSONObject()
-            .put("recipientPublicKey", draft.recipientPublicKey.standardBase64())
-            .put("nonce", draft.nonce.standardBase64())
+            .put("recipientPublicKey", recipientPublicKey.standardBase64())
+            .put("nonce", nonce.standardBase64())
             .put("expiresInSeconds", expiresInSeconds)
             .toString()
         return pairingResponse(spaceID, expectedServerInstanceID, JSONObject(request(
@@ -383,6 +395,27 @@ class HttpSyncClient {
             algorithm = algorithm,
             ciphertext = response.getString("ciphertext").canonicalStandardBase64(4_096),
         )
+    }
+
+    /** `POST /v2/auth/device-requests/{id}/approval`; idempotent for the same binding. */
+    fun approveDeviceSignInRequest(
+        serverURL: String,
+        requestID: String,
+        spaceID: String,
+        pairingID: String,
+        accessToken: String,
+    ) {
+        val response = request(
+            serverURL,
+            accessToken,
+            "POST",
+            "v2/auth/device-requests/${validatedUUID(requestID)}/approval",
+            JSONObject()
+                .put("spaceId", validatedUUID(spaceID))
+                .put("pairingId", validatedUUID(pairingID))
+                .toString(),
+        )
+        require(response.isEmpty())
     }
 
     fun cancelPairing(
