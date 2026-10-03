@@ -393,10 +393,22 @@ fn automatic_parent() -> (adw::Application, adw::ApplicationWindow) {
 fn connect_keys(window: &Rc<AccountWindow>, fixture: &server::Fixture) {
     window.server.set_text(fixture.server.for_secure_storage());
     window.email.set_text("fixture@example.invalid");
+    assert!(window.email.grab_focus());
+    until("native email delegate did not acquire focus", || {
+        gtk::prelude::GtkWindowExt::focus(&window.window)
+            .is_some_and(|focus| focus.is_ancestor(&window.email))
+    });
     press(window.window.upcast_ref(), "Send Sign-in Code");
+    assert!(window.busy.get() && gtk::prelude::GtkWindowExt::focus(&window.window).is_none());
     wait_work(window);
     window.code.set_text("123456");
+    assert!(window.code.grab_focus());
+    until("native sign-in code delegate did not acquire focus", || {
+        gtk::prelude::GtkWindowExt::focus(&window.window)
+            .is_some_and(|focus| focus.is_ancestor(&window.code))
+    });
     press(window.window.upcast_ref(), "Sign In");
+    assert!(window.busy.get() && gtk::prelude::GtkWindowExt::focus(&window.window).is_none());
     wait_work(window);
     assert!(window.libraries.selected() == 0 && !window.library_panel.is_sensitive());
     window.libraries.set_selected(1);

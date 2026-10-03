@@ -327,9 +327,10 @@ preservation: its disabled protected copy is acknowledged before the source
 changes. Fresh-authorized restoration of a missing copy preserves its nonce.
 Flat current secure v1 cloud-source Keep/Delete and acknowledged-copy deletion
 repair now pass native acceptance with independent mixed source/copy choices and
-retained source rejection packets. Nested/journal-only C1, independent raw child
-decisions, local-absence source review and unrelated ambiguous packets remain
-separate checks.
+retained source rejection packets. Nested physical/journal-only C1 source
+Keep/Delete also pass: original copies are acknowledged before later intent,
+and C1 retains its sealed body. Independent raw child decisions, local-absence
+source review and unrelated ambiguous packets remain separate checks.
 
 After reconnecting, selecting a library and verifying its keys, choose **Enable
 Automatic Sync for This Library**. Snippets resumes that exact saved account and
@@ -662,10 +663,12 @@ restoration and basic cloud deletion Cancel/Keep/Delete also pass. Missing-snaps
 Cancel/focus/stale-primary refusal and explicit resumption now pass for acknowledged
 ordinary and protected records, with preserved nonce and fresh create CAS. Flat
 current secure v1 source and acknowledged-copy deletion repair also pass with fresh
-credentials, cancellation refusal and exact CAS ordering. Nested/journal-only
-groups, independent raw child decisions, local-absence source review, unrelated
-ambiguous packets, pairing and signed operations remain under live acceptance. The native
-interrupted-startup recovery fixture passes with temporary data; full file-dialog
+credentials, cancellation refusal and exact CAS ordering. Nested physical and
+journal-only C1 source Keep/Delete also pass with retained child seals and
+separate originals. Independent raw child decisions, local-absence source review,
+unrelated ambiguous packets, pairing and signed operations remain under live
+acceptance. The native interrupted-startup recovery fixture passes with temporary
+data; full file-dialog
 and Apple-app backup round trips remain separate.
 
 **Show Pending Recovery Code…** opens a fresh computer-login-password dialog.
@@ -1203,6 +1206,11 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 # deletion repair while an actual source rejection packet is retained.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --current-review-keep
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --current-review-delete
+# Nested secure C1, physically present or held only in the native journal.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --nested-review-keep
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --nested-review-delete
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --nested-journal-keep
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --nested-journal-delete
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib clipboard_history::wayland::protocol_tests::private_libwayland -- --ignored --test-threads=1

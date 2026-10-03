@@ -1297,6 +1297,12 @@ impl AccountWindow {
         self.approval_input.set_text("");
     }
     fn busy(&self, value: bool) {
+        if value {
+            // Deliver focus-out while the entry and its controllers are still
+            // sensitive. Disabling the panel first can leave GtkText's cursor
+            // tick alive after its focus controller stops receiving events.
+            gtk::prelude::GtkWindowExt::set_focus(&self.window, None::<&gtk::Widget>);
+        }
         self.busy.set(value);
         self.panel.set_sensitive(!value);
     }

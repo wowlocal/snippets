@@ -1,5 +1,7 @@
 //! Native current v1 carrier decisions, real keyring, HTTPS receipts and vault.
 use super::*;
+#[path = "account_nested_review_live_tests.rs"]
+mod nested;
 #[path = "account_prerequisite_live_tests.rs"]
 mod prerequisite;
 
@@ -18,6 +20,13 @@ fn credentials(
                 .contains("Restore 1 missing conflict originals")
         );
     }
+    credentials_from(window, delete, dialog)
+}
+fn credentials_from(
+    window: &Rc<AccountWindow>,
+    delete: bool,
+    dialog: adw::AlertDialog,
+) -> (adw::AlertDialog, gtk::PasswordEntry) {
     press(
         dialog.upcast_ref(),
         if delete {

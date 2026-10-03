@@ -37,7 +37,7 @@ if [[ ${1:-} == --in-bus ]]; then
 fi
 if [[ $# -lt 1 || $# -gt 2 || ! -x $1 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${HYPRLAND_INSTANCE_SIGNATURE:-} || -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete] (in the unlocked desktop session)' >&2
+  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete|--nested-review-keep|--nested-review-delete|--nested-journal-keep|--nested-journal-delete] (in the unlocked desktop session)' >&2
   exit 2
 fi
 case ${2:-} in
@@ -48,6 +48,10 @@ case ${2:-} in
   --sync-review) test_name=account_ui::live_tests::vault::review::live_secure_conflict_and_deletion ;;
   --current-review-keep) test_name=account_ui::live_tests::vault::review::current::live_current_carrier_keep ;;
   --current-review-delete) test_name=account_ui::live_tests::vault::review::current::live_current_carrier_delete ;;
+  --nested-review-keep) test_name=account_ui::live_tests::vault::review::current::nested::live_nested_current_keep ;;
+  --nested-review-delete) test_name=account_ui::live_tests::vault::review::current::nested::live_nested_current_delete ;;
+  --nested-journal-keep) test_name=account_ui::live_tests::vault::review::current::nested::live_nested_journal_keep ;;
+  --nested-journal-delete) test_name=account_ui::live_tests::vault::review::current::nested::live_nested_journal_delete ;;
   *) printf '%s\n' 'Unknown native account fixture.' >&2; exit 2 ;;
 esac
 if ! "$1" --list | rg -Fx "$test_name: test" > /dev/null; then
