@@ -316,8 +316,13 @@ and CAS version. Cancelling before the write journal preserves current primary
 files; cancellation after journal publication retains the encrypted redo for normal
 recovery. Saved automatic scheduling pauses until the request/cycle releases its
 key; ordinary and automatic cycles continue without borrowing an editor key.
-The native dialog and combined live keyring/HTTPS workflow still need a graphical
-end-to-end check.
+The mapped native dialog now passes combined private-keyring/verified-HTTPS
+acceptance with independent public vault wraps. Cancel, incorrect passphrase,
+focus loss and replacement of the captured file preserve primary/checkpoint
+bytes. A fresh passphrase cycle receives an unmarked legacy secure edit and sends
+the local secure edit; another such incoming edit requires a new recovery-key
+authorization. Explicit same-vault routing also passes sealed exchange while the
+vault stays locked. Secure-conflict preservation remains a separate live check.
 
 After reconnecting, selecting a library and verifying its keys, choose **Enable
 Automatic Sync for This Library**. Snippets resumes that exact saved account and
@@ -644,10 +649,11 @@ Missing primary files stop sending; they never become cloud deletions. Receiving
 computer's local changes, and a connected account or verified key does not mean
 snippets have synchronized. Ordinary automatic receiving/sending now passes the
 combined live GTK, private native keyring and verified HTTPS workflow. Explicit
-Sync Now/Receive/Send controls, vault-authenticated cycles, snapshot/deletion
-review, pairing and signed operations still need combined live acceptance.
-The startup-recovery UI also needs a live graphical check;
-its core crash/restart and file-access checks use only temporary data.
+Sync Now/Receive/Send controls and fresh passphrase/recovery-key cycles also pass
+combined live acceptance. Snapshot/deletion review, secure-conflict preservation,
+pairing and signed operations remain under live acceptance. The native
+interrupted-startup recovery fixture passes with temporary data; full file-dialog
+and Apple-app backup round trips remain separate.
 
 **Show Pending Recovery Code…** opens a fresh computer-login-password dialog.
 The request is bound to this library and retained presentation. QR/code pixels
@@ -1175,6 +1181,8 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary
 # The hidden-window checks wait for the unmodified 30-second scheduler.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --automatic-sync
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --automatic-reader
+# Manual Receive/Send/Sync Now and fresh passphrase/recovery-key vault cycles.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --vault-sync
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib clipboard_history::wayland::protocol_tests::private_libwayland -- --ignored --test-threads=1
@@ -1271,8 +1279,13 @@ directions use the production timer with the account window hidden. Writer check
 also verify HTTP backoff, new-worker automatic reconnect, a mapped Disable action
 while the HTTP response is held, unchanged primary/checkpoint bytes after revocation,
 and offline startup after opt-out. Reader checks verify no batch upload and a halt
-on changed membership. Only closed status/failure enums and counts appear in
-failure output.
+on changed membership. The vault variant uses independent public wraps and
+private vault/checkpoint files. It covers mapped manual commands, sealed
+same-vault exchange, fresh passphrase/recovery methods, cancellation, focus and
+source revocation, encrypted local/remote edit convergence and a second cycle
+requiring new proof. It never enables automatic scheduling, and only the test
+thread opens fixture bodies to verify the result. The HTTPS server keeps opaque
+wire records. Only closed status/failure enums and counts appear in failure output.
 The independent QR reader test uses public payloads and explicitly disables
 zbar's D-Bus publication. Recovery-disclosure/confirmation tests use an explicitly synthetic proof;
 they cover suffix normalization, secret retirement, schema migration and both sides

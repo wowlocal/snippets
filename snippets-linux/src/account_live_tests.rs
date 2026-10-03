@@ -14,6 +14,8 @@ use std::{
 
 #[path = "account_live_server.rs"]
 mod server;
+#[path = "account_vault_sync_live_tests.rs"]
+mod vault;
 
 fn pump() {
     let context = glib::MainContext::default();
