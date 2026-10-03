@@ -53,13 +53,13 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertTrue(waitUntil { syncPane.viewIfLoaded?.window == nil })
         XCTAssertTrue(navigation.viewIfLoaded?.window === window)
 
-        XCTAssertTrue(try CloudEmailSignInViewController.visiblePresenter(for: syncPane) === accountPage)
+        XCTAssertTrue(try CloudAccountKeySignInViewController.visiblePresenter(for: syncPane) === accountPage)
     }
 
     func testNativeCloudSignInRejectsDetachedPresenterInsteadOfUsingAnotherScenesWindow() {
         let detached = UIViewController()
-        XCTAssertThrowsError(try CloudEmailSignInViewController.visiblePresenter(for: detached)) { error in
-            XCTAssertTrue(error is CloudEmailSignInViewController.PresentationFailure)
+        XCTAssertThrowsError(try CloudAccountKeySignInViewController.visiblePresenter(for: detached)) { error in
+            XCTAssertTrue(error is CloudAccountKeySignInViewController.PresentationFailure)
         }
         XCTAssertFalse(detached.isViewLoaded, "Resolving a presenter must not load a detached view")
     }
@@ -2370,14 +2370,26 @@ final class SnippetsIOSTests: XCTestCase {
                 durationMilliseconds: 40, httpStatus: 200, reason: nil, failure: nil),
             .cloudSignInRequest(endpoint: .providerDiscovery, outcome: .failed,
                 durationMilliseconds: 80, httpStatus: nil, reason: .requestFailed, failure: DiagnosticFailure(error)),
-            .cloudSignIn(stage: .emailCodeSend, outcome: .entered, durationMilliseconds: 1,
+            .cloudSignIn(stage: .accountCreate, outcome: .entered, durationMilliseconds: 1,
                 storedSessionPresent: false, reason: nil, failure: nil),
-            .cloudSignIn(stage: .emailCodeVerify, outcome: .failed, durationMilliseconds: 20,
-                storedSessionPresent: false, reason: .invalidCode, failure: nil),
-            .cloudSignInRequest(endpoint: .emailCodeSend, outcome: .succeeded,
+            .cloudSignIn(stage: .accountSignIn, outcome: .failed, durationMilliseconds: 20,
+                storedSessionPresent: false, reason: .invalidAccountKey, failure: nil),
+            .cloudSignInRequest(endpoint: .accountCreate, outcome: .succeeded,
                 durationMilliseconds: 10, httpStatus: 200, reason: nil, failure: nil),
-            .cloudSignInRequest(endpoint: .emailCodeVerify, outcome: .failed,
+            .cloudSignInRequest(endpoint: .accountSignIn, outcome: .failed,
+                durationMilliseconds: 10, httpStatus: 401, reason: .invalidAccountKey, failure: nil),
+            .cloudSignInRequest(endpoint: .accountSignIn, outcome: .failed,
                 durationMilliseconds: 10, httpStatus: 429, reason: .rateLimited, failure: nil),
+            .cloudSignIn(stage: .deviceRequest, outcome: .entered, durationMilliseconds: 2,
+                storedSessionPresent: false, reason: nil, failure: nil),
+            .cloudSignIn(stage: .deviceClaim, outcome: .entered, durationMilliseconds: 3,
+                storedSessionPresent: false, reason: nil, failure: nil),
+            .cloudSignInRequest(endpoint: .deviceRequest, outcome: .succeeded,
+                durationMilliseconds: 10, httpStatus: 200, reason: nil, failure: nil),
+            .cloudSignInRequest(endpoint: .deviceClaim, outcome: .failed,
+                durationMilliseconds: 0, httpStatus: nil, reason: .httpStatus, failure: nil),
+            .cloudSignInRequest(endpoint: .deviceApproval, outcome: .succeeded,
+                durationMilliseconds: 40, httpStatus: nil, reason: nil, failure: nil),
             .cloudSignInPresentationAnchor(available: false),
         ]
         for event in events { service.emit(event, level: event.defaultLevel, synchronous: event.requiresSynchronousWrite) }
@@ -2391,6 +2403,10 @@ final class SnippetsIOSTests: XCTestCase {
         XCTAssertEqual(auth.count, events.count)
         XCTAssertTrue(text.contains("stored_issuer_mismatch"))
         XCTAssertTrue(text.contains("\"error_code\":-1001"))
+        for value in ["account_create", "account_sign_in", "invalid_account_key",
+                      "device_request", "device_claim", "device_approval"] {
+            XCTAssertTrue(text.contains(value), "Missing \(value)")
+        }
         for secret in ["PRIVATE-TOKEN", "email@example.test", "secret.example"] { XCTAssertFalse(text.contains(secret)) }
     }
 
@@ -2407,6 +2423,11 @@ final class SnippetsIOSTests: XCTestCase {
             ("endpoint", "https://secret.example"), ("http_status", "503"),
             ("http_status", true), ("http_status", 999), ("duration_ms", -1),
             ("outcome", "PRIVATE-TOKEN"), ("error_family", "url"),
+            // The removed email/code vocabulary and any key or account field fail closed.
+            ("reason", "invalid_email"), ("reason", "invalid_code"), ("reason", "code_expired"),
+            ("reason", "too_many_attempts"), ("endpoint", "email_code_send"),
+            ("endpoint", "email_code_verify"), ("account_key", "7KQF9M2XR4TDH8WBZN3CP6YE1AQ7"),
+            ("account_id", "e621e1f8-c36c-495a-93fc-0c247a3e6e5f"),
         ]
         for (key, value) in mutations {
             var object = valid

@@ -153,14 +153,18 @@ nonisolated enum DiagnosticSyncTrigger: String, Codable, Sendable {
     case retry
 }
 
-/// Sign-in diagnostics accept classifications only, never OAuth URLs or payloads.
+/// Sign-in diagnostics accept classifications only, never account keys, account IDs,
+/// tokens, URLs or payloads.
 nonisolated enum DiagnosticCloudSignInStage: String, Codable, Sendable {
     case preflight
     case credentialCleanup = "credential_cleanup"
     case stepUpValidation = "step_up_validation"
     case storedSession = "stored_session"
-    case emailCodeSend = "email_code_send"
-    case emailCodeVerify = "email_code_verify"
+    case accountCreate = "account_create"
+    case accountSignIn = "account_sign_in"
+    /// ADR 0007 new device: opening a request, then the approved claim.
+    case deviceRequest = "device_request"
+    case deviceClaim = "device_claim"
     case serverDiscovery = "server_discovery"
     case providerDiscovery = "provider_discovery"
     case sessionBinding = "session_binding"
@@ -184,10 +188,8 @@ nonisolated enum DiagnosticCloudSignInOutcome: String, Codable, Sendable {
 
 nonisolated enum DiagnosticCloudSignInReason: String, Codable, Sendable {
     case invalidStoredSession = "invalid_stored_session"
-    case invalidEmail = "invalid_email"
-    case invalidCode = "invalid_code"
-    case codeExpired = "code_expired"
-    case tooManyAttempts = "too_many_attempts"
+    /// A locally malformed key, or the server's `invalid_account_key`. Never the key.
+    case invalidAccountKey = "invalid_account_key"
     case rateLimited = "rate_limited"
     case storedServerMismatch = "stored_server_mismatch"
     case storedIssuerMismatch = "stored_issuer_mismatch"
@@ -216,8 +218,13 @@ nonisolated enum DiagnosticCloudSignInReason: String, Codable, Sendable {
 }
 
 nonisolated enum DiagnosticCloudSignInEndpoint: String, Codable, Sendable {
-    case emailCodeSend = "email_code_send"
-    case emailCodeVerify = "email_code_verify"
+    case accountCreate = "account_create"
+    case accountSignIn = "account_sign_in"
+    /// ADR 0007: request creation and the final claim outcome on the new device, and
+    /// the approving device's aggregate approval outcome. Pending polls are not logged.
+    case deviceRequest = "device_request"
+    case deviceApproval = "device_approval"
+    case deviceClaim = "device_claim"
     case serverDiscovery = "server_discovery"
     case providerDiscovery = "provider_discovery"
     case identityKeys = "identity_keys"

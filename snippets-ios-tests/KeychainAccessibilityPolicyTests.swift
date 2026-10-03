@@ -833,7 +833,7 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             "issuer": "https://sync.example",
             "resource": "https://sync.example",
             "revocationEndpoint": "https://sync.example/v2/auth/revoke",
-            "clientID": "native-email-code-v1",
+            "clientID": "native-account-key-v1",
             "accessTokens": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
             "refreshTokens": ["rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"],
         ]

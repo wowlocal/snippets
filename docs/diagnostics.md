@@ -35,37 +35,58 @@ ciphertext, keys, arbitrary error descriptions, or `NSError.userInfo`. Errors ar
 to a known family and numeric code. In the Apple vocabulary, secure-snippet keywords are explicitly approved
 metadata; they are normalized and bounded to 256 UTF-8 bytes.
 
-Snippets Cloud native email login uses two events in the `sync` category:
+Snippets Cloud native account-key sign-in (server ADR 0006) uses two events in the
+`sync` category:
 
 - `cloud_sign_in`: a closed stage and outcome, elapsed milliseconds (bounded to one
   day), an optional saved-session-present boolean, and a classified failure reason
   with the sanitized error family/code. Stages cover local preflight, credential
-  cleanup, discovery, saved-session checks, `email_code_send`, `email_code_verify`,
-  credential journaling, library selection, commit, and post-login library setup.
+  cleanup, discovery, saved-session checks, `account_create`, `account_sign_in`,
+  `device_request` and `device_claim` (ADR 0007 device-approved sign-in), credential
+  journaling, library selection, commit, and post-login library setup.
   There is one terminal result per attempt. If cleanup masks the original error,
   the terminal record retains the original failing stage and cause.
-- `cloud_sign_in_request`: one outcome per discovery, email-code start, or code
-  verification request, with a closed endpoint kind, duration, optional HTTP status
-  (100–599), and classified transport/response/JSON failure. Native reasons include
-  invalid email/code, expired code, exhausted attempts, and rate limiting. This
-  records the cause before user-facing error mapping; background refreshes do not
-  emit this trace. Email addresses, codes, challenge IDs, and tokens are never logged.
+- `cloud_sign_in_request`: one outcome per discovery, account-creation, or
+  account-key sign-in request, with a closed endpoint kind (`account_create`,
+  `account_sign_in`, `device_request`, `device_claim`, `device_approval`, …),
+  duration, optional HTTP status (100–599), and classified transport/response/JSON
+  failure. Native reasons include `invalid_account_key` (the server rejected a key)
+  and `rate_limited`. This records the cause before user-facing error mapping;
+  background refreshes do not emit this trace.
 
-The native email sheet opens before network work. To investigate a failure, find
-its terminal `cloud_sign_in` and preceding request records in the same process
-session. A saved-session authority mismatch identifies the failed comparison
-without recording either value. A missing terminal result alone does not prove a
-crash; correlate it with lifecycle/MetricKit diagnostics or the device crash report.
+Device-approved sign-in (server ADR 0007) adds no fields. On the new device,
+`device_request` records the request creation, and `device_claim` records only the
+final claim outcome (approved, or a final `404`/`409`/`410` answer, recorded as
+`http_status` reason without a status); the claim is polled about every two seconds
+and pending, rate-limited, or offline polls are deliberately not logged. On the
+approving device, `device_approval` is one aggregate outcome per approval attempt,
+covering pairing creation, pairing approval, and the request binding with its
+transport retries. Request IDs, poll tokens, payloads, pairing IDs, confirmation
+codes, and keys never enter either device's diagnostics.
 
-Exports still accept historic browser stages and `cloud_sign_in_presentation_anchor`
-so retained logs remain readable. These are no longer emitted by native sign-in.
-Terminal failures request synchronous persistence; ordinary progress and request
-records remain asynchronous. Process-session sequence and timestamps supply
-ordering; there are no account, device, or authentication request IDs.
+The native sheet opens before network work, and a key that fails local
+normalization or its check symbols is rejected in the sheet without any request, so
+it produces no request record. To investigate a failure, find its terminal
+`cloud_sign_in` and preceding request records in the same process session. A
+saved-session authority mismatch identifies the failed comparison without recording
+either value. A missing terminal result alone does not prove a crash; correlate it
+with lifecycle/MetricKit diagnostics or the device crash report.
 
-No email addresses, authorization/verification codes, tokens, state, nonce, PKCE
-values, issuer/server/callback URLs, HTTP headers, or response bodies enter these
-events. Export privacy copy on both platforms describes the added fields.
+The email-code vocabulary (`email_code_send`, `email_code_verify`, `invalid_email`,
+`invalid_code`, `code_expired`, `too_many_attempts`) was removed with the email flow;
+Snippets Cloud was never deployed, so export now rejects those values like any other
+unknown value. Exports still accept historic browser stages and
+`cloud_sign_in_presentation_anchor` so retained logs remain readable. These are no
+longer emitted by native sign-in. Terminal failures request synchronous persistence;
+ordinary progress and request records remain asynchronous. Process-session sequence
+and timestamps supply ordering; there are no account, device, or authentication
+request IDs.
+
+No account keys (in any form), account UUIDs or the short Account ID, tokens, state,
+nonce, PKCE values, issuer/server/callback URLs, HTTP headers, or response bodies
+enter these events. The account key lives only in the device-only Keychain session
+item; it is not in credential journals, UserDefaults, files, exports, or OS logs.
+Export privacy copy on both platforms describes the accepted fields.
 
 CloudKit ordering is recorded through `cloudkit_sync_event` and
 `cloudkit_scheduler_transition`. The former records only the closed callback kind, aggregate record
