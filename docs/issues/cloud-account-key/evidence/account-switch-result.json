@@ -1,0 +1,102 @@
+{
+  "status": "passed",
+  "phases": [
+    {
+      "role": "macos",
+      "stage": "seed",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "join",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "switch",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "switch",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "switch",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "switch",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "switch",
+      "status": "passed"
+    }
+  ],
+  "switches": [
+    {
+      "role": "macos",
+      "old_response_in_flight": true,
+      "replacement_account_empty": true,
+      "status": "passed",
+      "boundary": "coordinator quiescence"
+    },
+    {
+      "role": "iphone",
+      "old_response_in_flight": true,
+      "replacement_account_empty": true,
+      "status": "passed",
+      "boundary": "coordinator quiescence"
+    },
+    {
+      "role": "ipad",
+      "old_response_in_flight": true,
+      "replacement_account_empty": true,
+      "status": "passed",
+      "boundary": "coordinator quiescence"
+    },
+    {
+      "role": "android",
+      "old_response_in_flight": true,
+      "replacement_account_empty": true,
+      "status": "passed",
+      "boundary": "repository mutex"
+    },
+    {
+      "role": "linux",
+      "old_response_in_flight": true,
+      "replacement_account_empty": true,
+      "status": "passed",
+      "boundary": "session invalidation + cross-account denial"
+    }
+  ]
+}
