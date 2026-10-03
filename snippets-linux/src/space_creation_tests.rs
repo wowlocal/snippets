@@ -87,7 +87,9 @@ pub(crate) fn install<B: Backend>(
     store.transaction_with::<_,super::super::Failure>(|owner| {
         let mut archive=Archive::load(owner)?;
         let lease=archive.begin(Replacement::Interactive,deployment.clone())?;archive.save(owner)?;
-        let grant=cloud::IssuedGrant::fixture(&serde_json::to_vec(&serde_json::json!({"access_token":format!("public-{label}-access"),"refresh_token":format!("public-{label}-refresh"),"expires_in":300,"token_type":"Bearer","account":{"id":identity,"email":"creator@example.test"}})).unwrap())?;
+        // Native accounts are UUIDs; each public label maps to a stable fictional one.
+        let identity=Uuid::new_v5(&Uuid::NAMESPACE_OID,identity.as_bytes());
+        let grant=cloud::IssuedGrant::fixture_signed_in(&serde_json::to_vec(&serde_json::json!({"access_token":format!("public-{label}-access"),"refresh_token":format!("public-{label}-refresh"),"expires_in":300,"token_type":"Bearer","account":{"id":identity}})).unwrap(),"7KQF9M2XR4TDH8WBZN3CP6YE1AQ7")?;
         let session=grant.accept(|credentials| {
             archive.stage_issued(&lease,credentials).map_err(|_|cloud::Failure::CredentialCommit)?;
             archive.save(owner).map_err(|_|cloud::Failure::CredentialCommit)

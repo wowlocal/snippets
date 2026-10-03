@@ -1,6 +1,19 @@
 //! Fictional tokens/account metadata; every archive lives in an isolated backend.
+//! Account keys are the public ADR 0006 test vectors, never real credentials.
 use super::*;
 use crate::secret_store::{Store, tests::Memory};
+const KEY: &str = "7KQF9M2XR4TDH8WBZN3CP6YE1AQ7";
+const OTHER_KEY: &str = "0123456789ABCDEFGHJKMNPQRS45";
+/// Native account identities are UUIDs; fixtures derive stable public ones.
+fn account_id(name: &str) -> String {
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes()).to_string()
+}
+fn display(name: &str) -> String {
+    crate::account_key::account_id_display(&account_id(name)).unwrap()
+}
+fn grant_bytes(label: &str, account: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({"access_token":format!("public-{label}-access"),"refresh_token":format!("public-{label}-refresh"),"expires_in":300,"token_type":"Bearer","account":{"id":account_id(account)}})).unwrap()
+}
 fn deployment() -> Deployment {
     Deployment::from_discovery(
         ServerURL::parse("https://cloud.example.test").unwrap(),
@@ -13,8 +26,13 @@ fn issued(label: &str) -> IssuedCredentials {
         refresh: Credential::new(format!("public-{label}-refresh")).unwrap(),
     }
 }
+/// A grant as returned by sign-in with the public fixture key. Refresh accepts
+/// it too, because a rotation may only repeat the saved account's own key.
 fn grant(label: &str, account: &str) -> cloud::IssuedGrant {
-    cloud::IssuedGrant::fixture(&serde_json::to_vec(&serde_json::json!({"access_token":format!("public-{label}-access"),"refresh_token":format!("public-{label}-refresh"),"expires_in":300,"token_type":"Bearer","account":{"id":account,"email":"reader@example.test"}})).unwrap()).unwrap()
+    cloud::IssuedGrant::fixture_signed_in(&grant_bytes(label, account), KEY).unwrap()
+}
+fn refreshed(label: &str, account: &str) -> cloud::IssuedGrant {
+    cloud::IssuedGrant::fixture(&grant_bytes(label, account)).unwrap()
 }
 fn operate<T>(
     store: &mut Store<Memory>,
@@ -107,7 +125,7 @@ fn bound_refresh_refuses_a_replaced_account_before_any_network_operation() {
     );
     let error = refresh_bound(&mut store, &client, &|| Ok(()), &|d, account| {
         assert!(*d == deployment());
-        assert_eq!(account, "public-account");
+        assert_eq!(account, account_id("public-account"));
         Err(Failure::WrongDeployment)
     })
     .err()
@@ -157,7 +175,7 @@ fn every_issued_pair_is_saved_before_invalid_metadata_can_be_accepted() {
                     .save(owner)
                     .map_err(|_| cloud::Failure::CredentialCommit)
             },
-            Some("expected-account"),
+            Some(account_id("expected-account").as_str()),
             None,
         );
         assert!(result.is_err());
@@ -168,7 +186,7 @@ fn every_issued_pair_is_saved_before_invalid_metadata_can_be_accepted() {
         assert_eq!(actions.len(), 2);
         assert!(actions[0].token.as_str() == "public-invalid-access" && !actions[0].refresh);
         assert!(actions[1].token.as_str() == "public-invalid-refresh" && actions[1].refresh);
-        assert!(restarted.profile_email() == Err(Failure::Busy));
+        assert!(restarted.profile_account() == Err(Failure::Busy));
         Ok(())
     })
     .unwrap();
@@ -179,10 +197,10 @@ fn committed_refresh_retires_only_the_obsolete_access_token() {
     install(&mut store, "old");
     operate(&mut store, |archive, owner| {
         let previous = archive.refresh_credential(&deployment())?;
-        assert!(archive.account_for_refresh(&deployment())? == "public-account");
+        assert!(archive.account_for_refresh(&deployment())? == account_id("public-account"));
         let lease = archive.begin(Replacement::Refresh, deployment())?;
         archive.save(owner)?;
-        let session = grant("new", "public-account")
+        let session = refreshed("new", "public-account")
             .accept(
                 |credentials| {
                     archive
@@ -192,7 +210,7 @@ fn committed_refresh_retires_only_the_obsolete_access_token() {
                         .save(owner)
                         .map_err(|_| cloud::Failure::CredentialCommit)
                 },
-                Some("public-account"),
+                Some(account_id("public-account").as_str()),
                 Some(&previous),
             )
             .map_err(|e| Failure::Cloud(e.failure))?;
@@ -213,7 +231,8 @@ fn committed_refresh_retires_only_the_obsolete_access_token() {
         restored.finish_cleanup(&lease)?;
         restored.save(owner)?;
         let restored = Archive::load(owner)?;
-        assert!(restored.profile_email()? == Some("reader@example.test"));
+        assert!(restored.profile_account()? == Some(display("public-account")));
+        assert!(restored.account_key_for_disclosure()?.canonical() == KEY);
         assert!(
             restored
                 .refresh_credential(&deployment())?
@@ -252,7 +271,7 @@ fn abandoned_refresh_revokes_both_generations_and_requires_sign_in_again() {
         }
         again.finish_cleanup(&lease)?;
         again.save(owner)?;
-        assert!(Archive::load(owner)?.profile_email()?.is_none());
+        assert!(Archive::load(owner)?.profile_account()?.is_none());
         Ok(())
     })
     .unwrap();
@@ -319,7 +338,7 @@ fn logout_is_durable_and_blocks_every_replacement_until_revocation_completes() {
         }
         restored.finish_cleanup(&lease)?;
         restored.save(owner)?;
-        assert!(Archive::load(owner)?.profile_email()?.is_none());
+        assert!(Archive::load(owner)?.profile_account()?.is_none());
         Ok(())
     })
     .unwrap();
@@ -367,8 +386,12 @@ fn cleanup_cannot_be_followed_by_publication_or_another_issued_family() {
         let lease = archive.begin(Replacement::Refresh, deployment())?;
         archive.stage_issued(&lease, &issued("new"))?;
         archive.begin_cleanup(&lease)?;
-        let session = grant("new", "public-account")
-            .accept(|_| Ok(()), Some("public-account"), None)
+        let session = refreshed("new", "public-account")
+            .accept(
+                |_| Ok(()),
+                Some(account_id("public-account").as_str()),
+                None,
+            )
             .map_err(|e| Failure::Cloud(e.failure))?;
         assert!(archive.publish(&lease, &session, 2000) == Err(Failure::Busy));
         assert!(archive.stage_issued(&lease, &issued("later")) == Err(Failure::Busy));
@@ -383,10 +406,12 @@ fn strict_secret_schema_refuses_unknown_fields_duplicate_keys_and_invalid_lineag
     operate(&mut store, |archive, owner| {
         let original = owner.read(Slot::Credentials)?.unwrap();
         for bad in [
-            br#"{"schema":1,"schema":1,"generation":0,"current":null,"pending":null}"#.as_slice(),
-            br#"{"schema":2,"generation":0,"current":null,"pending":null}"#,
-            br#"{"schema":1,"generation":0,"current":null,"pending":null,"extra":true}"#,
-            br#"{"schema":1,"generation":1.0,"current":null,"pending":null}"#,
+            br#"{"schema":2,"schema":2,"generation":0,"current":null,"pending":null}"#.as_slice(),
+            br#"{"schema":3,"generation":0,"current":null,"pending":null}"#,
+            br#"{"schema":0,"generation":0,"current":null,"pending":null}"#,
+            br#"{"schema":2,"generation":0,"current":null,"pending":null,"extra":true}"#,
+            br#"{"schema":2,"generation":1.0,"current":null,"pending":null}"#,
+            br#"{"schema":1,"generation":-1,"current":null,"pending":null}"#,
         ] {
             let current = owner.read(Slot::Credentials)?.unwrap();
             owner.replace(Slot::Credentials, Some(&current), Some(bad))?;
@@ -420,14 +445,24 @@ fn overlapping_grants_cannot_publish_and_cleanup_cannot_restore_a_revoked_sessio
                 archive.save(owner)?;
                 let bytes = serde_json::to_vec(&serde_json::json!({
                     "access_token":access,"refresh_token":refresh,"expires_in":300,
-                    "token_type":"Bearer","account":{"id":"public-account","email":"reader@example.test"}
-                })).unwrap();
-                let session = cloud::IssuedGrant::fixture(&bytes).unwrap().accept(
-                    |pair| {
-                        archive.stage_issued(&lease, pair).map_err(|_| cloud::Failure::CredentialCommit)?;
-                        archive.save(owner).map_err(|_| cloud::Failure::CredentialCommit)
-                    }, None, None
-                ).map_err(|e| Failure::Cloud(e.failure))?;
+                    "token_type":"Bearer","account":{"id":account_id("public-account")}
+                }))
+                .unwrap();
+                let session = cloud::IssuedGrant::fixture_signed_in(&bytes, KEY)
+                    .unwrap()
+                    .accept(
+                        |pair| {
+                            archive
+                                .stage_issued(&lease, pair)
+                                .map_err(|_| cloud::Failure::CredentialCommit)?;
+                            archive
+                                .save(owner)
+                                .map_err(|_| cloud::Failure::CredentialCommit)
+                        },
+                        None,
+                        None,
+                    )
+                    .map_err(|e| Failure::Cloud(e.failure))?;
                 assert!(archive.publish(&lease, &session, 2000) == Err(Failure::InvalidState));
                 let mut restarted = Archive::load(owner)?;
                 let lease = restarted.resume().unwrap();
@@ -437,9 +472,10 @@ fn overlapping_grants_cannot_publish_and_cleanup_cannot_restore_a_revoked_sessio
                 }
                 restarted.finish_cleanup(&lease)?;
                 restarted.save(owner)?;
-                assert!(Archive::load(owner)?.profile_email()?.is_none());
+                assert!(Archive::load(owner)?.profile_account()?.is_none());
                 Ok(())
-            }).unwrap();
+            })
+            .unwrap();
         }
     }
 }
@@ -472,7 +508,10 @@ fn durable_lineage_revalidates_account_tokens_and_logout_deployment() {
                 unreachable!()
             };
             if field == "account" {
-                current.insert(field.into(), Value::text("foreign-account"));
+                current.insert(
+                    field.into(),
+                    Value::text(account_id("foreign-account").as_str()),
+                );
             } else {
                 let Value::Object(pair) = current.get_mut("pair").unwrap() else {
                     unreachable!()
@@ -549,7 +588,7 @@ fn owner_refresh_cleanup_failure_recovers_without_revoking_the_committed_family(
     )
     .unwrap_or_else(|e| panic!("{:?}", e.failure));
     assert!(live.access().unwrap().for_secure_storage() == b"public-newer-access");
-    assert!(live.email() == "reader@example.test");
+    assert!(live.account_display().unwrap() == display("public-account"));
 }
 
 #[test]
@@ -894,4 +933,315 @@ fn lost_revocation_receipt_persistence_replays_safely_and_stops_before_the_next_
         })
         .unwrap();
     }
+}
+
+fn creation(label: &str, account: &str, key: serde_json::Value) -> cloud::IssuedGrant {
+    let session: serde_json::Value = serde_json::from_slice(&grant_bytes(label, account)).unwrap();
+    cloud::IssuedGrant::fixture_created(
+        &serde_json::to_vec(&serde_json::json!({"accountKey":key,"session":session})).unwrap(),
+    )
+    .unwrap()
+}
+fn stored(store: &mut Store<Memory>) -> Vec<u8> {
+    store
+        .transaction(|owner| owner.read(Slot::Credentials))
+        .unwrap()
+        .map_or_else(Vec::new, |bytes| bytes.to_vec())
+}
+fn contains(haystack: &[u8], needle: &str) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle.as_bytes())
+}
+
+#[test]
+fn account_key_is_stored_with_its_session_kept_by_refresh_and_removed_on_sign_out() {
+    let (_root, mut store, _) = fixture();
+    let (live, key) = create_account_with(
+        &mut store,
+        deployment(),
+        |previous| {
+            assert!(previous.is_none());
+            Ok(creation(
+                "created",
+                "public-account",
+                serde_json::json!(KEY),
+            ))
+        },
+        &mut |a| Ok(receipt(a)),
+    )
+    .unwrap_or_else(|e| panic!("{:?}", e.failure));
+    assert!(key.canonical() == KEY);
+    assert!(live.session.issued_account_key().is_none());
+    assert!(live.account_display().unwrap() == display("public-account"));
+    let document = stored(&mut store);
+    let value = canonical::parse(&document).unwrap();
+    assert!(value.as_object().unwrap()["schema"].as_int().unwrap() == 2);
+    assert!(contains(
+        &document,
+        "\"accountKey\":\"7KQF9M2XR4TDH8WBZN3CP6YE1AQ7\""
+    ));
+    assert!(!contains(&document, "email"));
+    // A rotation never carries a key; the saved account's key is kept.
+    issue(
+        &mut store,
+        Replacement::Refresh,
+        deployment(),
+        |_| Ok(refreshed("rotated", "public-account")),
+        &mut |a| Ok(receipt(a)),
+    )
+    .unwrap_or_else(|e| panic!("{:?}", e.failure));
+    operate(&mut store, |archive, _| {
+        assert!(archive.account_key_for_disclosure()?.canonical() == KEY);
+        Ok(())
+    })
+    .unwrap();
+    // Signing in to another account replaces both the session and its key.
+    let other = AccountKey::from_canonical(OTHER_KEY).unwrap();
+    let signed_in = issue(
+        &mut store,
+        Replacement::Interactive,
+        deployment(),
+        |_| {
+            Ok(cloud::IssuedGrant::fixture_signed_in(
+                &grant_bytes("other", "public-other-account"),
+                OTHER_KEY,
+            )?)
+        },
+        &mut |a| Ok(receipt(a)),
+    )
+    .unwrap_or_else(|e| panic!("{:?}", e.failure));
+    assert!(signed_in.session.issued_account_key() == Some(&other));
+    let document = stored(&mut store);
+    assert!(contains(&document, OTHER_KEY) && !contains(&document, KEY));
+    sign_out_with(&mut store, &mut |a| Ok(receipt(a))).unwrap();
+    let document = stored(&mut store);
+    assert!(!contains(&document, OTHER_KEY) && !contains(&document, KEY));
+    operate(&mut store, |archive, _| {
+        assert!(archive.profile_account()?.is_none());
+        assert!(archive.account_key_for_disclosure().err() == Some(Failure::InvalidState));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn interactive_publication_requires_its_key_and_refresh_cannot_change_it() {
+    let (_root, mut store, _) = fixture();
+    let rejected = issue(
+        &mut store,
+        Replacement::Interactive,
+        deployment(),
+        |_| Ok(refreshed("keyless", "public-account")),
+        &mut |_| panic!("an unpublished grant needs explicit recovery"),
+    )
+    .err()
+    .unwrap();
+    assert!(rejected.failure == Failure::InvalidState && rejected.unrecorded.is_none());
+    let mut retired = Vec::new();
+    recover_with(&mut store, &mut |a| {
+        retired.push(a.token.as_str().to_owned());
+        Ok(receipt(a))
+    })
+    .unwrap();
+    assert!(retired == ["public-keyless-access", "public-keyless-refresh"]);
+    install(&mut store, "old");
+    let rejected = issue(
+        &mut store,
+        Replacement::Refresh,
+        deployment(),
+        |_| {
+            Ok(cloud::IssuedGrant::fixture_signed_in(
+                &grant_bytes("changed-key", "public-account"),
+                OTHER_KEY,
+            )?)
+        },
+        &mut |_| panic!("an unpublished grant needs explicit recovery"),
+    )
+    .err()
+    .unwrap();
+    assert!(rejected.failure == Failure::InvalidState);
+    recover_with(&mut store, &mut |a| Ok(receipt(a))).unwrap();
+    // The abandoned rotation retired the whole family: sign in again.
+    operate(&mut store, |archive, _| {
+        assert!(archive.current.is_none());
+        Ok(())
+    })
+    .unwrap();
+    install(&mut store, "stored");
+    let original = stored(&mut store);
+    for (from, to) in [
+        (
+            "\"accountKey\":\"7KQF9M2XR4TDH8WBZN3CP6YE1AQ7\"",
+            "\"accountKey\":\"7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ7\"",
+        ),
+        (
+            "\"accountKey\":\"7KQF9M2XR4TDH8WBZN3CP6YE1AQ7\"",
+            "\"accountKey\":\"7KQF9M2XR4TDH8WBZN3CP6YE1AQ8\"",
+        ),
+        (
+            "\"accountKey\":\"7KQF9M2XR4TDH8WBZN3CP6YE1AQ7\"",
+            "\"email\":\"public@example.test\"",
+        ),
+    ] {
+        let text = String::from_utf8(original.clone()).unwrap();
+        assert!(text.contains(from));
+        let changed = text.replace(from, to);
+        store
+            .transaction(|owner| {
+                let before = owner.read(Slot::Credentials)?.unwrap();
+                owner.replace(Slot::Credentials, Some(&before), Some(changed.as_bytes()))?;
+                assert!(Archive::load(owner).err() == Some(Failure::InvalidState));
+                owner.replace(Slot::Credentials, Some(changed.as_bytes()), Some(&original))
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn creation_key_and_envelope_are_checked_only_after_the_pair_is_journaled() {
+    for key in [
+        serde_json::json!("7KQF9M2XR4TDH8WBZN3CP6YE1AQ8"),
+        serde_json::json!("7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ7"),
+        serde_json::json!(null),
+    ] {
+        let (_root, mut store, _) = fixture();
+        let rejected = create_account_with(
+            &mut store,
+            deployment(),
+            |_| Ok(creation("orphan", "public-account", key.clone())),
+            &mut |_| panic!("an unpublished grant needs explicit recovery"),
+        )
+        .err()
+        .unwrap();
+        assert!(rejected.failure == Failure::Cloud(cloud::Failure::InvalidResponse));
+        assert!(rejected.unrecorded.is_none());
+        let mut retired = Vec::new();
+        recover_with(&mut store, &mut |a| {
+            retired.push((a.token.as_str().to_owned(), a.refresh));
+            Ok(receipt(a))
+        })
+        .unwrap();
+        assert!(
+            retired
+                == [
+                    ("public-orphan-access".into(), false),
+                    ("public-orphan-refresh".into(), true)
+                ]
+        );
+        operate(&mut store, |archive, _| {
+            assert!(archive.current.is_none() && archive.pending.is_none());
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[test]
+fn retired_email_schema_requires_sign_in_again_and_is_replaced_before_issuance() {
+    for pending in [false, true] {
+        let (_root, mut store, _) = fixture();
+        let session = serde_json::json!({
+            "deployment":{"server":"https://cloud.example.test","instance":Uuid::from_u128(1)},
+            "pair":{"access":"public-retired-access","refresh":"public-retired-refresh"},
+            "account":"public-retired-account","email":"retired@example.test","expiresAt":1000
+        });
+        let pending_value = pending.then(|| {
+            serde_json::json!({
+                "kind":"refresh","deployment":session["deployment"],"previous":session,
+                "issued":null,"published":false,"cleaning":false,"acknowledged":0
+            })
+        });
+        let retired = serde_json::to_vec(&serde_json::json!({
+            "schema":1,"generation":5,"current":session,"pending":pending_value
+        }))
+        .unwrap();
+        store
+            .transaction(|owner| owner.replace(Slot::Credentials, None, Some(&retired)))
+            .unwrap();
+        operate(&mut store, |archive, _| {
+            assert!(archive.current.is_none() && archive.pending.is_none());
+            assert!(archive.profile_account()?.is_none());
+            assert!(archive.saved_deployment()?.is_none());
+            assert!(archive.generation == 5 && archive.retired);
+            Ok(())
+        })
+        .unwrap();
+        recover_with(&mut store, &mut |_| {
+            panic!("a retired email session is never sent anywhere")
+        })
+        .unwrap();
+        let document = stored(&mut store);
+        let value = canonical::parse(&document).unwrap();
+        let top = value.as_object().unwrap();
+        assert!(top["schema"].as_int().unwrap() == 2 && top["generation"].as_int().unwrap() == 5);
+        assert!(!contains(&document, "email") && !contains(&document, "public-retired"));
+        let live = issue(
+            &mut store,
+            Replacement::Interactive,
+            deployment(),
+            |_| Ok(grant("after-retirement", "public-account")),
+            &mut |a| Ok(receipt(a)),
+        )
+        .unwrap_or_else(|e| panic!("{:?}", e.failure));
+        assert!(live.account_display().unwrap() == display("public-account"));
+        operate(&mut store, |archive, _| {
+            assert!(archive.generation == 6);
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[test]
+fn owner_authorized_key_disclosure_is_bound_to_the_exact_saved_session() {
+    use crate::{
+        desktop::{SessionState, SessionWitness},
+        local_auth::{self, Gate, Purpose},
+    };
+    let (_root, mut store, _) = fixture();
+    assert!(prepare_account_key_disclosure(&mut store).err() == Some(Failure::InvalidState));
+    install(&mut store, "disclosed");
+    let mut gate = Gate::new();
+    gate.set_foreground(true);
+    let permit = |gate: &mut Gate, target: local_auth::Target| {
+        let request = gate
+            .begin(target, SessionWitness::test(SessionState::Unlocked, 1))
+            .unwrap();
+        gate.accept(local_auth::authenticate_fixture(request).unwrap())
+            .unwrap()
+    };
+    let before = stored(&mut store);
+    let target = prepare_account_key_disclosure(&mut store).unwrap();
+    assert!(target.purpose() == Purpose::RevealAccountKey);
+    let disclosure = reveal_account_key(&mut store, permit(&mut gate, target.clone())).unwrap();
+    assert!(disclosure.valid());
+    assert!(disclosure.display().unwrap().as_str() == "7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ7");
+    // Backgrounding, lock or cancellation revoke an already drawn presentation.
+    gate.set_foreground(false);
+    assert!(!disclosure.valid());
+    assert!(
+        disclosure.display().err() == Some(Failure::Authentication(local_auth::Failure::Cancelled))
+    );
+    gate.set_foreground(true);
+    assert!(stored(&mut store) == before);
+    // A rotation changes the credential generation; an older permit discloses nothing.
+    let stale = permit(&mut gate, target);
+    issue(
+        &mut store,
+        Replacement::Refresh,
+        deployment(),
+        |_| Ok(refreshed("rotated", "public-account")),
+        &mut |a| Ok(receipt(a)),
+    )
+    .unwrap_or_else(|e| panic!("{:?}", e.failure));
+    assert!(
+        reveal_account_key(&mut store, stale).err()
+            == Some(Failure::Authentication(local_auth::Failure::WrongTarget))
+    );
+    let target = prepare_account_key_disclosure(&mut store).unwrap();
+    let signed_out = permit(&mut gate, target);
+    sign_out_with(&mut store, &mut |a| Ok(receipt(a))).unwrap();
+    assert!(reveal_account_key(&mut store, signed_out).err() == Some(Failure::InvalidState));
+    assert!(prepare_account_key_disclosure(&mut store).err() == Some(Failure::InvalidState));
 }

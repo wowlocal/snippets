@@ -293,9 +293,37 @@ sync was explicitly enabled for a verified saved library.
 ## Account and library recovery
 
 Open **Account & Recovery…** from the menu. Opening the window reads saved account
-metadata without making an HTTP request. Enter your HTTPS Snippets Cloud server
-and email, request a sign-in code, then verify it. After an incorrect code, enter
-the correct code for the same challenge and try again. **Reconnect Saved Account**
+metadata without making an HTTP request. Enter your HTTPS Snippets Cloud server,
+then choose **Create Account** or **Sign In with Account Key**. Snippets Cloud
+never asks for an email address. A new account shows **Save Your Account Key**
+once, in monospaced selectable text with **Copy**; continue only after choosing
+**I've Saved It**. The key is the only way to sign in to the account on another
+device, and Snippets cannot recover or resend it. Signing in accepts the key with
+or without dashes, in either case, and with `O`/`I`/`L` typed for `0`/`1`/`1`; a
+key that fails its built-in check is reported as a typing error and never sent.
+After the server rejects a key, correct it and choose **Sign In** again.
+
+The key is stored with the session in the system keyring and removed with it on
+**Sign Out**, which asks first: you need the key to sign in again. While signed in,
+the window shows a short **Account ID** and **Show Account Key…**, which requires
+your computer login password like recovery-code disclosure. A shown key hides when
+the window loses focus, the desktop locks or authorization expires. **Copy** marks
+the clipboard as a password for clipboard managers, keeps it out of Snippets'
+clipboard history, and clears it after two minutes if it is still current. Keys
+never enter logs, diagnostics, exports or backups. A session saved by the retired
+email sign-in is ignored, replaced on the next account operation, and requires
+signing in again.
+
+**Sign In with Another Device** appears when the server advertises device-approved
+sign-in. It shows a QR code, copyable request text and a confirmation code; no key
+is typed. On a device that is signed in and opens the library, paste or scan the
+request into the add-device field, check that both devices show the same code,
+continue and enter your computer login password. That device approves the pairing
+and signs this computer in; this computer then selects that library and receives
+its key. The request expires after ten minutes; **Cancel** discards it locally. A
+device signed in this way cannot show the account key.
+
+**Reconnect Saved Account**
 refreshes the retained session and lists existing libraries. Account and keyring
 operations run in one worker outside the GTK thread. Closing the window preserves
 worker ownership; quit remains unavailable during an in-flight operation or while
@@ -1265,10 +1293,13 @@ GTK response buttons against a certificate-verified loopback server, with exact
 fixture-CA trust scoped to its worker thread. The ordinary constructor rejects
 that certificate before and after the scenario. Its private PAM policy uses the
 production helper protocol and libpam with a public fictional password module;
-it never reads the host authentication database. The check covers wrong-code
-retry, explicit selection of the first/only library without implicit key creation,
-key setup, recovery cancellation/wrong-password refusal, focus revocation, fresh
-authorization and confirmation, new-worker reconnect and sign-out. Both workers
+it never reads the host authentication database. The check covers account
+creation with its one-time key screen, explicit selection of the first/only
+library without implicit key creation, key setup, recovery cancellation/
+wrong-password refusal, focus revocation, fresh authorization and confirmation,
+new-worker reconnect, owner-authorized **Show Account Key** and its focus
+revocation, confirmed sign-out, and signing in again after a local typing error
+and a rejected key. Both workers
 drain, all fixture children are reaped, and private bus/keyring/data are removed.
 Its onboarding variant requires an unlocked desktop and creates no vault or sync
 checkpoint. The automatic variants explicitly create private sync checkpoints

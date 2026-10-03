@@ -423,3 +423,131 @@ fn fresh_pairing_and_recovery_use_new_random_keys_nonces_and_no_library_material
     );
     assert_material(&open_recovery(&a.ciphertext, &a.kit).unwrap());
 }
+
+fn device_request() -> DeviceSignIn {
+    let invitation = invitation();
+    DeviceSignIn::new(
+        invitation.server.clone(),
+        Uuid::from_u128(0x7a6b5c4d_3e2f_4a1b_8c9d_0e1f2a3b4c5d),
+        invitation.nonce,
+        invitation.recipient,
+        1700000600,
+        1700000000,
+    )
+    .unwrap()
+}
+fn rejected_device(value: &JSON) -> bool {
+    DeviceSignIn::decode_qr(&serde_json::to_vec(value).unwrap(), 1700000000).is_err()
+}
+
+#[test]
+fn device_sign_in_payload_uses_the_invitation_encoding_rules_and_round_trips() {
+    let request = device_request();
+    let encoded = request.encode_qr().unwrap();
+    let text = std::str::from_utf8(&encoded).unwrap();
+    let invitation = invitation();
+    // Byte-exact: sorted keys, unescaped slashes, unpadded Base64url, lowercase UUID.
+    let expected = format!(
+        r#"{{"expiresAt":1700000600,"kind":"snippets-device-sign-in","nonce":"{}","recipientPublicKey":"{}","requestId":"7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d","schemaVersion":1,"server":"{}"}}"#,
+        URL_SAFE_NO_PAD.encode(invitation.nonce),
+        URL_SAFE_NO_PAD.encode(invitation.recipient),
+        invitation.server.for_secure_storage(),
+    );
+    assert_eq!(text, expected);
+    assert!(!text.contains("\\/") && !text.contains('='));
+    let decoded = DeviceSignIn::decode_qr(&encoded, 1700000000).unwrap();
+    assert!(decoded == request);
+    assert!(matches!(
+        AddDevice::decode_qr(&encoded, 1700000000).unwrap(),
+        AddDevice::SignIn(value) if value == request
+    ));
+    assert!(matches!(
+        AddDevice::decode_qr(&invitation.encode_qr().unwrap(), 1700000000).unwrap(),
+        AddDevice::Pairing(value) if value == invitation
+    ));
+    // The derivation is unchanged: it equals the pairing (and server tag) code.
+    assert_eq!(request.confirmation_code(), invitation.confirmation_code());
+    assert_eq!(request.confirmation_code().len(), 8);
+    // A different recipient or nonce changes the code.
+    let other = draft();
+    let mut nonce = invitation.nonce;
+    nonce[0] ^= 1;
+    let changed = DeviceSignIn::new(
+        request.server.clone(),
+        request.request,
+        nonce,
+        *other.public_key(),
+        1700000600,
+        1700000000,
+    )
+    .unwrap();
+    assert_ne!(changed.confirmation_code(), request.confirmation_code());
+}
+
+#[test]
+fn device_sign_in_payload_is_strict_bounded_and_time_limited() {
+    let original: JSON = serde_json::from_slice(&device_request().encode_qr().unwrap()).unwrap();
+    for mutation in 0..14 {
+        let mut v = original.clone();
+        match mutation {
+            0 => v["schemaVersion"] = json!(2),
+            1 => v["schemaVersion"] = json!(1.0),
+            2 => v["kind"] = json!("snippets-pairing"),
+            3 => v["requestId"] = json!(Uuid::nil().to_string()),
+            4 => v["requestId"] = json!("7a6b5c4d3e2f4a1b8c9d0e1f2a3b4c5d"),
+            5 => v["server"] = json!("http://sync.example"),
+            6 => v["server"] = json!("https://sync.example/"),
+            7 => v["nonce"] = json!(format!("{}=", v["nonce"].as_str().unwrap())),
+            8 => v["nonce"] = json!(STANDARD.encode([0xfb; 32])),
+            9 => v["recipientPublicKey"] = json!(URL_SAFE_NO_PAD.encode([4; 65])),
+            10 => v["unexpected"] = json!(false),
+            11 => {
+                v.as_object_mut().unwrap().remove("expiresAt");
+            }
+            12 => v["pollToken"] = json!("sn_d_must-never-appear"),
+            _ => v["spaceId"] = json!(Uuid::from_u128(1).to_string()),
+        }
+        assert!(rejected_device(&v), "{mutation}");
+    }
+    let mut uppercase = original.clone();
+    uppercase["requestId"] = json!(
+        uppercase["requestId"]
+            .as_str()
+            .unwrap()
+            .to_ascii_uppercase()
+    );
+    // Same acceptance as the existing invitation codec; output stays lowercase.
+    assert!(!rejected_device(&uppercase));
+    let duplicate = device_request().encode_qr().unwrap();
+    let raw = std::str::from_utf8(&duplicate)
+        .unwrap()
+        .replacen("{", "{\"schemaVersion\":1,", 1);
+    assert!(DeviceSignIn::decode_qr(raw.as_bytes(), 1700000000).is_err());
+    let oversized = format!("{}{}", " ".repeat(MAX_ENVELOPE_BYTES), "{}");
+    assert!(DeviceSignIn::decode_qr(oversized.as_bytes(), 1700000000).is_err());
+    assert!(AddDevice::decode_qr(br#"{"kind":"snippets-other"}"#, 1700000000).is_err());
+    let request = device_request();
+    for (expiry, valid) in [
+        (1700000000 - 30, false),
+        (1700000000 - 29, true),
+        (1700000630, true),
+        (1700000631, false),
+    ] {
+        assert_eq!(
+            DeviceSignIn::new(
+                request.server.clone(),
+                request.request,
+                request.nonce,
+                request.recipient,
+                expiry,
+                1700000000,
+            )
+            .is_ok(),
+            valid
+        );
+    }
+    assert!(
+        DeviceSignIn::decode_qr(&request.encode_qr().unwrap(), 1700000700).err()
+            == Some(Failure::Expired)
+    );
+}

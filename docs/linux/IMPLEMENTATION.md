@@ -253,13 +253,13 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; combined native restoration GTK/keyring/PAM acceptance remains pending |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor with bounded encrypted Undo/Redo and explicit Paste, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; current native secure lifecycle, retained-draft recovery and legacy-repair lifecycle checks pass; fuller secure editing/reveal and recovery acceptance remains open |
 | Secure delivery and transfers | Native portable encrypted-backup export/import, fresh-authenticated direct virtual-keyboard insertion and one-cycle vault authentication for receiving/sending | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private native Wayland input fixture and live fresh vault-authenticated insertion into an independent GTK receiving field pass; the mapped fresh passphrase/recovery-key sync workflow also passes with a real private keyring and verified HTTPS; secure-conflict preservation and fuller editing/accessibility remain under live review |
-| Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, current v1 conflict-owned deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; fresh verified loopback HTTPS onboarding/recipient checks and combined native onboarding/reconnect/sign-out pass in the unrestricted session; combined native ordinary automatic exchange passes with a real private keyring and verified HTTPS; manual Receive/Send/Sync Now and fresh vault passphrase/recovery-key exchange pass; pairing, switching and secure-conflict/review acceptance remain pending; CloudKit is Apple-only |
+| Cloud protocol | Rust HTTPS discovery, native account-key/session endpoints and device-approved sign-in, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, current v1 conflict-owned deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; fresh verified loopback HTTPS onboarding/recipient checks and combined native onboarding/reconnect/sign-out pass in the unrestricted session; combined native ordinary automatic exchange passes with a real private keyring and verified HTTPS; manual Receive/Send/Sync Now and fresh vault passphrase/recovery-key exchange pass; pairing, switching and secure-conflict/review acceptance remain pending; CloudKit is Apple-only |
 | Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent pending child deletions are selected for their own decision before the parent; unknown versions remain a separate boundary; live password-dialog verification remains open |
 | Library-key setup | Portable sync-v1 bundle, P-256 pairing, recovery QR/code and envelope, Ed25519 authority/proofs and request hashes; bound control-plane HTTP; durable first-key, recovery, recipient activation and signed mutations; native setup, recipient pairing, trusted-device approval, recovery replacement, disclosure, library-switch review/resume/cancel/offline finish and empty-target first-key UI wired | Independent vectors, retained proofs, interrupted Secret Service writes, schema migration, response ownership, exact authorization targets, mutation recovery and offline switch cancellation/completion pass; earlier verified loopback TLS passes; independent QR decoder passes for recovery and pairing payloads; terminal history retirement is wired; combined live GTK/verified-HTTPS/native-keyring first-key setup, recovery disclosure/confirmation and new-worker reconnect pass; pairing, signed mutations and switching still need combined acceptance |
 | Library-switch pairing | Separate bounded Secret Service candidate history, request/check/cancel, retained private drafts and claims, fresh authority verification, native public QR/copy and subsequent reviewed activation | Twenty desktop tests (nineteen without desktop features) cover interruption, response ownership, expiry, scope/account changes, capacity/schema/generation refusal, old-key preservation, exact authorized handover and review-only reuse of retained claims across changed pins/accounts; combined native candidate-pairing GTK/keyring/HTTPS acceptance remains pending |
 | Empty-target first keys | Separate bounded Secret Service candidate history, exact key/envelope before POST, owner-only native create/resume, fresh server reconciliation and reviewed activation | Twenty-seven desktop tests (twenty-six without desktop features) cover writes, races, restart, scope/account/schema/capacity refusal, old-key preservation, reviewed reuse across changed pins/accounts and offline completion/retirement of promoted recovery-code copies; combined live workflow remains unverified |
 | Local owner authorization | Bounded unprivileged PAM worker, exact-purpose/scope/generation gate, single-use permit and revocable disclosure lease; password dialog and focus/lock UI wired | Fresh private-policy libpam success, refusal, timeout and cancellation checks pass; mapped native recovery-password cancellation/wrong-password refusal, real private-policy PAM authorization, actual focus-loss revocation and fresh reauthorization/confirmation pass; host login-policy authentication remains separate |
-| Cloud credentials | Native Secret Service backend, credential lineage, serialized sign-in/refresh/logout/restart cleanup, bounded live access tokens; native sign-in/reconnect/sign-out UI | Fresh isolated GNOME Keyring and existing fault/restart/worker ownership checks pass; combined native wrong-code retry/sign-in, explicit library selection, new-worker reconnect with token rotation and sign-out pass through the real private keyring and verified HTTPS, preserving the library key; startup connects only with explicit saved automatic consent |
+| Cloud credentials | Native Secret Service backend, credential lineage, serialized sign-in/refresh/logout/restart cleanup, bounded live access tokens; native sign-in/reconnect/sign-out UI | Fresh isolated GNOME Keyring and existing fault/restart/worker ownership checks pass; combined native account creation and key acknowledgement, wrong-key retry/sign-in, explicit library selection, new-worker reconnect with token rotation, gated Show Account Key and confirmed sign-out pass through the real private keyring and verified HTTPS, preserving the library key; startup connects only with explicit saved automatic consent |
 | Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; current native toggle smoke and combined private-keyring/verified-HTTPS/GTK writer/reader checks pass: transient backoff, actual hidden-window timer exchange, protected-consent startup in a new worker, in-flight disable preserving primary/checkpoint bytes, opt-out restart without HTTP and changed-membership halt; generated-service primary startup passes in the live user manager; full new sign-in, automatic secure/review workflows and protected-conflict preservation remain separate |
 | Cloud library creation | Explicit native create/resume/open and create-another actions; bounded retained intents; one-use confirmation binds account session and existing protected state; original idempotency key retained before POST | Twenty-four fault/restart/schema/expiry tests plus bootstrap admission and reviewed-switch integration; combined live GTK/keyring/HTTPS workflow remains unverified; preserves active keys and sync checkpoint |
 | Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, current v1 conflict-owned absence/deletion crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; ordinary native automatic receiving/sending now passes against verified HTTPS with a real private keyring; manual and fresh vault passphrase/recovery exchange also pass; live snapshot/deletion, secure-conflict and reviewed-switch workflows remain open |
@@ -342,6 +342,37 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-03
 
+- Generated account-key authentication (server ADR 0006) replaces native email
+  sign-in. ADR vectors, normalization, 64-byte bounds, canonical-only wire/storage
+  decoding, discovery pinning, the empty create body, the sign-in body,
+  journal-before-validation of creation keys/envelopes, UUID account identities,
+  schema-2 key storage, refresh key retention, sign-out removal, retired schema-1
+  replacement and owner-authorized disclosure bound to the exact credential
+  generation have new tests. Diagnostic vocabulary and privacy tests cover
+  `account_create`, `account_sign_in` and code 120. A new native fixture covers
+  local validation, the creation acknowledgement, lease-bound disclosure and the
+  sign-out confirmation. Device-approved sign-in adds payload codec, poll-token,
+  claim parsing, pairing-lifetime clamp, keyless commit, recipient adoption,
+  approving-device authorization/binding, Retry-After and native fixture tests.
+  Verified in a Debian trixie arm64 container with Rust
+  1.97.1: formatting; Clippy with warnings denied for all targets in desktop and
+  headless configurations; 1,036 desktop library tests (one unrelated failure:
+  the container has no systemd user generator) and 921 headless library tests,
+  plus 26 core and one owner-helper integration tests; and all three release
+  binaries. Under Xvfb with openbox, the new account-key and device sign-in
+  fixtures and the existing account cancellation, automatic-toggle,
+  interrupted-startup and settings fixtures pass, each in its own process.
+  The combined live account fixtures, ported to account keys (creation and key
+  acknowledgement, typing-error refusal, rejected-key retry, gated Show Account
+  Key, confirmed sign-out), pass all four variants (onboarding, automatic sync,
+  automatic reader, manual/vault sync) with a private GNOME Keyring, private
+  PAM policy and verified loopback HTTPS in that container, using a stand-in
+  `hyprctl` that reports an unlocked session. They run without
+  `G_DEBUG=fatal-warnings` there: Xvfb/openbox emits a GtkText focus-out
+  warning that equally aborts the unported upstream fixture. That container needed its shared
+  libraries repeated after the build script's static archives at link time.
+  Live Omarchy/Wayland rendering, real PAM, Secret Service, clipboard clearing
+  and a real server remain unverified.
 - Approved secure CLI adds app-mediated `reveal`, `secure-status` and creation
   through `add --secure`. Bodies use separate zeroizing bounded binary frames;
   GTK offers/notices contain public metadata and receipts only. The installed
@@ -1178,9 +1209,80 @@ ciphertext, not a fresh seal. The inbound owner handles `cursor_invalid`
 with a bounded snapshot restart that preserves outbound offers, confirmed
 ancestors and local intent. It never mixes a rejected page's cursor into the checkpoint.
 
-Email sign-in proves account access, not possession of a library key. Issued
+Account-key sign-in proves account access, not possession of a library key. Issued
 credentials must be journaled into a secure store before account/lifetime
 validation, and rejected generations remain available for durable revocation.
+
+Native Snippets Cloud accounts follow server ADR 0006: no email is collected,
+stored or sent. Discovery must advertise `native-account-key-v1`, flow
+`account_key`, and create/sign-in/refresh/revoke endpoints at exactly
+`/v2/auth/accounts`, `/v2/auth/sign-in`, `/v2/auth/refresh` and `/v2/auth/revoke`
+on the configured origin. `src/account_key.rs` holds keys only in zeroizing
+canonical form with no `Debug`, `Display` or serialization. Input over 64 UTF-8
+bytes is refused; ASCII whitespace and `-` are removed, ASCII is uppercased and
+`O`/`I`/`L` map to `0`/`1`/`1` before the 26-symbol body's two Crockford check
+symbols are verified. A local typing error is never sent. **Create Account** posts
+with no body (no content type, length zero); **Sign In with Account Key** posts
+only `{"accountKey": canonical}`. Both run in the serialized account worker
+through the same discovery pin, retained-cleanup recovery, credential journal,
+`Unrecorded` retention, revocation authority and library listing as every other
+interactive grant. A creation response's session pair is journaled before its
+envelope, key and account metadata are validated, so a malformed key is revoked
+like any rejected grant. Account identities must be canonical non-nil UUIDs and
+responses carrying the retired `email` field are refused. `invalid_account_key`
+has its own message; rate limiting keeps the generic retry copy.
+
+Credential archive schema 2 stores the canonical key with the session in the same
+Secret Service document. Interactive publication requires the grant's key, a
+refresh keeps the saved key and cannot introduce another, and sign-out removes it
+with the session. A schema-1 email-era archive is read as signed out without
+sending any of its tokens, keeps only its generation, and is replaced on the next
+recovery, so the user signs in again. After **Create Account**, **Save Your Account
+Key** shows the display form as selectable monospaced text with **Copy** and
+requires **I've Saved It** before the retained library reply is applied; it stays
+visible on focus loss for a password manager and ends on hide, lock or quit. The
+signed-in window shows **Account ID** (the first eight UUID hex digits) and **Show
+Account Key…**, gated by the same fresh PAM owner authorization as recovery-code
+disclosure: an account-scoped `RevealAccountKey` target binds the credential
+generation and a deployment/account digest, and the single-use lease closes on
+focus loss, lock, cancellation or expiry. Copy adds the internal history marker
+and the KDE password-manager hint and conditionally clears after two minutes.
+Sign-out confirmation states that the account key is needed to sign in again.
+Diagnostics record `account_create` and `account_sign_in`; cloud failure code 120
+is `invalid_account_key`, and the retired email/code codes 101–104 are never
+reused. Neither keys nor account IDs enter events.
+
+Device-approved sign-in (server ADR 0007) is offered only when discovery advertises
+`native-device-sign-in-v1`; its endpoints are fixed paths on the pinned origin. A
+signed-out device generates the existing pairing recipient material and keeps it,
+with the request ID and `sn_d_` poll token, in a closed `device-sign-in-v1`
+Secret Service document (`src/device_sign_in.rs`); the token has no `Debug`,
+`Display` or serialization and is never shown, logged or exported. The QR/copy
+payload (`bootstrap::DeviceSignIn`) uses the invitation codec rules: sorted keys,
+unescaped slashes, unpadded Base64url, lowercase UUID, canonical origin, 4,096-byte
+bound, exact keys and the invitation time window; its confirmation code is the
+unchanged pairing derivation. The window polls the claim about every two seconds,
+honoring `Retry-After`, backing off on network failure and stopping at expiry or
+a definitive refusal. Pending polls are not recorded. An approved claim's session
+pair is committed by the same journaled `issue()` path as account-key sign-in,
+validated only afterwards, and stored with a null account key; Show Account Key
+then explains that another device signed this one in. A lost or failed commit is
+recovered by claiming again, which makes the server revoke the earlier family.
+After commit only the recipient material and returned space/pairing remain; the
+worker lists libraries, selects exactly that space (failing closed when absent),
+observes the pairing through the existing recipient key/nonce check, moves the
+material into the ordinary recipient journal and finishes the existing claim,
+AEAD, authority and installation steps. The approving device's add-device field
+accepts the new kind: the origin is compared and the code and confirmation copy
+are shown before any network call, then the same fresh PAM authorization as
+pairing approval is consumed against a target binding the request, installed key
+and owning documents. Only then is the pairing created
+(`clamp(expiresAt − now − 5, 60, 600)` seconds) and its tag compared with the
+code; the approval reuses the challenge/proof/envelope journal with the request
+ID retained in the intent, so the binding POST is retried on transport failure,
+again by **Check Saved Result**, and retired on a definitive refusal. Diagnostic
+operations `device_request`, `device_approval` and `device_claim` carry no IDs,
+tokens, payloads or codes.
 The app currently creates no session, transport, sync checkpoint or network
 request by default. **Sync Now** is an explicit bidirectional action after key
 verification; it may create the separate device-only checkpoint key. The separate
@@ -1237,7 +1339,8 @@ pair with its sealed generation/deployment. Its owner must retry retention befor
 cleanup; a failed retry returns ownership again. It must not become a generic
 logged error. An old retained error cannot overwrite a later pending generation.
 The native operations revalidate discovery before sending credentials; a changed
-deployment never receives them. Email challenges bind to their issuing deployment.
+deployment never receives them. Create and sign-in discover the deployment afresh
+and revalidate it before sending a request.
 Stored access tokens are never restored as live credentials: refresh is required.
 Live access expires on either wall time or Linux's suspend-aware monotonic clock,
 anchored before the issuance request. The native account window now uses these
@@ -3423,7 +3526,12 @@ row and maps explicit library choices back to their worker index. Returning to t
 placeholder revokes sensitive UI state and stops pairing polls. Selection alone
 creates neither a library key nor a bootstrap capability.
 
-The native check verifies wrong-code retry, explicit selection, first-key setup
+Account-key create and sign-in (below) replaced Verify; both enter through the
+same journal recovery before issuance, so a retry after a rejected key cannot
+fail as busy. The live fixture was ported to that contract: discovery advertises
+`account_key`, `/v2/auth/accounts` takes no body, `/v2/auth/sign-in` rejects an
+unknown well-formed key with `invalid_account_key`, and the account is a UUID.
+The original native check verified wrong-code retry, explicit selection, first-key setup
 through verified HTTPS and the native keyring, default/close Cancel, wrong-password
 refusal and fresh PAM authorization. Actual focus loss revokes a held recovery
 disclosure lease; fresh reauthorization permits suffix confirmation and retires

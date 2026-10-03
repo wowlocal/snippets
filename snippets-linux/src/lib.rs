@@ -1,3 +1,4 @@
+pub mod account_key;
 pub mod account_review;
 #[cfg(feature = "desktop")]
 mod account_ui;

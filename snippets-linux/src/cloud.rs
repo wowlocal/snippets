@@ -2,6 +2,7 @@
 //! Run blocking HTTP on an owner worker. Callers must journal credentials/offers
 //! before adopting them; no network, session or checkpoint is created by default.
 use crate::{
+    account_key::{self, AccountKey},
     canonical,
     wire::{self, WireRecord},
 };
@@ -19,6 +20,7 @@ use zeroize::Zeroizing;
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 const MAX_AUTH: usize = 32 * 1024;
 const MAX_CONTROL: usize = 256 * 1024;
+const DEVICE_SIGN_IN_CAPABILITY: &str = "native-device-sign-in-v1";
 pub const RECORDS_PER_MESSAGE: usize = 10;
 type Result<T> = std::result::Result<T, Failure>;
 fn non_null<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
@@ -70,10 +72,7 @@ impl std::error::Error for Failure {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
-    InvalidEmail,
-    InvalidCode,
-    CodeExpired,
-    TooManyAttempts,
+    InvalidAccountKey,
     InvalidRequest,
     AuthenticationRequired,
     ReauthenticationRequired,
@@ -93,10 +92,7 @@ pub enum ErrorCode {
 impl ErrorCode {
     fn name(self) -> &'static str {
         match self {
-            Self::InvalidEmail => "invalid_email",
-            Self::InvalidCode => "invalid_code",
-            Self::CodeExpired => "code_expired",
-            Self::TooManyAttempts => "too_many_attempts",
+            Self::InvalidAccountKey => "invalid_account_key",
             Self::InvalidRequest => "invalid_request",
             Self::AuthenticationRequired => "authentication_required",
             Self::ReauthenticationRequired => "reauthentication_required",
@@ -117,9 +113,6 @@ impl ErrorCode {
 }
 fn bounded(text: &str, min: usize, max: usize) -> bool {
     (min..=max).contains(&text.len()) && !text.chars().any(char::is_control)
-}
-pub(crate) fn email_valid(email: &str) -> bool {
-    bounded(email, 3, 254) && email.contains('@') && !email.chars().any(char::is_whitespace)
 }
 
 /// No Debug, Display or Serialize: tokens only leave via authenticated headers,
@@ -356,8 +349,8 @@ impl Limits {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NativeAuth {
     flow: String,
-    start_endpoint: String,
-    verify_endpoint: String,
+    create_account_endpoint: String,
+    sign_in_endpoint: String,
     refresh_endpoint: String,
     revoke_endpoint: String,
 }
@@ -417,7 +410,7 @@ impl Discovery {
             return Err(Failure::InvalidResponse);
         }
         if [
-            "native-email-code-v1",
+            "native-account-key-v1",
             "library-action-proof-v1",
             "pairing-v2",
             "offline-recovery-v1",
@@ -425,13 +418,16 @@ impl Discovery {
         ]
         .iter()
         .any(|name| !self.capabilities.iter().any(|c| c == name))
-            || self.native_auth.flow != "email_code"
+            || self.native_auth.flow != "account_key"
         {
             return Err(Failure::IncompatibleServer);
         }
         for (actual, path) in [
-            (&self.native_auth.start_endpoint, "/v2/auth/email/start"),
-            (&self.native_auth.verify_endpoint, "/v2/auth/email/verify"),
+            (
+                &self.native_auth.create_account_endpoint,
+                "/v2/auth/accounts",
+            ),
+            (&self.native_auth.sign_in_endpoint, "/v2/auth/sign-in"),
             (&self.native_auth.refresh_endpoint, "/v2/auth/refresh"),
             (&self.native_auth.revoke_endpoint, "/v2/auth/revoke"),
         ] {
@@ -522,6 +518,8 @@ pub struct CloudClient {
     server: ServerURL,
     agent: Agent,
     instance: Uuid,
+    /// Discovery advertised `native-device-sign-in-v1` (server ADR 0007).
+    device_sign_in: bool,
 }
 struct Reply {
     status: u16,
@@ -551,7 +549,12 @@ impl CloudClient {
             server,
             agent,
             instance,
+            device_sign_in: true,
         }
+    }
+    /// Device-approved sign-in is offered only when discovery advertises it.
+    pub fn supports_device_sign_in(&self) -> bool {
+        self.device_sign_in
     }
     pub fn credential_deployment(&self) -> crate::auth_store::Deployment {
         crate::auth_store::Deployment::from_discovery(self.server.clone(), self.instance)
@@ -562,6 +565,7 @@ impl CloudClient {
             server,
             agent: agent(true),
             instance: Uuid::nil(),
+            device_sign_in: false,
         };
         #[cfg(all(test, feature = "desktop"))]
         LIVE_FIXTURE_AGENT.with(|fixture| {
@@ -602,6 +606,10 @@ impl CloudClient {
         )?;
         discovery.validate(&self.server)?;
         self.instance = discovery.server_instance_id;
+        self.device_sign_in = discovery
+            .capabilities
+            .iter()
+            .any(|c| c == DEVICE_SIGN_IN_CAPABILITY);
         Ok(())
     }
     fn exchange(
@@ -819,57 +827,107 @@ impl CloudClient {
             halt: None,
         })
     }
-    pub fn start_email(&self, email: &str) -> Result<EmailChallenge> {
-        if !email_valid(email) {
-            return Err(Failure::Server {
-                code: ErrorCode::InvalidEmail,
-                retry_after: None,
-            });
-        }
-        let body = encode(&serde_json::json!({"email":email}))?;
-        let mut challenge: EmailChallenge = self.json(
+    /// Creates an account with no request body. The response returns its generated
+    /// key exactly once beside the first session; journal the issued credentials
+    /// before the key or session metadata is validated with accept().
+    pub fn create_account(&self) -> Result<IssuedGrant> {
+        let bytes = self.exchange(
             Method::POST,
-            "/v2/auth/email/start",
+            self.server.endpoint("/v2/auth/accounts")?,
             None,
-            Some(&body),
-            200,
-            MAX_AUTH,
+            None,
+            Reply::new(200, MAX_AUTH),
         )?;
-        challenge.validate()?;
-        challenge.deployment = Some(self.credential_deployment());
-        Ok(challenge)
+        IssuedGrant::parse_creation(&bytes)
     }
-    /// Returned credentials are not yet a usable session: journal the issued
-    /// generation before validating account/lifetime fields with accept().
-    pub fn verify_email(&self, challenge: &EmailChallenge, code: &str) -> Result<IssuedGrant> {
-        challenge.validate()?;
-        if challenge.deployment.as_ref() != Some(&self.credential_deployment()) {
-            return Err(Failure::AccountReview);
-        }
-        if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(Failure::Server {
-                code: ErrorCode::InvalidCode,
-                retry_after: None,
-            });
-        }
+    /// The key type is canonical by construction; a locally invalid key cannot be
+    /// sent. Returned credentials are not yet a usable session (see accept()).
+    pub fn sign_in(&self, key: &AccountKey) -> Result<IssuedGrant> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Body<'a> {
-            challenge_id: &'a str,
-            code: &'a str,
+            account_key: &'a str,
         }
         let body = encode(&Body {
-            challenge_id: &challenge.challenge_id,
-            code,
+            account_key: key.canonical(),
         })?;
         let bytes = self.exchange(
             Method::POST,
-            self.server.endpoint("/v2/auth/email/verify")?,
+            self.server.endpoint("/v2/auth/sign-in")?,
             None,
             Some(&body),
             Reply::new(200, MAX_AUTH),
         )?;
-        IssuedGrant::parse(&bytes)
+        Ok(IssuedGrant::parse(&bytes)?.signed_in_with(key))
+    }
+    /// Opens an unauthenticated device sign-in request for the new device's
+    /// pairing recipient key and nonce. The returned poll token is the only claim
+    /// credential; the caller must store it in secure storage before display.
+    pub fn create_device_request(
+        &self,
+        draft: &crate::bootstrap::PairingDraft,
+    ) -> Result<DeviceRequestReceipt> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        if !self.device_sign_in {
+            return Err(Failure::IncompatibleServer);
+        }
+        let body = encode(&serde_json::json!({
+            "recipientPublicKey": STANDARD.encode(draft.public_key()),
+            "nonce": STANDARD.encode(draft.nonce()),
+        }))?;
+        let bytes = self.exchange(
+            Method::POST,
+            self.server.endpoint("/v2/auth/device-requests")?,
+            None,
+            Some(&body),
+            Reply::new(200, MAX_AUTH),
+        )?;
+        let value = canonical::parse(&bytes).map_err(|_| Failure::InvalidResponse)?;
+        let created = value.as_object().map_err(|_| Failure::InvalidResponse)?;
+        let text = |name: &str| {
+            created
+                .get(name)
+                .and_then(|v| v.as_text().ok())
+                .ok_or(Failure::InvalidResponse)
+        };
+        if created.len() != 3 {
+            return Err(Failure::InvalidResponse);
+        }
+        let request = canonical_uuid(text("requestId")?).ok_or(Failure::InvalidResponse)?;
+        let poll_token = PollToken::new(Zeroizing::new(text("pollToken")?.to_owned()))?;
+        let expires_at = device_expiry(text("expiresAt")?)?;
+        Ok(DeviceRequestReceipt {
+            request,
+            poll_token,
+            expires_at,
+        })
+    }
+    /// Polls one request with its poll token. An approved claim issues a new
+    /// session family whose pair must be journaled before it is validated.
+    pub fn claim_device_request(&self, request: Uuid, token: &PollToken) -> Result<DeviceClaim> {
+        if !self.device_sign_in {
+            return Err(Failure::IncompatibleServer);
+        }
+        if request.is_nil() {
+            return Err(Failure::InvalidResponse);
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Body<'a> {
+            poll_token: &'a str,
+        }
+        let body = encode(&Body {
+            poll_token: token.0.as_str(),
+        })?;
+        let bytes = self.exchange(
+            Method::POST,
+            self.server
+                .endpoint(&format!("/v2/auth/device-requests/{request}/claim"))?,
+            None,
+            Some(&body),
+            Reply::new(200, MAX_AUTH),
+        )?;
+        parse_device_claim(&bytes)
     }
     pub fn refresh(&self, refresh: &Credential) -> Result<IssuedGrant> {
         #[derive(Serialize)]
@@ -948,41 +1006,120 @@ fn encode<T: Serialize>(value: &T) -> Result<Zeroizing<Vec<u8>>> {
     })?;
     Ok(bytes)
 }
+/// Pending: exactly `state` and `expiresAt`. Approved: the issued pair is taken
+/// from `session` first; every other member is checked by accept() afterwards.
+fn parse_device_claim(bytes: &[u8]) -> Result<DeviceClaim> {
+    let envelope = canonical::parse(bytes).map_err(|_| Failure::InvalidResponse)?;
+    let object = envelope.as_object().map_err(|_| Failure::InvalidResponse)?;
+    let state = object
+        .get("state")
+        .and_then(|v| v.as_text().ok())
+        .ok_or(Failure::InvalidResponse)?;
+    match state {
+        "pending" => {
+            if object.len() != 2 || !object.contains_key("expiresAt") {
+                return Err(Failure::InvalidResponse);
+            }
+            let expires = object["expiresAt"]
+                .as_text()
+                .map_err(|_| Failure::InvalidResponse)?;
+            Ok(DeviceClaim::Pending {
+                expires_at: device_expiry(expires)?,
+            })
+        }
+        "approved" => {
+            // Take ownership of the issued pair first; the remaining members
+            // are checked by accept() only after the journal has it.
+            let session = object
+                .get("session")
+                .cloned()
+                .ok_or(Failure::InvalidResponse)?;
+            Ok(DeviceClaim::Approved(Box::new(IssuedGrant::from_metadata(
+                session,
+                IssuedKey::Device(envelope),
+            )?)))
+        }
+        _ => Err(Failure::InvalidResponse),
+    }
+}
+/// A device request lives at most ten minutes (plus the shared clock-skew bound).
+fn device_expiry(text: &str) -> Result<i64> {
+    if !bounded(text, 20, 64) {
+        return Err(Failure::InvalidResponse);
+    }
+    let value = chrono::DateTime::parse_from_rfc3339(text)
+        .map_err(|_| Failure::InvalidResponse)?
+        .timestamp();
+    let now = chrono::Utc::now().timestamp();
+    if value <= now - 30 || value > now + 630 {
+        return Err(Failure::InvalidResponse);
+    }
+    Ok(value)
+}
+/// The device-request claim credential (`sn_d_` and 43 Base64url symbols).
+/// No Debug, Display or serialization: it leaves only in the claim body or the
+/// device's secure storage, and is never shown, logged or exported.
+pub struct PollToken(Zeroizing<String>);
+impl PollToken {
+    pub(crate) fn new(text: Zeroizing<String>) -> Result<Self> {
+        let valid = text.len() == 48
+            && text.starts_with("sn_d_")
+            && text.as_bytes()[5..]
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_');
+        if !valid {
+            return Err(Failure::InvalidResponse);
+        }
+        Ok(Self(text))
+    }
+    pub(crate) fn for_secure_storage(&self) -> &str {
+        &self.0
+    }
+}
+pub struct DeviceRequestReceipt {
+    pub request: Uuid,
+    pub poll_token: PollToken,
+    pub expires_at: i64,
+}
+pub enum DeviceClaim {
+    Pending { expires_at: i64 },
+    Approved(Box<IssuedGrant>),
+}
+/// The library and approved pairing named by an approved device claim.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct DeviceApproval {
+    pub space: Uuid,
+    pub pairing: Uuid,
+}
+fn canonical_uuid(text: &str) -> Option<Uuid> {
+    Uuid::parse_str(text)
+        .ok()
+        .filter(|id| !id.is_nil() && id.hyphenated().to_string() == text)
+}
 fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     // Typed structs reject duplicates/unknown members. Nested decoding is bounded
     // by serde_json's recursion limit, in addition to the HTTP byte ceiling.
     serde_json::from_slice(bytes).map_err(|_| Failure::InvalidResponse)
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EmailChallenge {
-    #[serde(skip)]
-    deployment: Option<crate::auth_store::Deployment>,
-    challenge_id: String,
-    pub expires_in: u32,
-    pub resend_after: u32,
-    pub code_length: u8,
-}
-impl EmailChallenge {
-    fn validate(&self) -> Result<()> {
-        if !bounded(&self.challenge_id, 1, 256)
-            || self.expires_in != 600
-            || self.resend_after != 60
-            || self.code_length != 6
-        {
-            return Err(Failure::InvalidResponse);
-        }
-        Ok(())
-    }
-}
 pub struct IssuedCredentials {
     pub access: Credential,
     pub refresh: Credential,
 }
+/// Where a grant's account key comes from. A refresh grant carries none; the
+/// credential owner keeps the account's key from the previous session.
+enum IssuedKey {
+    None,
+    Sent(AccountKey),
+    /// The complete creation envelope, validated only after credentials are journaled.
+    Created(canonical::Value),
+    /// The complete approved device claim. Its session has no account key.
+    Device(canonical::Value),
+}
 pub struct IssuedGrant {
     pub credentials: IssuedCredentials,
     metadata: canonical::Value,
+    key: IssuedKey,
 }
 pub struct InvalidGrant {
     pub failure: Failure,
@@ -991,15 +1128,24 @@ pub struct InvalidGrant {
 pub struct NativeSession {
     pub credentials: IssuedCredentials,
     account_id: String,
-    email: String,
+    account_key: Option<AccountKey>,
+    device: Option<DeviceApproval>,
     expires_in: Duration,
 }
 impl NativeSession {
     pub fn account_for_secure_storage(&self) -> &str {
         &self.account_id
     }
-    pub fn email_for_sign_in_ui(&self) -> &str {
-        &self.email
+    /// The key sent or issued with an interactive grant; never present after refresh.
+    pub(crate) fn issued_account_key(&self) -> Option<&AccountKey> {
+        self.account_key.as_ref()
+    }
+    pub(crate) fn take_issued_account_key(&mut self) -> Option<AccountKey> {
+        self.account_key.take()
+    }
+    /// Present only for a session issued by an approved device claim.
+    pub(crate) fn device_approval(&self) -> Option<DeviceApproval> {
+        self.device
     }
     pub fn expires_in(&self) -> Duration {
         self.expires_in
@@ -1010,8 +1156,45 @@ impl IssuedGrant {
     pub(crate) fn fixture(bytes: &[u8]) -> Result<Self> {
         Self::parse(bytes)
     }
+    /// An interactive grant as returned by sign-in with this public fixture key.
+    #[cfg(test)]
+    pub(crate) fn fixture_signed_in(bytes: &[u8], key: &str) -> Result<Self> {
+        let key = AccountKey::from_canonical(key).ok_or(Failure::InvalidResponse)?;
+        Ok(Self::parse(bytes)?.signed_in_with(&key))
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_created(bytes: &[u8]) -> Result<Self> {
+        Self::parse_creation(bytes)
+    }
+    /// An approved device claim body, parsed exactly as the claim endpoint does.
+    #[cfg(test)]
+    pub(crate) fn fixture_device(bytes: &[u8]) -> Result<Self> {
+        match parse_device_claim(bytes)? {
+            DeviceClaim::Approved(grant) => Ok(*grant),
+            DeviceClaim::Pending { .. } => Err(Failure::InvalidResponse),
+        }
+    }
+    fn signed_in_with(mut self, key: &AccountKey) -> Self {
+        self.key = IssuedKey::Sent(key.clone());
+        self
+    }
     fn parse(bytes: &[u8]) -> Result<Self> {
         let metadata = canonical::parse(bytes).map_err(|_| Failure::InvalidResponse)?;
+        Self::from_metadata(metadata, IssuedKey::None)
+    }
+    /// Only the nested session is needed to take ownership of the issued pair.
+    /// The envelope shape and key are checked after the pair is journaled.
+    fn parse_creation(bytes: &[u8]) -> Result<Self> {
+        let envelope = canonical::parse(bytes).map_err(|_| Failure::InvalidResponse)?;
+        let session = envelope
+            .as_object()
+            .ok()
+            .and_then(|object| object.get("session"))
+            .cloned()
+            .ok_or(Failure::InvalidResponse)?;
+        Self::from_metadata(session, IssuedKey::Created(envelope))
+    }
+    fn from_metadata(metadata: canonical::Value, key: IssuedKey) -> Result<Self> {
         let object = metadata.as_object().map_err(|_| Failure::InvalidResponse)?;
         let token = |name: &str| {
             Credential::new(
@@ -1030,6 +1213,7 @@ impl IssuedGrant {
         Ok(Self {
             credentials,
             metadata,
+            key,
         })
     }
     /// On every error the issued credentials are returned for durable revocation.
@@ -1044,10 +1228,11 @@ impl IssuedGrant {
             .map_err(|_| Failure::CredentialCommit)
             .and_then(|()| self.validate(expected_account, previous_refresh));
         match result {
-            Ok((account_id, email, expires_in)) => Ok(NativeSession {
+            Ok((account_id, account_key, device, expires_in)) => Ok(NativeSession {
                 credentials: self.credentials,
                 account_id,
-                email,
+                account_key,
+                device,
                 expires_in: Duration::from_secs(expires_in),
             }),
             Err(failure) => Err(InvalidGrant {
@@ -1060,8 +1245,9 @@ impl IssuedGrant {
         &self,
         expected_account: Option<&str>,
         previous_refresh: Option<&Credential>,
-    ) -> Result<(String, String, u64)> {
-        let check = || -> crate::model::Result<(String, String, u64)> {
+    ) -> Result<(String, Option<AccountKey>, Option<DeviceApproval>, u64)> {
+        type Checked = (String, Option<AccountKey>, Option<DeviceApproval>, u64);
+        let check = || -> crate::model::Result<Checked> {
             let object = self.metadata.as_object()?;
             let invalid = crate::model::Error("Invalid native session.");
             let keys = [
@@ -1082,20 +1268,54 @@ impl IssuedGrant {
                 return Err(invalid);
             }
             let account = object["account"].as_object()?;
-            if account.len() != 2 || !account.contains_key("id") || !account.contains_key("email") {
+            if account.len() != 1 || !account.contains_key("id") {
                 return Err(invalid);
             }
             let id = account["id"].as_text()?;
-            let email = account["email"].as_text()?;
-            if !bounded(id, 1, 256)
-                || !email_valid(email)
+            if !account_key::valid_account_id(id)
                 || expected_account.is_some_and(|e| e != id)
                 || previous_refresh
                     .is_some_and(|p| p.0.as_str() == self.credentials.refresh.0.as_str())
             {
                 return Err(invalid);
             }
-            Ok((id.into(), email.into(), expires as u64))
+            let mut device = None;
+            let key = match &self.key {
+                IssuedKey::None => None,
+                IssuedKey::Sent(key) => Some(key.clone()),
+                IssuedKey::Device(envelope) => {
+                    let envelope = envelope.as_object()?;
+                    let members = ["state", "expiresAt", "spaceId", "pairingId", "session"];
+                    if envelope.len() != members.len()
+                        || !members.iter().all(|k| envelope.contains_key(*k))
+                        || envelope["state"].as_text()? != "approved"
+                        || device_expiry(envelope["expiresAt"].as_text()?).is_err()
+                    {
+                        return Err(invalid);
+                    }
+                    device = Some(DeviceApproval {
+                        space: canonical_uuid(envelope["spaceId"].as_text()?)
+                            .ok_or(crate::model::Error("Invalid native session."))?,
+                        pairing: canonical_uuid(envelope["pairingId"].as_text()?)
+                            .ok_or(crate::model::Error("Invalid native session."))?,
+                    });
+                    None
+                }
+                IssuedKey::Created(envelope) => {
+                    let envelope = envelope.as_object()?;
+                    if envelope.len() != 2
+                        || !envelope.contains_key("accountKey")
+                        || !envelope.contains_key("session")
+                    {
+                        return Err(invalid);
+                    }
+                    Some(
+                        AccountKey::from_canonical(envelope["accountKey"].as_text()?)
+                            .ok_or(invalid)?,
+                    )
+                }
+            };
+            Ok((id.into(), key, device, expires as u64))
         };
         check().map_err(|_| Failure::InvalidResponse)
     }

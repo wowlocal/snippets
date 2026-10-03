@@ -2,9 +2,9 @@
 //! requests stay in Secret Service; each send requires fresh local authority.
 use super::*;
 use crate::{
-    bootstrap::Invitation,
+    bootstrap::{DeviceSignIn, Invitation},
     cloud::{ActionChallenge, Mutation, Pairing, PairingState, SignedAction},
-    local_auth::{Permit, Purpose, Target},
+    local_auth::{AuthorizationLease, Permit, Purpose, Target},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +27,8 @@ pub struct Retained {
 pub enum Outcome {
     RecoveryReady,
     ApprovalAcknowledged,
+    /// The pairing was approved and the new device's sign-in request bound.
+    DeviceSignedIn,
     ReviewRequired,
 }
 
@@ -39,6 +41,8 @@ enum Intent {
     Approval {
         invitation: Invitation,
         ciphertext: Vec<u8>,
+        /// A device sign-in request (ADR 0007) to bind once the pairing is approved.
+        device_request: Option<Uuid>,
     },
 }
 impl Intent {
@@ -56,6 +60,7 @@ impl Intent {
             Self::Approval {
                 invitation,
                 ciphertext,
+                ..
             } => Mutation::approval(binding.epoch, invitation.clone(), ciphertext)?,
         })
     }
@@ -85,10 +90,21 @@ impl Intent {
             Self::Approval {
                 invitation,
                 ciphertext,
+                device_request: None,
             } => object([
                 ("kind", Value::text("approval")),
                 ("invitation", canonical::parse(&invitation.encode_qr()?)?),
                 ("ciphertext", Value::text(STANDARD.encode(ciphertext))),
+            ]),
+            Self::Approval {
+                invitation,
+                ciphertext,
+                device_request: Some(request),
+            } => object([
+                ("kind", Value::text("approval")),
+                ("invitation", canonical::parse(&invitation.encode_qr()?)?),
+                ("ciphertext", Value::text(STANDARD.encode(ciphertext))),
+                ("deviceRequest", Value::text(request.to_string())),
             ]),
         })
     }
@@ -125,7 +141,25 @@ impl Intent {
                 }
             }
             "approval" => {
-                let v = exact(v, &["kind", "invitation", "ciphertext"])?;
+                // A device sign-in approval adds exactly one member to the
+                // unchanged pairing approval shape.
+                let device = v.as_object()?.contains_key("deviceRequest");
+                let v = if device {
+                    exact(v, &["kind", "invitation", "ciphertext", "deviceRequest"])?
+                } else {
+                    exact(v, &["kind", "invitation", "ciphertext"])?
+                };
+                let device_request = if device {
+                    let text = v["deviceRequest"].as_text()?;
+                    Some(
+                        Uuid::parse_str(text)
+                            .ok()
+                            .filter(|id| !id.is_nil() && id.to_string() == text)
+                            .ok_or(Failure::InvalidState)?,
+                    )
+                } else {
+                    None
+                };
                 Self::Approval {
                     invitation: Invitation::decode_retained_qr(&v["invitation"].encode()?)?,
                     ciphertext: decode64(
@@ -133,6 +167,7 @@ impl Intent {
                         bootstrap::MAX_ENVELOPE_BYTES,
                     )?
                     .to_vec(),
+                    device_request,
                 }
             }
             _ => return Err(Failure::InvalidState),
@@ -443,6 +478,10 @@ pub(super) trait Remote: super::Remote {
         signed: &SignedAction,
         guard: &mut dyn FnMut() -> std::result::Result<(), cloud::Failure>,
     ) -> Result<Pairing>;
+    /// Creates a pairing for a new device's recipient key and nonce.
+    fn create_for(&mut self, public: &[u8; 65], nonce: &[u8; 32], expires: u32) -> Result<Pairing>;
+    /// Binds a device sign-in request to this account (idempotent).
+    fn approve_device(&mut self, request: Uuid, pairing: Uuid) -> Result<()>;
 }
 impl Remote for BoundTransport {
     fn pairing(&mut self, i: &Invitation) -> Result<Pairing> {
@@ -468,6 +507,12 @@ impl Remote for BoundTransport {
         g: &mut dyn FnMut() -> std::result::Result<(), cloud::Failure>,
     ) -> Result<Pairing> {
         Ok(self.approve_pairing_guarded(s, g)?)
+    }
+    fn create_for(&mut self, public: &[u8; 65], nonce: &[u8; 32], expires: u32) -> Result<Pairing> {
+        Ok(self.create_pairing_for(public, nonce, expires)?)
+    }
+    fn approve_device(&mut self, request: Uuid, pairing: Uuid) -> Result<()> {
+        Ok(self.approve_device_request(request, pairing)?)
     }
 }
 fn current<B: Backend>(
@@ -600,6 +645,7 @@ pub(super) fn prepare_locked<B: Backend>(
                 chrono::Utc::now().timestamp(),
             )?,
             invitation,
+            device_request: None,
         }
     } else {
         if remote.role() != Role::Owner {
@@ -645,10 +691,20 @@ pub(super) fn execute_locked<B: Backend>(
     permit: Permit,
 ) -> Result<Outcome> {
     let (archive, installed) = current(owner, remote)?;
-    let mut j = Journal::load(owner)?.ok_or(Failure::InvalidState)?;
+    let j = Journal::load(owner)?.ok_or(Failure::InvalidState)?;
     j.check_binding(&installed.binding)?;
     let target = j.target(&installed, &archive)?;
     let lease = permit.consume(&target)?;
+    execute_authorized(owner, remote, &installed, j, lease)
+}
+/// The send half of execute_locked, under an already consumed exact authority.
+fn execute_authorized<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    remote: &mut impl Remote,
+    installed: &Installed,
+    mut j: Journal,
+    lease: AuthorizationLease,
+) -> Result<Outcome> {
     let intent = j.intent.as_ref().ok_or(Failure::InvalidState)?;
     permitted(remote, intent)?;
     if j.authority != Authority::new(&installed.bundle, &j.binding.context()?).public_key() {
@@ -753,12 +809,202 @@ fn finish<B: Backend>(
             }
             Outcome::RecoveryReady
         }
-        Intent::Approval { .. } => Outcome::ApprovalAcknowledged,
+        Intent::Approval {
+            device_request: None,
+            ..
+        } => Outcome::ApprovalAcknowledged,
+        Intent::Approval {
+            invitation,
+            device_request: Some(request),
+            ..
+        } => {
+            // The acknowledged approval stays journaled until the request is
+            // bound. Transport failures retry here and through reconciliation;
+            // a definitive refusal retires it, since retrying cannot succeed.
+            match bind_device_request(remote, *request, invitation.pairing()) {
+                Ok(()) => Outcome::DeviceSignedIn,
+                Err(failure) if device_binding_retryable(failure) => return Err(failure),
+                Err(failure) => {
+                    j.intent = None;
+                    j.phase = Phase::Inactive;
+                    j.save(owner)?;
+                    return Err(failure);
+                }
+            }
+        }
     };
     j.intent = None;
     j.phase = Phase::Inactive;
     j.save(owner)?;
     Ok(outcome)
+}
+const DEVICE_BINDING_ATTEMPTS: u32 = 3;
+fn bind_device_request(remote: &mut impl Remote, request: Uuid, pairing: Uuid) -> Result<()> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match remote.approve_device(request, pairing) {
+            Err(Failure::Cloud(cloud::Failure::Network)) if attempt < DEVICE_BINDING_ATTEMPTS => {
+                std::thread::sleep(std::time::Duration::from_millis(250 * u64::from(attempt)));
+            }
+            result => return result,
+        }
+    }
+}
+fn device_binding_retryable(failure: Failure) -> bool {
+    !matches!(
+        failure,
+        Failure::Cloud(cloud::Failure::Server {
+            code: cloud::ErrorCode::Conflict
+                | cloud::ErrorCode::NotFound
+                | cloud::ErrorCode::PairingExpired
+                | cloud::ErrorCode::Forbidden,
+            ..
+        }) | Failure::Cloud(cloud::Failure::ReadOnly)
+    )
+}
+/// `clamp(expiresAt − now − 5, 60, 600)`: the pairing ends with the request.
+pub(crate) fn device_pairing_seconds(expires_at: i64, now: i64) -> u32 {
+    expires_at
+        .saturating_sub(now)
+        .saturating_sub(5)
+        .clamp(60, 600) as u32
+}
+/// The exact authority for one device sign-in approval, computed before any
+/// pairing exists: the public request, this library's installed key and both
+/// owning documents. Fresh owner authentication precedes pairing creation.
+fn device_target(
+    request: &DeviceSignIn,
+    journal: Option<&Journal>,
+    installed: &Installed,
+    archive: &Archive,
+) -> Result<Target> {
+    let mut hash = Sha256::new();
+    hash.update(b"snippets-device-sign-in-approval-target-v1\0");
+    hash.update(request.encode_qr()?.as_slice());
+    if let Some(bytes) = journal.and_then(|j| j.snapshot.as_ref()) {
+        hash.update(bytes.as_slice());
+    }
+    hash.update(installed.value()?.encode()?.as_slice());
+    hash.update(archive.generation.to_be_bytes());
+    if let Some(bytes) = &archive.snapshot {
+        hash.update(bytes.as_slice());
+    }
+    Ok(Target::new(
+        installed.binding.clone(),
+        Purpose::ApprovePairing,
+        journal
+            .map_or(0, |j| j.generation)
+            .checked_add(1)
+            .ok_or(Failure::InvalidState)?,
+        hash.finalize().into(),
+    )?)
+}
+fn device_preconditions<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    remote: &mut impl Remote,
+    request: &DeviceSignIn,
+) -> Result<(Archive, Installed, Option<Journal>)> {
+    // Checked before any network call: the request names this pinned origin.
+    if *request.server() != remote.binding()?.server {
+        return Err(Failure::ReviewRequired);
+    }
+    let (archive, installed) = current(owner, remote)?;
+    let journal = Journal::load(owner)?;
+    if let Some(j) = &journal {
+        j.check_binding(&installed.binding)?;
+        if j.intent.is_some() {
+            return Err(Failure::Busy);
+        }
+    }
+    if remote.role() == Role::Reader {
+        return Err(Failure::Cloud(cloud::Failure::ReadOnly));
+    }
+    Ok((archive, installed, journal))
+}
+pub fn prepare_device_approval<B: Backend>(
+    store: &mut Store<B>,
+    remote: &mut BoundTransport,
+    request: &DeviceSignIn,
+) -> Result<Target> {
+    store.transaction_with(|o| prepare_device_locked(o, remote, request))
+}
+pub(super) fn prepare_device_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    remote: &mut impl Remote,
+    request: &DeviceSignIn,
+) -> Result<Target> {
+    let (archive, installed, journal) = device_preconditions(owner, remote, request)?;
+    device_target(request, journal.as_ref(), &installed, &archive)
+}
+/// Creates the pairing for the request's key and nonce, requires its tag to be
+/// the confirmation code, approves it through the ordinary challenge, proof and
+/// envelope path, then binds the request. All under one consumed authority.
+pub fn approve_device<B: Backend>(
+    store: &mut Store<B>,
+    remote: &mut BoundTransport,
+    request: &DeviceSignIn,
+    permit: Permit,
+) -> Result<Outcome> {
+    store.transaction_with(|o| approve_device_locked(o, remote, request, permit, unix_now()?))
+}
+fn unix_now() -> Result<i64> {
+    i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| Failure::InvalidState)?
+            .as_secs(),
+    )
+    .map_err(|_| Failure::InvalidState)
+}
+pub(super) fn approve_device_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    remote: &mut impl Remote,
+    request: &DeviceSignIn,
+    permit: Permit,
+    now: i64,
+) -> Result<Outcome> {
+    let (archive, installed, journal) = device_preconditions(owner, remote, request)?;
+    let target = device_target(request, journal.as_ref(), &installed, &archive)?;
+    let lease = permit.consume(&target)?;
+    let binding = installed.binding.clone();
+    lease.check()?;
+    let pairing = remote.create_for(
+        request.public_key(),
+        request.nonce(),
+        device_pairing_seconds(request.expires_at(), now),
+    )?;
+    check_remote(remote, &binding)?;
+    let invitation = pairing.invitation().clone();
+    if pairing.state() != PairingState::Pending
+        || invitation.confirmation_code() != request.confirmation_code()
+        || invitation.public_key() != request.public_key()
+        || invitation.nonce() != request.nonce()
+        || invitation.server() != &binding.server
+        || invitation.space() != binding.space
+    {
+        return Err(Failure::ReviewRequired);
+    }
+    lease.check()?;
+    let mut j = journal.unwrap_or(Journal {
+        generation: 0,
+        binding: binding.clone(),
+        authority: Authority::new(&installed.bundle, &binding.context()?).public_key(),
+        intent: None,
+        phase: Phase::Inactive,
+        snapshot: None,
+    });
+    if j.authority != Authority::new(&installed.bundle, &binding.context()?).public_key() {
+        return Err(Failure::KeyConflict);
+    }
+    j.intent = Some(Intent::Approval {
+        ciphertext: bootstrap::seal_pairing(&installed.bundle, &invitation, now)?,
+        invitation,
+        device_request: Some(request.request()),
+    });
+    j.phase = Phase::Prepared;
+    j.save(owner)?;
+    execute_authorized(owner, remote, &installed, j, lease)
 }
 /// Read-only outcome reconciliation, including after proof expiry. A pairing's
 /// redacted Approved status cannot prove which ciphertext won, so it never retires

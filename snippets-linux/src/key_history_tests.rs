@@ -338,10 +338,11 @@ fn window_dismissal_during_history_inspection_preserves_pending_work_and_quit_ow
                     Ok(Reply::History(history::inspect(&mut store).unwrap()))
                 }
                 Command::Inspect => Ok(Reply::Profile {
-                    email: None,
+                    account: None,
                     server: None,
                     interrupted: false,
                     switching: handover::inspect(&mut store).unwrap(),
+                    device: None,
                 }),
                 _ => panic!("History inspection must not request network or activation"),
             },

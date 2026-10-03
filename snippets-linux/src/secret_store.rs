@@ -45,6 +45,9 @@ pub enum Slot {
     HistoryMaintenance,
     AutomaticSync,
     ClipboardHistory,
+    /// A signed-out device's pending device-approved sign-in (ADR 0007): its
+    /// pairing recipient material, request ID and poll token.
+    DeviceSignIn,
 }
 impl Slot {
     #[cfg(feature = "secret-service")]
@@ -64,6 +67,7 @@ impl Slot {
             Self::HistoryMaintenance => c"history-maintenance-v1",
             Self::AutomaticSync => c"automatic-sync-v1",
             Self::ClipboardHistory => c"clipboard-history-key-v1",
+            Self::DeviceSignIn => c"device-sign-in-v1",
         }
     }
 }

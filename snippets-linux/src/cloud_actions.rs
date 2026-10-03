@@ -529,12 +529,30 @@ impl SignedAction {
 
 impl BoundTransport {
     pub fn create_pairing(&mut self, draft: &PairingDraft) -> Result<Pairing> {
+        self.create_pairing_for(
+            draft.public_key(),
+            draft.nonce(),
+            bootstrap::DEFAULT_PAIRING_SECONDS,
+        )
+    }
+    /// Creates a pairing for another device's recipient key and nonce, as the
+    /// approving device does for a device sign-in request. The server's tag must
+    /// equal the confirmation code derived from exactly that key and nonce.
+    pub fn create_pairing_for(
+        &mut self,
+        public: &[u8; 65],
+        nonce: &[u8; 32],
+        expires_in: u32,
+    ) -> Result<Pairing> {
+        if !(60..=600).contains(&expires_in) {
+            return Err(Failure::InvalidResponse);
+        }
         self.preflight()?;
         if self.role == Role::Reader {
             return Err(Failure::ReadOnly);
         }
         let body = encode(
-            &serde_json::json!({"recipientPublicKey":STANDARD.encode(draft.public_key()),"nonce":STANDARD.encode(draft.nonce()),"expiresInSeconds":bootstrap::DEFAULT_PAIRING_SECONDS}),
+            &serde_json::json!({"recipientPublicKey":STANDARD.encode(public),"nonce":STANDARD.encode(nonce),"expiresInSeconds":expires_in}),
         )?;
         let result: Result<PairingResponse> = self.client.json(
             Method::POST,
@@ -546,12 +564,63 @@ impl BoundTransport {
         );
         let response = self.remember(result)?;
         self.adopt_feed(response.scope)?;
-        let pairing =
-            self.decode_pairing(response.pairing, draft.public_key(), draft.nonce(), None)?;
+        let pairing = self.decode_pairing(response.pairing, public, nonce, None)?;
         if pairing.state != PairingState::Pending {
             return Err(Failure::InvalidResponse);
         }
         Ok(pairing)
+    }
+    /// Reads a pairing known only by ID, as a device signed in by approval does.
+    /// The existing decoder refuses it unless its recipient key and nonce equal
+    /// this device's own retained material.
+    pub fn observe_pairing(
+        &mut self,
+        pairing: Uuid,
+        public: &[u8; 65],
+        nonce: &[u8; 32],
+    ) -> Result<Pairing> {
+        if pairing.is_nil() {
+            return Err(Failure::InvalidResponse);
+        }
+        self.preflight()?;
+        let result: Result<PairingResponse> = self.client.json(
+            Method::GET,
+            &format!("/v2/spaces/{}/pairings/{pairing}", self.scope.space_id),
+            Some(&self.token),
+            None,
+            200,
+            MAX_AUTH,
+        );
+        let response = self.remember(result)?;
+        self.adopt_feed(response.scope)?;
+        let observed = self.decode_pairing(response.pairing, public, nonce, None)?;
+        if observed.invitation.pairing() != pairing {
+            return Err(Failure::InvalidResponse);
+        }
+        Ok(observed)
+    }
+    /// Binds a new device's sign-in request to this account after this device
+    /// approved its pairing. Idempotent for the same request, space and pairing.
+    pub fn approve_device_request(&mut self, request: Uuid, pairing: Uuid) -> Result<()> {
+        if request.is_nil() || pairing.is_nil() {
+            return Err(Failure::InvalidResponse);
+        }
+        self.preflight()?;
+        if self.role == Role::Reader {
+            return Err(Failure::ReadOnly);
+        }
+        let body = encode(&serde_json::json!({"spaceId":self.scope.space_id,"pairingId":pairing}))?;
+        let result = self.client.exchange(
+            Method::POST,
+            self.client
+                .server
+                .endpoint(&format!("/v2/auth/device-requests/{request}/approval"))?,
+            Some(&self.token),
+            Some(&body),
+            Reply::new(204, MAX_AUTH),
+        );
+        self.remember(result)?;
+        Ok(())
     }
     pub fn pairing(&mut self, invitation: &Invitation) -> Result<Pairing> {
         validate_invitation(invitation, &self.client.server, self.scope.space_id)?;

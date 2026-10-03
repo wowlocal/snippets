@@ -184,14 +184,7 @@ impl Invitation {
         Ok(result)
     }
     pub(crate) fn validate_time(&self, now: i64) -> Result<()> {
-        if now < 0 {
-            return Err(Failure::InvalidFormat);
-        }
-        let latest = now.checked_add(630).ok_or(Failure::InvalidFormat)?;
-        if self.expires_at <= now - 30 || self.expires_at > latest {
-            return Err(Failure::Expired);
-        }
-        Ok(())
+        validate_expiry(self.expires_at, now)
     }
     pub fn server(&self) -> &ServerURL {
         &self.server
@@ -212,14 +205,7 @@ impl Invitation {
         self.expires_at
     }
     pub fn confirmation_code(&self) -> String {
-        let mut digest = Sha256::new();
-        digest.update(b"snippets-pairing-confirm-v1");
-        digest.update(self.nonce);
-        digest.update(self.recipient);
-        digest.finalize()[..8]
-            .iter()
-            .map(|b| ALPHABET[(b & 31) as usize] as char)
-            .collect()
+        confirmation_code(&self.nonce, &self.recipient)
     }
     pub fn encode_qr(&self) -> Result<Zeroizing<Vec<u8>>> {
         encode(
@@ -333,6 +319,168 @@ impl PendingPairing {
             PairingDraft::from_value(&v["draft"])?,
             Invitation::decode_retained_qr(v["invitationPayload"].as_text()?.as_bytes())?,
         )
+    }
+}
+
+/// Shared invitation/device-request lifetime window: never already expired by
+/// more than 30 seconds of skew, and never longer than a ten-minute offer.
+fn validate_expiry(expires_at: i64, now: i64) -> Result<()> {
+    if now < 0 {
+        return Err(Failure::InvalidFormat);
+    }
+    let latest = now.checked_add(630).ok_or(Failure::InvalidFormat)?;
+    if expires_at <= now - 30 || expires_at > latest {
+        return Err(Failure::Expired);
+    }
+    Ok(())
+}
+/// The unchanged pairing confirmation code. The server derives the same value as
+/// a pairing's `authenticationTag` from its recipient key and nonce.
+fn confirmation_code(nonce: &[u8; 32], recipient: &[u8; 65]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"snippets-pairing-confirm-v1");
+    digest.update(nonce);
+    digest.update(recipient);
+    digest.finalize()[..8]
+        .iter()
+        .map(|b| ALPHABET[(b & 31) as usize] as char)
+        .collect()
+}
+
+/// Public device sign-in request (server ADR 0007). It carries only the new
+/// device's pairing recipient key and nonce; never its private key, poll token
+/// or any account credential. Encoding follows the pairing invitation exactly.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DeviceSignIn {
+    server: ServerURL,
+    request: Uuid,
+    nonce: [u8; 32],
+    recipient: [u8; 65],
+    expires_at: i64,
+}
+pub const DEVICE_SIGN_IN_KIND: &str = "snippets-device-sign-in";
+impl DeviceSignIn {
+    pub fn new(
+        server: ServerURL,
+        request: Uuid,
+        nonce: [u8; 32],
+        recipient: [u8; 65],
+        expires_at: i64,
+        now: i64,
+    ) -> Result<Self> {
+        if request.is_nil() {
+            return Err(Failure::InvalidFormat);
+        }
+        parse_public(&recipient)?;
+        validate_expiry(expires_at, now)?;
+        Ok(Self {
+            server,
+            request,
+            nonce,
+            recipient,
+            expires_at,
+        })
+    }
+    /// A request saved by this device stays displayable after expiry so the owner
+    /// sees it ended; live operations check the server's own expiry.
+    pub(crate) fn retained(
+        server: ServerURL,
+        request: Uuid,
+        draft: &PairingDraft,
+        expires_at: i64,
+    ) -> Result<Self> {
+        Self::new(
+            server,
+            request,
+            draft.nonce,
+            draft.public,
+            expires_at,
+            expires_at.saturating_sub(300).max(0),
+        )
+    }
+    pub fn server(&self) -> &ServerURL {
+        &self.server
+    }
+    pub fn request(&self) -> Uuid {
+        self.request
+    }
+    pub fn nonce(&self) -> &[u8; 32] {
+        &self.nonce
+    }
+    pub fn public_key(&self) -> &[u8; 65] {
+        &self.recipient
+    }
+    pub fn expires_at(&self) -> i64 {
+        self.expires_at
+    }
+    pub fn confirmation_code(&self) -> String {
+        confirmation_code(&self.nonce, &self.recipient)
+    }
+    /// Sorted keys, unescaped slashes, unpadded Base64url, lowercase UUID and the
+    /// canonical origin without a trailing slash, bounded like an invitation.
+    pub fn encode_qr(&self) -> Result<Zeroizing<Vec<u8>>> {
+        encode(
+            &object([
+                ("expiresAt", Value::Int(self.expires_at)),
+                ("kind", Value::text(DEVICE_SIGN_IN_KIND)),
+                ("nonce", Value::text(URL_SAFE_NO_PAD.encode(self.nonce))),
+                (
+                    "recipientPublicKey",
+                    Value::text(URL_SAFE_NO_PAD.encode(self.recipient)),
+                ),
+                ("requestId", Value::text(self.request.to_string())),
+                ("schemaVersion", Value::Int(1)),
+                ("server", Value::text(self.server.for_secure_storage())),
+            ]),
+            MAX_ENVELOPE_BYTES,
+        )
+    }
+    pub fn decode_qr(bytes: &[u8], now: i64) -> Result<Self> {
+        let value = parse(bytes, MAX_ENVELOPE_BYTES)?;
+        let v = exact(
+            &value,
+            &[
+                "expiresAt",
+                "kind",
+                "nonce",
+                "recipientPublicKey",
+                "requestId",
+                "schemaVersion",
+                "server",
+            ],
+        )?;
+        if v["schemaVersion"].as_int()? != 1 || v["kind"].as_text()? != DEVICE_SIGN_IN_KIND {
+            return Err(Failure::InvalidFormat);
+        }
+        Self::new(
+            parse_server(v["server"].as_text()?)?,
+            parse_uuid(v["requestId"].as_text()?)?,
+            array64(v["nonce"].as_text()?, true)?,
+            array64(v["recipientPublicKey"].as_text()?, true)?,
+            v["expiresAt"].as_int()?,
+            now,
+        )
+    }
+}
+/// What the existing add-device entry accepts: a pairing invitation for this
+/// library, or a new device's sign-in request for this account.
+pub enum AddDevice {
+    Pairing(Invitation),
+    SignIn(DeviceSignIn),
+}
+impl AddDevice {
+    pub fn decode_qr(bytes: &[u8], now: i64) -> Result<Self> {
+        let value = parse(bytes, MAX_ENVELOPE_BYTES)?;
+        let kind = value
+            .as_object()?
+            .get("kind")
+            .ok_or(Failure::InvalidFormat)?
+            .as_text()?;
+        match kind {
+            "snippets-pairing" => Ok(Self::Pairing(Invitation::decode_qr(bytes, now)?)),
+            DEVICE_SIGN_IN_KIND => Ok(Self::SignIn(DeviceSignIn::decode_qr(bytes, now)?)),
+            _ => Err(Failure::InvalidFormat),
+        }
     }
 }
 
@@ -609,7 +757,7 @@ pub fn recipient_key_hash(public: &[u8; 65]) -> Result<[u8; 32]> {
     Ok(Sha256::digest(public).into())
 }
 
-/// Identity of the existing immutable library authority, never an account email.
+/// Identity of the existing immutable library authority, never an account identity.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AuthorityContext {
     server: ServerURL,

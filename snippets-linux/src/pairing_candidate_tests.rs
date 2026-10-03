@@ -107,6 +107,9 @@ impl super::super::Remote for Peer {
     }
 }
 impl Remote for Peer {
+    fn observe(&mut self, _: Uuid, _: &[u8; 65], _: &[u8; 32]) -> super::super::Result<Pairing> {
+        panic!("candidate pairing never adopts a device sign-in request")
+    }
     fn create(&mut self, draft: &PairingDraft) -> super::super::Result<Pairing> {
         self.creates += 1;
         assert!(self.memory.slot(Slot::LibraryKey).is_some());

@@ -46,11 +46,8 @@ impl Failure {
             F::DatasetReview => 8,
             F::ReadOnly => 9,
             F::CredentialCommit => 10,
+            // 101-104 belonged to the retired email/code sign-in; never reuse them.
             F::Server { code, .. } => match code {
-                C::InvalidEmail => 101,
-                C::InvalidCode => 102,
-                C::CodeExpired => 103,
-                C::TooManyAttempts => 104,
                 C::InvalidRequest => 105,
                 C::AuthenticationRequired => 106,
                 C::ReauthenticationRequired => 107,
@@ -66,6 +63,7 @@ impl Failure {
                 C::PairingExpired => 117,
                 C::DependencyUnavailable => 118,
                 C::InternalError => 119,
+                C::InvalidAccountKey => 120,
             },
         };
         Self {
@@ -161,8 +159,8 @@ pub enum Outcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountOperation {
-    EmailCodeSend,
-    EmailCodeVerify,
+    AccountCreate,
+    AccountSignIn,
     Reconnect,
     SignOut,
     CreateLibrary,
@@ -183,6 +181,9 @@ pub enum AccountOperation {
     Authenticate,
     RecoveryDisclosure,
     Automatic,
+    DeviceRequest,
+    DeviceApproval,
+    DeviceClaim,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
