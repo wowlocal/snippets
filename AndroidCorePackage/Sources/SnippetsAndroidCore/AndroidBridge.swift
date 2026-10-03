@@ -307,10 +307,22 @@ private func reconcileLibraryImpl(
             $0.id.uuidString < $1.id.uuidString
         }
         let outcome = SyncMerge.mergeLocal(base: effectiveBase, local: mergeLocal, remote: remote)
+        let normalizedDevice = HLC.normalizedDevice(deviceID)
+        // A content conflict is preserved under the canonical sync-wire identity used by
+        // Apple and Linux (docs/cloud-sync.md, "Conflict-copy identity"): the copy is
+        // derived from the exact losing envelope and carries `conflictCopy.v1`
+        // provenance. Every device that preserves the same published version therefore
+        // mints the same record instead of a second copy of identical text.
+        let canonical = try canonicalConflictCopies(
+            outcome.snippets,
+            base: Dictionary(uniqueKeysWithValues: effectiveBase.map { ($0.id, $0) }),
+            local: mergeLocalByID,
+            remoteEnvelopes: remoteEnvelopes,
+            device: normalizedDevice)
         // Keep the secure-carrier exclusion at the final serialization boundary too.
         // That makes this invariant independent of SyncMerge's treatment of a base-only
         // row and prevents a future merge change from reintroducing a plain shadow.
-        let mergedSnippets = outcome.snippets.filter { !liveSecureIDs.contains($0.id) }
+        let mergedSnippets = canonical.snippets.filter { !liveSecureIDs.contains($0.id) }
         let mergedByID = Dictionary(uniqueKeysWithValues: mergedSnippets.map { ($0.id, $0) })
         let deletionGuardLocalIDs = Set(localByID.keys).subtracting(liveSecureIDs)
         let deletionReview = SyncDeletionSafety.review(
@@ -319,7 +331,6 @@ private func reconcileLibraryImpl(
         let deletionFacts = SyncDeletionSafety.facts(
             liveIDs: deletionGuardLocalIDs,
             resultingLiveIDs: Set(mergedByID.keys))
-        let normalizedDevice = HLC.normalizedDevice(deviceID)
         let clock = HLCGenerator(device: normalizedDevice)
 
         var desired: [WireRecord] = []
@@ -336,12 +347,22 @@ private func reconcileLibraryImpl(
                let existing = remoteByID[snippet.id] {
                 _ = remoteEnvelope
                 record = existing
+            } else if remoteEnvelope == nil,
+                      let copy = canonical.envelopes[snippet.id],
+                      copy.plainSnippet == snippet {
+                // Exact canonical bytes: the source's HLC/origin and provenance are part
+                // of the deterministic identity other devices verify.
+                record = try WireCodec.seal(copy, using: sealer)
             } else {
                 let floor = UInt64(max(0, snippet.updatedAt.timeIntervalSince1970 * 1_000))
                 let envelope = SyncEnvelope.plain(
                     snippet,
                     hlc: clock.send(atLeast: floor),
-                    origin: normalizedDevice)
+                    origin: normalizedDevice,
+                    // Extensions belong to the record, not to whichever app edited it.
+                    // In particular an edited conflict copy keeps the provenance that
+                    // proves its deterministic identity to Apple and Linux peers.
+                    x: remoteEnvelope.map(ordinaryExtensions) ?? [:])
                 var sealed = try WireCodec.seal(envelope, using: sealer)
                 sealed.recordVersion = remoteByID[snippet.id]?.recordVersion
                 record = sealed
@@ -386,6 +407,74 @@ private func reconcileLibraryImpl(
             deletionReview: deletionReview,
             deletionFacts: deletionFacts)
         return String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)
+    }
+}
+
+/// Replaces the snippet-level copies from `SyncMerge.mergeLocal` with canonical
+/// envelope copies. The losing side is decided exactly as `mergeLocal` decided it.
+/// A losing remote record is copied from its exact published envelope. A losing local
+/// edit has never been published, so its envelope is derived deterministically from
+/// the edit itself (HLC wall = `updatedAt`), keeping the identity stable across the
+/// repeated reconciliations that precede the next confirmed base.
+private func canonicalConflictCopies(
+    _ merged: [Snippet],
+    base: [UUID: Snippet],
+    local: [UUID: Snippet],
+    remoteEnvelopes: [UUID: SyncEnvelope],
+    device: String
+) throws -> (snippets: [Snippet], envelopes: [UUID: SyncEnvelope]) {
+    var replacements: [UUID: SyncEnvelope] = [:]
+    for (id, localValue) in local {
+        guard let remoteEnvelope = remoteEnvelopes[id],
+              let remoteValue = remoteEnvelope.plainSnippet,
+              let legacy = SyncMerge.mergeRecord(
+                base: base[id], local: localValue, remote: remoteValue).conflictCopy,
+              // A record already stored under the legacy identity (an older Android
+              // build) is ordinary data now; replacing it would delete it.
+              local[legacy.id] == nil, base[legacy.id] == nil,
+              remoteEnvelopes[legacy.id] == nil
+        else { continue }
+        let source: SyncEnvelope
+        if SyncMerge.localOutranksRemote(localValue, remoteValue) {
+            source = remoteEnvelope
+        } else {
+            source = SyncEnvelope.plain(
+                localValue,
+                hlc: HLC(
+                    wallMs: localValue.updatedAt.millisecondsSince1970,
+                    counter: 0,
+                    device: device),
+                origin: device)
+        }
+        replacements[legacy.id] = try SyncMerge.makePlainContentConflictCopy(from: source)
+    }
+    guard !replacements.isEmpty else { return (merged, [:]) }
+
+    var envelopes: [UUID: SyncEnvelope] = [:]
+    var emitted = Set(merged.lazy.filter { replacements[$0.id] == nil }.map(\.id))
+    var snippets: [Snippet] = []
+    snippets.reserveCapacity(merged.count)
+    for snippet in merged {
+        guard let copy = replacements[snippet.id] else {
+            snippets.append(snippet)
+            continue
+        }
+        // Another device (or an earlier pass before this base advanced) may already
+        // hold this exact copy; that record, including any later user edit, wins.
+        guard emitted.insert(copy.id).inserted,
+              let canonicalSnippet = copy.plainSnippet else { continue }
+        snippets.append(canonicalSnippet)
+        envelopes[copy.id] = copy
+    }
+    return (snippets, envelopes)
+}
+
+/// The record's own extension bag minus values that describe a vault seal.
+private func ordinaryExtensions(_ envelope: SyncEnvelope) -> [String: CanonicalJSON.Value] {
+    guard !envelope.secure, !envelope.deleted else { return [:] }
+    return envelope.x.filter {
+        $0.key != SyncEnvelope.vaultContentHashExtensionKey
+            && $0.key != SyncEnvelope.vaultKeyIDExtensionKey
     }
 }
 
