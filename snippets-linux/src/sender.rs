@@ -179,7 +179,7 @@ impl Owner<'_> {
                 conflict_copies: vec![],
             };
             if let Some(status) =
-                self.apply_send_outcome(checkpoint, device, &current, &outcome, Some(next))?
+                self.apply_send_outcome(checkpoint, device, &current, &outcome, Some(next), false)?
             {
                 return Ok(Some(status));
             }
@@ -217,7 +217,7 @@ impl Owner<'_> {
                 conflict_copies: vec![],
             };
             if let Some(status) =
-                self.apply_send_outcome(checkpoint, device, &fresh, &outcome, None)?
+                self.apply_send_outcome(checkpoint, device, &fresh, &outcome, None, false)?
             {
                 return Ok(Some(status));
             }
@@ -231,6 +231,7 @@ impl Owner<'_> {
         current: &BTreeMap<uuid::Uuid, Envelope>,
         outcome: &merge::Outcome,
         staged: Option<Journal>,
+        authoritative_merge: bool,
     ) -> Result<Option<Status>> {
         let mut secure_unit = false;
         for e in outcome.survivor.iter().chain(&outcome.conflict_copies) {
@@ -244,7 +245,10 @@ impl Owner<'_> {
             secure_unit |= e.secure || !variants.is_empty();
         }
         let expected = primary::preservation_read_set(std::slice::from_ref(outcome), current)?;
-        let prepared = self.prepare_primary(&checkpoint.journal, device, outcome, &expected)?;
+        let mut prepared = self.prepare_primary(&checkpoint.journal, device, outcome, &expected)?;
+        if authoritative_merge {
+            prepared.merged_authoritative_remote();
+        }
         let status = if !prepared.incompatible_ids.is_empty() {
             Some(Status::IncompatibleVault)
         } else if !prepared.deferred_ids.is_empty() {
@@ -540,12 +544,19 @@ impl Owner<'_> {
                                 Some(&remote),
                             )
                             .map_err(|_| Failure::InvalidPage)?;
+                            // Different authoritative bytes prove this offer was not
+                            // accepted. Retire it before staging the merge, so the
+                            // merged value becomes the source's next post-copy release.
+                            // Keeping it would freeze the rejected bytes and later pair
+                            // them with this conflict's CAS version.
+                            checkpoint.journal.reject(remote.id);
                             if let Some(status) = self.apply_send_outcome(
                                 &mut checkpoint,
                                 &device,
                                 &current,
                                 &outcome,
                                 None,
+                                true,
                             )? {
                                 progress.status = status;
                                 return Ok(progress);

@@ -2,6 +2,16 @@
 //! immutable copies and delivery targets wait behind the active source receipts.
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Staging {
+    /// A local/reviewed decision: overlapping active work is frozen and queued.
+    Local,
+    /// The merge of a fetched or CAS-authoritative remote value.
+    AuthoritativeMerge,
+    /// Archived restoration frames with their own exact delivery targets.
+    Historical,
+}
+
 fn owned(dependencies: &BTreeMap<Uuid, Dependency>) -> BTreeSet<Uuid> {
     dependencies
         .iter()
@@ -475,7 +485,33 @@ impl Journal {
         targets: &BTreeMap<Uuid, Envelope>,
         old_targets: &BTreeMap<Uuid, Envelope>,
     ) -> Result<()> {
-        self.stage_generation_impl(nonce, sources, authenticated, targets, old_targets, false)
+        self.stage_generation_impl(
+            nonce,
+            sources,
+            authenticated,
+            targets,
+            old_targets,
+            Staging::Local,
+        )
+    }
+    /// The merge of a newer authoritative remote value into local intent. Unlike
+    /// a local or archived decision, it refines a refinable active source epoch.
+    pub(crate) fn stage_merge_generation(
+        &mut self,
+        nonce: [u8; 16],
+        sources: &[(Envelope, Vec<Envelope>)],
+        authenticated: &[Envelope],
+        targets: &BTreeMap<Uuid, Envelope>,
+        old_targets: &BTreeMap<Uuid, Envelope>,
+    ) -> Result<()> {
+        self.stage_generation_impl(
+            nonce,
+            sources,
+            authenticated,
+            targets,
+            old_targets,
+            Staging::AuthoritativeMerge,
+        )
     }
     pub(crate) fn stage_restoration_generation(
         &mut self,
@@ -496,7 +532,7 @@ impl Journal {
             &authenticated,
             &generation.targets,
             old_targets,
-            true,
+            Staging::Historical,
         )
     }
     fn stage_generation_impl(
@@ -506,8 +542,9 @@ impl Journal {
         authenticated: &[Envelope],
         targets: &BTreeMap<Uuid, Envelope>,
         old_targets: &BTreeMap<Uuid, Envelope>,
-        historical: bool,
+        staging: Staging,
     ) -> Result<()> {
+        let historical = staging == Staging::Historical;
         if nonce == [0; 16] || targets.is_empty() {
             return Err(Failure::InvalidState);
         }
@@ -591,6 +628,36 @@ impl Journal {
             *self = next;
             return Ok(());
         }
+        if staging == Staging::AuthoritativeMerge
+            && self.refines_active_epoch(&ids, sources, targets)
+        {
+            // An ordinary merge of a newer authoritative value into a source
+            // whose post-copy release is not in flight refines that same epoch,
+            // exactly like Swift's `stageConflictDependency`. Freezing the older
+            // target instead would later offer bytes that were never merged
+            // with the value whose CAS version they carry: a silent overwrite of
+            // another device's concurrent body.
+            let mut next = self.clone();
+            for (source, copies) in sources {
+                next.stage_conflict(source, copies)?;
+            }
+            for copy in authenticated {
+                next.freeze_authenticated_copy(copy)?;
+            }
+            for (source, _) in sources {
+                if !self.dependency_owns(source.id)
+                    && let Some(target) = targets.get(&source.id)
+                    && target.deleted
+                    && next.deletion_approved(target)?
+                    && next.known_absence(source.id)
+                {
+                    next.delivery.insert(source.id, target.clone());
+                }
+            }
+            codec::validate(&next)?;
+            *self = next;
+            return Ok(());
+        }
         if self.generations.len() >= MAX_PRESERVATION_GENERATIONS {
             return Err(Failure::GenerationExhausted);
         }
@@ -633,6 +700,47 @@ impl Journal {
         codec::validate(&next)?;
         *self = next;
         Ok(())
+    }
+    /// Whether every already-owned participant of an ordinary outcome belongs to
+    /// an active source epoch that can safely absorb it. Restorations, queued or
+    /// frozen deliveries, in-flight source offers, deletion targets and foreign
+    /// copy roles keep the conservative queued-generation path.
+    fn refines_active_epoch(
+        &self,
+        ids: &BTreeSet<Uuid>,
+        sources: &[(Envelope, Vec<Envelope>)],
+        targets: &BTreeMap<Uuid, Envelope>,
+    ) -> bool {
+        let refinable = |id: &Uuid| {
+            self.dependencies
+                .get(id)
+                .is_some_and(|edge| edge.source_offered.is_none())
+        };
+        let fresh: BTreeSet<_> = sources.iter().map(|(source, _)| source.id).collect();
+        let queued: BTreeSet<_> = self
+            .generations
+            .iter()
+            .flat_map(|g| g.targets.keys().copied().chain(owned(&g.dependencies)))
+            .collect();
+        ids.iter()
+            .filter(|id| self.dependency_owns(**id))
+            .all(|id| {
+                if self.delivery.contains_key(id)
+                    || queued.contains(id)
+                    || targets.get(id).is_some_and(|t| t.deleted)
+                {
+                    return false;
+                }
+                if self.dependencies.contains_key(id) {
+                    return refinable(id);
+                }
+                // An exact redelivery of a requirement of the same refined source.
+                self.dependencies.iter().any(|(source, edge)| {
+                    fresh.contains(source)
+                        && refinable(source)
+                        && edge.requirements.values().any(|r| r.copy_id == *id)
+                })
+            })
     }
     fn future_carrier(&self, id: Uuid, key: &str, value: &Value) -> bool {
         self.generations.iter().any(|g| {

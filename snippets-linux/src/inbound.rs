@@ -1,7 +1,7 @@
 //! Ordered, encrypted-checkpoint inbox. Receiving a cursor never acknowledges
 //! primary application, and an incomplete snapshot never proves record absence.
 use crate::{
-    cloud::Cursor,
+    cloud::{Cursor, RecordVersion},
     journal::{Confirmed, Failure, Result},
     merge, model,
 };
@@ -87,6 +87,23 @@ impl Inbox {
         self.pending
             .as_ref()
             .and_then(|p| p.records.get(p.position))
+    }
+    /// Whether the next live delta record precedes, in this durable ordered page,
+    /// the generation `confirmed` that a receipt already recorded for the record.
+    /// Only that exact later occurrence proves the next record is an ancestor.
+    pub(crate) fn next_precedes(&self, confirmed: Option<&RecordVersion>) -> bool {
+        let (Some(page), Some(confirmed)) = (self.pending.as_ref(), confirmed) else {
+            return false;
+        };
+        let Some(current) = page.records.get(page.position) else {
+            return false;
+        };
+        !page.full_snapshot
+            && !current.envelope.deleted
+            && &current.record_version != confirmed
+            && page.records[page.position + 1..].iter().any(|later| {
+                later.envelope.id == current.envelope.id && &later.record_version == confirmed
+            })
     }
     pub fn needs_review(&self) -> bool {
         self.review
