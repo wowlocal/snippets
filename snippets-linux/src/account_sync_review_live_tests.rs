@@ -1,6 +1,8 @@
 //! Actual HTTPS CAS conflicts, protected originals and mapped deletion reviews.
 use super::*;
 use crate::clock::Hlc;
+#[path = "account_snapshot_live_tests.rs"]
+mod snapshot;
 
 fn review(window: &Rc<AccountWindow>) -> adw::AlertDialog {
     press(window.window.upcast_ref(), "Review Deletions…");
@@ -323,6 +325,7 @@ fn live_secure_conflict_and_deletion() {
         body(&final_vault, copy_id, &vault_key).as_slice()
             == independent["plaintext"].as_str().unwrap().as_bytes()
     );
+    snapshot::run(&window, &parent, &root, &fixture, &key, &salt);
     for name in ["snippets.json", "Vault/vault.json", "Sync/journal.bin"] {
         let bytes = fs::read(root.join(name)).unwrap();
         let plaintext = independent["plaintext"].as_str().unwrap().as_bytes();

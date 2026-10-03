@@ -25,6 +25,8 @@ pub(super) struct State {
     pub reader: bool,
     pub changed_scope: bool,
     pub defer_fetch: bool,
+    pub invalidate_cursor: bool,
+    pub fetched: Vec<Option<String>>,
     pub submitted: Vec<Vec<(WireRecord, Option<String>)>>,
     public: Option<Value>,
     ciphertext: Option<Value>,
@@ -46,6 +48,9 @@ impl State {
     }
     pub fn version(&self, id: uuid::Uuid) -> Option<String> {
         self.records.get(&id).map(|(_, version)| version.clone())
+    }
+    pub fn omit(&mut self, id: uuid::Uuid) {
+        assert!(self.records.remove(&id).is_some());
     }
     fn known(&self) -> BTreeMap<uuid::Uuid, String> {
         self.records
@@ -249,6 +254,16 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
             .query_pairs()
             .find(|(key, _)| key == "cursor")
             .map(|(_, value)| value.into_owned());
+        assert!(state.fetched.len() < 64);
+        state.fetched.push(cursor.clone());
+        if std::mem::take(&mut state.invalidate_cursor) {
+            assert!(cursor.is_some());
+            return (
+                409,
+                json!({"type":"urn:snippets:error:cursor_invalid","status":409,
+                    "code":"cursor_invalid","requestId":uuid::Uuid::from_u128(99)}),
+            );
+        }
         let known = cursor.as_ref().map(|cursor| {
             state
                 .positions

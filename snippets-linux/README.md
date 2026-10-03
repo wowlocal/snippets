@@ -654,9 +654,10 @@ snippets have synchronized. Ordinary automatic receiving/sending now passes the
 combined live GTK, private native keyring and verified HTTPS workflow. Explicit
 Sync Now/Receive/Send controls and fresh passphrase/recovery-key cycles also pass
 combined live acceptance. Retained secure-conflict preservation, protected-copy
-restoration and basic cloud deletion Cancel/Keep/Delete also pass. Snapshot
-review, current raw/nested deletion groups, pairing and signed operations remain
-under live acceptance. The native
+restoration and basic cloud deletion Cancel/Keep/Delete also pass. Missing-snapshot
+Cancel/focus/stale-primary refusal and explicit resumption now pass for acknowledged
+ordinary and protected records, with preserved nonce and fresh create CAS. Current
+raw/nested deletion groups, pairing and signed operations remain under live acceptance. The native
 interrupted-startup recovery fixture passes with temporary data; full file-dialog
 and Apple-app backup round trips remain separate.
 
@@ -1188,7 +1189,8 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --automatic-reader
 # Manual Receive/Send/Sync Now and fresh passphrase/recovery-key vault cycles.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --vault-sync
-# Retained secure CAS conflict, protected-copy restore and cloud Cancel/Keep/Delete.
+# Retained secure CAS conflict, protected-copy restore, cloud Cancel/Keep/Delete,
+# then cursor-invalid snapshot Cancel/focus/stale-primary refusal and resumption.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --sync-review
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
