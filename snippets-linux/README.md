@@ -68,6 +68,12 @@ Remote deletion of materialized conflict originals can now be reviewed while
 retaining original requests and later local edits. Protected repairs require the
 matching vault's passphrase or recovery key. Missing originals and known current
 conflict carriers can be recovered together through an authenticated group review.
+If a missing conflict copy has its own pending deletion, **Review Deletion** now
+offers that copy first. The dialog identifies it as a prerequisite and confirms
+only its own fate. Review again afterward for the parent. Restoring a secure
+copy requires vault authentication; an original not yet materialized requires
+authentication for either choice. Later body edits remain intact. Existing
+originals, cloud requests and later decisions keep their ordering.
 
 The account-review journal and its durable key owner preserve encrypted previous
 state, local intent and old key/recovery/pairing capabilities across an explicitly

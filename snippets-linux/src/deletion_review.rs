@@ -85,6 +85,7 @@ pub struct Summary {
     pub preserved_source_versions: usize,
     pub restored_conflict_copies: usize,
     pub preserved_conflict_copies: usize,
+    pub prerequisite: bool,
 }
 enum Source {
     Local,
@@ -132,6 +133,7 @@ fn retained_live<'a>(
         journal.projected().get(&id),
         journal.confirmed(id).map(|c| &c.envelope),
         previous,
+        journal.preservation_original(id),
     ]
     .into_iter()
     .flatten()
@@ -241,6 +243,13 @@ fn candidate(
 }
 impl Owner<'_> {
     pub fn prepare_deletion_review(&self, remote: &mut impl Remote) -> Result<Review> {
+        self.prepare_deletion_review_inner(remote, true)
+    }
+    fn prepare_deletion_review_inner(
+        &self,
+        remote: &mut impl Remote,
+        follow_prerequisites: bool,
+    ) -> Result<Review> {
         let observed = self.review_preflight(remote)?;
         let checkpoint = primary::recover_checked(
             &self.library.root,
@@ -254,163 +263,192 @@ impl Owner<'_> {
             let _guard = self.library.lock().map_err(|_| journal::Failure::Storage)?;
             primary::snapshot_locked(self.library, &checkpoint.journal, &device)?
         };
-        let (id, source) = candidate(&checkpoint.journal, &snapshot, self)?;
-        let live = retained_live(&checkpoint.journal, snapshot.records.get(&id), id).cloned();
-        let current_sources = if let Some(live) = &live
-            && merge::has_unresolved(Some(live))
-        {
-            sources::current_group(&checkpoint.journal, &snapshot.records, live)?
-        } else {
-            Vec::new()
-        };
-        let materialize = !current_sources.is_empty()
-            || (checkpoint.journal.dependency_owns(id)
-                && !checkpoint.journal.preservation_materialized(id)?);
-        let variant = checkpoint
-            .journal
-            .unmaterialized_variants()?
-            .into_iter()
-            .find(|v| v.copy_id == id);
-        let source_versions = if materialize {
-            sources::versions(&checkpoint.journal, id, live.as_ref())?
-        } else {
-            Vec::new()
-        };
-        let frames = checkpoint.journal.preservation_generations(id)?;
-        let mut identities = sources::identities(&source_versions)?;
-        let mut current_copies = std::collections::BTreeSet::new();
-        for source in &current_sources {
-            for v in merge::secure_variants(source).map_err(|_| Failure::PreservationRequired)? {
-                current_copies.insert(v.copy_id);
-                identities.push((v.copy_id, v.source_id, v.fingerprint));
+        let (mut id, mut source) = candidate(&checkpoint.journal, &snapshot, self)?;
+        let initial = id;
+        let mut visited = std::collections::BTreeSet::new();
+        loop {
+            (self.validate_session)()?;
+            if !visited.insert(id) {
+                return Err(Failure::PreservationRequired);
             }
-        }
-        for frame in &frames {
-            for (source, copies) in &frame.sources {
-                for copy in copies {
-                    let p = merge::provenance(copy).ok_or(Failure::PreservationRequired)?;
-                    identities.push((copy.id, p.source_id, p.fingerprint));
-                }
+            let live = retained_live(&checkpoint.journal, snapshot.records.get(&id), id).cloned();
+            let current_sources = if let Some(live) = &live
+                && merge::has_unresolved(Some(live))
+            {
+                sources::current_group(&checkpoint.journal, &snapshot.records, live)?
+            } else {
+                Vec::new()
+            };
+            let materialize = !current_sources.is_empty()
+                || (checkpoint.journal.dependency_owns(id)
+                    && !checkpoint.journal.preservation_materialized(id)?);
+            let variant = checkpoint
+                .journal
+                .unmaterialized_variants()?
+                .into_iter()
+                .find(|v| v.copy_id == id);
+            let source_versions = if materialize {
+                sources::versions(&checkpoint.journal, id, live.as_ref())?
+            } else {
+                Vec::new()
+            };
+            let frames = checkpoint.journal.preservation_generations(id)?;
+            let mut identities = sources::identities(&source_versions)?;
+            let mut current_copies = std::collections::BTreeSet::new();
+            for source in &current_sources {
                 for v in
                     merge::secure_variants(source).map_err(|_| Failure::PreservationRequired)?
                 {
+                    current_copies.insert(v.copy_id);
                     identities.push((v.copy_id, v.source_id, v.fingerprint));
                 }
             }
-        }
-        let mut missing_originals = std::collections::BTreeSet::new();
-        for (copy_id, source_id, fingerprint) in identities {
-            if snapshot
-                .records
-                .get(&copy_id)
-                .is_some_and(|e| !merge::matching_provenance(e, source_id, &fingerprint))
+            for frame in &frames {
+                for (source, copies) in &frame.sources {
+                    for copy in copies {
+                        let p = merge::provenance(copy).ok_or(Failure::PreservationRequired)?;
+                        identities.push((copy.id, p.source_id, p.fingerprint));
+                    }
+                    for v in
+                        merge::secure_variants(source).map_err(|_| Failure::PreservationRequired)?
+                    {
+                        identities.push((v.copy_id, v.source_id, v.fingerprint));
+                    }
+                }
+            }
+            let mut missing_originals = std::collections::BTreeSet::new();
+            for (copy_id, source_id, fingerprint) in identities {
+                if snapshot
+                    .records
+                    .get(&copy_id)
+                    .is_some_and(|e| !merge::matching_provenance(e, source_id, &fingerprint))
+                {
+                    return Err(primary::Failure::ReservedCollision.into());
+                }
+                if materialize
+                    && (checkpoint.journal.is_preservation_source(id)
+                        || !current_sources.is_empty())
+                    && copy_id != id
+                    && (checkpoint.journal.is_preservation_copy(copy_id)
+                        || current_copies.contains(&copy_id))
+                    && !snapshot.records.contains_key(&copy_id)
+                    && !checkpoint.journal.known_absence(copy_id)
+                {
+                    missing_originals.insert(copy_id);
+                }
+            }
+            if let Some(variant) = &variant
+                && snapshot.records.get(&id).is_some_and(|e| {
+                    !merge::matching_provenance(e, variant.source_id, &variant.fingerprint)
+                })
             {
                 return Err(primary::Failure::ReservedCollision.into());
             }
-            if materialize
-                && (checkpoint.journal.is_preservation_source(id) || !current_sources.is_empty())
-                && copy_id != id
-                && (checkpoint.journal.is_preservation_copy(copy_id)
-                    || current_copies.contains(&copy_id))
-                && !snapshot.records.contains_key(&copy_id)
-                && !checkpoint.journal.known_absence(copy_id)
+            if matches!(source, Source::Local)
+                && live.as_ref().map_or_else(
+                    || variant.is_none() || !snapshot.has_file(true),
+                    |e| !snapshot.has_file(e.secure),
+                )
             {
-                missing_originals.insert(copy_id);
+                return Err(Failure::MissingFile);
             }
-        }
-        if let Some(variant) = &variant
-            && snapshot.records.get(&id).is_some_and(|e| {
-                !merge::matching_provenance(e, variant.source_id, &variant.fingerprint)
-            })
-        {
-            return Err(primary::Failure::ReservedCollision.into());
-        }
-        if matches!(source, Source::Local)
-            && live.as_ref().map_or_else(
-                || variant.is_none() || !snapshot.has_file(true),
-                |e| !snapshot.has_file(e.secure),
-            )
-        {
-            return Err(Failure::MissingFile);
-        }
-        let repair = if !materialize
-            && matches!(source, Source::Inbound(..) | Source::Outbound(..))
-            && let Some(retained) = &live
-        {
-            checkpoint
-                .journal
-                .deletion_repair(id, &snapshot.records, retained)?
-        } else {
-            None
-        };
-        let repair_requires_vault = repair.as_ref().is_some_and(|r| r.needs_vault());
-        let kind = match &source {
-            Source::Local => Kind::LocalAbsence,
-            Source::Pending(_) => Kind::PendingDeletion,
-            _ => Kind::CloudDeletion,
-        };
-        let fields = live.as_ref().and_then(|e| e.fields.as_ref());
-        let copy_name = variant
-            .as_ref()
-            .map(crate::materializer::copy_display_name)
-            .transpose()
-            .map_err(primary::Failure::from)?;
-        let secure = live.as_ref().map_or_else(
-            || {
-                if variant.is_some() {
-                    true
-                } else {
-                    match &source {
-                        Source::Pending(e) | Source::Inbound(e, _) | Source::Outbound(e, _) => {
-                            e.secure
+            let repair = if !materialize
+                && matches!(source, Source::Inbound(..) | Source::Outbound(..))
+                && let Some(retained) = &live
+            {
+                checkpoint
+                    .journal
+                    .deletion_repair(id, &snapshot.records, retained)?
+            } else {
+                None
+            };
+            let repair_requires_vault = repair.as_ref().is_some_and(|r| r.needs_vault());
+            let kind = match &source {
+                Source::Local => Kind::LocalAbsence,
+                Source::Pending(_) => Kind::PendingDeletion,
+                _ => Kind::CloudDeletion,
+            };
+            let fields = live.as_ref().and_then(|e| e.fields.as_ref());
+            let copy_name = variant
+                .as_ref()
+                .map(crate::materializer::copy_display_name)
+                .transpose()
+                .map_err(primary::Failure::from)?;
+            let secure = live.as_ref().map_or_else(
+                || {
+                    if variant.is_some() {
+                        true
+                    } else {
+                        match &source {
+                            Source::Pending(e) | Source::Inbound(e, _) | Source::Outbound(e, _) => {
+                                e.secure
+                            }
+                            _ => false,
                         }
-                        _ => false,
                     }
-                }
-            },
-            |e| e.secure,
-        );
-        let summary = Summary {
-            kind,
-            name: fields
-                .map(|f| f.name.clone())
-                .or(copy_name)
-                .unwrap_or_else(|| "Deleted snippet".into()),
-            keyword: fields.map(|f| f.keyword.clone()).unwrap_or_default(),
-            secure,
-            can_keep: (live.is_some() || variant.is_some()) && (!secure || snapshot.has_file(true)),
-            keep_requires_vault: materialize
-                || repair_requires_vault
-                || live.as_ref().is_some_and(|e| {
-                    e.secure
-                        && (e.extensions.contains_key(merge::COPY_PROVENANCE)
-                            || !e.extensions.contains_key("vaultKID"))
-                }),
-            delete_requires_vault: materialize || repair_requires_vault,
-            preserved_source_versions: source_versions.len(),
-            restored_conflict_copies: missing_originals.len(),
-            preserved_conflict_copies: current_copies.len(),
-        };
-        let after = self.review_preflight(remote)?;
-        if after.feed != observed.feed {
-            return Err(Failure::Changed);
+                },
+                |e| e.secure,
+            );
+            let summary = Summary {
+                kind,
+                name: fields
+                    .map(|f| f.name.clone())
+                    .or(copy_name)
+                    .unwrap_or_else(|| "Deleted snippet".into()),
+                keyword: fields.map(|f| f.keyword.clone()).unwrap_or_default(),
+                secure,
+                can_keep: (live.is_some() || variant.is_some())
+                    && (!secure || snapshot.has_file(true)),
+                keep_requires_vault: materialize
+                    || repair_requires_vault
+                    || live.as_ref().is_some_and(|e| {
+                        e.secure
+                            && (e.extensions.contains_key(merge::COPY_PROVENANCE)
+                                || !e.extensions.contains_key("vaultKID"))
+                    }),
+                delete_requires_vault: materialize || repair_requires_vault,
+                preserved_source_versions: source_versions.len(),
+                restored_conflict_copies: missing_originals.len(),
+                preserved_conflict_copies: current_copies.len(),
+                prerequisite: id != initial,
+            };
+            if follow_prerequisites
+                && let Some(deleted) = missing_originals.iter().find_map(|id| {
+                    checkpoint
+                        .journal
+                        .entry(*id)
+                        .map(|entry| &entry.desired)
+                        .filter(|e| e.deleted)
+                })
+            {
+                // A parent's preservation review cannot approve this child's own
+                // tombstone. Offer that exact independent decision first, using
+                // the same frozen checkpoint/primary view. No receipt is consumed.
+                id = deleted.id;
+                source = Source::Pending(deleted.clone());
+                continue;
+            }
+            let after = self.review_preflight(remote)?;
+            if after.feed != observed.feed {
+                return Err(Failure::Changed);
+            }
+            return Ok(Review {
+                root: self.library.root.clone(),
+                checkpoint,
+                snapshot,
+                device,
+                feed: observed.feed,
+                id,
+                live,
+                source,
+                repair,
+                materialize,
+                source_versions,
+                missing_originals: missing_originals.into_iter().collect(),
+                current_sources,
+                summary,
+            });
         }
-        Ok(Review {
-            root: self.library.root.clone(),
-            checkpoint,
-            snapshot,
-            device,
-            feed: observed.feed,
-            id,
-            live,
-            source,
-            repair,
-            materialize,
-            source_versions,
-            missing_originals: missing_originals.into_iter().collect(),
-            current_sources,
-            summary,
-        })
     }
     pub fn decide_deletion_review(
         &self,

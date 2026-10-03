@@ -2314,7 +2314,8 @@ impl AccountWindow {
                 let conflicts = if summary.preserved_conflict_copies > 0 {
                     format!("\n\nConflict originals to preserve: {}. Their contents are kept before your decision is applied.", summary.preserved_conflict_copies)
                 } else { String::new() };
-                let body=format!("{}{}\n\n{}{}{}{}",name,if keyword.is_empty() {String::new()} else {format!(" · {keyword}")},description,preservation,originals,conflicts);
+                let prerequisite = if summary.prerequisite { "\n\nReview this snippet first so another pending conflict decision can continue. Your choice applies only to this snippet. Review Deletion again afterward for the next decision." } else { "" };
+                let body=format!("{}{}\n\n{}{}{}{}{}",name,if keyword.is_empty() {String::new()} else {format!(" · {keyword}")},description,prerequisite,preservation,originals,conflicts);
                 let dialog=adw::AlertDialog::builder().heading(if summary.secure {"Review Secure Snippet Deletion"} else {"Review Snippet Deletion"}).body(body).build();
                 dialog.add_responses(&[("cancel","Cancel"),("keep",if summary.kind==Kind::CloudDeletion {"Keep Local Version"} else {"Restore Retained Version"}),("delete","Confirm Deletion")]);
                 dialog.set_response_enabled("keep",summary.can_keep);

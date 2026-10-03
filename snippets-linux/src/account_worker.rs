@@ -939,6 +939,7 @@ impl Handle {
                             preserved_source_versions: 0,
                             restored_conflict_copies: 0,
                             preserved_conflict_copies: 0,
+                            prerequisite: false,
                         },
                     }),
                     Command::DecideDeletionReview {

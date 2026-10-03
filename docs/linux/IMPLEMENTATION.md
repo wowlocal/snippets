@@ -229,7 +229,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor with bounded encrypted Undo/Redo and explicit Paste, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery/repair dialogs compile but display initialization is unavailable; live keyboard/reveal workflow remains open |
 | Secure delivery and transfers | Native portable encrypted-backup export/import, fresh-authenticated direct virtual-keyboard insertion and one-cycle vault authentication for receiving/sending | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private Wayland fixture cannot initialize under restricted peer credentials; live receiving-field and authenticated-sync validation plus fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; current environment cannot run loopback fixtures or initialize the new GTK smoke; complete conflict-owned recovery and live automatic workflow verification remain pending; CloudKit is Apple-only |
-| Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent child deletions and unknown versions remain separate review boundaries; live password-dialog verification remains open |
+| Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent pending child deletions are selected for their own decision before the parent; unknown versions remain a separate boundary; live password-dialog verification remains open |
 | Library-key setup | Portable sync-v1 bundle, P-256 pairing, recovery QR/code and envelope, Ed25519 authority/proofs and request hashes; bound control-plane HTTP; durable first-key, recovery, recipient activation and signed mutations; native setup, recipient pairing, trusted-device approval, recovery replacement, disclosure, library-switch review/resume/cancel/offline finish and empty-target first-key UI wired | Independent vectors, retained proofs, interrupted Secret Service writes, schema migration, response ownership, exact authorization targets, mutation recovery and offline switch cancellation/completion pass; earlier verified loopback TLS passes; independent QR decoder passes for recovery and pairing payloads; terminal history retirement is wired; combined live UI/HTTPS/keyring verification remains pending |
 | Library-switch pairing | Separate bounded Secret Service candidate history, request/check/cancel, retained private drafts and claims, fresh authority verification, native public QR/copy and subsequent reviewed activation | Twenty desktop tests (nineteen without desktop features) cover interruption, response ownership, expiry, scope/account changes, capacity/schema/generation refusal, old-key preservation, exact authorized handover and review-only reuse of retained claims across changed pins/accounts; native GTK and private-keyring attempts stop before window/keyring creation |
 | Empty-target first keys | Separate bounded Secret Service candidate history, exact key/envelope before POST, owner-only native create/resume, fresh server reconciliation and reviewed activation | Twenty-seven desktop tests (twenty-six without desktop features) cover writes, races, restart, scope/account/schema/capacity refusal, old-key preservation, reviewed reuse across changed pins/accounts and offline completion/retirement of promoted recovery-code copies; combined live workflow remains unverified |
@@ -269,6 +269,18 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-03
 
+- Independent prerequisite deletion review adds five isolated regression tests.
+  All four child/parent choices, five WAL interruption phases, stale/cancelled
+  authorization, authentication of unmaterialized originals and a restored
+  secure child edited afterward pass with public fictional vaults and positional
+  memory CAS peers. Selected regressions pass 241 default library tests,
+  231 headless library tests and 24 core/helper integration tests.
+  These include deletion review, journal, primary apply, sender/receiver and
+  saved-history restoration. Clippy passes with warnings denied for all targets
+  in both configurations; formatting, three release binaries and two isolated
+  temporary-prefix installs pass. The account cancellation fixture stops at GTK
+  initialization before its widget assertions. Live prerequisite selection,
+  password dialogs and combined account/keyring/HTTPS workflows remain open.
 - Explicit protected body Paste adds fourteen isolated checks: eleven encrypted
   receipt tests and three additional shared-reader tests. Selected regressions
   pass 98 default library tests, 90 headless library tests and 24 core/helper
@@ -2106,6 +2118,54 @@ opaque and prevent deletion/cleanup. The recovery startup gate reaches the expli
 authenticated data owner without exposing mixed primary files; its combined live
 graphical/account workflow still needs verification. These
 obligations remain part of the full port.
+
+## Independent prerequisite deletion decisions
+
+A current conflict-source review can need an absent copy whose own pending
+intent is a tombstone. Previously the native action kept selecting the parent,
+then refused either choice because it could not approve another record's
+independent deletion. `src/deletion_review.rs` now follows such prerequisites
+using one frozen checkpoint and primary snapshot. Each hop revalidates the
+owner session; visited IDs reject a cycle. Preparation consumes no offer, inbox
+record, receipt or consent. The selected child's exact pending tombstone is
+reviewed first; after its decision, Review Deletion offers the parent again.
+The native dialog explains that the choice applies only to the displayed
+prerequisite snippet. The parent's own decision boundary still refuses to grant
+a child's deletion permission.
+
+Retained-live lookup now falls back to the journal's immutable authenticated
+C0 when no newer live version survives. A restored secure C0 requires matching
+vault authentication. If the original has not been materialized yet, both
+child choices require the existing authenticated materialization owner before
+anything is published. Each child decision keeps the parent's exact saved
+request/receipt position and C0 evidence. The confirmation continues to bind
+the original scope, feed, checkpoint and full primary images.
+
+`src/primary.rs` retains an already approved absent child's exact tombstone as
+its C1 target, while authenticated C0 remains preservation evidence. A parent
+operation cannot restore that child or mint a new deletion permit. Unreviewed
+or differently hashed absences retain their existing refusal. Fresh queued
+preservation groups also capture delivery targets for unchanged participants
+from the same pinned primary view and local intent. Deleting a parent therefore
+keeps a restored or subsequently edited physical C1 instead of dropping its
+target or replacing it with C0. The ordinary read-set and complete-file WAL
+checks still guard publication.
+
+An accepted child tombstone retains its exact-hash permission while a queued
+preservation generation owns that child as a prerequisite and carries the
+same target. The next generation can preserve C0 and finish that already
+reviewed deletion. A different target gets no permission; the final actual
+acceptance retires it. Original offered bytes/nonces/CAS and the requirement for
+real C0/source acknowledgements remain unchanged.
+
+Five new isolated tests cover all four child/parent choices, every child WAL
+interruption phase, cancelled/stale session/scope/feed/primary/checkpoint views,
+unmaterialized authentication refusal, and a physical secure C1 edited after
+restoration. They use public fictional vaults, temporary roots and the existing
+positional-CAS memory peer. They verify retained parent requests, exact C0
+before source delivery, final server choices and retirement of consent after
+completion. Live native selection/dialog/focus and combined cloud verification
+remain open; unsupported protocol versions retain a closed refusal.
 
 ## Protected body selection and editing
 

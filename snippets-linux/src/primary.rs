@@ -304,6 +304,7 @@ pub struct Prepared {
     dependencies: Vec<(Envelope, Vec<Envelope>)>,
     authenticated: Vec<Envelope>,
     held: BTreeMap<Uuid, Envelope>,
+    unchanged_targets: BTreeMap<Uuid, Envelope>,
     release_targets: BTreeMap<Uuid, Envelope>,
     deferred_deletion_sources: BTreeSet<Uuid>,
     administrative: bool,
@@ -552,6 +553,7 @@ fn prepare_impl(
         dependencies: Vec::new(),
         authenticated: Vec::new(),
         held: BTreeMap::new(),
+        unchanged_targets: BTreeMap::new(),
         release_targets: journal.release_targets(&primary)?,
         deferred_deletion_sources: BTreeSet::new(),
         administrative,
@@ -564,7 +566,7 @@ fn prepare_impl(
     };
     let original_snippets = contents.snippets.clone();
     let original_vault = contents.vault.clone();
-    for group in groups::prepare(
+    for mut group in groups::prepare(
         outcomes,
         &primary,
         journal,
@@ -573,6 +575,23 @@ fn prepare_impl(
         !administrative,
         deletion.map(DeletionGroup::originals),
     )? {
+        let mut reviewed_absences = BTreeSet::new();
+        for id in &group.implicit {
+            if !primary.contains_key(id) && journal.known_absence(*id) {
+                let selected = journal
+                    .local_intent(*id, None)?
+                    .or_else(|| journal.entry(*id).map(|entry| &entry.desired));
+                if let Some(selected) = selected
+                    && journal.deletion_approved(selected)?
+                {
+                    // Keep the child's separately approved exact tombstone as
+                    // C1. Its authenticated immutable C0 still owns delivery
+                    // evidence; this parent operation cannot restore the child.
+                    group.targets.insert(*id, selected.clone());
+                    reviewed_absences.insert(*id);
+                }
+            }
+        }
         let mut retry = false;
         let mut defer = false;
         let mut incompatible = false;
@@ -624,6 +643,7 @@ fn prepare_impl(
             if group.implicit.contains(&e.id)
                 && !primary.contains_key(&e.id)
                 && journal.entry(e.id).is_some()
+                && !reviewed_absences.contains(&e.id)
             {
                 defer = true;
             }
@@ -756,6 +776,22 @@ fn prepare_impl(
     }
     if let Some(group) = deletion {
         group.attach(&mut prepared, journal)?;
+    }
+    for participant in prepared
+        .dependencies
+        .iter()
+        .flat_map(|(source, copies)| std::iter::once(source).chain(copies))
+    {
+        if !prepared.changed_ids.contains(&participant.id) {
+            let target = journal
+                .local_intent(participant.id, primary.get(&participant.id))?
+                .or_else(|| journal.entry(participant.id).map(|entry| &entry.desired))
+                .or_else(|| prepared.projected.get(&participant.id))
+                .ok_or(Failure::InvalidState)?;
+            prepared
+                .unchanged_targets
+                .insert(participant.id, target.clone());
+        }
     }
     validate_keywords(
         &contents.snippets,
@@ -991,6 +1027,13 @@ fn stage_prepared(mut next: Journal, prepared: &Prepared) -> Result<Journal> {
             })
             .collect();
         targets.extend(prepared.held.clone());
+        // A newly queued preservation graph needs delivery intent for every
+        // participant, including an unchanged/restored C1 beside frozen C0.
+        // Use the pinned primary view and journal intent, never substitute C0
+        // for a separately reviewed absence or a current edited copy.
+        for (id, target) in &prepared.unchanged_targets {
+            targets.entry(*id).or_insert_with(|| target.clone());
+        }
         next.stage_generation(
             prepared.intent.nonce,
             &prepared.dependencies,

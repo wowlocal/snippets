@@ -1161,7 +1161,12 @@ impl Journal {
         }
         if candidate.deletion_approved(&offered.envelope)?
             && !candidate.generations.iter().any(|generation| {
-                generation.dependencies.contains_key(&id)
+                (generation.dependencies.contains_key(&id)
+                    || generation.dependencies.values().any(|edge| {
+                        edge.requirements
+                            .values()
+                            .any(|requirement| requirement.copy_id == id)
+                    }))
                     && generation
                         .targets
                         .get(&id)
