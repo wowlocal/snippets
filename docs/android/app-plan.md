@@ -25,7 +25,7 @@ was removed from those apps.
 | Layer | Language | Owns |
 | --- | --- | --- |
 | UI | Kotlin + Jetpack Compose | Screens, adaptive layout, navigation, accessibility semantics, state rendering |
-| Android platform | Kotlin | Activity lifecycle, `ACTION_PROCESS_TEXT`, clipboard/share sheet, WorkManager, FCM, notifications, document picker, native email-code auth, Keystore, BiometricPrompt, OkHttp |
+| Android platform | Kotlin | Activity lifecycle, `ACTION_PROCESS_TEXT`, clipboard/share sheet, WorkManager, FCM, notifications, document picker, native account-key auth, Keystore, BiometricPrompt, OkHttp |
 | Bridge | Generated Java/JNI + small Kotlin wrapper | Versioned commands/results, cancellation, lifecycle barrier, conversion to Kotlin flows |
 | Product core | Swift | Model, validation, local files, mutation ordering, search, placeholders, crypto, vault projection, journal, merge, deletion guard, HTTP transport mapping, sync engine |
 | Service | Swift/PostgreSQL | Authentication enforcement, opaque record CAS/change feed, encrypted key envelopes, quota/push hints |
@@ -94,8 +94,12 @@ backup classes requires a separate privacy and restore-consistency design.
 1. Choose Local Only or the HTTP service pinned into this app distribution. A self-hosted
    operator ships a correspondingly pinned build; the app does not accept a runtime
    credential destination.
-2. For HTTP, open the native email form immediately. Send a one-time code through the
-   pinned service, then verify it on the native code screen with resend and edit-email controls.
+2. For HTTP, offer **Create Account** and **Sign In with Account Key** in native dialogs.
+   Creation shows the server-generated key once on **Save Your Account Key** and waits for
+   an explicit **I've Saved It**; sign-in takes one key field. When the server advertises
+   `native-device-sign-in-v1`, **Sign In with Another Device** shows a QR/code that an
+   approved device scans; one approval signs the new device in and gives it the library
+   key through the existing pairing envelope.
 3. Choose an existing sync space or create one.
 4. Obtain its encryption bundle by scanning/approving a pairing code on a trusted
    device or entering the high-entropy recovery key.
@@ -134,18 +138,22 @@ Apple app's provider flow. Never accept iCloud credentials in Android.
 ## HTTP authentication and endpoint handling
 
 The app discovers `nativeAuth` and protocol capabilities from its build-pinned canonical
-HTTPS origin. Email-code start, verification, refresh and revocation endpoints must match
-that origin and the expected paths. The email form opens without waiting for discovery;
-network requests begin only when the user sends the code. No browser, WebView, AppAuth
-session or Account Center participates in sign-in.
+HTTPS origin. It requires `native-account-key-v1` and `flow=account_key`; the create-account,
+sign-in, refresh and revocation endpoints must match that origin and the exact paths
+`/v2/auth/accounts`, `/v2/auth/sign-in`, `/v2/auth/refresh` and `/v2/auth/revoke`. Network
+requests begin only when the user confirms an action, and a typed key that fails local
+normalization and its check is never sent. No browser, WebView, AppAuth session or
+Account Center participates in sign-in.
 
-Kotlin stores the opaque access/refresh credentials, immutable account ID, verified email
-and expiry in the Android Keystore-backed encrypted store. The email is used for display;
-refresh must preserve the account ID, and neither value can replace the resolved library
-scope. The server stores the verified account email and sends codes using its configured
-email provider. Sign-in proves access to the mailbox, not possession of library keys or
-phishing-resistant authentication. Key-granting actions require device-owner authentication
-and a proof made with an already-held library key; new devices need pairing or recovery.
+Kotlin stores the opaque access/refresh credentials, immutable account UUID, canonical
+account key and expiry in the Android Keystore-backed encrypted store, and removes them
+together on sign-out. Settings shows only the first eight hex digits of the account UUID
+as the Account ID; the key is disclosed only after device-owner authentication. Refresh
+must preserve the account ID, and neither value can replace the resolved library scope.
+The server holds no personal identifier for native accounts and stores only a peppered
+MAC of the key. Holding the key is holding the account, not possession of library keys:
+key-granting actions require device-owner authentication and a proof made with an
+already-held library key; new devices need pairing or recovery.
 
 Sign-out revokes exact access tokens and the installation's refresh family through the
 pinned native API before local credential deletion. Durable cleanup distinguishes separate
@@ -159,7 +167,7 @@ Custom Server rules:
   entry is excluded. Authentication does not need callback domains or custom URI schemes.
 - HTTPS is mandatory outside explicitly marked local developer builds.
 - Canonical origin changes create a different provider identity and require review.
-- Authentication redirects are disabled; email, codes and credentials are never forwarded to a new host.
+- Authentication redirects are disabled; account keys and credentials are never forwarded to a new host.
 - Discovery is size/time bounded and cannot override client wire/crypto safety limits.
 - Certificate errors fail closed. Certificate pinning is not enabled without a rotation
   and emergency-recovery design.
@@ -281,7 +289,7 @@ default.
 
 - Compose state and accessibility tests for phone, tablet, foldable, font scaling,
   screen reader, dark mode, rotation, and process recreation.
-- Provider onboarding, email-code cancellation/expiry, pairing/recovery, offline edits,
+- Provider onboarding, account creation/key acknowledgement, sign-in typos and rejected keys, pairing/recovery, offline edits,
   conflict/halt review, and account switch.
 - Keystore/BiometricPrompt success, timeout, lockout, invalidation, and no-auth paths.
 - WorkManager unique-work/coalescing, retry, provider cancellation, and reboot paths.
