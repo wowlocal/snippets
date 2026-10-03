@@ -35,6 +35,39 @@ The authentication helper stays beside the application under `share/snippets-lin
 it has no `bin` shortcut and runs without elevated privileges. Installation does
 not create or edit a system PAM policy.
 
+## Desktop settings and login startup
+
+Open **Settings…** from the menu, press **Ctrl+,**, or run `snippets --settings`.
+The native preferences window searches its row titles and descriptions. Its pages
+open the existing vault, Cloud account/recovery, inline expansion, learning,
+clipboard history and encrypted backup controls.
+
+**General → When Library Window Closes** chooses **Hide and Keep Running**
+(the default) or **Quit Snippets**. Quit uses the same draft-saving, sensitive
+operation cancellation and worker-completion checks as Ctrl+Q and `snippets --quit`.
+Settings writes finish before quitting. Closing the Settings window hides it.
+
+**Launch at Login** explicitly registers this installation to start with
+`--background`. That command starts the primary desktop owner and its existing
+opt-in services without opening the library window. Recovery-required startup
+shows the recovery window. A secondary background invocation leaves the current
+windows alone. Opening Settings only reads the current preferences and login entry.
+
+Registration uses a private app-owned entry at
+`$XDG_CONFIG_HOME/autostart/com.khm.snippets.linux.desktop` (normally
+`~/.config/autostart/`). Disabling writes `Hidden=true`, which also masks a
+lower-priority system entry. A changed installation offers **Use This Installation**;
+this updates only an unchanged managed entry. Custom, newer, linked, oversized or
+concurrently changed entries are preserved. Paths with a literal backslash cannot
+be enabled because the installed systemd generator cannot preserve them; use the
+normal installed location instead. Spaces, Unicode, quotes, dollar signs and
+percent signs are checked with independent native launchers.
+
+Omarchy's UWSM handles [XDG autostart](https://raw.githubusercontent.com/Vladimir-csp/uwsm/master/README.md).
+The registration follows the [desktop autostart specification](https://specifications.freedesktop.org/autostart/latest/).
+The native window compiles and isolated registration/launch checks pass. A live
+GTK session and actual sign-in trial remain unverified in this environment.
+
 ## Library
 
 - Start empty, create entries, or import a Mac/iOS **Export for Sharing** file.

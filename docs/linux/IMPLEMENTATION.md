@@ -217,7 +217,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 
 | Area | Rust implementation | Verification / next work |
 | --- | --- | --- |
-| Native workspace | GTK list/editor, search, tags, pins, autosave, keyboard actions and gated startup recovery | Earlier native lifecycle smoke passes with fatal GTK warnings; recovery crash/access checks pass, new recovery UI compiles and needs a live display check |
+| Native workspace | GTK list/editor, search, tags, pins, autosave, keyboard actions, searchable settings, configurable close behavior, explicit background login startup and gated startup recovery | Earlier native lifecycle smoke passes with fatal GTK warnings; recovery crash/access checks pass, new recovery UI compiles and needs a live display check |
 | Library | CRUD, bounded/strict JSON, file permissions, process lock, atomic replacement, CAS conflicts, undo/redo | Rust core and concurrent CLI writer tests pass |
 | Transfers | Native and Raycast JSON import, ordinary sharing export and native portable encrypted-backup export/import with interrupted-import recovery | Round-trip, timestamps, collisions, exact-key authentication, encrypted two-file redo, cancellation and independent OpenSSL backup format checks pass; live native dialogs and Apple app round trips remain unverified |
 | Placeholders | Native ICU date/time formats, one-pass clipboard, locale, calendar offsets | Fixed-date, month-end, literal grammar tests pass |
@@ -2779,3 +2779,61 @@ The GTK settings smoke again failed at display initialization before opening a
 window. The final inline run used one test thread: a concurrent run had a transient
 nonblocking-lock refusal in the existing large-delivery fixture, which passed
 serially. Production lock admission was kept unchanged.
+
+
+## Native searchable desktop settings and login startup
+
+`settings_ui.rs` creates an AdwPreferencesWindow with native row search and pages
+linking to the existing secret-owning controls. General preferences choose Hide
+or Quit on main-window close. The closed schema-1 `desktop-settings.json` contains
+only that enum, defaults to Hide without writing, rejects newer/unknown/linked
+inputs, and writes atomically under the common library lock. A main-window close
+reads the preference after releasing the RefCell borrow before save/quit. Quit
+uses the existing draft and worker barriers, fences new settings changes and waits
+for an accepted settings write. A rejected draft save cancels that fence.
+
+`desktop_settings.rs` owns explicit XDG login registration. Reads create nothing;
+a per-entry nonblocking process lock and exact saved bytes protect publication.
+The managed desktop entry and new directories are private; unrelated entries,
+customizations, unknown versions, links and observed concurrent changes survive.
+Disable publishes Hidden=true to mask lower-priority entries. An installation
+move requires the explicit Use This Installation action. The fixed native
+`/usr/bin/env` executable forwards the absolute app path without a shell, allowing
+GLib to validate the executable before expanding escaped percent characters.
+The [GLib 2.88.3 implementation](https://raw.githubusercontent.com/GNOME/glib/2.88.3/gio/gdesktopappinfo.c)
+performs that pre-expansion executable check. The installed systemd generator
+applies another C unescape that cannot represent a literal backslash in the app
+path. Enable refuses that path before touching the saved entry; the entry encoder
+and decoder still support its standard format for reading/preserving metadata.
+
+`--settings`, Ctrl+, and the desktop Settings action open the preferences window.
+`--background` is mutually exclusive with foreground commands and registers only
+the existing primary GApplication owner; it creates no main window unless a
+recovery fence requires one. Secondary background commands create no observer or
+window. Existing opt-in service admission remains authoritative. Startup uses
+the [installed UWSM XDG autostart target](https://raw.githubusercontent.com/Vladimir-csp/uwsm/master/README.md);
+the target dependency is present on this machine, while the user bus cannot be
+queried from this restricted environment. No user config or login entry was
+changed during development.
+
+The public native fixture `tests/reference/autostart-entry.c` asks GLib to parse
+and launch the actual generated entry into a temporary argv recorder, including
+spaces, Unicode, quotes, dollars, backticks and percent characters. The systemd
+user generator runs with private XDG config directories and output directories;
+it creates one linked startup unit, then verifies that a user Hidden=true entry
+masks an enabled simulated system entry. It starts no service or user session.
+Core checks cover defaults, schema/privacy, permissions, saved-byte conflicts,
+foreign files, linked inputs, busy locks, install moves and unusable paths. The
+GTK smoke injects temporary registration paths and verifies search, persistence
+and quit fencing; live native-window and actual sign-in behavior remain pending.
+
+Verification for this addition: all seven default-feature settings tests and all
+six headless settings tests passed, including the independent GLib launcher and
+isolated systemd generator checks. The command-line exclusivity test, 35 inline
+regressions and 26 core integration tests passed; one private peer-credential test
+remained ignored. Clippy passed with warnings denied in both configurations,
+formatting passed, all three release binaries built, and two installs into a
+temporary prefix verified executable bytes, modes, the desktop Settings action
+and isolated CLI refusals. The GTK smoke was attempted but failed at display
+initialization before creating a window or changing any registration. These
+checks do not establish live window behavior or startup after an actual sign-in.

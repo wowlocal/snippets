@@ -22,6 +22,8 @@ use std::{
 mod history;
 #[path = "inline_ui.rs"]
 mod inline;
+#[path = "settings_ui.rs"]
+mod settings;
 #[path = "usage_ui.rs"]
 mod usage_settings;
 
@@ -52,6 +54,10 @@ struct Options {
     history: bool,
     #[arg(long)]
     quit: bool,
+    #[arg(long, conflicts_with_all = ["picker", "new", "capture", "history", "quit", "settings"])]
+    background: bool,
+    #[arg(long, conflicts_with_all = ["picker", "new", "capture", "history", "quit", "background"])]
+    settings: bool,
 }
 struct App {
     application: adw::Application,
@@ -68,6 +74,7 @@ struct App {
     control: RefCell<Option<Rc<crate::control_ui::Service>>>,
     usage: RefCell<Option<crate::usage_store::Handle>>,
     usage_settings: RefCell<Option<Rc<usage_settings::Settings>>>,
+    settings: RefCell<Option<Rc<settings::Settings>>>,
     usage_quitting: Cell<bool>,
     hold: RefCell<Option<gio::ApplicationHoldGuard>>,
     copy_serial: Cell<u64>,
@@ -210,6 +217,21 @@ impl App {
         }
         if let Some(settings) = self.usage_settings.borrow().as_ref() {
             settings.window.present();
+        }
+    }
+    fn open_settings(self: &Rc<Self>) {
+        if self.usage_quitting.get() {
+            return;
+        }
+        if self.settings.borrow().is_none() {
+            *self.settings.borrow_mut() = Some(settings::Settings::new(
+                &self.application,
+                self.library.borrow().root.clone(),
+            ));
+        }
+        if let Some(settings) = self.settings.borrow().as_ref() {
+            settings.cancel_quit();
+            settings.present();
         }
     }
     fn start_inline(&self) {
@@ -665,6 +687,11 @@ impl App {
         if self.usage_quitting.get() {
             return;
         }
+        let settings_idle = self
+            .settings
+            .borrow()
+            .as_ref()
+            .is_none_or(|settings| settings.prepare_quit());
         let control_idle = self
             .control
             .borrow()
@@ -690,6 +717,10 @@ impl App {
             .borrow()
             .as_ref()
             .is_none_or(|worker| worker.prepare_quit());
+        if !settings_idle {
+            self.toast("Waiting for desktop settings to save. Try Quit again shortly.");
+            return;
+        }
         if !control_idle {
             self.toast("Waiting for the CLI request to stop. Try Quit again shortly.");
             return;
@@ -744,6 +775,9 @@ impl App {
             if let Some(service) = self.inline.borrow().as_ref() {
                 service.cancel_quit();
             }
+            if let Some(settings) = self.settings.borrow().as_ref() {
+                settings.cancel_quit();
+            }
             workspace.present(None);
             return;
         }
@@ -797,6 +831,9 @@ impl App {
             if let Some(service) = self.inline.borrow().as_ref() {
                 service.cancel_quit();
             }
+            if let Some(settings) = self.settings.borrow().as_ref() {
+                settings.cancel_quit();
+            }
             self.present();
         }
     }
@@ -843,6 +880,7 @@ impl App {
             "history",
             "inline",
             "usage",
+            "settings",
             "search",
             "save",
             "copy",
@@ -870,6 +908,7 @@ impl App {
                         "history",
                         "inline",
                         "usage",
+                        "settings",
                     ]
                     .contains(&name)
                         && !app.ensure_library()
@@ -889,6 +928,7 @@ impl App {
                         "history" => app.open_history(),
                         "inline" => app.open_inline(),
                         "usage" => app.open_usage(),
+                        "settings" => app.open_settings(),
                         "secure" => app.open_secure(None),
                         "new" => {
                             app.main().new_entry("");
@@ -974,6 +1014,7 @@ impl App {
             ("undo", "<Control><Alt>z"),
             ("redo", "<Control><Alt><Shift>z"),
             ("quit", "<Control>q"),
+            ("settings", "<Control>comma"),
         ] {
             self.application
                 .set_accels_for_action(&format!("app.{action}"), &[shortcut]);
@@ -1036,6 +1077,7 @@ impl MainWindow {
         header.pack_end(&picker);
         let menu = gio::Menu::new();
         for (title, action) in [
+            ("Settings…", "settings"),
             ("Account & Recovery…", "account"),
             ("Secure Snippets…", "secure"),
             ("Capture Clipboard", "capture"),
@@ -1350,9 +1392,24 @@ impl MainWindow {
         let weak = Rc::downgrade(&this);
         this.window.connect_close_request(move |window| {
             if let Some(this) = weak.upgrade()
-                && this.save()
+                && let Some(app) = this.app.upgrade()
             {
-                window.set_visible(false);
+                let preference =
+                    crate::desktop_settings::Preferences::read(&app.library.borrow().root);
+                match preference {
+                    Ok(preference)
+                        if preference.close_action
+                            == crate::desktop_settings::CloseAction::Quit =>
+                    {
+                        app.quit()
+                    }
+                    Ok(_) => {
+                        if this.save() {
+                            window.set_visible(false);
+                        }
+                    }
+                    Err(error) => this.toast(error.0),
+                }
             }
             glib::Propagation::Stop
         });
@@ -2022,6 +2079,7 @@ pub fn run() -> glib::ExitCode {
         control: RefCell::new(None),
         usage: RefCell::new(None),
         usage_settings: RefCell::new(None),
+        settings: RefCell::new(None),
         usage_quitting: Cell::new(false),
         hold: RefCell::new(None),
         copy_serial: Cell::new(0),
@@ -2071,6 +2129,14 @@ pub fn run() -> glib::ExitCode {
         };
         if options.quit {
             app.quit();
+        } else if options.background {
+            // Primary startup owns the existing services without creating a window.
+            // A recovery fence must stay visible even on login startup.
+            if app.recovery_required.get() {
+                app.present();
+            }
+        } else if options.settings {
+            app.open_settings();
         } else if options.picker {
             app.open_picker(PasteTarget::capture());
         } else if options.new {
@@ -2093,6 +2159,37 @@ pub fn run() -> glib::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn background_and_settings_commands_are_exclusive_and_do_not_parse_as_capture_or_picker() {
+        for mode in ["--background", "--settings"] {
+            let options = Options::try_parse_from(["snippets", mode]).unwrap();
+            assert!(
+                options.background == (mode == "--background")
+                    && options.settings == (mode == "--settings")
+            );
+            assert!(
+                !options.picker
+                    && !options.new
+                    && !options.capture
+                    && !options.history
+                    && !options.quit
+            );
+            for other in [
+                "--background",
+                "--settings",
+                "--picker",
+                "--new",
+                "--capture",
+                "--clipboard-history",
+                "--quit",
+            ] {
+                if other != mode {
+                    assert!(Options::try_parse_from(["snippets", mode, other]).is_err());
+                }
+            }
+        }
+    }
+
     fn drain() {
         let context = glib::MainContext::default();
         while context.pending() {
@@ -2179,6 +2276,7 @@ mod tests {
             control: RefCell::new(None),
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
+            settings: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2307,6 +2405,7 @@ mod tests {
             control: RefCell::new(None),
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
+            settings: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2375,6 +2474,7 @@ mod tests {
             control: RefCell::new(None),
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
+            settings: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2479,6 +2579,7 @@ mod tests {
             control: RefCell::new(None),
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
+            settings: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),

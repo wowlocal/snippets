@@ -9,7 +9,7 @@ Categories=Utility;
 Keywords=snippets;notes;clipboard;text;links;
 StartupNotify=true
 StartupWMClass=com.khm.snippets.linux
-Actions=Picker;New;Capture;History;
+Actions=Settings;Picker;New;Capture;History;
 
 [Desktop Action Picker]
 Name=Find and Paste a Snippet
@@ -26,3 +26,7 @@ Exec=snippets --capture
 [Desktop Action History]
 Name=Clipboard History
 Exec=snippets --clipboard-history
+
+[Desktop Action Settings]
+Name=Settings
+Exec=snippets --settings

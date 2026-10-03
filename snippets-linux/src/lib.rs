@@ -19,6 +19,7 @@ mod control_ui;
 pub mod crypto;
 pub mod deletion_review;
 pub mod desktop;
+pub mod desktop_settings;
 pub mod inbound;
 #[cfg(any(test, feature = "desktop"))]
 pub mod inline_expansion;
