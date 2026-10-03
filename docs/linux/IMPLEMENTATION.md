@@ -219,6 +219,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | --- | --- | --- |
 | Native workspace | GTK list/editor, search, tags, pins, autosave, keyboard actions, searchable settings, configurable close behavior, explicit background login startup and gated startup recovery | Earlier native lifecycle smoke passes with fatal GTK warnings; recovery crash/access checks pass, new recovery UI compiles and needs a live display check |
 | Library | CRUD, bounded/strict JSON, file permissions, process lock, atomic replacement, CAS conflicts, undo/redo | Rust core and concurrent CLI writer tests pass |
+| Editor assistance | Safe derived keyword buttons, existing metadata references, shared next-part Tab completion, duplicate and bidirectional prefix warnings, explicit bounded ordinary placeholder preview | Frozen Mac examples, Unicode boundary, reservation, disabled-keyword and preview grammar/limit tests pass; native widget smoke requires a live display |
 | Transfers | Native and Raycast JSON import, ordinary sharing export and native portable encrypted-backup export/import with interrupted-import recovery | Round-trip, timestamps, collisions, exact-key authentication, encrypted two-file redo, cancellation and independent OpenSSL backup format checks pass; live native dialogs and Apple app round trips remain unverified |
 | Placeholders | Native ICU date/time formats, one-pass clipboard, locale, calendar offsets | Fixed-date, month-end, literal grammar tests pass |
 | CLI | Ordinary mutations/get/import and combined metadata catalogue | Concurrent writer and secure output/refusal tests pass |
@@ -2837,3 +2838,56 @@ temporary prefix verified executable bytes, modes, the desktop Settings action
 and isolated CLI refusals. The GTK smoke was attempted but failed at display
 initialization before creating a window or changing any registration. These
 checks do not establish live window behavior or startup after an actual sign-in.
+
+## Native editor keyword assistance and resolved preview
+
+`editor_assistance.rs` ports the established Mac keyword examples: short opening
+words, four/three-letter abbreviations for long words, up to five name initials
+and URL-scheme skipping. Ordinary content contributes only its first line. The
+explicit Secure body variant has no text argument. The native ordinary editor
+checks current locked-vault metadata before reading its buffer for assistance or
+preview; unknown state or a newly secure identity refuses the view.
+
+Candidate buttons exclude every reserved duplicate, including disabled entries,
+and both active prefix-conflict directions. Suggestions are capped at three;
+neutral existing-keyword references at eight. Existing references match components
+and reordered dot parts, while Tab uses only the shared continuation of actual
+prefix matches, ending at the next dot or hyphen. Grapheme/source boundaries keep
+case and diacritic folds from splitting Unicode text. A modified selection or
+modified Tab retains native focus navigation. Clicking a suggestion rereads the
+saved catalogue before changing the field. The ordinary autosave and CAS owner
+remain the publication authority.
+
+Native admission uses `Library::try_catalogue`: ordinary records and locked-vault
+metadata share one fresh primary generation under the common nonblocking lock.
+A busy writer or an unknown primary/vault state refuses the view rather than
+blocking GTK or extending the clipboard-read deadline. Its focused regression
+checks a concurrently saved keyword, held lock and malformed vault.
+
+`editor_assistance_ui.rs` exposes these controls as native GTK buttons, labels and
+a popover. Metadata refresh is debounced after typing. Duplicate, unsupported,
+disabled and both prefix-direction warnings coexist. Preview opens explicitly,
+uses the production ICU grammar once and never changes the saved template. It
+caps clipboard display at 1,000 graphemes or 8 KiB and total display at 2,000
+graphemes or 16 KiB, with visible truncation markers. Unknown tokens stay literal
+and replacements are not expanded recursively. Copy obtains a fresh resolution.
+
+Only opening a template containing `{clipboard}` starts a native clipboard read.
+That read reuses the bounded, time-limited GIO stream owner and an off-thread
+desktop-session monitor. A generation binds its reply to the current draft/view;
+focus loss, hide, close, edits, recovery, read failure, quit and observed session
+lock cancel the task and clear the GTK label before hiding it. Session epochs
+also reject a lock/unlock while a read waits. No preview is written to disk, no
+clipboard content is written, and no actual desktop clipboard or input was
+touched by development checks.
+
+Verification: nine assistance tests passed with default features and nine
+without desktop features. The default run also retained one ignored native
+widget smoke. Five bounded clipboard-stream tests, 35 inline tests and 26 core
+integration tests passed; the inline run retained one ignored private
+peer-credential test. Clippy passed with warnings denied in both configurations
+and formatting passed. All three release binaries built, and two installations
+into a temporary prefix verified bytes, modes and isolated CLI refusals. The new
+public, isolated GTK smoke was attempted and
+failed at display initialization before creating a window. Live buttons, Tab
+focus routing, popover layout and actual clipboard preview remain unverified.

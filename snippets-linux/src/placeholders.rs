@@ -2,6 +2,7 @@
 use chrono::{DateTime, Duration, Local, Months};
 use regex::Regex;
 use std::{collections::HashMap, ffi::CString, sync::OnceLock};
+use unicode_segmentation::UnicodeSegmentation;
 use zeroize::Zeroizing;
 
 unsafe extern "C" {
@@ -145,6 +146,75 @@ pub fn resolve_at(template: &str, clipboard: &str, now: DateTime<Local>) -> Stri
 }
 pub fn resolve(template: &str, clipboard: &str) -> String {
     resolve_at(template, clipboard, Local::now())
+}
+
+pub struct Preview {
+    pub text: String,
+    pub has_placeholder: bool,
+    pub truncated: bool,
+}
+fn append_preview(output: &mut String, value: &str, remaining: &mut usize, bytes: usize) -> bool {
+    for grapheme in value.graphemes(true) {
+        if *remaining == 0 || output.len().saturating_add(grapheme.len()) > bytes {
+            return false;
+        }
+        output.push_str(grapheme);
+        *remaining -= 1;
+    }
+    true
+}
+/// Bounded display resolution. The caller supplies a deliberately acquired
+/// clipboard snapshot; this core never reads the desktop clipboard.
+pub fn preview_at(template: &str, clipboard: &str, now: DateTime<Local>) -> Preview {
+    static BRACES: OnceLock<Regex> = OnceLock::new();
+    let regex = BRACES.get_or_init(|| Regex::new(r"\{([^{}\r\n]*)\}").expect("static pattern"));
+    let mut clip = Zeroizing::new(String::new());
+    if !append_preview(&mut clip, clipboard, &mut 1000, 8192) {
+        clip.push_str("[clipboard truncated]");
+    }
+    let mut result = Preview {
+        text: String::new(),
+        has_placeholder: false,
+        truncated: false,
+    };
+    let mut remaining = 2000;
+    let mut previous = 0;
+    for capture in regex.captures_iter(template) {
+        let whole = capture.get(0).expect("whole match");
+        let replacement = token(&capture[1], &clip, now).map(Zeroizing::new);
+        result.has_placeholder |= replacement.is_some();
+        if !result.truncated {
+            result.truncated = !append_preview(
+                &mut result.text,
+                &template[previous..whole.start()],
+                &mut remaining,
+                16384,
+            ) || !append_preview(
+                &mut result.text,
+                replacement
+                    .as_deref()
+                    .map_or(whole.as_str(), |s| s.as_str()),
+                &mut remaining,
+                16384,
+            );
+        }
+        previous = whole.end();
+        if result.truncated && result.has_placeholder {
+            break;
+        }
+    }
+    if !result.truncated {
+        result.truncated = !append_preview(
+            &mut result.text,
+            &template[previous..],
+            &mut remaining,
+            16384,
+        );
+    }
+    if result.truncated {
+        result.text.push_str("[preview truncated]");
+    }
+    result
 }
 /// One-pass secure resolution uses owned wipeable buffers and checks growth
 /// before each append. Regex captures borrow the template; no body enters caches.

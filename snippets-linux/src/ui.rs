@@ -18,6 +18,8 @@ use std::{
     rc::{Rc, Weak},
     time::Duration,
 };
+#[path = "editor_assistance_ui.rs"]
+mod editor_assistance_ui;
 #[path = "clipboard_history_ui.rs"]
 mod history;
 #[path = "inline_ui.rs"]
@@ -684,6 +686,9 @@ impl App {
         });
     }
     fn quit(self: &Rc<Self>) {
+        if let Some(main) = self.main.borrow().as_ref() {
+            main.assistance.invalidate();
+        }
         if self.usage_quitting.get() {
             return;
         }
@@ -1040,6 +1045,7 @@ struct MainWindow {
     editor_stack: gtk::Stack,
     name: gtk::Entry,
     keyword: gtk::Entry,
+    assistance: Rc<editor_assistance_ui::Assistance>,
     tags: gtk::Entry,
     enabled: gtk::CheckButton,
     pin: gtk::CheckButton,
@@ -1222,6 +1228,8 @@ impl MainWindow {
             metadata.append(&group);
         }
         editor.append(&metadata);
+        let assistance = editor_assistance_ui::Assistance::new();
+        editor.append(&assistance.row);
         let toggles = gtk::Box::new(gtk::Orientation::Horizontal, 16);
         let enabled = gtk::CheckButton::with_label("Available in picker");
         let pin = gtk::CheckButton::with_label("Pin to top");
@@ -1255,6 +1263,7 @@ impl MainWindow {
             footer.append(&insert);
         }
         editor.append(&footer);
+        footer.append(&assistance.preview_button);
         editor.append(&label(
             "Ordinary entries are stored locally as plaintext.",
             "dim-label",
@@ -1277,6 +1286,7 @@ impl MainWindow {
             editor_stack,
             name,
             keyword,
+            assistance,
             tags,
             enabled,
             pin,
@@ -1289,6 +1299,7 @@ impl MainWindow {
             autosave: RefCell::new(None),
             read_failed: Cell::new(false),
         });
+        this.assistance.attach(&this);
         let weak = Rc::downgrade(app);
         this.recovery.connect_button_clicked(move |_| {
             if let Some(app) = weak.upgrade() {
@@ -1463,6 +1474,8 @@ impl MainWindow {
             create.set_visible(!blocked);
         }
         if blocked {
+            self.assistance.invalidate();
+            self.assistance.row.set_visible(false);
             if let Some(source) = self.autosave.borrow_mut().take() {
                 source.remove();
             }
@@ -1492,6 +1505,7 @@ impl MainWindow {
         self.overlay.add_toast(adw::Toast::new(text));
     }
     fn show(&self, snippet: Option<Snippet>, expected: Option<Snippet>) {
+        self.assistance.invalidate();
         if let Some(source) = self.autosave.borrow_mut().take() {
             source.remove();
         }
@@ -1517,12 +1531,14 @@ impl MainWindow {
             self.editor_stack.set_visible_child_name("empty");
         }
         self.loading.set(false);
+        self.assistance.refresh(self);
     }
     fn edited(self: &Rc<Self>) {
         if self.loading.get() || self.current.borrow().is_none() {
             return;
         }
         self.dirty.set(true);
+        self.assistance.queue(self);
         self.status.set_label("Unsaved changes");
         if let Some(source) = self.autosave.borrow_mut().take() {
             source.remove();
@@ -1657,6 +1673,7 @@ impl MainWindow {
         *self.visible.borrow_mut() = snippets;
         self.loading.set(false);
         self.refresh_tags();
+        self.assistance.refresh(self);
     }
     fn refresh_tags(&self) {
         let Some(app) = self.app.upgrade() else {
@@ -1823,6 +1840,7 @@ impl MainWindow {
                 return;
             }
             Err(error) => {
+                self.assistance.invalidate();
                 if !self.read_failed.replace(true) {
                     self.toast(&error.to_string());
                 }
@@ -1849,6 +1867,7 @@ impl MainWindow {
                 self.refresh();
             }
             Err(error) => {
+                self.assistance.invalidate();
                 if !self.read_failed.replace(true) {
                     self.toast(&error.to_string());
                 }

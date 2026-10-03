@@ -72,6 +72,11 @@ GTK session and actual sign-in trial remain unverified in this environment.
 
 - Start empty, create entries, or import a Mac/iOS **Export for Sharing** file.
 - Changes autosave after 600 ms. Ctrl+S saves immediately.
+- The ordinary editor suggests keywords from the name or first content line.
+  Suggested buttons avoid reserved keywords and enabled prefix conflicts;
+  existing keywords appear as references. Tab at the end of the keyword field
+  completes the next shared part without choosing between ambiguous entries.
+  Warnings explain duplicates and both directions of trigger-prefix conflicts.
 - Search names, keywords, tags, and ordinary text. Metadata supports fuzzy
   subsequences; content uses contiguous matching. Selected tags must all match.
   Pins sort first; disabled entries stay editable but leave the picker.
@@ -83,6 +88,14 @@ GTK session and actual sign-in trial remain unverified in this environment.
 - Copy resolves `{clipboard}`, `{date}`, `{time}`, `{datetime}`, compact ICU
   formats such as `{date:yyyy-MM-dd}`, and explicit `format`, `locale`, and
   calendar `offset` attributes. Unknown/malformed placeholders remain literal.
+- **Preview…** shows a bounded snapshot of resolved ordinary text. Opening it
+  explicitly reads the clipboard only when `{clipboard}` is present, with the
+  existing size/time limits and desktop-session checks. Closing it, leaving the
+  window, changing the draft, quitting or observing a desktop lock clears the
+  preview and cancels an unfinished read. Clipboard display is capped at 1,000
+  graphemes or 8 KiB; the complete preview at 2,000 graphemes or 16 KiB. Copy
+  resolves the template again. Secure bodies never supply keyword suggestions
+  or enter this preview.
 - External changes are polled every two seconds. Conflicting saves preserve the
   unsaved draft; Reload offers to discard it and load the current disk record.
 

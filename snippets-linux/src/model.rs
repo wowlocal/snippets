@@ -472,6 +472,16 @@ impl Library {
     /// Fresh ordinary content and locked-vault metadata from one primary generation.
     pub fn catalogue(&self) -> Result<(Vec<Snippet>, Vec<crate::vault::Metadata>)> {
         let _guard = self.lock()?;
+        self.catalogue_locked()
+    }
+    /// Native short-lived views must refuse a busy writer instead of blocking
+    /// the main loop or extending a bounded clipboard-read deadline.
+    #[cfg(any(test, feature = "desktop"))]
+    pub(crate) fn try_catalogue(&self) -> Result<(Vec<Snippet>, Vec<crate::vault::Metadata>)> {
+        let _guard = self.try_lock()?;
+        self.catalogue_locked()
+    }
+    fn catalogue_locked(&self) -> Result<(Vec<Snippet>, Vec<crate::vault::Metadata>)> {
         Ok((self.read_locked()?.0, self.secure_metadata_locked()?))
     }
     fn transaction(
