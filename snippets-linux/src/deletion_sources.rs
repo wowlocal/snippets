@@ -3,6 +3,70 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) fn prerequisite_variant(
+    sources: &[Envelope],
+    id: Uuid,
+) -> Result<Option<merge::SecureVariant>> {
+    let mut found = None;
+    for source in sources {
+        for variant in merge::secure_variants(source).map_err(|_| Failure::PreservationRequired)? {
+            if variant.copy_id == id {
+                if found.is_some() {
+                    return Err(Failure::PreservationRequired);
+                }
+                found = Some(variant);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Freeze authenticated raw-carrier evidence in the decision's journal clone.
+/// No source primary outcome, receipt, absence or deletion consent is created.
+pub(super) fn materialize_prerequisite(
+    id: Uuid,
+    sources: &[Envelope],
+    journal: &Journal,
+    current: &BTreeMap<Uuid, Envelope>,
+    keys: &crate::materializer::Keyring<'_>,
+) -> primary::Result<Journal> {
+    let source = sources.first().ok_or(primary::Failure::InvalidState)?;
+    let group = primary::DeletionGroup::prepare(source.id, sources.to_vec(), journal, keys)?;
+    if !group.originals().contains_key(&id) {
+        return Err(primary::Failure::InvalidState);
+    }
+    let dependencies: Vec<_> = group
+        .sources()
+        .iter()
+        .map(|source| {
+            let copies = group
+                .originals()
+                .values()
+                .filter(|copy| merge::provenance(copy).is_some_and(|p| p.source_id == source.id))
+                .cloned()
+                .collect();
+            (source.clone(), copies)
+        })
+        .collect();
+    let mut targets = BTreeMap::new();
+    for participant in group.sources().iter().chain(group.originals().values()) {
+        let target = journal
+            .local_intent(participant.id, current.get(&participant.id))?
+            .or_else(|| journal.entry(participant.id).map(|entry| &entry.desired))
+            .unwrap_or(participant);
+        targets.insert(participant.id, target.clone());
+    }
+    let mut next = journal.clone();
+    next.stage_generation(
+        crate::crypto::random()?,
+        &dependencies,
+        &group.originals().values().cloned().collect::<Vec<_>>(),
+        &targets,
+        &journal.release_targets(current)?,
+    )?;
+    next.materialize_preservation(id, keys)
+}
+
 pub(super) fn current_group(
     journal: &Journal,
     current: &BTreeMap<Uuid, Envelope>,

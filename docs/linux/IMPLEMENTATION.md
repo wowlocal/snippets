@@ -269,6 +269,20 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-03
 
+- Raw-carrier prerequisite recovery adds four isolated regression tests.
+  They cover all eight local/remote-parent and child/parent choices, both child
+  decisions through all five WAL phases, eight refusal modes for each decision,
+  and exact retained ambiguous source requests/CAS beside new originals.
+  Public fictional vaults and positional memory peers verify that the child's
+  decision never changes the parent primary file or grants its deletion consent.
+  Selected regressions pass 187 default library tests,
+  187 headless library tests and 24 core/helper integration tests.
+  Deletion review, journal, primary apply and sender/receiver checks pass; Clippy
+  passes with warnings denied for all targets in both configurations. Formatting,
+  three release binaries and two temporary-prefix installations pass. The native
+  account fixture stops at GTK initialization before its widget assertions.
+  Live prerequisite selection, authentication dialogs and combined native/cloud
+  workflows remain open.
 - Independent prerequisite deletion review adds five isolated regression tests.
   All four child/parent choices, five WAL interruption phases, stale/cancelled
   authorization, authentication of unmaterialized originals and a restored
@@ -2166,6 +2180,29 @@ positional-CAS memory peer. They verify retained parent requests, exact C0
 before source delivery, final server choices and retirement of consent after
 completion. Live native selection/dialog/focus and combined cloud verification
 remain open; unsupported protocol versions retain a closed refusal.
+
+A prerequisite can also exist only inside a current v1 carrier, before any
+preservation dependency frame has been staged. The review retains that exact
+parent group in its frozen snapshot and derives the child's display metadata
+from the validated variant. Restore remains available and both decisions require
+vault authentication. Authentication checks the carrier sources and original
+bodies, then freezes complete source/copy evidence and selected targets in a
+journal clone. This clone has no authority until the child's complete-file WAL
+is published. It adds no parent primary outcome, deletion permission or receipt.
+The parent's physical absence or present body, inbox/outbound request and every
+previous original/CAS remain owned by their existing boundaries. The later
+parent review reuses the child's frozen C0 rather than resealing it.
+
+Four additional isolated regressions cover all eight local/remote-parent and
+child/parent choices, both choices through all five WAL interruption phases,
+eight refusal modes for each choice, and old ambiguous source requests beside
+new raw originals. The raw-source setup intentionally starts with no dependency
+frame. A pre-WAL interruption advances only the authenticated fence nonce; all
+other journal state remains unchanged and no original or consent is published.
+Published redo needs no live vault key. The ambiguous-request fixture also
+checks exact original bytes/CAS and a retained C0 across the later parent
+review and real positional-CAS completion. These fixtures do not establish a
+live native dialog or combined cloud workflow.
 
 ## Protected body selection and editing
 

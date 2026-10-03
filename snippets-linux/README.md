@@ -74,6 +74,11 @@ only its own fate. Review again afterward for the parent. Restoring a secure
 copy requires vault authentication; an original not yet materialized requires
 authentication for either choice. Later body edits remain intact. Existing
 originals, cloud requests and later decisions keep their ordering.
+A prerequisite whose original is still inside the parent's current conflict,
+with no preservation frame yet, can also be restored. Both choices authenticate
+the matching vault and retain the encrypted original before applying the child's
+own decision. The parent's contents or absence and previous cloud requests stay
+intact until its separate review.
 
 The account-review journal and its durable key owner preserve encrypted previous
 state, local intent and old key/recovery/pairing capabilities across an explicitly

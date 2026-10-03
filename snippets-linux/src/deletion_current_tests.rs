@@ -12,8 +12,23 @@ fn fixture(
     Envelope,
     Uuid,
 ) {
+    fixture_with_corruption(unstaged, remote, false)
+}
+
+fn fixture_with_corruption(
+    unstaged: bool,
+    remote: bool,
+    corrupt: bool,
+) -> (
+    tempfile::TempDir,
+    Library,
+    Server,
+    crate::vault::Document,
+    Envelope,
+    Uuid,
+) {
     let (temp, library, mut server, document, source, id) =
-        missing_originals::missing_original(false);
+        missing_originals::missing_original(corrupt);
     if unstaged {
         let mut checkpoint = load(&library);
         let old = &checkpoint.journal;
@@ -712,6 +727,372 @@ fn a_child_edited_after_restore_keeps_its_latest_physical_c1_when_the_parent_is_
             .flatten()
             .any(|(e, _)| *e == original)
     );
+}
+
+fn raw_deleted_child(
+    remote: bool,
+    corrupt: bool,
+) -> (tempfile::TempDir, Library, Server, Envelope, Envelope) {
+    let (temp, library, server, document, source, id) =
+        fixture_with_corruption(true, remote, corrupt);
+    let mut deleted = source.clone();
+    deleted.id = id;
+    deleted.secure = true;
+    deleted.deleted = true;
+    deleted.fields = None;
+    deleted.hlc = crate::clock::Hlc::foreign(0xffff_ffff_ff40);
+    deleted.extensions = std::collections::BTreeMap::from([(
+        "vaultKID".into(),
+        crate::canonical::Value::text(document.kid.clone()),
+    )]);
+    let mut checkpoint = load(&library);
+    assert!(
+        checkpoint
+            .journal
+            .preservation_generations(source.id)
+            .unwrap()
+            .is_empty()
+    );
+    checkpoint.journal.desire(deleted.clone()).unwrap();
+    checkpoint.save(&library, &key(), &SALT).unwrap();
+    (temp, library, server, source, deleted)
+}
+
+#[test]
+fn raw_prerequisite_children_can_be_restored_or_deleted_before_either_parent_decision() {
+    for remote in [false, true] {
+        for child_choice in [Choice::Keep, Choice::Delete] {
+            for parent_choice in [Choice::Keep, Choice::Delete] {
+                let (_temp, library, mut server, source, deleted) =
+                    raw_deleted_child(remote, false);
+                let id = deleted.id;
+                let before = load(&library);
+                let plain = fs::read(library.path()).unwrap();
+                let key = key();
+                let scope = scope();
+                let owner = owner(&library, &key, &scope, &|| Ok(()));
+                let review = owner.prepare_deletion_review(&mut server).unwrap();
+                assert_eq!(review.id, id);
+                assert!(review.summary().prerequisite && review.summary().can_keep);
+                assert!(
+                    review.summary().keep_requires_vault && review.summary().delete_requires_vault
+                );
+                assert!(load(&library).same_snapshot(&before));
+                let mut vault = unlock_vault(&library);
+                owner
+                    .decide_deletion_review_with_vault(
+                        &mut server,
+                        review,
+                        child_choice,
+                        Some(&mut vault),
+                    )
+                    .unwrap();
+                let after = load(&library);
+                assert!(
+                    after.journal.inbox == before.journal.inbox
+                        && after.journal.outbound == before.journal.outbound
+                );
+                assert!(!after.journal.deletion_approvals.contains_key(&source.id));
+                assert!(fs::read(library.path()).unwrap() == plain);
+                let original = after.journal.preservation_original(id).unwrap().clone();
+                let review = owner.prepare_deletion_review(&mut server).unwrap();
+                assert_eq!(review.id, source.id);
+                owner
+                    .decide_deletion_review_with_vault(
+                        &mut server,
+                        review,
+                        parent_choice,
+                        Some(&mut vault),
+                    )
+                    .unwrap();
+                drop(vault);
+                missing_originals::finish(&owner, &library, &mut server);
+                assert_eq!(
+                    server.records[&id].0.deleted,
+                    child_choice == Choice::Delete
+                );
+                assert_eq!(
+                    server.records[&source.id].0.deleted,
+                    parent_choice == Choice::Delete
+                );
+                let sent: Vec<_> = server.submitted.iter().flatten().map(|(e, _)| e).collect();
+                let original_position = sent.iter().position(|e| **e == original).unwrap();
+                let parent_position = sent.iter().position(|e| e.id == source.id).unwrap();
+                assert!(original_position < parent_position);
+                assert!(load(&library).journal.deletion_approvals.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_prerequisite_originals_and_decisions_survive_all_wal_phases_without_parent_consent() {
+    for choice in [Choice::Keep, Choice::Delete] {
+        for fault in 0..5 {
+            let (_temp, library, mut server, source, deleted) = raw_deleted_child(true, false);
+            let before = load(&library);
+            let plain = fs::read(library.path()).unwrap();
+            let key = key();
+            let scope = scope();
+            let owner = owner(&library, &key, &scope, &|| Ok(()));
+            let review = owner.prepare_deletion_review(&mut server).unwrap();
+            let mut vault = unlock_vault(&library);
+            assert!(
+                owner
+                    .decide_deletion_authenticated(
+                        &mut server,
+                        review,
+                        choice,
+                        Some(&mut vault),
+                        Some(fault)
+                    )
+                    .is_err()
+            );
+            drop(vault);
+            primary::recover(&library.root, &key, &SALT, scope.clone()).unwrap();
+            let mut vault = unlock_vault(&library);
+            if fault == 0 {
+                // The authenticated pre-WAL baseline advances only its fence
+                // nonce; the raw graph, intent and permissions stay unchanged.
+                let mut recovered = load(&library).journal;
+                assert!(recovered.primary_intent.is_none());
+                recovered.primary_epoch = before.journal.primary_epoch;
+                assert!(recovered == before.journal);
+                let review = owner.prepare_deletion_review(&mut server).unwrap();
+                assert!(review.id == deleted.id && review.summary().can_keep);
+                owner
+                    .decide_deletion_review_with_vault(
+                        &mut server,
+                        review,
+                        choice,
+                        Some(&mut vault),
+                    )
+                    .unwrap();
+            }
+            let after = load(&library);
+            assert!(fs::read(library.path()).unwrap() == plain);
+            assert!(
+                after.journal.inbox == before.journal.inbox
+                    && after.journal.outbound == before.journal.outbound
+            );
+            assert!(!after.journal.deletion_approvals.contains_key(&source.id));
+            let original = after
+                .journal
+                .preservation_original(deleted.id)
+                .unwrap()
+                .clone();
+            let review = owner.prepare_deletion_review(&mut server).unwrap();
+            assert_eq!(review.id, source.id);
+            owner
+                .decide_deletion_review_with_vault(
+                    &mut server,
+                    review,
+                    Choice::Keep,
+                    Some(&mut vault),
+                )
+                .unwrap();
+            assert!(load(&library).journal.preservation_original(deleted.id) == Some(&original));
+            drop(vault);
+            missing_originals::finish(&owner, &library, &mut server);
+            assert_eq!(
+                server.records[&deleted.id].0.deleted,
+                choice == Choice::Delete
+            );
+            assert!(!server.records[&source.id].0.deleted);
+            assert!(load(&library).journal.deletion_approvals.is_empty());
+        }
+    }
+}
+
+#[test]
+fn raw_prerequisite_authentication_or_stale_review_failures_leave_no_original_or_permission() {
+    for choice in [Choice::Keep, Choice::Delete] {
+        for change in 0..8 {
+            let (_temp, library, mut server, source, deleted) =
+                raw_deleted_child(true, change == 1);
+            let key = key();
+            let scope = scope();
+            let valid = Cell::new(true);
+            let guard = || {
+                if valid.get() {
+                    Ok(())
+                } else {
+                    Err(receiver::Failure::SessionChanged)
+                }
+            };
+            let owner = owner(&library, &key, &scope, &guard);
+            let review = owner.prepare_deletion_review(&mut server).unwrap();
+            assert!(review.id == deleted.id && review.summary().can_keep);
+            let mut vault = unlock_vault(&library);
+            match change {
+                2 => valid.set(false),
+                3 => server.scope.membership = crate::cloud::Binding::from_checkpoint([0x99; 32]),
+                4 => server.feed = feed(4),
+                5 => {
+                    let mut records = library.read().unwrap().0;
+                    records[0].content = "Public changed primary during raw-child review".into();
+                    crate::model::atomic_write(
+                        &library.path(),
+                        &crate::model::encode_library(&records, false).unwrap(),
+                    )
+                    .unwrap();
+                }
+                6 => {
+                    let mut checkpoint = load(&library);
+                    let mut changed = source.clone();
+                    changed.fields.as_mut().unwrap().name =
+                        "Public changed raw carrier intent".into();
+                    checkpoint.journal.desire(changed).unwrap();
+                    checkpoint.save(&library, &key, &SALT).unwrap();
+                }
+                7 => vault.lock(),
+                _ => (),
+            }
+            let before = load(&library);
+            let plain = fs::read(library.path()).unwrap();
+            let sealed = fs::read(library.root.join("Vault/vault.json")).unwrap();
+            let result = if change == 0 {
+                owner.decide_deletion_review(&mut server, review, choice)
+            } else {
+                owner.decide_deletion_review_with_vault(
+                    &mut server,
+                    review,
+                    choice,
+                    Some(&mut vault),
+                )
+            };
+            assert!(result.is_err());
+            assert!(load(&library).same_snapshot(&before));
+            assert!(
+                fs::read(library.path()).unwrap() == plain
+                    && fs::read(library.root.join("Vault/vault.json")).unwrap() == sealed
+            );
+            assert!(
+                load(&library)
+                    .journal
+                    .preservation_original(deleted.id)
+                    .is_none()
+            );
+            assert!(
+                !library.root.join("Sync/primary.pending").exists() && server.submitted.is_empty()
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_prerequisite_materialization_keeps_an_ambiguous_earlier_source_packet_and_c0_exact() {
+    for choice in [Choice::Keep, Choice::Delete] {
+        for fault in [None, Some(2)] {
+            let (_temp, library, mut server, mut document, source, id) =
+                missing_originals::missing_original(false);
+            let old_original = freeze_original(&library, &document, id);
+            save_child(&library, &mut document, &old_original, true);
+            let key = key();
+            let scope = scope();
+            let owner = owner(&library, &key, &scope, &|| Ok(()));
+            assert_eq!(
+                owner.send(&mut server, 1).unwrap().status,
+                sender::Status::MoreBatches
+            );
+            assert!(
+                owner
+                    .send(&mut missing_originals::LostReply(&mut server), 1)
+                    .is_err()
+            );
+            let mut checkpoint = load(&library);
+            let packet = checkpoint.journal.outbound.clone().unwrap();
+            let losing = edit_secure(
+                &checkpoint.journal.confirmed(source.id).unwrap().envelope,
+                &document,
+                b"Public new raw prerequisite beside an earlier lost reply",
+            );
+            let mut selected = envelope(
+                source.id.as_u128(),
+                "Public new raw parent winner",
+                0xffff_ffff_ff50,
+            );
+            selected.fields.as_mut().unwrap().keyword = "".into();
+            let current = merge::merge(None, Some(&losing), Some(&selected))
+                .unwrap()
+                .survivor
+                .unwrap();
+            let new_id = merge::secure_variants(&current).unwrap().remove(0).copy_id;
+            assert_ne!(new_id, id);
+            let mut deleted = current.clone();
+            deleted.id = new_id;
+            deleted.secure = true;
+            deleted.deleted = true;
+            deleted.fields = None;
+            deleted.hlc = crate::clock::Hlc::foreign(0xffff_ffff_ff60);
+            deleted.extensions = std::collections::BTreeMap::from([(
+                "vaultKID".into(),
+                crate::canonical::Value::text(document.kid.clone()),
+            )]);
+            checkpoint.journal.desire(current).unwrap();
+            checkpoint.journal.desire(deleted.clone()).unwrap();
+            let mut records = library.read().unwrap().0;
+            records.retain(|record| record.id != source.id);
+            crate::model::atomic_write(
+                &library.path(),
+                &crate::model::encode_library(&records, false).unwrap(),
+            )
+            .unwrap();
+            checkpoint.save(&library, &key, &SALT).unwrap();
+            let before = load(&library);
+            let plain = fs::read(library.path()).unwrap();
+            let review = owner.prepare_deletion_review(&mut server).unwrap();
+            assert!(
+                review.id == new_id && review.summary().prerequisite && review.summary().can_keep
+            );
+            let mut vault = unlock_vault(&library);
+            let result = owner.decide_deletion_authenticated(
+                &mut server,
+                review,
+                choice,
+                Some(&mut vault),
+                fault,
+            );
+            drop(vault);
+            assert_eq!(result.is_ok(), fault.is_none(), "{result:?}");
+            if fault.is_some() {
+                primary::recover(&library.root, &key, &SALT, scope.clone()).unwrap();
+            }
+            let after = load(&library);
+            assert!(fs::read(library.path()).unwrap() == plain);
+            assert!(after.journal.outbound == Some(packet.clone()));
+            assert!(after.journal.inbox == before.journal.inbox);
+            assert!(before.journal.confirmed(id) == after.journal.confirmed(id));
+            assert!(after.journal.preservation_original(id) == Some(&old_original));
+            assert!(!after.journal.deletion_approvals.contains_key(&source.id));
+            let new_original = after.journal.preservation_original(new_id).unwrap().clone();
+            let mut vault = unlock_vault(&library);
+            let review = owner.prepare_deletion_review(&mut server).unwrap();
+            assert_eq!(review.id, source.id);
+            owner
+                .decide_deletion_review_with_vault(
+                    &mut server,
+                    review,
+                    Choice::Delete,
+                    Some(&mut vault),
+                )
+                .unwrap();
+            drop(vault);
+            assert!(load(&library).journal.outbound == Some(packet.clone()));
+            assert!(load(&library).journal.preservation_original(new_id) == Some(&new_original));
+            let start = server.submitted.len();
+            missing_originals::finish(&owner, &library, &mut server);
+            let sent: Vec<_> = server.submitted[start..].iter().flatten().collect();
+            assert!(
+                sent[0].0 == packet.offers[0].offered.envelope
+                    && sent[0].1 == packet.offers[0].offered.record_version
+            );
+            assert!(sent.iter().any(|(e, _)| *e == new_original));
+            assert_eq!(server.records[&new_id].0.deleted, choice == Choice::Delete);
+            assert!(server.records[&source.id].0.deleted);
+            assert!(load(&library).journal.deletion_approvals.is_empty());
+        }
+    }
 }
 
 #[test]

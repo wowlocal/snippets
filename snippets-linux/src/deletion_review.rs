@@ -107,6 +107,7 @@ pub struct Review {
     source_versions: Vec<Envelope>,
     missing_originals: Vec<Uuid>,
     current_sources: Vec<Envelope>,
+    prerequisite_sources: Vec<Envelope>,
     summary: Summary,
 }
 impl Review {
@@ -266,6 +267,7 @@ impl Owner<'_> {
         let (mut id, mut source) = candidate(&checkpoint.journal, &snapshot, self)?;
         let initial = id;
         let mut visited = std::collections::BTreeSet::new();
+        let mut prerequisite_sources = Vec::new();
         loop {
             (self.validate_session)()?;
             if !visited.insert(id) {
@@ -280,13 +282,15 @@ impl Owner<'_> {
                 Vec::new()
             };
             let materialize = !current_sources.is_empty()
+                || !prerequisite_sources.is_empty()
                 || (checkpoint.journal.dependency_owns(id)
                     && !checkpoint.journal.preservation_materialized(id)?);
             let variant = checkpoint
                 .journal
                 .unmaterialized_variants()?
                 .into_iter()
-                .find(|v| v.copy_id == id);
+                .find(|v| v.copy_id == id)
+                .or(sources::prerequisite_variant(&prerequisite_sources, id)?);
             let source_versions = if materialize {
                 sources::versions(&checkpoint.journal, id, live.as_ref())?
             } else {
@@ -426,6 +430,11 @@ impl Owner<'_> {
                 // the same frozen checkpoint/primary view. No receipt is consumed.
                 id = deleted.id;
                 source = Source::Pending(deleted.clone());
+                prerequisite_sources = if checkpoint.journal.dependency_owns(id) {
+                    Vec::new()
+                } else {
+                    current_sources.clone()
+                };
                 continue;
             }
             let after = self.review_preflight(remote)?;
@@ -446,6 +455,7 @@ impl Owner<'_> {
                 source_versions,
                 missing_originals: missing_originals.into_iter().collect(),
                 current_sources,
+                prerequisite_sources,
                 summary,
             });
         }
@@ -517,7 +527,16 @@ impl Owner<'_> {
             let _guard = self.library.lock().map_err(|_| journal::Failure::Storage)?;
             (next, source_copies, group) =
                 vault.with_restoration_keys_locked(self.library, |keys| {
-                    let next = next.materialize_preservation(review.id, keys)?;
+                    let mut next = next.materialize_preservation(review.id, keys)?;
+                    if !review.prerequisite_sources.is_empty() {
+                        next = sources::materialize_prerequisite(
+                            review.id,
+                            &review.prerequisite_sources,
+                            &next,
+                            &review.snapshot.records,
+                            keys,
+                        )?;
+                    }
                     let group = if review.current_sources.is_empty() {
                         None
                     } else {
