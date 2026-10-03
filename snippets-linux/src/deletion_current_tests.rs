@@ -1078,6 +1078,170 @@ fn raw_prerequisite_children_can_be_restored_or_deleted_before_either_parent_dec
 }
 
 #[test]
+fn prior_confirmed_child_deletions_require_independent_choices_before_the_parent() {
+    for direct in [false, true] {
+        for child_choice in [Choice::Keep, Choice::Delete] {
+            for parent_choice in [Choice::Keep, Choice::Delete] {
+                let (_temp, library, mut server, source, deleted) = if direct {
+                    direct_raw_deleted_child(false)
+                } else {
+                    raw_deleted_child(true, false)
+                };
+                let mut checkpoint = load(&library);
+                if direct {
+                    checkpoint.journal.stage_conflict(&source, &[]).unwrap();
+                }
+                checkpoint
+                    .journal
+                    .projected
+                    .insert(deleted.id, deleted.clone());
+                server.add(&deleted);
+                checkpoint
+                    .journal
+                    .record_confirmed(deleted.clone(), server.records[&deleted.id].1.clone())
+                    .unwrap();
+                checkpoint.save(&library, &key(), &SALT).unwrap();
+                let before = load(&library);
+                assert!(before.journal.known_absence(deleted.id));
+                assert!(!before.journal.deletion_approved(&deleted).unwrap());
+                let key = key();
+                let scope = scope();
+                let owner = owner(&library, &key, &scope, &|| Ok(()));
+                let review = owner.prepare_deletion_review(&mut server).unwrap();
+                assert!(review.id == deleted.id && review.summary().kind == Kind::CloudDeletion);
+                assert!(review.summary().prerequisite != direct && review.summary().can_keep);
+                assert!(
+                    review.summary().keep_requires_vault && review.summary().delete_requires_vault
+                );
+                assert!(load(&library).same_snapshot(&before));
+                assert!(
+                    owner
+                        .decide_deletion_review(&mut server, review, child_choice)
+                        .err()
+                        == Some(Failure::VaultLocked)
+                );
+                assert!(load(&library).same_snapshot(&before));
+                let review = owner.prepare_deletion_review(&mut server).unwrap();
+                let mut vault = unlock_vault(&library);
+                owner
+                    .decide_deletion_review_with_vault(
+                        &mut server,
+                        review,
+                        child_choice,
+                        Some(&mut vault),
+                    )
+                    .unwrap();
+                let after = load(&library);
+                assert!(
+                    after.journal.inbox == before.journal.inbox
+                        && after.journal.outbound == before.journal.outbound
+                );
+                assert!(
+                    after.journal.confirmed(deleted.id) == before.journal.confirmed(deleted.id)
+                );
+                assert!(!after.journal.deletion_approvals.contains_key(&source.id));
+                assert!(
+                    after.journal.deletion_approved(&deleted).unwrap()
+                        == (child_choice == Choice::Delete)
+                );
+                let original = after
+                    .journal
+                    .preservation_original(deleted.id)
+                    .unwrap()
+                    .clone();
+                if !direct {
+                    let review = owner.prepare_deletion_review(&mut server).unwrap();
+                    assert!(review.id == source.id && !review.summary().prerequisite);
+                    owner
+                        .decide_deletion_review_with_vault(
+                            &mut server,
+                            review,
+                            parent_choice,
+                            Some(&mut vault),
+                        )
+                        .unwrap();
+                }
+                if !direct && parent_choice == Choice::Delete {
+                    let decided = load(&library);
+                    let marker = server.records[&source.id].0.open(&key, &SALT).unwrap();
+                    let current = primary::current(&library, &decided.journal, "11111111").unwrap();
+                    assert!(!requires_remote_delete(&decided.journal, &current, &marker).unwrap());
+                    let mut different = marker.clone();
+                    different.hlc = crate::clock::Hlc::foreign(0xffff_ffff_ff41);
+                    assert!(
+                        requires_remote_delete(&decided.journal, &current, &different).unwrap()
+                    );
+                    let restored = std::collections::BTreeMap::from([(source.id, source.clone())]);
+                    assert!(requires_remote_delete(&decided.journal, &restored, &marker).unwrap());
+                    // Exact cloud confirmation may finish the delivery frames
+                    // before a repeated page retires the last permission.
+                    let mut completed = crate::journal::Journal::new(scope.clone());
+                    completed.key_epoch = Some(1);
+                    completed.projected.insert(marker.id, marker.clone());
+                    completed
+                        .record_confirmed(marker.clone(), server.records[&source.id].1.clone())
+                        .unwrap();
+                    completed
+                        .approve_deletion(&marker, Some(source.clone()))
+                        .unwrap();
+                    assert!(!completed.has_preservation_work());
+                    assert!(completed.local_intent(marker.id, None).unwrap().is_none());
+                    assert!(!requires_remote_delete(&completed, &current, &marker).unwrap());
+                    assert!(requires_remote_delete(&completed, &current, &different).unwrap());
+                    assert!(requires_remote_delete(&completed, &restored, &marker).unwrap());
+                }
+                drop(vault);
+                let mut status = sender::Status::MoreBatches;
+                for _ in 0..12 {
+                    status = owner.send(&mut server, 2).unwrap().status;
+                    if status == sender::Status::ReceiveFirst {
+                        assert!(
+                            owner.receive(&mut server, 1).unwrap().status
+                                == receiver::Status::Current
+                        );
+                        continue;
+                    }
+                    if status != sender::Status::MoreBatches {
+                        break;
+                    }
+                }
+                let saved = load(&library);
+                let pending: Vec<_> = saved
+                    .journal
+                    .pending()
+                    .unwrap()
+                    .iter()
+                    .map(|e| {
+                        (
+                            e.id == deleted.id,
+                            e.id == source.id,
+                            e.deleted,
+                            saved.journal.deletion_approved(e).unwrap(),
+                        )
+                    })
+                    .collect();
+                assert!(
+                    status == sender::Status::Settled,
+                    "direct={direct}, child_delete={}, parent_delete={}, pending={pending:?}",
+                    child_choice == Choice::Delete,
+                    parent_choice == Choice::Delete
+                );
+                assert!(server.records[&deleted.id].0.deleted == (child_choice == Choice::Delete));
+                assert!(
+                    server.records[&source.id].0.deleted
+                        == (!direct && parent_choice == Choice::Delete)
+                );
+                let sent: Vec<_> = server.submitted.iter().flatten().map(|(e, _)| e).collect();
+                let copy_position = sent.iter().position(|e| **e == original).unwrap();
+                let parent_position = sent.iter().position(|e| e.id == source.id).unwrap();
+                assert!(copy_position < parent_position);
+                assert!(load(&library).journal.deletion_approvals.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
 fn raw_prerequisite_originals_and_decisions_survive_all_wal_phases_without_parent_consent() {
     for direct in [false, true] {
         for choice in [Choice::Keep, Choice::Delete] {
@@ -1743,7 +1907,13 @@ fn confirmed_remote_deletion_still_needs_actual_current_group_source_receipt() {
         .record_version
         .clone();
     assert!(before_send.journal.deletion_approved(deleted).unwrap());
-    assert!(before_send.journal.entry(source.id).is_none());
+    assert!(
+        before_send
+            .journal
+            .entry(source.id)
+            .is_some_and(|e| &e.desired == deleted)
+    );
+    assert!(before_send.journal.local_intent(source.id, None).unwrap() == Some(deleted));
     assert!(
         before_send
             .journal
@@ -1798,7 +1968,14 @@ fn confirmed_deleted_source_is_retained_when_repairing_its_acknowledged_copy() {
             .unwrap()
             .envelope
             .clone();
-        assert!(deleted.deleted && before.journal.entry(source.id).is_none());
+        assert!(deleted.deleted);
+        assert!(
+            before
+                .journal
+                .entry(source.id)
+                .is_some_and(|e| e.desired == deleted)
+        );
+        assert!(before.journal.local_intent(source.id, None).unwrap() == Some(&deleted));
         assert!(before.journal.deletion_approved(&deleted).unwrap());
         let original = before.journal.preservation_original(id).unwrap().clone();
         let marker = original

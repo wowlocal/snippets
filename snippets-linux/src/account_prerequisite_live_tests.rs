@@ -77,10 +77,15 @@ pub(super) fn run(
     );
     if source_deleted {
         assert!(held.journal.known_absence(source));
-        assert!(held.journal.entry(source).is_none());
         let deleted = &held.journal.confirmed(source).unwrap().envelope;
         assert!(deleted.deleted);
         assert!(held.journal.deletion_approved(deleted).unwrap());
+        assert!(
+            held.journal
+                .entry(source)
+                .is_some_and(|e| &e.desired == deleted)
+        );
+        assert!(held.journal.local_intent(source, None).unwrap() == Some(deleted));
     }
     let primary_before = primary(root);
     let counts = data_counts(fixture);

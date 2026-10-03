@@ -32,6 +32,232 @@ fn ack(j: &mut Journal, expected: &Envelope, label: &str) -> Offered {
 }
 
 #[test]
+fn an_exact_reviewed_deletion_can_wait_in_a_frame_while_its_original_is_current() {
+    let (old, c0) = plain_conflict();
+    let mut fresh = old.clone();
+    fresh.fields.as_mut().unwrap().name = "Public later source metadata".into();
+    let deleted = fresh
+        .tombstone(Hlc::foreign(50), "11111111".into(), true)
+        .unwrap();
+    let mut j = Journal::new(scope());
+    j.key_epoch = Some(1);
+    j.stage_conflict(&old, std::slice::from_ref(&c0)).unwrap();
+    j.desire(old.clone()).unwrap();
+    let physical = BTreeMap::from([(old.id, old.clone()), (c0.id, c0.clone())]);
+    let release = j.release_targets(&physical).unwrap();
+    j.projected.insert(deleted.id, deleted.clone());
+    j.desire(deleted.clone()).unwrap();
+    j.approve_deletion(&deleted, Some(fresh.clone())).unwrap();
+    j.stage_generation(
+        [1; 16],
+        &[(fresh.clone(), vec![c0.clone()])],
+        &[],
+        &BTreeMap::from([(deleted.id, deleted.clone()), (c0.id, c0)]),
+        &release,
+    )
+    .unwrap();
+    j.record_confirmed(deleted.clone(), version("prior-delete"))
+        .unwrap();
+    assert!(j.entry(deleted.id).is_none());
+    j.record_confirmed(fresh.clone(), version("original-delivery"))
+        .unwrap();
+    j.projected.insert(fresh.id, fresh.clone());
+    let saved = restart(&j);
+    assert!(saved.deletion_approved(&deleted).unwrap());
+    assert!(saved.primary_deletion_approved(&deleted, &fresh).unwrap());
+    let mut changed = fresh.clone();
+    changed.fields.as_mut().unwrap().name = "Public separately changed source".into();
+    assert!(!saved.primary_deletion_approved(&deleted, &changed).unwrap());
+    let mut unrepresented = saved;
+    unrepresented.entries.remove(&deleted.id);
+    unrepresented.generations[0].targets.insert(
+        deleted.id,
+        fresh
+            .tombstone(Hlc::foreign(51), "11111111".into(), true)
+            .unwrap(),
+    );
+    assert!(codec::encode(&unrepresented).err() == Some(Failure::InvalidState));
+    let mut kept = j;
+    kept.desire(changed.clone()).unwrap();
+    assert!(kept.deletion_approved(&deleted).unwrap());
+    assert!(!kept.primary_deletion_approved(&deleted, &changed).unwrap());
+    kept.supersede_unoffered_deletion(&deleted, &changed)
+        .unwrap();
+    assert!(!kept.deletion_approved(&deleted).unwrap());
+    restart(&kept);
+}
+
+#[test]
+fn an_active_reviewed_delete_keeps_its_exact_permit_until_its_source_ack_or_explicit_keep() {
+    let (old, c0) = plain_conflict();
+    let deleted = old
+        .tombstone(Hlc::foreign(50), "11111111".into(), true)
+        .unwrap();
+    let mut j = Journal::new(scope());
+    j.key_epoch = Some(1);
+    j.stage_conflict(&old, std::slice::from_ref(&c0)).unwrap();
+    j.desire(old.clone()).unwrap();
+    ack(&mut j, &c0, "copy-before-reviewed-delete");
+    j.desire(deleted.clone()).unwrap();
+    j.approve_deletion(&deleted, Some(old.clone())).unwrap();
+    j.delivery.insert(old.id, deleted.clone());
+    j.record_confirmed(deleted.clone(), version("cloud-marker-before-release"))
+        .unwrap();
+    j.projected.insert(old.id, old.clone());
+    j.desire(old.clone()).unwrap();
+    assert!(j.deletion_approved(&deleted).unwrap());
+    assert!(j.primary_deletion_approved(&deleted, &old).unwrap());
+    let mut changed = old.clone();
+    changed.fields.as_mut().unwrap().name = "Public separately changed active source".into();
+    assert!(!j.primary_deletion_approved(&deleted, &changed).unwrap());
+    restart(&j);
+    let mut kept = j.clone();
+    kept.desire(changed.clone()).unwrap();
+    kept.supersede_unoffered_deletion(&deleted, &changed)
+        .unwrap();
+    assert!(!kept.deletion_approved(&deleted).unwrap());
+    restart(&kept);
+    let offered = j
+        .mark_offered(std::slice::from_ref(&deleted))
+        .unwrap()
+        .remove(0);
+    j.accept_offered(&offered, version("actual-post-copy-source-ACK"))
+        .unwrap();
+    assert!(!j.deletion_approved(&deleted).unwrap());
+    restart(&j);
+}
+
+#[test]
+fn an_ordinary_copy_delivery_retains_only_its_exact_reviewed_delete_until_keep_or_ack() {
+    let (_, copy) = plain_conflict();
+    let deleted = copy
+        .tombstone(Hlc::foreign(50), "11111111".into(), true)
+        .unwrap();
+    let mut j = Journal::new(scope());
+    j.key_epoch = Some(1);
+    j.record_confirmed(deleted.clone(), version("prior-copy-delete"))
+        .unwrap();
+    j.projected.insert(copy.id, copy.clone());
+    j.desire(deleted.clone()).unwrap();
+    j.approve_deletion(&deleted, Some(copy.clone())).unwrap();
+    j.delivery.insert(copy.id, deleted.clone());
+    assert!(j.dependencies.is_empty());
+    j.record_confirmed(copy.clone(), version("temporary-copy-original"))
+        .unwrap();
+    j.desire(copy.clone()).unwrap();
+    j = restart(&j);
+    assert!(j.deletion_approved(&deleted).unwrap());
+    assert!(j.primary_deletion_approved(&deleted, &copy).unwrap());
+    let mut changed = copy.clone();
+    changed.fields.as_mut().unwrap().name = "Public separately changed copy".into();
+    assert!(!j.primary_deletion_approved(&deleted, &changed).unwrap());
+    let mut different_marker = j.clone();
+    different_marker.delivery.insert(
+        copy.id,
+        copy.tombstone(Hlc::foreign(51), "11111111".into(), true)
+            .unwrap(),
+    );
+    assert!(codec::encode(&different_marker).err() == Some(Failure::InvalidState));
+    let mut kept = j.clone();
+    kept.desire(changed.clone()).unwrap();
+    kept.supersede_unoffered_deletion(&deleted, &changed)
+        .unwrap();
+    assert!(!kept.deletion_approved(&deleted).unwrap());
+    restart(&kept);
+    let offered = j
+        .mark_offered(std::slice::from_ref(&deleted))
+        .unwrap()
+        .remove(0);
+    j.accept_offered(&offered, version("actual-copy-delete-ACK"))
+        .unwrap();
+    assert!(!j.deletion_approved(&deleted).unwrap());
+    restart(&j);
+}
+
+#[test]
+fn a_fetched_prior_copy_marker_cannot_discard_its_queued_reviewed_absence() {
+    let (_, copy) = plain_conflict();
+    let deleted = copy
+        .tombstone(Hlc::foreign(50), "11111111".into(), true)
+        .unwrap();
+    let mut j = Journal::new(scope());
+    j.key_epoch = Some(1);
+    j.record_confirmed(deleted.clone(), version("prior-cloud-copy-marker"))
+        .unwrap();
+    j.projected.insert(copy.id, deleted.clone());
+    j.desire(deleted.clone()).unwrap();
+    j.review_absence(copy.id, Some(deleted.clone())).unwrap();
+    j.approve_deletion(&deleted, Some(copy.clone())).unwrap();
+    j.delivery.insert(copy.id, deleted.clone());
+    j.record_confirmed(deleted.clone(), version("same-marker-before-original"))
+        .unwrap();
+    j = restart(&j);
+    assert!(j.entry(copy.id).is_none());
+    assert!(j.local_intent(copy.id, None).unwrap() == Some(&deleted));
+    j.record_confirmed(copy, version("original-copy-delivered"))
+        .unwrap();
+    j = restart(&j);
+    assert!(j.entry(deleted.id).is_none());
+    assert!(j.local_intent(deleted.id, None).unwrap() == Some(&deleted));
+    let offered = j
+        .mark_offered(std::slice::from_ref(&deleted))
+        .unwrap()
+        .remove(0);
+    j.accept_offered(&offered, version("actual-reviewed-copy-delete-ACK"))
+        .unwrap();
+    assert!(j.entry(deleted.id).is_none());
+    assert!(!j.deletion_approved(&deleted).unwrap());
+    restart(&j);
+}
+
+#[test]
+fn an_earlier_delete_ack_keeps_a_queued_reviewed_marker_as_local_absence() {
+    let (_, copy) = plain_conflict();
+    let deleted = copy
+        .tombstone(Hlc::foreign(50), "11111111".into(), true)
+        .unwrap();
+    let mut j = Journal::new(scope());
+    j.key_epoch = Some(1);
+    j.projected.insert(copy.id, deleted.clone());
+    j.desire(deleted.clone()).unwrap();
+    j.review_absence(copy.id, Some(copy.clone())).unwrap();
+    j.approve_deletion(&deleted, Some(copy.clone())).unwrap();
+    j.delivery.insert(copy.id, deleted.clone());
+    j.stage_generation(
+        [1; 16],
+        &[(copy.clone(), vec![])],
+        &[],
+        &BTreeMap::from([(copy.id, deleted.clone())]),
+        &BTreeMap::from([(copy.id, deleted.clone())]),
+    )
+    .unwrap();
+    let offered = j
+        .mark_offered(std::slice::from_ref(&deleted))
+        .unwrap()
+        .remove(0);
+    j.accept_offered(&offered, version("earlier-copy-delete-ACK"))
+        .unwrap();
+    assert!(j.entry(copy.id).is_none() && j.deletion_approved(&deleted).unwrap());
+    j.record_confirmed(copy.clone(), version("later-original-delivery"))
+        .unwrap();
+    j = restart(&j);
+    assert!(j.local_intent(copy.id, None).unwrap() == Some(&deleted));
+    assert!(
+        merge::merge(
+            j.merge_ancestor(copy.id),
+            j.local_intent(copy.id, None).unwrap(),
+            Some(&copy),
+        )
+        .unwrap()
+        .survivor
+            == Some(deleted)
+    );
+    let mut edited = copy.clone();
+    edited.fields.as_mut().unwrap().name = "Public new physical copy edit".into();
+    assert!(j.local_intent(copy.id, Some(&edited)).unwrap() == Some(&edited));
+}
+
+#[test]
 fn queued_restore_keeps_original_copy_or_source_offer_and_uses_fresh_cas_after_release() {
     for source_in_flight in [false, true] {
         let (old, c0) = plain_conflict();

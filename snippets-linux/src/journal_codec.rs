@@ -182,6 +182,11 @@ pub(super) fn validate(journal: &Journal) -> Result<()> {
             .into_iter()
             .chain(journal.projected.get(id))
             .chain(journal.confirmed(*id).map(|c| &c.envelope))
+            // Original delivery can temporarily own the primary/confirmed
+            // image while this separately reviewed exact deletion waits in
+            // an ordered frame. The frame represents intent, never consent.
+            .chain(journal.delivery.get(id))
+            .chain(journal.generations.iter().filter_map(|g| g.targets.get(id)))
             .any(|e| e.deleted && e.hash().is_ok_and(|hash| hash == approval.hash))
         {
             return Err(INVALID);

@@ -410,6 +410,21 @@ impl Journal {
                 return Ok(Some(&entry.desired));
             }
         }
+        if current.is_none() && self.entry(id).is_none() && self.known_absence(id) {
+            // An earlier exact ACK may retire the ordinary entry while another
+            // reviewed release still waits behind original delivery. Its queued
+            // tombstone remains the local side of merge, not an unknown absence.
+            for target in self.delivery.get(&id).into_iter().chain(
+                self.generations
+                    .iter()
+                    .rev()
+                    .filter_map(|g| g.targets.get(&id)),
+            ) {
+                if self.deletion_approved(target)? {
+                    return Ok(Some(target));
+                }
+            }
+        }
         Ok(current)
     }
     /// Explicit review only, after a complete snapshot proved a missing record.
@@ -627,17 +642,23 @@ impl Journal {
         Ok(())
     }
     fn retains_release_permission(&self, id: Uuid, approval: &DeletionApproval) -> bool {
-        // A send-only retry permit comes from an exact authorized packet and
-        // authoritative CAS rejection. Later physical intent must not revoke
-        // that original release, and the absent ancestor forbids primary delete.
-        approval.ancestor.is_none()
-            && self.dependencies.get(&id).is_some_and(|edge| {
-                edge.source_accepted_version.is_none() && Self::prerequisites_accepted(edge)
-            })
-            && self
-                .delivery
+        // Temporary original delivery must not revoke a separately reviewed
+        // deletion still frozen in a later frame. It authorizes only that
+        // exact wire hash; primary deletion still checks the live ancestor.
+        if self.generations.iter().any(|g| {
+            g.targets
                 .get(&id)
                 .is_some_and(|e| e.deleted && e.hash().is_ok_and(|hash| hash == approval.hash))
+        }) {
+            return true;
+        }
+        // Active delivery also owns ordinary copy targets without a source edge.
+        // Capturing their temporary original must retain consent for this exact
+        // later send. Primary deletion remains fenced by the reviewed ancestor;
+        // explicit Keep or the actual deletion ACK retires the permission.
+        self.delivery
+            .get(&id)
+            .is_some_and(|e| e.deleted && e.hash().is_ok_and(|hash| hash == approval.hash))
     }
     /// Call before primary apply, then fsync the complete checkpoint. This method
     /// commits its in-memory change only after every snapshot validates.
@@ -1161,16 +1182,12 @@ impl Journal {
         }
         if candidate.deletion_approved(&offered.envelope)?
             && !candidate.generations.iter().any(|generation| {
-                (generation.dependencies.contains_key(&id)
-                    || generation.dependencies.values().any(|edge| {
-                        edge.requirements
-                            .values()
-                            .any(|requirement| requirement.copy_id == id)
-                    }))
-                    && generation
-                        .targets
-                        .get(&id)
-                        .is_some_and(|e| same(e, &offered.envelope).unwrap_or(false))
+                // Ordinary targets also wait in later frames, without an edge
+                // of their own. This ACK covers the active exact send only.
+                generation
+                    .targets
+                    .get(&id)
+                    .is_some_and(|e| same(e, &offered.envelope).unwrap_or(false))
             })
         {
             candidate.deletion_approvals.remove(&id);

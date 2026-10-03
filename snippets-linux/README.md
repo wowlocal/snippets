@@ -329,8 +329,10 @@ Flat current secure v1 cloud-source Keep/Delete and acknowledged-copy deletion
 repair now pass native acceptance with independent mixed source/copy choices and
 retained source rejection packets. Nested physical/journal-only C1 source
 Keep/Delete also pass: original copies are acknowledged before later intent,
-and C1 retains its sealed body. Independent raw child decisions, local-absence
-source review and unrelated ambiguous packets remain separate checks.
+and C1 retains its sealed body. A cloud-deleted copy received before its raw
+owner arrives now receives its own Keep/Delete choice before either parent
+choice. Unknown pending raw-child decisions, local-absence source review and
+unrelated ambiguous packets remain separate checks.
 
 After reconnecting, selecting a library and verifying its keys, choose **Enable
 Automatic Sync for This Library**. Snippets resumes that exact saved account and
@@ -665,9 +667,10 @@ ordinary and protected records, with preserved nonce and fresh create CAS. Flat
 current secure v1 source and acknowledged-copy deletion repair also pass with fresh
 credentials, cancellation refusal and exact CAS ordering. Nested physical and
 journal-only C1 source Keep/Delete also pass with retained child seals and
-separate originals. Independent raw child decisions, local-absence source review,
-unrelated ambiguous packets, pairing and signed operations remain under live
-acceptance. The native interrupted-startup recovery fixture passes with temporary
+separate originals. Prior-confirmed cloud-child Keep/Delete before parent
+Keep/Delete also passes all four native combinations with actual saved CAS.
+Unknown pending raw-child decisions, local-absence source review, unrelated
+ambiguous packets, pairing and signed operations remain under live acceptance. The native interrupted-startup recovery fixture passes with temporary
 data; full file-dialog
 and Apple-app backup round trips remain separate.
 
@@ -1211,6 +1214,11 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --nested-review-delete
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --nested-journal-keep
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --nested-journal-delete
+# Cloud child deletion received before its raw owner; independent choices.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --prior-child-keep-parent-keep
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --prior-child-keep-parent-delete
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --prior-child-delete-parent-keep
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --prior-child-delete-parent-delete
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib clipboard_history::wayland::protocol_tests::private_libwayland -- --ignored --test-threads=1

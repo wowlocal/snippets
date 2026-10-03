@@ -92,6 +92,7 @@ enum Source {
     Pending(Envelope),
     Inbound(Envelope, RecordVersion),
     Outbound(Envelope, RecordVersion),
+    Confirmed(Envelope, RecordVersion),
 }
 pub struct Review {
     root: std::path::PathBuf,
@@ -148,6 +149,17 @@ pub(crate) fn requires_remote_delete(
     if !e.deleted {
         return Ok(false);
     }
+    if !current.contains_key(&e.id)
+        && journal.known_absence(e.id)
+        && journal.deletion_approved(e)?
+        && (journal.local_intent(e.id, None)? == Some(e)
+            || journal.projected().get(&e.id) == Some(e))
+    {
+        // The native decision already approved these exact bytes for this
+        // unchanged absence. Repeated delivery does not require another choice;
+        // a new primary, different marker or lost permission still does below.
+        return Ok(false);
+    }
     if journal.is_preservation_copy(e.id) {
         return Ok(true);
     }
@@ -174,6 +186,24 @@ fn missing_source(journal: &Journal, id: Uuid) -> Source {
         .filter(|e| e.deleted)
         .map(|e| Source::Pending(e.clone()))
         .unwrap_or(Source::Local)
+}
+// A tombstone received before its raw owner existed is a cloud fact, not
+// permission to delete an original that the newly arrived carrier preserves.
+fn confirmed_child_decision(journal: &Journal, id: Uuid) -> Result<Option<Source>> {
+    if journal.entry(id).is_some() {
+        return Ok(None);
+    }
+    let Some(confirmed) = journal.confirmed(id) else {
+        return Ok(None);
+    };
+    if confirmed.envelope.deleted && !journal.deletion_approved(&confirmed.envelope)? {
+        Ok(Some(Source::Confirmed(
+            confirmed.envelope.clone(),
+            confirmed.record_version.clone(),
+        )))
+    } else {
+        Ok(None)
+    }
 }
 fn candidate(
     journal: &Journal,
@@ -217,10 +247,13 @@ fn candidate(
         }
     }
     for variant in journal.unmaterialized_variants()? {
-        if !snapshot.records.contains_key(&variant.copy_id)
-            && !journal.known_absence(variant.copy_id)
-        {
-            return Ok((variant.copy_id, missing_source(journal, variant.copy_id)));
+        if !snapshot.records.contains_key(&variant.copy_id) {
+            if !journal.known_absence(variant.copy_id) {
+                return Ok((variant.copy_id, missing_source(journal, variant.copy_id)));
+            }
+            if let Some(source) = confirmed_child_decision(journal, variant.copy_id)? {
+                return Ok((variant.copy_id, source));
+            }
         }
     }
     // Preserve a prepared tombstone's original wire bytes and generation.
@@ -348,7 +381,8 @@ impl Owner<'_> {
                     && (checkpoint.journal.is_preservation_copy(copy_id)
                         || current_copies.contains(&copy_id))
                     && !snapshot.records.contains_key(&copy_id)
-                    && !checkpoint.journal.known_absence(copy_id)
+                    && (!checkpoint.journal.known_absence(copy_id)
+                        || confirmed_child_decision(&checkpoint.journal, copy_id)?.is_some())
                 {
                     missing_originals.insert(copy_id);
                 }
@@ -369,7 +403,10 @@ impl Owner<'_> {
                 return Err(Failure::MissingFile);
             }
             let repair = if !materialize
-                && matches!(source, Source::Inbound(..) | Source::Outbound(..))
+                && matches!(
+                    source,
+                    Source::Inbound(..) | Source::Outbound(..) | Source::Confirmed(..)
+                )
                 && let Some(retained) = &live
             {
                 checkpoint
@@ -396,9 +433,10 @@ impl Owner<'_> {
                         true
                     } else {
                         match &source {
-                            Source::Pending(e) | Source::Inbound(e, _) | Source::Outbound(e, _) => {
-                                e.secure
-                            }
+                            Source::Pending(e)
+                            | Source::Inbound(e, _)
+                            | Source::Outbound(e, _)
+                            | Source::Confirmed(e, _) => e.secure,
                             _ => false,
                         }
                     }
@@ -428,20 +466,32 @@ impl Owner<'_> {
                 preserved_conflict_copies: current_copies.len(),
                 prerequisite: id != initial,
             };
-            if follow_prerequisites
-                && let Some(deleted) = missing_originals.iter().find_map(|id| {
-                    checkpoint
+            let mut prerequisite = None;
+            if follow_prerequisites {
+                for child_id in &missing_originals {
+                    if let Some(deleted) = checkpoint
                         .journal
-                        .entry(*id)
+                        .entry(*child_id)
                         .map(|entry| &entry.desired)
                         .filter(|e| e.deleted)
-                })
-            {
+                    {
+                        prerequisite = Some((*child_id, Source::Pending(deleted.clone())));
+                    } else if let Some(source) =
+                        confirmed_child_decision(&checkpoint.journal, *child_id)?
+                    {
+                        prerequisite = Some((*child_id, source));
+                    }
+                    if prerequisite.is_some() {
+                        break;
+                    }
+                }
+            }
+            if let Some((child_id, child_source)) = prerequisite {
                 // A parent's preservation review cannot approve this child's own
                 // tombstone. Offer that exact independent decision first, using
                 // the same frozen checkpoint/primary view. No receipt is consumed.
-                id = deleted.id;
-                source = Source::Pending(deleted.clone());
+                id = child_id;
+                source = child_source;
                 prerequisite_sources = if checkpoint.journal.dependency_owns(id) {
                     Vec::new()
                 } else {
@@ -570,7 +620,10 @@ impl Owner<'_> {
             if review.live.is_none() {
                 review.live = next.preservation_original(review.id).cloned();
             }
-            review.repair = if matches!(review.source, Source::Inbound(..) | Source::Outbound(..)) {
+            review.repair = if matches!(
+                review.source,
+                Source::Inbound(..) | Source::Outbound(..) | Source::Confirmed(..)
+            ) {
                 review
                     .live
                     .as_ref()
@@ -598,7 +651,10 @@ impl Owner<'_> {
         let previous = next.merge_ancestor(review.id).cloned();
         let target = match choice {
             Choice::Delete => match &review.source {
-                Source::Pending(e) | Source::Inbound(e, _) | Source::Outbound(e, _) => e.clone(),
+                Source::Pending(e)
+                | Source::Inbound(e, _)
+                | Source::Outbound(e, _)
+                | Source::Confirmed(e, _) => e.clone(),
                 Source::Local => {
                     let live = review.live.as_ref().ok_or(Failure::RestoreUnavailable)?;
                     let stamp = self.deletion_stamp(&review)?;
@@ -750,7 +806,7 @@ impl Owner<'_> {
         next.desire(target.clone())?;
         if choice == Choice::Delete {
             next.approve_deletion(&target, review.live.clone())?;
-            next.review_absence(review.id, previous)?;
+            next.review_absence(review.id, previous.clone())?;
             prepared.release_reviewed_deletion(&review.checkpoint.journal, &next, &target)?;
             if matches!(&review.source, Source::Pending(_))
                 && let Some(packet) = next.outbound.as_mut()
@@ -762,11 +818,11 @@ impl Owner<'_> {
                     }
                 }
             }
-        } else if matches!(&review.source, Source::Pending(_)) {
+        } else if matches!(&review.source, Source::Pending(_) | Source::Confirmed(..)) {
             // A false frozen consent bit proves this batch could not have been
             // posted by the native sender. An authorized ambiguous transmission
             // retains its original consent/bytes while the newer live edit waits.
-            let Source::Pending(deleted) = &review.source else {
+            let (Source::Pending(deleted) | Source::Confirmed(deleted, _)) = &review.source else {
                 unreachable!()
             };
             let deleted_hash = deleted.hash()?;
@@ -791,13 +847,20 @@ impl Owner<'_> {
             prepared.release_reviewed_keep(&review.checkpoint.journal, deleted, &target)?;
         }
         match &review.source {
-            Source::Inbound(e, version) | Source::Outbound(e, version) => {
+            Source::Inbound(e, version)
+            | Source::Outbound(e, version)
+            | Source::Confirmed(e, version) => {
                 if matches!(review.source, Source::Outbound(..)) {
                     next.reject(review.id);
-                } else {
+                } else if matches!(review.source, Source::Inbound(..)) {
                     next.retire_deleted_prerequisite(e, version)?;
                 }
-                next.record_confirmed(e.clone(), version.clone())?;
+                // The confirmed child's CAS is already pinned. Replaying its
+                // old acknowledgement would retire this fresh local deletion
+                // intent before the original has actually been delivered.
+                if !matches!(review.source, Source::Confirmed(..)) {
+                    next.record_confirmed(e.clone(), version.clone())?;
+                }
                 if choice == Choice::Delete && group.is_some() {
                     // The authenticated current group is staged only when its
                     // primary WAL is published. An equal received tombstone
@@ -806,10 +869,12 @@ impl Owner<'_> {
                     // still needs consent for its post-original source send;
                     // it is not a source acknowledgement.
                     next.approve_deletion(&target, review.live.clone())?;
+                    next.desire(target.clone())?;
+                    next.review_absence(review.id, previous)?;
                 }
                 if matches!(review.source, Source::Inbound(..)) {
                     next.inbox.acknowledge_record()?;
-                } else {
+                } else if matches!(review.source, Source::Outbound(..)) {
                     next.outbound.as_mut().ok_or(Failure::Changed)?.position += 1;
                 }
             }
@@ -833,7 +898,10 @@ impl Owner<'_> {
         // The reviewed remote tombstone has not yet been confirmed. Observe
         // its clock too, so an explicit keep is causally newer even after skew.
         let deletion = match &review.source {
-            Source::Pending(e) | Source::Inbound(e, _) | Source::Outbound(e, _) => Some(e),
+            Source::Pending(e)
+            | Source::Inbound(e, _)
+            | Source::Outbound(e, _)
+            | Source::Confirmed(e, _) => Some(e),
             Source::Local => None,
         };
         let frames = journal.preservation_generations(review.id)?;

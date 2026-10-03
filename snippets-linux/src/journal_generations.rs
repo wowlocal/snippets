@@ -395,6 +395,12 @@ impl Journal {
                 *target = keep.clone();
             }
         }
+        if let Some(approval) = next.deletion_approvals.get(&deleted.id)
+            && approval.hash == hash
+            && !next.retains_release_permission(deleted.id, approval)
+        {
+            next.deletion_approvals.remove(&deleted.id);
+        }
         codec::validate(&next)?;
         *self = next;
         Ok(())

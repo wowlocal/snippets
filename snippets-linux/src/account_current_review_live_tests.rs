@@ -4,6 +4,8 @@ use super::*;
 mod nested;
 #[path = "account_prerequisite_live_tests.rs"]
 mod prerequisite;
+#[path = "account_prior_child_live_tests.rs"]
+mod prior_child;
 
 fn credentials(
     window: &Rc<AccountWindow>,
