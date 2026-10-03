@@ -92,8 +92,19 @@ pub struct Workspace {
     repair_authorization: RefCell<Option<crate::vault::legacy_repair::Authorization>>,
     repair_dialog: RefCell<Option<(adw::AlertDialog, gtk::PasswordEntry)>>,
     repair_worker: Cell<bool>,
+    usage: RefCell<Option<crate::usage_store::Handle>>,
+    selection_query: RefCell<Option<(Uuid, String)>>,
 }
 impl Workspace {
+    pub fn attach_usage(&self, usage: Option<crate::usage_store::Handle>) {
+        *self.usage.borrow_mut() = usage;
+    }
+    pub fn selection_query(&self, id: Uuid, query: &str) {
+        *self.selection_query.borrow_mut() = crate::usage::prefix(query).map(|p| (id, p));
+    }
+    pub fn forget_selection_query(&self) {
+        self.selection_query.borrow_mut().take();
+    }
     pub fn new(application: &adw::Application, library: &Library) -> Result<Rc<Self>> {
         let vault = Rc::new(RefCell::new(Vault::open(library)?));
         let library = Library::open(library.root.clone())?;
@@ -266,6 +277,8 @@ impl Workspace {
             repair_authorization: RefCell::new(None),
             repair_dialog: RefCell::new(None),
             repair_worker: Cell::new(false),
+            usage: RefCell::new(None),
+            selection_query: RefCell::new(None),
         });
         this.editor
             .observe_desktop(this.desktop.as_ref().map(|monitor| monitor.witness()));
@@ -730,6 +743,7 @@ impl Workspace {
         self.update();
     }
     pub fn present(&self, id: Option<Uuid>) {
+        self.selection_query.borrow_mut().take();
         self.cancel_insertion();
         self.insertion_target.borrow_mut().take();
         if id.is_some() && id != self.selected.get() && self.save() {

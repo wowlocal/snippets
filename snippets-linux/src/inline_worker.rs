@@ -183,7 +183,15 @@ pub(crate) struct Handle {
     thread: thread::JoinHandle<()>,
 }
 impl Handle {
+    #[cfg(test)]
     pub fn start(root: PathBuf, witness: SessionWitness) -> Result<Self> {
+        Self::start_with_usage(root, witness, None)
+    }
+    pub fn start_with_usage(
+        root: PathBuf,
+        witness: SessionWitness,
+        usage: Option<crate::usage_store::Handle>,
+    ) -> Result<Self> {
         if !Preference::read(&root)?.enabled {
             return Err(STOPPED);
         }
@@ -192,7 +200,7 @@ impl Handle {
         let (sender, receiver) = mpsc::sync_channel(16);
         let thread = thread::Builder::new()
             .name("snippets-inline".into())
-            .spawn(move || run(root, witness, ending, sender))
+            .spawn(move || run(root, witness, ending, sender, usage))
             .map_err(|_| Error("Inline expansion could not start."))?;
         Ok(Self {
             stop,
@@ -321,6 +329,7 @@ fn run(
     witness: SessionWitness,
     stop: Arc<AtomicBool>,
     sender: mpsc::SyncSender<Status>,
+    usage: Option<crate::usage_store::Handle>,
 ) {
     let library = match Library::prepare(root.clone()) {
         Ok(library) => library,
@@ -411,9 +420,12 @@ fn run(
             };
             report(Status::Listening);
             if let Some(plan) = engine.observe(frame, &ordinary) {
+                let id = plan.snippet.id;
                 engine.reset();
                 if deliver(plan, &library, &mut connection, witness.clone(), &guard).is_err() {
                     report(Status::Stopped);
+                } else if let Some(usage) = &usage {
+                    usage.record(id, crate::usage::Event::Expansion, None);
                 }
                 previous = None;
             }

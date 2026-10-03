@@ -7,6 +7,7 @@ use crate::{
 use std::path::PathBuf;
 pub(super) struct Service {
     root: PathBuf,
+    usage: Option<crate::usage_store::Handle>,
     enabled: Cell<bool>,
     error: Cell<Option<&'static str>>,
     status: Cell<Status>,
@@ -25,10 +26,11 @@ struct Settings {
     retry: gtk::Button,
 }
 impl Service {
-    pub fn new(root: PathBuf) -> Rc<Self> {
+    pub fn new(root: PathBuf, usage: Option<crate::usage_store::Handle>) -> Rc<Self> {
         let preference = Preference::read(&root);
         let this = Rc::new(Self {
             root,
+            usage,
             enabled: Cell::new(preference.as_ref().is_ok_and(|value| value.enabled)),
             error: Cell::new(preference.err().map(|error| error.0)),
             status: Cell::new(Status::WaitingForUnlock),
@@ -107,7 +109,7 @@ impl Service {
             self.status.set(Status::Unavailable);
             return;
         };
-        match Handle::start(self.root.clone(), witness) {
+        match Handle::start_with_usage(self.root.clone(), witness, self.usage.clone()) {
             Ok(worker) => {
                 *self.worker.borrow_mut() = Some(worker);
                 self.status.set(Status::WaitingForUnlock);
@@ -322,7 +324,7 @@ mod tests {
         adw::init().expect("graphical display");
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("Public absent library");
-        let service = Service::new(root.clone());
+        let service = Service::new(root.clone(), None);
         assert!(
             !service.enabled.get()
                 && service.worker.borrow().is_none()

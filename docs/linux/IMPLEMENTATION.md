@@ -222,8 +222,10 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Transfers | Native and Raycast JSON import, ordinary sharing export and native portable encrypted-backup export/import with interrupted-import recovery | Round-trip, timestamps, collisions, exact-key authentication, encrypted two-file redo, cancellation and independent OpenSSL backup format checks pass; live native dialogs and Apple app round trips remain unverified |
 | Placeholders | Native ICU date/time formats, one-pass clipboard, locale, calendar offsets | Fixed-date, month-end, literal grammar tests pass |
 | CLI | Ordinary mutations/get/import and combined metadata catalogue | Concurrent writer and secure output/refusal tests pass |
+| Approved secure CLI | Not implemented: native approval/peer authentication for `reveal`, `secure-status` and `add --secure` | Remaining product parity work; the CLI continues to refuse secure body access |
 | Omarchy theme | Active XDG state palette, periodic refresh, validated colors | Parser and CSS injection tests pass |
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Target validation tested; actual cross-window delivery still requires verification |
+| Local suggestion learning | Frozen picker snapshots; relevance/keyword/pin priority before bounded prefix memory and 14-day frecency; successful copy/paste/inline/secure insertion recording; native toggles and independent resets; separate private debounced persistence | Isolated math/schema/concurrency/privacy tests and compiled native controls; live picker/settings/input behavior remains unverified |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; live native GTK/keyring/PAM verification remains unavailable |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor with bounded encrypted Undo/Redo and explicit Paste, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery/repair dialogs compile but display initialization is unavailable; live keyboard/reveal workflow remains open |
@@ -269,6 +271,22 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-03
 
+- Local suggestion learning adds fifteen isolated tests for decay/rebase and
+  the single-copy floor, optimal fuzzy scoring, match/pin precedence, frozen
+  snapshots, durable corrections, bounded prefixes/entries, separate resets,
+  stale-writer joins, concurrent private locking, consecutive-event coalescing,
+  debounced writes, retained failure status, read-only future/corrupt files,
+  unsafe linked/public storage, preferences defaults and the no-filesystem kill
+  switch. Tests use public identifiers and temporary directories only.
+  Selected regressions pass 41 default library tests, 30 headless library tests
+  and 24 core/helper integration tests. Clippy passes with warnings denied in
+  both configurations; formatting, three release binaries and two isolated
+  installations pass. The installed CLI starts empty and creates no Usage state.
+  The native learning-settings fixture stops at GTK initialization before
+  widgets or a usage worker; live picker/settings/input behavior is unverified.
+  A final hide-on-close property keeps the settings window reusable; desktop
+  Clippy, formatting, release binaries and installations were repeated for it.
+  App-approved secure CLI operations remain unimplemented product parity work.
 - Direct raw-child review adds three isolated regressions: both child choices
   with a live parent, all four sibling choice combinations, and related versus
   unrelated unknown-version boundaries. Existing suites now cover both direct

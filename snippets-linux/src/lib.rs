@@ -50,5 +50,7 @@ pub mod snapshot_review;
 pub mod sync;
 #[cfg(feature = "desktop")]
 pub mod ui;
+pub mod usage;
+pub mod usage_store;
 pub mod vault;
 pub mod wire;

@@ -22,6 +22,8 @@ use std::{
 mod history;
 #[path = "inline_ui.rs"]
 mod inline;
+#[path = "usage_ui.rs"]
+mod usage_settings;
 
 pub(crate) fn internal_clipboard_provider(text: &str) -> gdk::ContentProvider {
     gdk::ContentProvider::new_union(&[
@@ -63,6 +65,9 @@ struct App {
     backup: RefCell<Option<Rc<BackupExport>>>,
     history: RefCell<Option<Rc<history::Service>>>,
     inline: RefCell<Option<Rc<inline::Service>>>,
+    usage: RefCell<Option<crate::usage_store::Handle>>,
+    usage_settings: RefCell<Option<Rc<usage_settings::Settings>>>,
+    usage_quitting: Cell<bool>,
     hold: RefCell<Option<gio::ApplicationHoldGuard>>,
     copy_serial: Cell<u64>,
     css: gtk::CssProvider,
@@ -133,10 +138,39 @@ fn row(snippet: &Snippet, secure: bool) -> gtk::ListBoxRow {
     gtk::ListBoxRow::builder().child(&content).build()
 }
 impl App {
+    fn learn(&self, id: uuid::Uuid, event: crate::usage::Event, query: Option<&str>) {
+        if let Some(usage) = self.usage.borrow().as_ref() {
+            usage.record(id, event, query);
+        }
+    }
+    fn open_usage(self: &Rc<Self>) {
+        let Some(handle) = self.usage.borrow().clone() else {
+            return;
+        };
+        if self.usage_settings.borrow().is_none() {
+            let weak = Rc::downgrade(self);
+            let settings = usage_settings::Settings::new(&self.application, handle, move || {
+                if let Some(app) = weak.upgrade() {
+                    if let Some(picker) = app.picker.borrow_mut().take() {
+                        picker.window.close();
+                    }
+                    if let Some(workspace) = app.secure.borrow().as_ref() {
+                        workspace.forget_selection_query();
+                    }
+                }
+            });
+            *self.usage_settings.borrow_mut() = Some(settings);
+        }
+        if let Some(settings) = self.usage_settings.borrow().as_ref() {
+            settings.window.present();
+        }
+    }
     fn start_inline(&self) {
         if self.inline.borrow().is_none() {
-            *self.inline.borrow_mut() =
-                Some(inline::Service::new(self.library.borrow().root.clone()));
+            *self.inline.borrow_mut() = Some(inline::Service::new(
+                self.library.borrow().root.clone(),
+                self.usage.borrow().clone(),
+            ));
         }
     }
     fn open_inline(&self) {
@@ -253,10 +287,14 @@ impl App {
         }
         let library = self.library.borrow();
         let (ordinary, secure) = library.catalogue()?;
-        Ok(ordinary
+        let catalogue: Vec<_> = ordinary
             .into_iter()
             .chain(secure.iter().map(|m| m.shell()))
-            .collect())
+            .collect();
+        if let Some(usage) = self.usage.borrow().as_ref() {
+            usage.live_ids(catalogue.iter().map(|s| s.id).collect());
+        }
+        Ok(catalogue)
     }
     fn is_secure(&self, id: uuid::Uuid) -> model::Result<bool> {
         if self.recovery_required.get() {
@@ -281,7 +319,10 @@ impl App {
         if self.secure.borrow().is_none() {
             let workspace = Workspace::new(&self.application, &self.library.borrow());
             match workspace {
-                Ok(workspace) => *self.secure.borrow_mut() = Some(workspace),
+                Ok(workspace) => {
+                    workspace.attach_usage(self.usage.borrow().clone());
+                    *self.secure.borrow_mut() = Some(workspace);
+                }
                 Err(error) => {
                     self.toast(&error.to_string());
                     return;
@@ -370,6 +411,14 @@ impl App {
         *self.picker.borrow_mut() = Some(picker);
     }
     fn copy(self: &Rc<Self>, snippet: Snippet, target: Option<PasteTarget>) {
+        self.copy_with_query(snippet, target, None);
+    }
+    fn copy_with_query(
+        self: &Rc<Self>,
+        snippet: Snippet,
+        target: Option<PasteTarget>,
+        query: Option<String>,
+    ) {
         if !self.ensure_library() {
             return;
         }
@@ -413,6 +462,7 @@ impl App {
                 return;
             }
             let Some(target) = target else {
+                app.learn(snippet.id, crate::usage::Event::Copy, query.as_deref());
                 app.toast("Copied resolved text.");
                 return;
             };
@@ -420,17 +470,21 @@ impl App {
                 picker.window.set_visible(false);
             }
             if !target.focus() {
+                app.learn(snippet.id, crate::usage::Event::Copy, query.as_deref());
                 app.paste_failed();
                 return;
             }
             glib::timeout_future(Duration::from_millis(200)).await;
             if app.copy_serial.get() != serial || clipboard.content().as_ref() != Some(&provider) {
+                app.learn(snippet.id, crate::usage::Event::Copy, query.as_deref());
                 return;
             }
             if !target.paste() {
+                app.learn(snippet.id, crate::usage::Event::Copy, query.as_deref());
                 app.paste_failed();
                 return;
             }
+            app.learn(snippet.id, crate::usage::Event::Paste, query.as_deref());
             glib::timeout_future(Duration::from_millis(1500)).await;
             if app.copy_serial.get() == serial
                 && clipboard.content().as_ref() == Some(&provider)
@@ -561,6 +615,9 @@ impl App {
         });
     }
     fn quit(self: &Rc<Self>) {
+        if self.usage_quitting.get() {
+            return;
+        }
         let inline_idle = self
             .inline
             .borrow()
@@ -636,7 +693,38 @@ impl App {
             if let Some(workspace) = self.secure.borrow().as_ref() {
                 workspace.lock();
             }
-            self.application.quit();
+            if let Some(usage) = self.usage.borrow().clone() {
+                self.usage_quitting.set(true);
+                let app = self.clone();
+                let reply = usage.flush();
+                glib::spawn_future_local(async move {
+                    let start = std::time::Instant::now();
+                    let result = loop {
+                        match reply.try_recv() {
+                            Ok(result) => break result,
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                break Err(Error("Usage learning stopped before it could save."));
+                            }
+                            Err(_) if start.elapsed() < Duration::from_secs(3) => {
+                                glib::timeout_future(Duration::from_millis(30)).await
+                            }
+                            Err(_) => {
+                                break Err(Error(
+                                    "Usage data is still being saved. Try Quit again shortly.",
+                                ));
+                            }
+                        }
+                    };
+                    app.usage_quitting.set(false);
+                    // Local learning is best effort; its failure must not trap the app at Quit.
+                    if let Err(error) = result {
+                        eprintln!("{error}");
+                    }
+                    app.application.quit();
+                });
+            } else {
+                self.application.quit();
+            }
         } else {
             if let Some(worker) = self.account_worker.borrow().as_ref() {
                 worker.cancel_quit();
@@ -692,6 +780,7 @@ impl App {
             "capture",
             "history",
             "inline",
+            "usage",
             "search",
             "save",
             "copy",
@@ -718,6 +807,7 @@ impl App {
                         "restore-backup",
                         "history",
                         "inline",
+                        "usage",
                     ]
                     .contains(&name)
                         && !app.ensure_library()
@@ -736,6 +826,7 @@ impl App {
                         "account" => app.open_account(),
                         "history" => app.open_history(),
                         "inline" => app.open_inline(),
+                        "usage" => app.open_usage(),
                         "secure" => app.open_secure(None),
                         "new" => {
                             app.main().new_entry("");
@@ -888,6 +979,7 @@ impl MainWindow {
             ("Capture Clipboard", "capture"),
             ("Clipboard History…", "history"),
             ("Inline Expansion…", "inline"),
+            ("Suggestion Learning…", "usage"),
             ("Import…", "import"),
             ("Export…", "export"),
             ("Encrypted Backup…", "backup"),
@@ -1654,6 +1746,7 @@ struct Picker {
     rows: gtk::ListBox,
     snippets: RefCell<Vec<Snippet>>,
     target: Option<PasteTarget>,
+    usage: crate::usage::Snapshot,
 }
 impl Picker {
     fn new(app: &Rc<App>, target: Option<PasteTarget>) -> Rc<Self> {
@@ -1701,6 +1794,12 @@ impl Picker {
             rows,
             snippets: RefCell::new(vec![]),
             target,
+            usage: app
+                .usage
+                .borrow()
+                .as_ref()
+                .map(crate::usage_store::Handle::snapshot)
+                .unwrap_or_default(),
         });
         let weak = Rc::downgrade(&this);
         this.query.connect_search_changed(move |_| {
@@ -1781,7 +1880,8 @@ impl Picker {
         };
         let ordinary_ids: std::collections::HashSet<_> =
             app.library.borrow().snippets.iter().map(|s| s.id).collect();
-        let snippets = model::search(&catalogue, &self.query.text(), &[], false, true);
+        let mut snippets = model::search(&catalogue, &self.query.text(), &[], false, true);
+        self.usage.rank(&mut snippets, &self.query.text());
         clear_rows(&self.rows);
         for snippet in &snippets {
             self.rows
@@ -1806,9 +1906,16 @@ impl Picker {
             if app.is_secure(snippet.id).is_ok_and(|secure| secure) {
                 self.window.set_visible(false);
                 app.open_secure_target(Some(snippet.id), self.target.clone());
+                if let Some(workspace) = app.secure.borrow().as_ref() {
+                    workspace.selection_query(snippet.id, &self.query.text());
+                }
                 return;
             }
-            app.copy(snippet, self.target.clone());
+            app.copy_with_query(
+                snippet,
+                self.target.clone(),
+                crate::usage::prefix(&self.query.text()),
+            );
         }
     }
 }
@@ -1850,6 +1957,9 @@ pub fn run() -> glib::ExitCode {
         backup: RefCell::new(None),
         history: RefCell::new(None),
         inline: RefCell::new(None),
+        usage: RefCell::new(None),
+        usage_settings: RefCell::new(None),
+        usage_quitting: Cell::new(false),
         hold: RefCell::new(None),
         copy_serial: Cell::new(0),
         css: gtk::CssProvider::new(),
@@ -1861,6 +1971,8 @@ pub fn run() -> glib::ExitCode {
             // GApplication emits startup only in the primary process. A
             // secondary --picker/--quit invocation never starts another owner.
             let root = app.library.borrow().root.clone();
+            // Usage is local and its worker is started only by the primary desktop owner.
+            *app.usage.borrow_mut() = Some(crate::usage_store::Handle::start(root.clone()));
             match AccountWorker::new(root) {
                 Ok(worker) => *app.account_worker.borrow_mut() = Some(Rc::new(worker)),
                 Err(failure) => eprintln!("{}", failure.message()),
@@ -2000,6 +2112,9 @@ mod tests {
             backup: RefCell::new(None),
             history: RefCell::new(None),
             inline: RefCell::new(None),
+            usage: RefCell::new(None),
+            usage_settings: RefCell::new(None),
+            usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
             last_theme: RefCell::new(String::new()),
@@ -2124,6 +2239,9 @@ mod tests {
             backup: RefCell::new(None),
             history: RefCell::new(None),
             inline: RefCell::new(None),
+            usage: RefCell::new(None),
+            usage_settings: RefCell::new(None),
+            usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
             last_theme: RefCell::new(String::new()),
@@ -2188,6 +2306,9 @@ mod tests {
             backup: RefCell::new(None),
             history: RefCell::new(None),
             inline: RefCell::new(None),
+            usage: RefCell::new(None),
+            usage_settings: RefCell::new(None),
+            usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
             last_theme: RefCell::new(String::new()),
@@ -2288,6 +2409,9 @@ mod tests {
             backup: RefCell::new(None),
             history: RefCell::new(None),
             inline: RefCell::new(None),
+            usage: RefCell::new(None),
+            usage_settings: RefCell::new(None),
+            usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
             last_theme: RefCell::new(String::new()),

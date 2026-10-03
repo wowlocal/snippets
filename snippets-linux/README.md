@@ -773,6 +773,41 @@ Background acquisition and the interactive history workflow still need an
 unrestricted, unlocked Hyprland verification. Other Wayland compositors require
 ext-data-control-v1 support and the current Hyprland session/source checks.
 
+## Local suggestion learning
+
+The native picker ranks matches by relevance, keyword match and pins before
+remembered choices and frequency. Its learning snapshot is frozen when it opens;
+using a snippet does not move rows during that picker session. The library list
+keeps its usual order. Short prefix collisions, such as `re` matching `reply`
+and `refund`, learn from deliberate picker choices. Prefixes are folded and must
+fit within eight graphemes; longer queries are rejected rather than truncated.
+
+Successful copies contribute 0.25; accepted paste and completed inline expansion
+contribute 1.0. Usage decays with a 14-day half-life. A single copy has no frequency
+ranking effect. Native secure insertion records only its saved snippet identifier
+after successful delivery, using the same fresh authentication as before. This
+does not prove a receiving application consumed input; live delivery remains
+unverified.
+
+Open **Suggestion Learning…** in the main menu to control frequency ranking and
+prefix memory separately, reset either history, or reset both. Both controls
+default to on. Disabling frequency ranking keeps counting use. Disabling prefix
+memory erases saved choices and stops collecting them. Storage failures are shown
+in that window; protected or unsupported files are preserved.
+
+`Usage/usage.json` stores UUIDs, bounded weights, counts, times and short search
+prefixes. It contains no snippet bodies, display names, tags, clipboard contents
+or keys. `Usage/preferences.json` stores the two controls. This local plaintext
+history uses mode `0600` inside a `0700` directory and is excluded from sync,
+sharing export and encrypted backups. It never changes snippet timestamps or
+Undo. A separate lock and atomic writes merge concurrent writers without summing
+their common ancestor; reset markers prevent stale caches restoring cleared data.
+Writes run on a worker with a five-second trailing delay and 60-second ceiling.
+The desktop attempts a final flush on quit; optional learning cannot prevent quit.
+The ordinary CLI never starts the learning worker or creates `Usage/`.
+`SNIPPETS_USAGE_DISABLED=1` prevents usage reading, writing and all access to its
+files, including settings and reset operations.
+
 ## Desktop picker and appearance
 
 `snippets --picker` captures the active Hyprland window before opening the picker.
@@ -821,6 +856,9 @@ Validate config edits with `hyprctl reload` and `hyprctl configerrors`.
 | Ctrl+Q | Save and quit |
 
 ## CLI
+
+The Linux CLI still lacks the Mac app's approved `reveal`, `secure-status` and
+`add --secure` workflows. Secure bodies remain inaccessible through the CLI.
 
 Commands return JSON; errors use a nonzero exit status and safe stderr messages.
 

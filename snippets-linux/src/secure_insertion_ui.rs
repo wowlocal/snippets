@@ -113,6 +113,12 @@ impl Workspace {
         self.update();
         let generation = self.generation.get();
         let vault_generation = self.vault.borrow().generation();
+        let query = self
+            .selection_query
+            .borrow()
+            .as_ref()
+            .filter(|(selected, _)| *selected == id)
+            .map(|(_, q)| q.clone());
         let this = self.clone();
         glib::spawn_future_local(async move {
             let result=async {
@@ -162,9 +168,14 @@ impl Workspace {
             this.insertion_target.borrow_mut().take();
             this.update();
             match result {
-                Ok(_) => this
-                    .status
-                    .set_label("Secure input sent to the original window; check the destination."),
+                Ok(_) => {
+                    if let Some(usage) = this.usage.borrow().as_ref() {
+                        usage.record(id, crate::usage::Event::Paste, query.as_deref());
+                    }
+                    this.status.set_label(
+                        "Secure input sent to the original window; check the destination.",
+                    );
+                }
                 Err(error) => {
                     if this.generation.get() == generation {
                         this.window.present();
