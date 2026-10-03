@@ -336,8 +336,13 @@ the account or library, reconnecting, or starting key/recovery operations turns
 automatic mode off before the operation proceeds. Enable it again after review.
 The public preference contains only a consent nonce; account/library pins stay in
 the system keyring. A missing preference does not create an owner, sync keys or
-checkpoint and makes no network request. The combined live GTK/keyring/HTTPS
-automatic workflow still needs verification.
+checkpoint and makes no network request. The combined live GTK, private native
+keyring and verified HTTPS checks now cover explicit enable, transient HTTP
+backoff/retry, bidirectional exchange on the normal 30-second timer with the window
+hidden, consent-based startup through a new worker and disabling while a response
+is in flight. A read-only library receives without uploading local edits; a changed
+membership stops background work until review. After disabling and restarting,
+no background HTTP request is made.
 
 The library selector starts at **Select a library…**. Choose an existing library,
 then explicitly set up/resume its keys or supply its offline recovery code/QR
@@ -633,9 +638,11 @@ and later edits, including independently reviewed missing/deleted copies. Unknow
 variant versions, damaged originals or ambiguous body ownership still refuse recovery.
 Missing primary files stop sending; they never become cloud deletions. Receiving does not send this
 computer's local changes, and a connected account or verified key does not mean
-snippets have synchronized. The combined live GTK, keyring and HTTPS workflow,
-including Sync Now, receiving, sending, snapshot/deletion review, pairing and signed operations,
-remains unverified. The startup-recovery UI also needs a live graphical check;
+snippets have synchronized. Ordinary automatic receiving/sending now passes the
+combined live GTK, private native keyring and verified HTTPS workflow. Explicit
+Sync Now/Receive/Send controls, vault-authenticated cycles, snapshot/deletion
+review, pairing and signed operations still need combined live acceptance.
+The startup-recovery UI also needs a live graphical check;
 its core crash/restart and file-access checks use only temporary data.
 
 **Show Pending Recovery Code…** opens a fresh computer-login-password dialog.
@@ -1114,7 +1121,9 @@ replacement-echo isolation pass in that independent GTK receiver too. Combined
 native sign-in, explicit library selection, key setup, recovery disclosure and
 confirmation, worker restart/reconnect and sign-out pass using a private native
 keyring, certificate-verified loopback HTTPS and private-policy PAM. Automatic
-sync, pairing, switching and remaining native interactions are still under review.
+sync also passes live bidirectional/read-only, background, retry, restart, scope
+halt and in-flight-disable checks. Pairing, switching and remaining native
+interactions are still under review.
 All three globally assigned actions, visible tray-menu selection/focus and re-registration
 with a restarted Omarchy host pass; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
@@ -1155,6 +1164,10 @@ bash snippets-linux/tests/clipboard-history-live.sh /absolute/path/to/library-te
 # Mapped account/password dialogs, real private keyring, verified loopback HTTPS
 # and private-policy PAM; no login-keyring or host-PAM-policy access.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary
+# Each variant has its own native GTK process, bus, keyring and data root.
+# The hidden-window checks wait for the unmodified 30-second scheduler.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --automatic-sync
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --automatic-reader
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib clipboard_history::wayland::protocol_tests::private_libwayland -- --ignored --test-threads=1
@@ -1235,7 +1248,17 @@ retry, explicit selection of the first/only library without implicit key creatio
 key setup, recovery cancellation/wrong-password refusal, focus revocation, fresh
 authorization and confirmation, new-worker reconnect and sign-out. Both workers
 drain, all fixture children are reaped, and private bus/keyring/data are removed.
-It requires an unlocked desktop and creates no vault or sync checkpoint.
+Its onboarding variant requires an unlocked desktop and creates no vault or sync
+checkpoint. The automatic variants explicitly create private sync checkpoints
+through saved native consent. Their independent server stores only opaque encrypted
+wire records and validates CAS versions; the test thread alone opens the public
+fixtures using the actual temporary keyring-owned library key. Both background
+directions use the production timer with the account window hidden. Writer checks
+also verify HTTP backoff, new-worker automatic reconnect, a mapped Disable action
+while the HTTP response is held, unchanged primary/checkpoint bytes after revocation,
+and offline startup after opt-out. Reader checks verify no batch upload and a halt
+on changed membership. Only closed status/failure enums and counts appear in
+failure output.
 The independent QR reader test uses public payloads and explicitly disables
 zbar's D-Bus publication. Recovery-disclosure/confirmation tests use an explicitly synthetic proof;
 they cover suffix normalization, secret retirement, schema migration and both sides

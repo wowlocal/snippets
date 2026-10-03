@@ -25,6 +25,9 @@ reaches that receiver through the real password dialog and native virtual keyboa
 including Cancel and wrong-password refusal. Native account onboarding, key setup,
 recovery-code authorization/confirmation, worker reconnect and sign-out also pass
 with a private native keyring, verified loopback HTTPS and private-policy PAM.
+Automatic ordinary synchronization now passes real private-keyring/HTTPS/GTK
+bidirectional and read-only checks, including hidden-window timers, retry, saved
+consent startup, scope-change halt and in-flight disable.
 The remaining live acceptance scope is recorded in the current table and latest
 milestones below.
 
@@ -250,16 +253,16 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; combined native restoration GTK/keyring/PAM acceptance remains pending |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor with bounded encrypted Undo/Redo and explicit Paste, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; current native secure lifecycle, retained-draft recovery and legacy-repair lifecycle checks pass; fuller secure editing/reveal and recovery acceptance remains open |
 | Secure delivery and transfers | Native portable encrypted-backup export/import, fresh-authenticated direct virtual-keyboard insertion and one-cycle vault authentication for receiving/sending | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private native Wayland input fixture and live fresh vault-authenticated insertion into an independent GTK receiving field pass; authenticated-sync validation and fuller editing/accessibility review remain pending |
-| Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, current v1 conflict-owned deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; fresh verified loopback HTTPS onboarding/recipient checks and combined native onboarding/reconnect/sign-out pass in the unrestricted session; combined native automatic workflow verification remains pending; CloudKit is Apple-only |
+| Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, current v1 conflict-owned deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; fresh verified loopback HTTPS onboarding/recipient checks and combined native onboarding/reconnect/sign-out pass in the unrestricted session; combined native ordinary automatic exchange passes with a real private keyring and verified HTTPS; pairing, switching and authenticated secure-sync acceptance remain pending; CloudKit is Apple-only |
 | Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent pending child deletions are selected for their own decision before the parent; unknown versions remain a separate boundary; live password-dialog verification remains open |
 | Library-key setup | Portable sync-v1 bundle, P-256 pairing, recovery QR/code and envelope, Ed25519 authority/proofs and request hashes; bound control-plane HTTP; durable first-key, recovery, recipient activation and signed mutations; native setup, recipient pairing, trusted-device approval, recovery replacement, disclosure, library-switch review/resume/cancel/offline finish and empty-target first-key UI wired | Independent vectors, retained proofs, interrupted Secret Service writes, schema migration, response ownership, exact authorization targets, mutation recovery and offline switch cancellation/completion pass; earlier verified loopback TLS passes; independent QR decoder passes for recovery and pairing payloads; terminal history retirement is wired; combined live GTK/verified-HTTPS/native-keyring first-key setup, recovery disclosure/confirmation and new-worker reconnect pass; pairing, signed mutations and switching still need combined acceptance |
 | Library-switch pairing | Separate bounded Secret Service candidate history, request/check/cancel, retained private drafts and claims, fresh authority verification, native public QR/copy and subsequent reviewed activation | Twenty desktop tests (nineteen without desktop features) cover interruption, response ownership, expiry, scope/account changes, capacity/schema/generation refusal, old-key preservation, exact authorized handover and review-only reuse of retained claims across changed pins/accounts; combined native candidate-pairing GTK/keyring/HTTPS acceptance remains pending |
 | Empty-target first keys | Separate bounded Secret Service candidate history, exact key/envelope before POST, owner-only native create/resume, fresh server reconciliation and reviewed activation | Twenty-seven desktop tests (twenty-six without desktop features) cover writes, races, restart, scope/account/schema/capacity refusal, old-key preservation, reviewed reuse across changed pins/accounts and offline completion/retirement of promoted recovery-code copies; combined live workflow remains unverified |
 | Local owner authorization | Bounded unprivileged PAM worker, exact-purpose/scope/generation gate, single-use permit and revocable disclosure lease; password dialog and focus/lock UI wired | Fresh private-policy libpam success, refusal, timeout and cancellation checks pass; mapped native recovery-password cancellation/wrong-password refusal, real private-policy PAM authorization, actual focus-loss revocation and fresh reauthorization/confirmation pass; host login-policy authentication remains separate |
 | Cloud credentials | Native Secret Service backend, credential lineage, serialized sign-in/refresh/logout/restart cleanup, bounded live access tokens; native sign-in/reconnect/sign-out UI | Fresh isolated GNOME Keyring and existing fault/restart/worker ownership checks pass; combined native wrong-code retry/sign-in, explicit library selection, new-worker reconnect with token rotation and sign-out pass through the real private keyring and verified HTTPS, preserving the library key; startup connects only with explicit saved automatic consent |
-| Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; current native toggle smoke passes; combined automatic GTK/keyring/HTTPS workflow remains unverified |
+| Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; current native toggle smoke and combined private-keyring/verified-HTTPS/GTK writer/reader checks pass: transient backoff, actual hidden-window timer exchange, protected-consent startup in a new worker, in-flight disable preserving primary/checkpoint bytes, opt-out restart without HTTP and changed-membership halt; primary process login startup and secure/review workflows remain separate |
 | Cloud library creation | Explicit native create/resume/open and create-another actions; bounded retained intents; one-use confirmation binds account session and existing protected state; original idempotency key retained before POST | Twenty-four fault/restart/schema/expiry tests plus bootstrap admission and reviewed-switch integration; combined live GTK/keyring/HTTPS workflow remains unverified; preserves active keys and sync checkpoint |
-| Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, current v1 conflict-owned absence/deletion crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; live native/cloud verification remains open |
+| Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, current v1 conflict-owned absence/deletion crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; ordinary native automatic receiving/sending now passes against verified HTTPS with a real private keyring; live snapshot/deletion, secure-sync, conflict and reviewed-switch workflows remain open |
 | Inline expansion | Native input-method-v2 owner, separate opt-in fuzzy input-popup with keyboard navigation and raw passthrough, conditional bounded clipboard read and move-only chunked replacement | Core, native pixels/FD/protocol and controller checks cover selection, dismissal, legacy consent, frozen ranking, queue/buffer bounds, UTF-8, field/file changes, cancellation and full 256 KiB output; real peer credentials, native settings and independent GTK exact/suggestion/echo receiving-field checks pass; other application compatibility remains under review |
 | Encrypted backup | Portable encrypted-backup export/import and recovery wired to GTK; independent all-layer codec verification | Live backup password/file-dialog workflow and Apple app round trips remain unverified |
 | Clipboard history | Explicit opt-in GTK view, separate local AES-GCM image/key, bounded seven-day retention/search/delete/clear, read-only Wayland data-control worker, foreground exclusions and sensitivity/internal markers, revocable acquisition and quit barriers | Core/worker/privacy, private libwayland-server and native disabled-history controls pass; real Omarchy collection with a separate C/GTK owner and private native keyring verifies consent cancellation, initial-offer exclusion, collection with the view closed, encrypted viewing/search/copy, sensitivity/internal skips, opt-out barriers and confirmed deletion/clear without changing the current clipboard |
@@ -3448,3 +3451,60 @@ existing 2026-10-05 09:00 Minsk lock-restoration timer are preserved.
 Combined automatic sync, pairing/signed mutations, reviewed library switching and
 conflict/deletion decisions, actual login startup, fuller secure editing/recovery
 and Apple-app backup round trips remain under live acceptance.
+
+### Native automatic synchronization acceptance (2026-10-03)
+
+The private account harness now has two independently selected GTK processes:
+`--automatic-sync` and `--automatic-reader`. Both use the production serial owner,
+real private Secret Service, scoped test-only verified HTTPS trust, and unchanged
+scheduling/control code. The independent TLS server retains only encrypted wire
+records, checks exact expected scope and positional CAS versions, and issues
+snapshot/delta cursors. Its record versions are admitted by the normal protocol
+validator. Actual temporary keyring-owned library material stays in zeroizing
+test-thread owners; the server never receives that key or ordinary plaintext.
+
+The writer explicitly signs in, selects a library, sets up its first keys and
+enables synchronization through mapped native buttons. A single 503 dependency
+refusal enters the normal backoff and then succeeds. An actual encrypted remote
+record is applied locally; a local ordinary record is uploaded, acknowledged and
+opened only in the test thread to verify its public fixture fields. Closing the
+account window hides it without stopping the owner. Remote content/tags and local
+content/tags subsequently converge through the unmodified 30-second timer, with
+no injected tick or wake for that background exchange. The public preference is
+private `0600`, has only its closed three fields, and its exact consent target
+exists in the native protected slot. No vault is created.
+
+A new owner reconnects and rotates credentials solely from saved protected consent;
+no Reconnect, library-selection or Enable button is invoked for that startup. It
+receives the next remote edit and retains the same installed library key. A separate
+foreground wake starts an HTTP fetch which the independent peer deliberately holds.
+The mapped Turn Off action remains available while the serial owner waits. It
+immediately revokes the ticket; releasing the response lets the queued off write
+finish without changing either primary bytes or the encrypted checkpoint. Later
+foreground/local-edit wakes cause no request. A third owner also starts offline
+with opt-out preserved, the same library key and unchanged primary bytes.
+
+The reader selects an observed read-only membership before enabling. It receives
+an encrypted remote record while preserving its unsent local record and emits no
+batch upload. With its window hidden, an actual subsequent periodic check observes
+a changed membership and enters the review-required attention halt. Foreground
+wakes cannot restart that halted schedule. Showing the window and pressing the
+native off button persists opt-out. All owners drain; fixture processes, private
+keyrings/buses/directories and native parent windows are removed.
+
+Both live variants and the original combined onboarding/recovery regression pass
+with GTK fatal warnings. Nine scheduling-policy, 21 account-worker, 35 HTTPS and
+20 bidirectional-core tests pass, as do the nine scheduling cases without desktop
+features. Both all-target Clippy configurations, formatting, shell syntax, the
+three release artifacts and two private-prefix installations pass on the same
+270-file native fingerprint. This checkpoint changes acceptance code and current
+documentation; production scheduling, consent and cancellation admission are
+unchanged. GTK 4.22.4/libadwaita 1.9.3, matching real Wayland credentials, the
+desktop D-Bus tray owner, DNS and verified external HTTPS are rechecked. The
+compositor remains unlocked without configuration errors. Stay Awake and the
+existing 2026-10-05 09:00 Minsk lock-restoration timer are preserved.
+
+Primary-process login startup, native manual and vault-authenticated sync controls,
+pairing/signed mutations, reviewed switching and snapshot/conflict/deletion flows,
+fuller secure editing/recovery/accessibility and Apple-app backup round trips
+remain under live acceptance.

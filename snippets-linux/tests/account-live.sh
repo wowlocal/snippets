@@ -5,6 +5,7 @@ set -euo pipefail
 if [[ ${1:-} == --in-bus ]]; then
   test_binary=$2
   fixture_root=$3
+  test_name=$4
   export SNIPPETS_SECRET_TEST_BUS=$DBUS_SESSION_BUS_ADDRESS
   export SNIPPETS_SECRET_TEST_ROOT=$XDG_DATA_HOME/snippets
   if [[ $DBUS_SESSION_BUS_ADDRESS == ${SNIPPETS_SECRET_HOST_BUS:-} ]]; then
@@ -31,16 +32,21 @@ if [[ ${1:-} == --in-bus ]]; then
     printf '%s\n' 'The isolated test keyring did not start.' >&2
     exit 1
   fi
-  G_DEBUG=fatal-warnings "$test_binary" --exact \
-    account_ui::live_tests::live_account_onboarding_and_recovery --ignored --test-threads=1
+  G_DEBUG=fatal-warnings "$test_binary" --exact "$test_name" --ignored --test-threads=1
   exit
 fi
-if [[ $# != 1 || ! -x $1 || -z ${XDG_RUNTIME_DIR:-} ||
+if [[ $# -lt 1 || $# -gt 2 || ! -x $1 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${HYPRLAND_INSTANCE_SIGNATURE:-} || -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary (in the unlocked desktop session)' >&2
+  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--automatic-sync|--automatic-reader] (in the unlocked desktop session)' >&2
   exit 2
 fi
-if ! "$1" --list | rg '^account_ui::live_tests::live_account_onboarding_and_recovery: test$' > /dev/null; then
+case ${2:-} in
+  '') test_name=account_ui::live_tests::live_account_onboarding_and_recovery ;;
+  --automatic-sync) test_name=account_ui::live_tests::live_automatic_sync ;;
+  --automatic-reader) test_name=account_ui::live_tests::live_automatic_reader ;;
+  *) printf '%s\n' 'Unknown native account fixture.' >&2; exit 2 ;;
+esac
+if ! "$1" --list | rg -Fx "$test_name: test" > /dev/null; then
   printf '%s\n' 'The selected test binary does not contain the live fixture.' >&2
   exit 2
 fi
@@ -80,4 +86,4 @@ export GDK_DEBUG=no-portals
 export GTK_A11Y=none
 export SNIPPETS_SECRET_HOST_BUS=${DBUS_SESSION_BUS_ADDRESS:-}
 dbus-run-session --config-file="$fixture_root/bus.conf" -- \
-  bash "$0" --in-bus "$1" "$fixture_root"
+  bash "$0" --in-bus "$1" "$fixture_root" "$test_name"

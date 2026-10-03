@@ -1,5 +1,5 @@
 //! Certificate-verified loopback account server; public fictional account only.
-use crate::{bootstrap, cloud::ServerURL};
+use crate::{bootstrap, cloud::ServerURL, wire::WireRecord};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -19,8 +19,49 @@ pub(super) struct State {
     pub grants: usize,
     pub bootstrap_posts: usize,
     pub revokes: usize,
+    pub fetches: usize,
+    pub batches: usize,
+    pub accepted: usize,
+    pub reader: bool,
+    pub changed_scope: bool,
+    pub defer_fetch: bool,
     public: Option<Value>,
     ciphertext: Option<Value>,
+    records: BTreeMap<uuid::Uuid, (WireRecord, String)>,
+    positions: BTreeMap<String, BTreeMap<uuid::Uuid, String>>,
+    generation: usize,
+    hold_changes: Option<Arc<Hold>>,
+}
+impl State {
+    pub fn put(&mut self, record: WireRecord) {
+        record.validate().unwrap();
+        self.generation += 1;
+        let version = format!("public-native-record-version-{:016x}", self.generation);
+        crate::cloud::RecordVersion::from_checkpoint(version.clone()).unwrap();
+        self.records.insert(record.id, (record, version));
+    }
+    pub fn record(&self, id: uuid::Uuid) -> Option<WireRecord> {
+        self.records.get(&id).map(|(record, _)| record.clone())
+    }
+    fn known(&self) -> BTreeMap<uuid::Uuid, String> {
+        self.records
+            .iter()
+            .map(|(id, (_, version))| (*id, version.clone()))
+            .collect()
+    }
+}
+#[derive(Default)]
+pub(super) struct Hold {
+    entered: AtomicBool,
+    released: AtomicBool,
+}
+impl Hold {
+    pub fn entered(&self) -> bool {
+        self.entered.load(Ordering::Acquire)
+    }
+    pub fn release(&self) {
+        self.released.store(true, Ordering::Release);
+    }
 }
 pub(super) struct Fixture {
     pub server: ServerURL,
@@ -33,8 +74,15 @@ fn scope() -> Value {
         "scopeBinding":"public-native-membership-binding","datasetGeneration":uuid::Uuid::from_u128(3),
         "feedEpoch":uuid::Uuid::from_u128(4)})
 }
-fn space() -> Value {
-    json!({"scope":scope(),"role":"owner","keyEpoch":1})
+fn observed_scope(state: &State) -> Value {
+    let mut value = scope();
+    if state.changed_scope {
+        value["scopeBinding"] = "public-native-changed-membership".into();
+    }
+    value
+}
+fn space(state: &State) -> Value {
+    json!({"scope":observed_scope(state),"role":if state.reader {"reader"} else {"owner"},"keyEpoch":1})
 }
 fn discovery(server: &ServerURL) -> Value {
     let base = server.for_secure_storage();
@@ -56,7 +104,7 @@ fn grant(state: &mut State) -> Value {
         "token_type":"Bearer","account":{"id":"public-native-account","email":"fixture@example.invalid"}})
 }
 fn recovery(state: &State) -> Value {
-    json!({"scope":scope(),"keyEpoch":1,"recovery":state.ciphertext.as_ref().map(|ciphertext|
+    json!({"scope":observed_scope(state),"keyEpoch":1,"recovery":state.ciphertext.as_ref().map(|ciphertext|
         json!({"purpose":"recovery","version":1,"keyEpoch":1,"algorithm":bootstrap::RECOVERY_ALGORITHM,
             "ciphertext":ciphertext,"createdAt":"2026-09-30T12:00:00Z"}))})
 }
@@ -157,15 +205,15 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
     let base = format!("/v2/spaces/{}", uuid::Uuid::from_u128(2));
     if request.path == "/v2/spaces" {
         assert!(request.method == "GET");
-        (200, json!({"spaces":[space()]}))
+        (200, json!({"spaces":[space(state)]}))
     } else if request.path == base {
         assert!(request.method == "GET");
-        (200, space())
+        (200, space(state))
     } else if request.path == format!("{base}/key-authority") {
         assert!(request.method == "GET");
         (
             200,
-            json!({"scope":scope(),"keyEpoch":1,"publicKey":state.public}),
+            json!({"scope":observed_scope(state),"keyEpoch":1,"publicKey":state.public}),
         )
     } else if request.path == format!("{base}/recovery-envelope") {
         assert!(request.method == "GET");
@@ -173,7 +221,7 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
     } else if request.path == format!("{base}/key-bootstrap") {
         assert!(request.method == "POST" && state.public.is_none());
         assert!(
-            request.body["expectedScope"] == scope()
+            request.body["expectedScope"] == observed_scope(state)
                 && request.body["recovery"]["expectedVersion"].is_null()
         );
         assert!(request.body.get("bundle").is_none() && request.body.get("key").is_none());
@@ -183,13 +231,79 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
         (200, recovery(state))
     } else if request.path.starts_with(&format!("{base}/changes?")) {
         assert!(request.method == "GET");
+        state.fetches += 1;
+        if std::mem::take(&mut state.defer_fetch) {
+            return (
+                503,
+                json!({"type":"urn:snippets:error:dependency_unavailable","status":503,
+                    "code":"dependency_unavailable","retryAfterSeconds":1,
+                    "requestId":uuid::Uuid::from_u128(99)}),
+            );
+        }
+        let url = url::Url::parse(&format!("https://127.0.0.1{}", request.path)).unwrap();
+        let cursor = url
+            .query_pairs()
+            .find(|(key, _)| key == "cursor")
+            .map(|(_, value)| value.into_owned());
+        let known = cursor.as_ref().map(|cursor| {
+            state
+                .positions
+                .get(cursor)
+                .expect("native fixture received an unissued cursor")
+        });
+        let records: Vec<_> = state
+            .records
+            .iter()
+            .filter(|(id, (_, version))| known.is_none_or(|known| known.get(id) != Some(version)))
+            .map(|(_, (record, version))| server_record(record, version))
+            .collect();
+        assert!(records.len() <= 50);
+        let next = format!("public-native-cursor-{}", state.fetches);
+        state.positions.insert(next.clone(), state.known());
         (
             200,
-            json!({"scope":scope(),"records":[],"cursor":"public-native-cursor","fullSnapshot":true,"hasMore":false}),
+            json!({"scope":observed_scope(state),"records":records,"cursor":next,
+                "fullSnapshot":cursor.is_none(),"hasMore":false}),
+        )
+    } else if request.path == format!("{base}/records/batch") {
+        assert!(request.method == "POST" && !state.reader);
+        assert!(request.body["expectedScope"] == observed_scope(state));
+        let items = request.body["items"].as_array().unwrap();
+        assert!(!items.is_empty() && items.len() <= 50);
+        state.batches += 1;
+        let mut partial = false;
+        let outcomes: Vec<_> = items
+            .iter()
+            .map(|item| {
+                let record: WireRecord = serde_json::from_value(item["record"].clone()).unwrap();
+                record.validate().unwrap();
+                let expected = item["expectedRecordVersion"].as_str();
+                let actual = state.records.get(&record.id).map(|(_, v)| v.as_str());
+                if expected != actual {
+                    partial = true;
+                    let (record, version) = state.records.get(&record.id).unwrap();
+                    json!({"kind":"conflict","authoritativeRecord":server_record(record, version)})
+                } else {
+                    state.accepted += 1;
+                    let id = record.id;
+                    state.put(record);
+                    let (record, version) = state.records.get(&id).unwrap();
+                    json!({"kind":"accepted","recordVersion":version,"revision":record.rev})
+                }
+            })
+            .collect();
+        (
+            200,
+            json!({"scope":observed_scope(state),"outcomes":outcomes,"partial":partial}),
         )
     } else {
         panic!("unexpected native fixture library route")
     }
+}
+fn server_record(record: &WireRecord, version: &str) -> Value {
+    let mut value = serde_json::to_value(record).unwrap();
+    value["recordVersion"] = version.into();
+    value
 }
 impl Fixture {
     pub fn new() -> Self {
@@ -237,8 +351,26 @@ impl Fixture {
                 let Ok(request) = request(&mut stream) else {
                     continue;
                 };
-                let (status, response) =
-                    respond(request, &thread_server, &mut thread_state.lock().unwrap());
+                let (status, response, hold) = {
+                    let mut state = thread_state.lock().unwrap();
+                    let hold = request
+                        .path
+                        .contains("/changes?")
+                        .then(|| state.hold_changes.take())
+                        .flatten();
+                    let (status, response) = respond(request, &thread_server, &mut state);
+                    (status, response, hold)
+                };
+                if let Some(hold) = hold {
+                    hold.entered.store(true, Ordering::Release);
+                    let started = std::time::Instant::now();
+                    while !hold.released.load(Ordering::Acquire)
+                        && !thread_stop.load(Ordering::Acquire)
+                        && started.elapsed() < Duration::from_secs(10)
+                    {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                }
                 let body = if status == 204 {
                     vec![]
                 } else {
@@ -278,6 +410,12 @@ impl Fixture {
             )
             .build()
             .into()
+    }
+    pub fn hold_next_changes(&self) -> Arc<Hold> {
+        let hold = Arc::new(Hold::default());
+        let mut state = self.state.lock().unwrap();
+        assert!(state.hold_changes.replace(hold.clone()).is_none());
+        hold
     }
 }
 impl Drop for Fixture {
