@@ -274,8 +274,33 @@ mod native {
         path: PathBuf,
         uid: u32,
     }
+    #[cfg(all(test, feature = "desktop"))]
+    thread_local! {
+        static LIVE_FIXTURE_HELPER: std::cell::RefCell<Option<PathBuf>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    #[cfg(all(test, feature = "desktop"))]
+    pub(crate) fn with_live_fixture_helper<T>(
+        path: &std::path::Path,
+        action: impl FnOnce() -> T,
+    ) -> T {
+        struct Restore(Option<PathBuf>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                LIVE_FIXTURE_HELPER.with(|fixture| *fixture.borrow_mut() = self.0.take());
+            }
+        }
+        let _restore = Restore(
+            LIVE_FIXTURE_HELPER.with(|fixture| fixture.borrow_mut().replace(path.to_owned())),
+        );
+        action()
+    }
     impl Native {
         pub fn new() -> Result<Self> {
+            #[cfg(all(test, feature = "desktop"))]
+            if let Some(path) = LIVE_FIXTURE_HELPER.with(|fixture| fixture.borrow().clone()) {
+                return Self::at(path);
+            }
             let path = std::env::current_exe().map_err(|_| Failure::Unavailable)?;
             let path = path
                 .parent()
@@ -473,6 +498,9 @@ mod native {
 }
 #[cfg(feature = "local-auth")]
 pub use native::{Native, helper_main};
+
+#[cfg(all(test, feature = "desktop"))]
+pub(crate) use native::with_live_fixture_helper;
 
 #[cfg(test)]
 pub(crate) fn authenticate_fixture(request: Request) -> Result<Authenticated> {

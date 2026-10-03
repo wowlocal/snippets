@@ -761,21 +761,39 @@ impl Handle {
     pub(crate) fn new(root: PathBuf) -> Result<Self> {
         let control = Control::new();
         let mut owner = Owner::new(root, control.clone());
+        Self::spawn_events(control, move |event| Self::owner_event(&mut owner, event))
+    }
+    fn owner_event(owner: &mut Owner, event: Event) -> (Option<Result<Reply>>, bool, Automatic) {
+        let reply = match event {
+            Event::Command(command) => Some(owner.handle_scheduled(*command)),
+            Event::Tick => {
+                owner.tick();
+                None
+            }
+            Event::Wake(reason) => {
+                if let Some(schedule) = owner.schedule.as_mut() {
+                    schedule.wake(reason, Self::now());
+                }
+                None
+            }
+        };
+        (reply, owner.pending.is_some(), owner.automatic)
+    }
+    #[cfg(test)]
+    pub(crate) fn live_fixture(
+        root: PathBuf,
+        server: ServerURL,
+        agent: ureq::Agent,
+        pam_helper: PathBuf,
+    ) -> Result<Self> {
+        let control = Control::new();
+        let mut owner = Owner::new(root, control.clone());
         Self::spawn_events(control, move |event| {
-            let reply = match event {
-                Event::Command(command) => Some(owner.handle_scheduled(*command)),
-                Event::Tick => {
-                    owner.tick();
-                    None
-                }
-                Event::Wake(reason) => {
-                    if let Some(schedule) = owner.schedule.as_mut() {
-                        schedule.wake(reason, Self::now());
-                    }
-                    None
-                }
-            };
-            (reply, owner.pending.is_some(), owner.automatic)
+            cloud::with_live_fixture_agent(&server, &agent, || {
+                local_auth::with_live_fixture_helper(&pam_helper, || {
+                    Self::owner_event(&mut owner, event)
+                })
+            })
         })
     }
     fn now() -> Duration {
@@ -1808,6 +1826,10 @@ impl Owner {
                 Ok(Reply::CodeRequired)
             }
             Command::Verify(code) => {
+                // A rejected exchange can leave the journal's requested phase.
+                // Recover it before retrying this still-valid challenge, using
+                // the same cleanup/admission path as SendCode and Refresh.
+                auth_store::recover(self.store.as_mut().ok_or(Failure::InvalidState)?)?;
                 let result = auth_store::sign_in(
                     self.store.as_mut().ok_or(Failure::InvalidState)?,
                     self.client.as_ref().ok_or(Failure::InvalidState)?,

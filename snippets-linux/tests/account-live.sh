@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Explicit live clipboard acceptance with an isolated bus, keyring and data root.
-# This intentionally shares the compositor, never the login keyring or library.
+# Explicit native account acceptance with an isolated bus, keyring and data root.
+# This shares only the compositor, never the login keyring or library.
 set -euo pipefail
 if [[ ${1:-} == --in-bus ]]; then
   test_binary=$2
@@ -32,15 +32,15 @@ if [[ ${1:-} == --in-bus ]]; then
     exit 1
   fi
   G_DEBUG=fatal-warnings "$test_binary" --exact \
-    ui::history::live_tests::live_clipboard_collection --ignored --test-threads=1
+    account_ui::live_tests::live_account_onboarding_and_recovery --ignored --test-threads=1
   exit
 fi
 if [[ $# != 1 || ! -x $1 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${HYPRLAND_INSTANCE_SIGNATURE:-} || -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: clipboard-history-live.sh /path/to/library-test-binary (in the unlocked desktop session)' >&2
+  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary (in the unlocked desktop session)' >&2
   exit 2
 fi
-if ! "$1" --list | rg '^ui::history::live_tests::live_clipboard_collection: test$' > /dev/null; then
+if ! "$1" --list | rg '^account_ui::live_tests::live_account_onboarding_and_recovery: test$' > /dev/null; then
   printf '%s\n' 'The selected test binary does not contain the live fixture.' >&2
   exit 2
 fi
@@ -52,7 +52,7 @@ if [[ ! -S $WAYLAND_DISPLAY || ! -d $host_runtime/hypr ]]; then
   printf '%s\n' 'The selected desktop compositor is unavailable.' >&2
   exit 1
 fi
-fixture_root=$(mktemp -d /tmp/snippets-history.XXXXXXXX)
+fixture_root=$(mktemp -d /tmp/snippets-account.XXXXXXXX)
 # Short path keeps Hyprland's signature/socket pathname within sockaddr_un.
 fixture_runtime=$(mktemp -d /tmp/sh.XXXXXX)
 trap 'rm -rf -- "$fixture_root" "$fixture_runtime"' EXIT

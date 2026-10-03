@@ -961,10 +961,24 @@ impl AccountWindow {
             if let Some(this) = weak.upgrade()
                 && !this.loading.get()
                 && !this.busy.get()
-                && dropdown.selected() != gtk::INVALID_LIST_POSITION
             {
                 this.library_panel.set_sensitive(false);
-                this.run(Command::Select(dropdown.selected() as usize));
+                let selected = dropdown.selected();
+                if selected == 0 || selected == gtk::INVALID_LIST_POSITION {
+                    this.cancel_sensitive();
+                    this.clear_pairing();
+                    this.clear_candidate_pairing();
+                    this.set_mutation(Ok(None));
+                    this.selected_role.set(None);
+                    this.sync.set_sensitive(false);
+                    this.send.set_sensitive(false);
+                    this.receive.set_sensitive(false);
+                    this.review_snapshot.set_visible(false);
+                    this.review_deletions.set_sensitive(false);
+                    this.update_automatic();
+                } else {
+                    this.run(Command::Select((selected - 1) as usize));
+                }
             }
         });
         let weak = Rc::downgrade(&this);
@@ -1377,9 +1391,12 @@ impl AccountWindow {
                 self.set_creation(creation);
                 self.set_new_creation(can_create_new);
                 self.email.set_text(&email); self.reconnect.set_visible(true); self.sign_out.set_visible(true); self.resume.set_visible(false);
-                let names=spaces.iter().map(|space|format!("{} · {}",space.id(),match space.role {Role::Owner=>"Owner",Role::Writer=>"Writer",Role::Reader=>"Reader"})).collect::<Vec<_>>();
+                // GtkDropDown's single selection cannot be cleared on a nonempty
+                // model. Keep a real first row so the first/only library still
+                // requires an explicit change and its notify signal can fire.
+                let names=std::iter::once("Select a library…".to_string()).chain(spaces.iter().map(|space|format!("{} · {}",space.id(),match space.role {Role::Owner=>"Owner",Role::Writer=>"Writer",Role::Reader=>"Reader"}))).collect::<Vec<_>>();
                 let names=names.iter().map(String::as_str).collect::<Vec<_>>();
-                self.loading.set(true); self.libraries.set_model(Some(&gtk::StringList::new(&names))); self.libraries.set_selected(gtk::INVALID_LIST_POSITION); self.loading.set(false);
+                self.loading.set(true); self.libraries.set_model(Some(&gtk::StringList::new(&names))); self.libraries.set_selected(0); self.loading.set(false);
                 self.library_panel.set_sensitive(false); self.pages.set_visible_child_name("libraries");
                 self.status.set_label(if spaces.is_empty() {"Account connected. Create a cloud library to begin."} else {"Account connected. Select a library to inspect its keys."});
                 match creation {
@@ -1389,7 +1406,7 @@ impl AccountWindow {
                     _=>(),
                 }
                 if let Some(id)=created {
-                    if let Some(index)=spaces.iter().position(|space|space.id()==id) {self.libraries.set_selected(index as u32);}
+                    if let Some(index)=spaces.iter().position(|space|space.id()==id) {self.libraries.set_selected(index as u32 + 1);}
                     else {self.status.set_label("The created library is unavailable. Reconnect to review this account.");}
                 }
                 self.set_switching(switching, false, false);
@@ -1504,7 +1521,7 @@ impl AccountWindow {
             Reply::Restored {failure,cancelled} => {
                 self.create_another.set_sensitive(false);
                 self.clear_pairing(); self.clear_candidate_pairing(); self.selected_role.set(None);
-                self.set_mutation(Ok(None)); self.libraries.set_selected(gtk::INVALID_LIST_POSITION);
+                self.set_mutation(Ok(None)); self.libraries.set_selected(0);
                 self.library_panel.set_sensitive(false); self.sync.set_sensitive(false);
                 self.receive.set_sensitive(false); self.send.set_sensitive(false);
                 self.review_deletions.set_sensitive(false); self.review_snapshot.set_visible(false);
@@ -1516,7 +1533,7 @@ impl AccountWindow {
             Reply::LocalHandover {switching,failure} => {
                 self.create_another.set_sensitive(false);
                 self.clear_pairing(); self.clear_candidate_pairing(); self.selected_role.set(None);
-                self.set_mutation(Ok(None)); self.libraries.set_selected(gtk::INVALID_LIST_POSITION);
+                self.set_mutation(Ok(None)); self.libraries.set_selected(0);
                 self.library_panel.set_sensitive(false); self.sync.set_sensitive(false);
                 self.receive.set_sensitive(false); self.send.set_sensitive(false);
                 self.review_deletions.set_sensitive(false); self.review_snapshot.set_visible(false);
@@ -2535,6 +2552,10 @@ impl AccountWindow {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "account_live_tests.rs"]
+mod live_tests;
 
 #[cfg(test)]
 mod tests {

@@ -270,8 +270,9 @@ promoted mutation, first-key candidate and handover target copies before replaci
 the presentation with bound verification metadata; original source capabilities
 remain in protected history. Restart resolves a lost
 write receipt without regenerating a code. Native account/key setup and recovery
-presentation/confirmation are now wired to the app; their live combined workflow
-still needs verification. Signed approval/recovery operations now retain their
+presentation/confirmation pass a combined live GTK, verified HTTPS, private native
+keyring and private-policy PAM check, including a fresh worker reconnect and
+sign-out. Signed approval/recovery operations now retain their
 candidate and original proof in Secret Service and have native review/authorization
 actions. A bounded inbound owner now saves each authenticated page and its cursor
 in one encrypted checkpoint, applies records in server order, and resumes retained
@@ -289,7 +290,8 @@ sync was explicitly enabled for a verified saved library.
 
 Open **Account & Recovery…** from the menu. Opening the window reads saved account
 metadata without making an HTTP request. Enter your HTTPS Snippets Cloud server
-and email, request a sign-in code, then verify it. **Reconnect Saved Account**
+and email, request a sign-in code, then verify it. After an incorrect code, enter
+the correct code for the same challenge and try again. **Reconnect Saved Account**
 refreshes the retained session and lists existing libraries. Account and keyring
 operations run in one worker outside the GTK thread. Closing the window preserves
 worker ownership; quit remains unavailable during an in-flight operation or while
@@ -337,9 +339,10 @@ the system keyring. A missing preference does not create an owner, sync keys or
 checkpoint and makes no network request. The combined live GTK/keyring/HTTPS
 automatic workflow still needs verification.
 
-Select an existing library, then explicitly set up/resume its keys or supply its
-offline recovery code/QR payload. Library selection does not mint a key. A changed
-account or library requires explicit review before its keys can replace retained state.
+The library selector starts at **Select a library…**. Choose an existing library,
+then explicitly set up/resume its keys or supply its offline recovery code/QR
+payload. Library selection does not mint a key. A changed account or library
+requires explicit review before its keys can replace retained state.
 
 For an existing initialized library, choose **Review Library Switch…**. Enter its
 recovery code or leave the field empty to reuse an available retained key after
@@ -645,9 +648,12 @@ allocations and compositor surfaces are outside that guarantee. Record an offlin
 copy, check **I saved an offline copy**, and enter the last eight characters.
 Confirmation hides the presentation before the worker verifies and retires it.
 A mismatch requires fresh authorization before redisplay; an ambiguous write is
-resolved from durable state. This account/recovery interface compiles, but the
-current restricted environment cannot initialize GTK for its new lifecycle smoke
-test, so its live focus/password/confirmation workflow remains unverified.
+resolved from durable state. The live native check now verifies cancellation, an
+incorrect password, fresh private-policy PAM authorization, actual focus-loss
+revocation and fresh reauthorization followed by recovery-code confirmation.
+Reconnect through a new worker and sign-out preserve the same library key in the
+private native keyring. Pairing, library switching and complete sync still need
+combined live acceptance.
 
 ## Secure Snippets
 
@@ -1105,8 +1111,11 @@ installed CLI also verifies that primary. Freshly authenticated secure insertion
 now reaches the independent receiving process too, with cancellation and incorrect
 password refusal. Exact inline expansion, suggestion selection with Return and
 replacement-echo isolation pass in that independent GTK receiver too. Combined
-account workflows and remaining native interactions are still under review. All
-three globally assigned actions, visible tray-menu selection/focus and re-registration
+native sign-in, explicit library selection, key setup, recovery disclosure and
+confirmation, worker restart/reconnect and sign-out pass using a private native
+keyring, certificate-verified loopback HTTPS and private-policy PAM. Automatic
+sync, pairing, switching and remaining native interactions are still under review.
+All three globally assigned actions, visible tray-menu selection/focus and re-registration
 with a restarted Omarchy host pass; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
 
@@ -1143,6 +1152,9 @@ G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.
 # then restores it after stopping all collectors. Private keyring/bus/data only.
 # Obtain the library-test executable with cargo test --lib --no-run first.
 bash snippets-linux/tests/clipboard-history-live.sh /absolute/path/to/library-test-binary
+# Mapped account/password dialogs, real private keyring, verified loopback HTTPS
+# and private-policy PAM; no login-keyring or host-PAM-policy access.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib clipboard_history::wayland::protocol_tests::private_libwayland -- --ignored --test-threads=1
@@ -1212,11 +1224,23 @@ PAM service or server. It must run on the normal host bus, separately from the
 keyring harness. Its current unlocked run passes after waiting for the parent
 window to map before presenting its child and applying the selected-library
 state before testing pairing controls.
+The separate combined account fixture uses the real serial account owner and
+native Secret Service backend on its own bus and data root. It exercises mapped
+GTK response buttons against a certificate-verified loopback server, with exact
+fixture-CA trust scoped to its worker thread. The ordinary constructor rejects
+that certificate before and after the scenario. Its private PAM policy uses the
+production helper protocol and libpam with a public fictional password module;
+it never reads the host authentication database. The check covers wrong-code
+retry, explicit selection of the first/only library without implicit key creation,
+key setup, recovery cancellation/wrong-password refusal, focus revocation, fresh
+authorization and confirmation, new-worker reconnect and sign-out. Both workers
+drain, all fixture children are reaped, and private bus/keyring/data are removed.
+It requires an unlocked desktop and creates no vault or sync checkpoint.
 The independent QR reader test uses public payloads and explicitly disables
 zbar's D-Bus publication. Recovery-disclosure/confirmation tests use an explicitly synthetic proof;
 they cover suffix normalization, secret retirement, schema migration and both sides
-of an interrupted write. They do not
-establish an interactive password-dialog workflow. See the
+of an interrupted write. The separate combined fixture above establishes the
+native password-dialog path with private-policy PAM. See the
 [implementation evidence](../docs/linux/IMPLEMENTATION.md) for current test counts
 and authorization limits.
 

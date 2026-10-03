@@ -479,6 +479,34 @@ impl Problem {
     }
 }
 
+// Only compiled for explicit native acceptance. This scoped, thread-local CA
+// applies to one exact fixture server; discovery and every deployment admission
+// still run normally, including authentication-journal cleanup rediscovery.
+#[cfg(all(test, feature = "desktop"))]
+thread_local! {
+    static LIVE_FIXTURE_AGENT: std::cell::RefCell<Option<(ServerURL, Agent)>> =
+        const { std::cell::RefCell::new(None) };
+}
+#[cfg(all(test, feature = "desktop"))]
+pub(crate) fn with_live_fixture_agent<T>(
+    server: &ServerURL,
+    agent: &Agent,
+    action: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<(ServerURL, Agent)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            LIVE_FIXTURE_AGENT.with(|fixture| *fixture.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(LIVE_FIXTURE_AGENT.with(|fixture| {
+        fixture
+            .borrow_mut()
+            .replace((server.clone(), agent.clone()))
+    }));
+    action()
+}
+
 fn agent(https_only: bool) -> Agent {
     Agent::config_builder()
         .https_only(https_only)
@@ -535,6 +563,14 @@ impl CloudClient {
             agent: agent(true),
             instance: Uuid::nil(),
         };
+        #[cfg(all(test, feature = "desktop"))]
+        LIVE_FIXTURE_AGENT.with(|fixture| {
+            if let Some((server, agent)) = fixture.borrow().as_ref()
+                && *server == client.server
+            {
+                client.agent = agent.clone();
+            }
+        });
         client.load_discovery()?;
         Ok(client)
     }
