@@ -1112,7 +1112,23 @@ final class SyncEngine {
         var quarantined = 0
         var fullResync = false
         var retryNeeded = false
+        /// Offers this round resolved: accepted, or disproved by an authoritative
+        /// fetch. Only such a round can expose newer intent that was waiting behind
+        /// a frozen offer, so only it may earn an immediate follow-up round.
+        var settledOffers = 0
+        /// A rate-limited or temporarily unavailable backend must not be retried
+        /// immediately by a follow-up round.
+        var retryableRejections = 0
     }
+
+    /// Follow-up rounds one `sync()` may run after a round settles offers. Two cover
+    /// the longest ordinary chain: a conflict copy, then its post-copy source.
+    static let productionFollowUpRounds = 2
+
+    /// How many follow-up rounds `sync()` runs while the previous round settled offers
+    /// and left sendable intent. `SyncCoordinator` uses `productionFollowUpRounds`;
+    /// protocol tests that inspect each individual round keep the default of zero.
+    var followUpRoundsAfterSettledOffers = 0
 
     @discardableResult
     func sync(bypassingBackoff: Bool = false) async -> State {
@@ -1188,6 +1204,31 @@ final class SyncEngine {
                 outcome.quarantined += retry.quarantined
                 outcome.fullResync = outcome.fullResync || retry.fullResync
                 outcome.retryNeeded = retry.retryNeeded
+                outcome.settledOffers += retry.settledOffers
+                outcome.retryableRejections += retry.retryableRejections
+            }
+            // A round can settle a frozen offer — an exact echo after a lost reply,
+            // a wire-key reseal of already-confirmed bytes, or a CAS conflict — and
+            // only then expose newer local intent behind it: the user's later edit, a
+            // merged survivor or its conflict copies. Reporting Synced without
+            // uploading it lets other devices keep editing the old value, which
+            // turns a sequential edit into a genuine conflict copy later. Run the
+            // next round now, but only while each round makes such progress.
+            var lastSettled = outcome.retryableRejections == 0 ? outcome.settledOffers : 0
+            var followUps = 0
+            while lastSettled > 0, outcome.deferred == 0, !outcome.retryNeeded,
+                  followUps < followUpRoundsAfterSettledOffers,
+                  !journal.pending(confirmed: base).isEmpty {
+                followUps += 1
+                let next = try await performRound()
+                outcome.uploaded += next.uploaded
+                outcome.downloaded += next.downloaded
+                outcome.merged += next.merged
+                outcome.deferred = next.deferred
+                outcome.quarantined += next.quarantined
+                outcome.fullResync = outcome.fullResync || next.fullResync
+                outcome.retryNeeded = next.retryNeeded
+                lastSettled = next.retryableRejections == 0 ? next.settledOffers : 0
             }
             diagnosticRound.uploaded = outcome.uploaded
             diagnosticRound.downloaded = outcome.downloaded
@@ -1561,7 +1602,10 @@ final class SyncEngine {
                     nextBase.recordConfirmed(
                         accepted,
                         recordVersion: recordVersion)
-                    if acceptedIDs.insert(result.id).inserted { round.uploaded += 1 }
+                    if acceptedIDs.insert(result.id).inserted {
+                        round.uploaded += 1
+                        round.settledOffers += 1
+                    }
                 case .rejected(.authenticationRequired(let detail)):
                     // Not a halt. An expired token is an ordinary, recoverable state and
                     // halting for it would put a scary sticky error in front of someone
@@ -1614,6 +1658,7 @@ final class SyncEngine {
                     // confirms the same bytes or proves a different server value. A
                     // rejection of this attempt cannot disprove an earlier attempt whose
                     // acknowledgement was lost.
+                    round.retryableRejections += 1
                 }
             }
 
@@ -1816,11 +1861,12 @@ final class SyncEngine {
             // resync is explicitly a snapshot from which absence must not be inferred.
             if !isFullResync {
                 var resolvedJournal = journal
-                resolvedJournal.reject(Array(
-                    rejectedThisRound
-                        .subtracting(opaqueFetchedIDs)
-                        .subtracting(unresolvedConflictIDs)))
+                let rejected = rejectedThisRound
+                    .subtracting(opaqueFetchedIDs)
+                    .subtracting(unresolvedConflictIDs)
+                resolvedJournal.reject(Array(rejected))
                 try persistJournal(resolvedJournal)
+                round.settledOffers += rejected.count
             }
 
             // Cursor advancement comes after durable offer resolution. If journal fsync
@@ -2211,6 +2257,7 @@ final class SyncEngine {
                 .subtracting(unresolvedConflictIDs)
         }
         resolvedJournal.reject(Array(authoritativelyRejectedIDs))
+        round.settledOffers += authoritativelyRejectedIDs.count
 
         // `applyRemote` may have written a field-level merge rather than the server
         // envelope recorded in base. Reproject it now so that difference becomes the

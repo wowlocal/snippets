@@ -645,6 +645,9 @@ final class SyncCoordinator {
             stateURL: SnippetStorageLocations.syncStateFileURL,
             libraryQuarantineMarkerURL: SnippetStorageLocations.libraryQuarantineMarkerURL,
             quarantineFolderURL: locations.quarantineFolderURL)
+        // A recovered lost reply or wire-key reseal must not report Synced while the
+        // user's newer edit is still waiting behind the offer it just settled.
+        engine.followUpRoundsAfterSettledOffers = SyncEngine.productionFollowUpRounds
         engine.noteUserInitiatedDeletions(pendingUserDeletionIDs)
         engine.onSafetyHaltPersistenceFailure = {
             // Independent fail-closed channel: if state.json or its lock is unavailable,
