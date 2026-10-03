@@ -18,11 +18,15 @@ use std::{
 const STOPPED: Error = Error("Inline expansion stopped. Check the text field before trying again.");
 const CLIPBOARD: Error =
     Error("The clipboard placeholder could not be read safely within its size and time limits.");
+#[path = "inline_selection_worker.rs"]
+mod selection;
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Preference {
     schema: u32,
     pub enabled: bool,
+    #[serde(default)]
+    pub suggestions: bool,
 }
 
 #[cfg(test)]
@@ -74,6 +78,25 @@ mod tests {
         assert!(Preference::read(root).is_err());
     }
     #[test]
+    fn legacy_exact_only_consent_never_enables_keyboard_suggestions() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        fs::write(
+            root.join("inline-expansion.json"),
+            br#"{"schema":1,"enabled":true}"#,
+        )
+        .unwrap();
+        let old = Preference::read(root).unwrap();
+        assert!(old.enabled && !old.suggestions);
+        Preference::write_suggestions(root, true).unwrap();
+        assert!(Preference::read(root).unwrap().suggestions);
+        Preference::write(root, false).unwrap();
+        let disabled = Preference::read(root).unwrap();
+        assert!(!disabled.enabled && disabled.suggestions);
+        Preference::write_suggestions(root, false).unwrap();
+        assert!(!Preference::read(root).unwrap().suggestions);
+    }
+    #[test]
     fn locked_worker_never_connects_and_explicit_stop_or_revocation_joins() {
         for explicit in [true, false] {
             let temporary = tempfile::tempdir().unwrap();
@@ -121,6 +144,7 @@ impl Preference {
                 return Ok(Self {
                     schema: 1,
                     enabled: false,
+                    suggestions: false,
                 });
             }
             Err(_) => return Err(Error("Inline expansion settings are unreadable.")),
@@ -150,7 +174,19 @@ impl Preference {
         Ok(value)
     }
     pub fn write(root: &Path, enabled: bool) -> Result<()> {
-        let value = Self { schema: 1, enabled };
+        let suggestions = Self::read(root)?.suggestions;
+        Self::write_value(root, enabled, suggestions)
+    }
+    pub fn write_suggestions(root: &Path, suggestions: bool) -> Result<()> {
+        let enabled = Self::read(root)?.enabled;
+        Self::write_value(root, enabled, suggestions)
+    }
+    fn write_value(root: &Path, enabled: bool, suggestions: bool) -> Result<()> {
+        let value = Self {
+            schema: 1,
+            enabled,
+            suggestions,
+        };
         let bytes = serde_json::to_vec(&value)
             .map_err(|_| Error("Inline expansion settings could not be saved."))?;
         model::atomic_write(&root.join("inline-expansion.json"), &bytes)
@@ -359,13 +395,15 @@ fn run(
             thread::park_timeout(Duration::from_millis(100));
             continue;
         }
+        let show_suggestions = Preference::read(&root).is_ok_and(|value| value.suggestions);
         let guard = || {
             if stop.load(Ordering::Acquire)
                 || witness.snapshot() != (SessionState::Unlocked, epoch)
                 || std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE") != signature
                 || std::env::var_os("WAYLAND_DISPLAY") != display
                 || std::env::var_os("XDG_RUNTIME_DIR") != runtime
-                || !Preference::read(&root).is_ok_and(|value| value.enabled)
+                || !Preference::read(&root)
+                    .is_ok_and(|value| value.enabled && value.suggestions == show_suggestions)
             {
                 return Err(STOPPED);
             }
@@ -380,9 +418,13 @@ fn run(
             }
         };
         let mut engine = Engine::default();
+        let mut popup = selection::Popup::default();
         let mut previous = None;
         while guard().is_ok() {
-            if connection.poll(50, &guard).is_err() {
+            if connection
+                .poll(if popup.active() { 10 } else { 50 }, &guard)
+                .is_err()
+            {
                 if guard().is_err() {
                     break;
                 }
@@ -397,35 +439,74 @@ fn run(
                 }
             };
             let Some(frame) = frame else {
+                if popup.clear(&connection, &guard).is_err() {
+                    break;
+                }
                 report(Status::WaitingForField);
                 continue;
             };
-            if previous == Some(frame.context()) {
+            if previous == Some(frame.context()) && !show_suggestions {
                 continue;
             }
+            let changed = previous != Some(frame.context());
             previous = Some(frame.context());
             if frame.admitted_text().is_none() {
                 engine.reset();
+                if popup.clear(&connection, &guard).is_err() {
+                    break;
+                }
                 report(Status::WaitingForField);
                 continue;
             }
-            let ordinary = (|| {
-                let _lock = library.try_lock()?;
-                library.read_locked().map(|(ordinary, _)| ordinary)
-            })();
+            let ordinary = if changed {
+                (|| {
+                    let _lock = library.try_lock()?;
+                    library.read_locked().map(|(ordinary, _)| ordinary)
+                })()
+            } else {
+                Ok(vec![])
+            };
             let Ok(ordinary) = ordinary else {
                 engine.reset();
+                if popup.clear(&connection, &guard).is_err() {
+                    break;
+                }
                 report(Status::Stopped);
                 continue;
             };
             report(Status::Listening);
-            if let Some(plan) = engine.observe(frame, &ordinary) {
+            let plan = if show_suggestions {
+                let current = frame.copy();
+                if changed {
+                    let ranking = usage
+                        .as_ref()
+                        .map_or_else(crate::usage::Snapshot::default, |handle| handle.snapshot());
+                    popup.observe(frame, &ordinary, &ranking);
+                }
+                match popup.process(&library, &current, &connection, &guard) {
+                    Ok(plan) => plan,
+                    Err(_) => {
+                        let _ = popup.clear(&connection, &guard);
+                        report(Status::Stopped);
+                        previous = None;
+                        continue;
+                    }
+                }
+            } else {
+                engine.observe(frame, &ordinary)
+            };
+            if let Some(plan) = plan {
                 let id = plan.snippet.id;
+                let query = plan.selected_query.clone();
                 engine.reset();
                 if deliver(plan, &library, &mut connection, witness.clone(), &guard).is_err() {
                     report(Status::Stopped);
                 } else if let Some(usage) = &usage {
-                    usage.record(id, crate::usage::Event::Expansion, None);
+                    usage.record(
+                        id,
+                        crate::usage::Event::Expansion,
+                        query.as_deref().map(|q| q.as_str()),
+                    );
                 }
                 previous = None;
             }

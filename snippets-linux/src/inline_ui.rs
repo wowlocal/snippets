@@ -9,6 +9,7 @@ pub(super) struct Service {
     root: PathBuf,
     usage: Option<crate::usage_store::Handle>,
     enabled: Cell<bool>,
+    suggestions: Cell<bool>,
     error: Cell<Option<&'static str>>,
     status: Cell<Status>,
     monitor: RefCell<Option<SessionMonitor>>,
@@ -23,6 +24,7 @@ struct Settings {
     window: adw::ApplicationWindow,
     status: gtk::Label,
     toggle: gtk::Button,
+    suggestions: gtk::Button,
     retry: gtk::Button,
 }
 impl Service {
@@ -32,6 +34,7 @@ impl Service {
             root,
             usage,
             enabled: Cell::new(preference.as_ref().is_ok_and(|value| value.enabled)),
+            suggestions: Cell::new(preference.as_ref().is_ok_and(|value| value.suggestions)),
             error: Cell::new(preference.err().map(|error| error.0)),
             status: Cell::new(Status::WaitingForUnlock),
             monitor: RefCell::new(None),
@@ -64,10 +67,19 @@ impl Service {
                 match Preference::read(&this.root) {
                     Ok(preference) if !preference.enabled => {
                         this.enabled.set(false);
+                        this.suggestions.set(preference.suggestions);
                         this.restart_pending.set(false);
                         this.stop();
                     }
-                    Ok(_) => (),
+                    Ok(preference) => {
+                        if this.enabled.get()
+                            && this.suggestions.replace(preference.suggestions)
+                                != preference.suggestions
+                        {
+                            this.stop();
+                            this.restart_pending.set(true);
+                        }
+                    }
                     Err(error) => {
                         this.error.set(Some(error.0));
                         this.enabled.set(false);
@@ -166,6 +178,14 @@ impl Service {
             .toggle
             .set_sensitive(!self.busy.get() && !self.quitting.get());
         settings.retry.set_visible(self.enabled.get());
+        settings.suggestions.set_label(if self.suggestions.get() {
+            "Disable Suggestions"
+        } else {
+            "Enable Suggestions…"
+        });
+        settings
+            .suggestions
+            .set_sensitive(self.enabled.get() && !self.busy.get() && !self.quitting.get());
         settings.retry.set_sensitive(
             !self.busy.get()
                 && !self.quitting.get()
@@ -218,6 +238,53 @@ impl Service {
             this.refresh();
         });
     }
+    fn disable_suggestions(&self) {
+        self.suggestions.set(false);
+        self.stop();
+        self.restart_pending.set(true);
+        self.error.set(Preference::write_suggestions(&self.root, false).err().map(|_| "Suggestions are stopped for this session, but the setting could not be saved. Retry after checking the settings file."));
+        self.refresh();
+    }
+    fn enable_suggestions(self: &Rc<Self>) {
+        if !self.enabled.get() || self.quitting.get() || self.busy.replace(true) {
+            return;
+        }
+        let Some(settings) = self.window.borrow().clone() else {
+            self.busy.set(false);
+            return;
+        };
+        let dialog = suggestions_dialog();
+        *self.dialog.borrow_mut() = Some(dialog.clone());
+        self.refresh();
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let response = dialog.choose_future(Some(&settings.window)).await;
+            this.dialog.borrow_mut().take();
+            if response == "enable"
+                && settings.window.is_active()
+                && !this.quitting.get()
+                && this.enabled.get()
+            {
+                let result = Preference::read(&this.root).and_then(|preference| {
+                    if !preference.enabled {
+                        return Err(crate::model::Error("Enable expansion first."));
+                    }
+                    Preference::write_suggestions(&this.root, true)
+                });
+                match result {
+                    Ok(()) => {
+                        this.stop();
+                        this.error.set(None);
+                        this.suggestions.set(true);
+                        this.restart_pending.set(true);
+                    }
+                    Err(error) => this.error.set(Some(error.0)),
+                }
+            }
+            this.busy.set(false);
+            this.refresh();
+        });
+    }
     pub fn present(self: &Rc<Self>, application: &adw::Application) {
         if let Some(settings) = self.window.borrow().clone() {
             settings.window.present();
@@ -247,6 +314,8 @@ impl Service {
         content.append(&status);
         let toggle = gtk::Button::with_label("Enable Expansion…");
         content.append(&toggle);
+        let suggestions = gtk::Button::with_label("Enable Suggestions…");
+        content.append(&suggestions);
         let retry = gtk::Button::with_label("Retry Connection");
         content.append(&retry);
         layout.append(&content);
@@ -261,6 +330,7 @@ impl Service {
             window: window.clone(),
             status,
             toggle,
+            suggestions,
             retry,
         });
         let weak = Rc::downgrade(self);
@@ -270,6 +340,16 @@ impl Service {
                     this.disable();
                 } else {
                     this.enable();
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        settings.suggestions.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                if this.suggestions.get() {
+                    this.disable_suggestions();
+                } else {
+                    this.enable_suggestions();
                 }
             }
         });
@@ -314,6 +394,15 @@ fn enable_dialog() -> adw::AlertDialog {
     dialog.set_body_use_markup(false);
     dialog
 }
+fn suggestions_dialog() -> adw::AlertDialog {
+    let dialog = adw::AlertDialog::builder().heading("Enable Inline Suggestions?")
+        .body("Typing \\ opens ordinary snippet names and keywords near the text cursor. Use ↑/↓ or Ctrl+N/P to select, Return or Tab to insert, and Escape to dismiss. While the popup is visible, Snippets temporarily receives keyboard events and forwards other keys to the focused application. A focus change can interrupt input or replacement. Secure snippets and password fields are excluded. This requires a compatible Wayland compositor.").build();
+    dialog.add_responses(&[("cancel", "Cancel"), ("enable", "Enable Suggestions")]);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    dialog.set_body_use_markup(false);
+    dialog
+}
 
 #[cfg(test)]
 mod tests {
@@ -327,6 +416,7 @@ mod tests {
         let service = Service::new(root.clone(), None);
         assert!(
             !service.enabled.get()
+                && !service.suggestions.get()
                 && service.worker.borrow().is_none()
                 && service.monitor.borrow().is_none()
         );
@@ -343,6 +433,11 @@ mod tests {
             Some("Enable Expansion…")
         );
         assert!(!settings.retry.is_visible());
+        assert!(!settings.suggestions.is_sensitive());
+        assert_eq!(
+            suggestions_dialog().default_response().as_deref(),
+            Some("cancel")
+        );
         assert_eq!(
             enable_dialog().default_response().as_deref(),
             Some("cancel")

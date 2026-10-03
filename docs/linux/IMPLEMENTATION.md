@@ -240,7 +240,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; native toggle smoke compiles but cannot initialize GTK here; live keyring/HTTPS workflow remains unverified |
 | Cloud library creation | Explicit native create/resume/open and create-another actions; bounded retained intents; one-use confirmation binds account session and existing protected state; original idempotency key retained before POST | Twenty-four fault/restart/schema/expiry tests plus bootstrap admission and reviewed-switch integration; combined live GTK/keyring/HTTPS workflow remains unverified; preserves active keys and sync checkpoint |
 | Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, deletion/restore crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; conflict-owned absence/deletion recovery remains pending |
-| Inline expansion | Native input-method-v2 owner, per-library opt-in GTK settings, conditional bounded clipboard read and move-only chunked replacement | Core, callback privacy/publication and private socketpair protocol checks cover UTF-8, clipped windows, ambiguity, field/file changes, cancellation and full 256 KiB output; real compositor peer credentials, native GTK settings and live receiving-field behavior remain unverified |
+| Inline expansion | Native input-method-v2 owner, separate opt-in fuzzy input-popup with keyboard navigation and raw passthrough, conditional bounded clipboard read and move-only chunked replacement | Core, native pixels/FD/protocol and controller checks cover selection, dismissal, legacy consent, frozen ranking, queue/buffer bounds, UTF-8, field/file changes, cancellation and full 256 KiB output; real compositor peer credentials, native GTK settings and live receiving-field behavior remain unverified |
 | Encrypted backup | Portable encrypted-backup export/import and recovery wired to GTK; independent all-layer codec verification | Live backup password/file-dialog workflow and Apple app round trips remain unverified |
 | Clipboard history | Explicit opt-in GTK view, separate local AES-GCM image/key, bounded seven-day retention/search/delete/clear, read-only Wayland data-control worker, foreground exclusions and sensitivity/internal markers, revocable acquisition and quit barriers | Isolated core/worker/privacy tests pass and native backend compiles; private libwayland-server fixture cannot create a client in this restricted environment, GTK cannot initialize a display; full protocol and background/live history verification remain pending |
 
@@ -2659,11 +2659,12 @@ focus-race reporting remain requirements. The installed compositor's receiving
 behavior has not been verified here.
 
 `data/input-method-v2.xml` retains all published request/event signatures, including
-unused popup and keyboard-grab interfaces, for native protocol generation. Client
+popup and keyboard-grab interfaces, for native protocol generation. Client
 and server headers generate and the protocol code compiles with strict C warnings;
 the generated client protocol and `src/inline_wayland.c` are linked into the
 Rust desktop app. The native owner respects `unavailable` without evicting another
-IME or grabbing the hardware keyboard.
+IME. Exact-only expansion does not grab the keyboard; the separately opted-in
+suggestion popup below uses the declared popup and keyboard interfaces.
 
 
 `src/inline_wayland.c` publishes only complete `done` frames. Pending focus/text
@@ -2723,3 +2724,58 @@ compilation uses strict C warnings. The explicit GTK settings smoke stopped at
 GTK initialization before creating its window; the separate private socketpair
 credential test could not obtain SO_PEERCRED in this sandbox. These two checks
 remain open for an unrestricted environment.
+
+
+### Native ordinary inline suggestions (2026-10-03)
+
+`inline_suggestions.rs` extends confirmed ordinary inline edits with prefix and
+fuzzy matching of names and keywords, up to eight choices, grapheme-safe highlight
+ranges, pins, and a ranking snapshot frozen for the current trigger. Unique exact
+appends still autoexpand; backspace and ambiguous matches require selection.
+Escape suppresses that trigger until it is removed or the field changes. Choice
+admission checks the complete current public frame and freshly saved entry; the
+existing move-only Delivery still checks source proof and exact acceptance echoes.
+Only confirmed success records usage and deliberate prefix memory.
+
+The native renderer in `inline_popup.c` draws bounded public metadata with
+Cairo/Pango into anonymous ARGB buffers. `inline_popup_wayland.c` assigns an
+input-popup role to a surface on the same verified IME connection. The compositor
+positions it at its active text-input rectangle; no GTK toplevel takes focus.
+Four unreleased buffers provide bounded backpressure. The native keyboard queue
+holds at most 32 events, binds them to field/serial/keymap generation, and marks
+events whose rows have not yet been presented. Selection keys use strict modifier
+bindings. Unhandled raw keys and modifier masks use a same-client virtual keyboard
+with the received XKB keymap, whose parsing emits no arbitrary diagnostic text.
+On [Hyprland v0.56.2](https://raw.githubusercontent.com/hyprwm/Hyprland/v0.56.2/src/managers/input/InputManager.cpp),
+InputManager's same-client virtual-keyboard handling bypasses its own IME grab;
+this is source inspection, not live compositor verification.
+
+`inline_selection_worker.rs` owns navigation, consumed press/release pairs, bounded
+repeat timing, selection reread, dismissal and popup lifecycle off the GTK thread.
+The schema-1 preference adds an optional `suggestions` boolean, default false for
+legacy files. GTK exposes a separate Cancel-default confirmation explaining
+keyboard interception and passthrough. Changing it cancels the previous owner
+before restart. Exact-only expansion remains available without the extra popup
+globals and without a keyboard grab. Production compositor credentials and desktop
+consent checks remain required.
+
+The raw socketpair fixture in `inline_popup_tests.rs` exercises production native
+Wayland code, transferred shm/keymap FDs, opaque metadata pixels, popup role and
+grab requests, unchanged raw key pairs, consumption and context/consent refusals.
+It neither connects to a desktop nor supplies a production identity override.
+Controller tests combine this transport with temporary saved libraries to verify
+selection and changed-source refusal. Renderer checks validate UTF-8 ranges, byte
+limits and selected-row pixels. Successful isolated tests do not establish live
+focus behavior, HiDPI rendering or compatibility with a receiving application.
+
+Verification for this addition: the focused default inline suite passed 35 tests
+with one private peer-credential test ignored; all 20 headless inline tests passed.
+The usage suites passed 16 tests with one native keyring fixture ignored, and all
+26 core integration tests passed. Clippy passed with warnings denied in both
+feature configurations, formatting passed, all three release binaries built, and
+two installs into a temporary prefix verified bytes, modes and isolated CLI
+refusals. A public PNG rendered by the production C renderer was visually checked.
+The GTK settings smoke again failed at display initialization before opening a
+window. The final inline run used one test thread: a concurrent run had a transient
+nonblocking-lock refusal in the existing large-delivery fixture, which passed
+serially. Production lock admission was kept unchanged.

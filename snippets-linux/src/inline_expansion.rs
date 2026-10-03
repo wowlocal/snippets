@@ -13,6 +13,8 @@ const CHANGED: Error = Error(
     "Inline expansion stopped because its text field or saved snippet changed. Check the field before trying again.",
 );
 const UNSUPPORTED: Error = Error("This inline expansion exceeds the supported text limits.");
+#[path = "inline_suggestions.rs"]
+pub mod suggestions;
 
 /// Connection-local field generation and the count of applied done events.
 /// The native owner must reset the engine and drop deliveries on reconnect.
@@ -182,6 +184,7 @@ impl Engine {
                 frame: frame.copy(),
                 snippet,
                 start,
+                selected_query: None,
             })
         })();
         self.previous = Some(frame);
@@ -193,6 +196,7 @@ pub struct Plan {
     frame: Frame,
     snippet: Snippet,
     start: usize,
+    selected_query: Option<Zeroizing<String>>,
 }
 impl Plan {
     pub fn needs_clipboard(&self) -> bool {
@@ -225,6 +229,7 @@ impl Plan {
             first: true,
             delete,
             source: None,
+            selected: self.selected_query.is_some(),
         })
     }
 }
@@ -253,6 +258,7 @@ pub struct Delivery {
     first: bool,
     delete: u32,
     source: Option<LibraryProof>,
+    selected: bool,
 }
 pub enum Step {
     AwaitingEcho(Box<Delivery>),
@@ -351,8 +357,19 @@ impl Delivery {
         if self.first {
             let (source, ordinary) = LibraryProof::capture(library)?;
             let saved = ordinary.iter().find(|s| s.id == self.snippet.id);
-            let (query, _) = trigger(&text[..current.cursor]).ok_or(CHANGED)?;
-            if saved != Some(&self.snippet) || matching(&ordinary, query) != saved {
+            let (query, _) = if self.selected {
+                trailing_query(&text[..current.cursor])
+            } else {
+                trigger(&text[..current.cursor])
+            }
+            .ok_or(CHANGED)?;
+            if saved != Some(&self.snippet)
+                || if self.selected {
+                    !suggestions::matches(&self.snippet, query)
+                } else {
+                    matching(&ordinary, query) != saved
+                }
+            {
                 return Err(CHANGED);
             }
             self.source = Some(source);

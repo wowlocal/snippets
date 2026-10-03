@@ -20,7 +20,7 @@ unsafe extern "C" {
         status: *mut c_int,
     ) -> *mut c_void;
 }
-fn connect(fd: OwnedFd, guard: &dyn Fn() -> Result<()>) -> Result<Connection> {
+pub(crate) fn connect(fd: OwnedFd, guard: &dyn Fn() -> Result<()>) -> Result<Connection> {
     let mut context = Check(guard);
     let mut status = 3;
     let pointer = unsafe {
@@ -56,7 +56,7 @@ fn native_socketpair_peer_credentials_match_the_fixture_process() {
         u64::from(std::process::id())
     );
 }
-fn words(values: &[u32]) -> Vec<u8> {
+pub(crate) fn words(values: &[u32]) -> Vec<u8> {
     values
         .iter()
         .flat_map(|value| value.to_ne_bytes())
@@ -284,7 +284,7 @@ impl Drop for Peer {
         }
     }
 }
-fn observe(connection: &Connection, serial: u32) -> Frame {
+pub(crate) fn observe(connection: &Connection, serial: u32) -> Frame {
     let start = Instant::now();
     loop {
         connection.poll(25, &|| Ok(())).unwrap();
@@ -378,8 +378,29 @@ fn production_callbacks_wipe_private_text_and_publish_only_at_done() {
                 .success()
         );
     }
+    let input_xml = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/virtual-keyboard-v1.xml");
+    for (mode, file) in [
+        ("client-header", "snippets-input.h"),
+        ("private-code", "input-protocol.c"),
+    ] {
+        assert!(
+            Command::new("wayland-scanner")
+                .arg(mode)
+                .arg(&input_xml)
+                .arg(root.join(file))
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
     let flags = Command::new("pkg-config")
-        .args(["--cflags", "--libs", "wayland-client"])
+        .args([
+            "--cflags",
+            "--libs",
+            "wayland-client",
+            "pangocairo",
+            "xkbcommon",
+        ])
         .output()
         .unwrap();
     assert!(flags.status.success());
@@ -390,6 +411,7 @@ fn production_callbacks_wipe_private_text_and_publish_only_at_done() {
         .arg(root)
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/inline-state.c"))
         .arg(root.join("protocol.c"))
+        .arg(root.join("input-protocol.c"))
         .args(
             std::str::from_utf8(&flags.stdout)
                 .unwrap()
@@ -406,3 +428,6 @@ fn production_callbacks_wipe_private_text_and_publish_only_at_done() {
     );
     assert!(Command::new(binary).status().unwrap().success());
 }
+
+#[path = "inline_popup_tests.rs"]
+pub(crate) mod popup_tests;

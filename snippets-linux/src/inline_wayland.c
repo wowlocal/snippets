@@ -1,4 +1,4 @@
-/* Native input-method-v2 owner. No hardware grab, clipboard writes, logging or
+/* Native input-method-v2 owner. No clipboard writes, logging or
  * retained Rust callbacks. All waits are bounded and consent checked. */
 #define _GNU_SOURCE
 #include <wayland-client.h>
@@ -12,6 +12,14 @@
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <pango/pangocairo.h>
+#include <xkbcommon/xkbcommon.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
+#include "snippets-input.h"
+#include "inline_popup.c"
 typedef int (*snip_ime_check)(void *);
 struct snip_ime_frame {
     uint64_t field;
@@ -25,6 +33,12 @@ struct snip_ime {
     struct wl_seat *seat;
     struct zwp_input_method_manager_v2 *manager;
     struct zwp_input_method_v2 *method;
+    struct wl_compositor *compositor;
+    struct wl_shm *shm;
+    struct zwp_virtual_keyboard_manager_v1 *virtual_manager;
+    uint32_t compositor_name, shm_name, virtual_name;
+    unsigned compositors, shms, virtual_managers;
+    struct snip_popup popup;
     uint32_t seat_name, manager_name;
     unsigned seats, managers;
     int failed, keyboard, dirty, published, payload;
@@ -148,6 +162,11 @@ static void capabilities(void *data, struct wl_seat *seat, uint32_t caps) {
     if (!owner->keyboard) owner->failed = 1;
 }
 static const struct wl_seat_listener seat_listener = { .capabilities = capabilities };
+static void shm_format(void *data, struct wl_shm *shm, uint32_t format) {
+    (void)data; (void)shm; (void)format;
+    /* ARGB8888 is mandatory; acknowledge the advertised formats. */
+}
+static const struct wl_shm_listener shm_listener = { .format = shm_format };
 static void global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
     struct snip_ime *owner = data;
     if (!strcmp(interface, "wl_seat")) {
@@ -161,12 +180,29 @@ static void global(void *data, struct wl_registry *registry, uint32_t name, cons
         owner->manager_name = name;
         owner->manager = wl_registry_bind(registry, name, &zwp_input_method_manager_v2_interface, 1);
         if (!owner->manager) owner->failed = 1;
+    } else if (!strcmp(interface, "wl_compositor")) {
+        if (++owner->compositors != 1 || !version) { owner->failed = 1; return; }
+        owner->compositor_name = name;
+        owner->compositor = wl_registry_bind(registry, name, &wl_compositor_interface, 1);
+        if (!owner->compositor) owner->failed = 1;
+    } else if (!strcmp(interface, "wl_shm")) {
+        if (++owner->shms != 1 || !version) { owner->failed = 1; return; }
+        owner->shm_name = name;
+        owner->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
+        if (!owner->shm) owner->failed = 1;
+        else wl_shm_add_listener(owner->shm, &shm_listener, owner);
+    } else if (!strcmp(interface, "zwp_virtual_keyboard_manager_v1")) {
+        if (++owner->virtual_managers != 1 || !version) { owner->failed = 1; return; }
+        owner->virtual_name = name;
+        owner->virtual_manager = wl_registry_bind(registry, name, &zwp_virtual_keyboard_manager_v1_interface, 1);
+        if (!owner->virtual_manager) owner->failed = 1;
     }
 }
 static void removed(void *data, struct wl_registry *registry, uint32_t name) {
     (void)registry;
     struct snip_ime *owner = data;
-    if (name == owner->seat_name || name == owner->manager_name) unavailable(owner, NULL);
+    if (name == owner->seat_name || name == owner->manager_name || name == owner->compositor_name
+        || name == owner->shm_name || name == owner->virtual_name) unavailable(owner, NULL);
 }
 static const struct wl_registry_listener registry_listener = { .global = global, .global_remove = removed };
 
@@ -227,6 +263,10 @@ static int synchronize(struct snip_ime *owner, snip_ime_check check, void *conte
 void snip_ime_close(struct snip_ime *owner) {
     if (!owner) return;
     /* Local destruction avoids marshalling/auto-flushing on cancellation. */
+    popup_local_close(&owner->popup);
+    if (owner->virtual_manager) wl_proxy_destroy((struct wl_proxy *)owner->virtual_manager);
+    if (owner->shm) wl_proxy_destroy((struct wl_proxy *)owner->shm);
+    if (owner->compositor) wl_proxy_destroy((struct wl_proxy *)owner->compositor);
     if (owner->method) wl_proxy_destroy((struct wl_proxy *)owner->method);
     if (owner->manager) wl_proxy_destroy((struct wl_proxy *)owner->manager);
     if (owner->seat) wl_proxy_destroy((struct wl_proxy *)owner->seat);
@@ -240,6 +280,7 @@ struct snip_ime *snip_ime_connect_fd(int fd, snip_ime_check check, void *context
     if (!check || !check(context)) { close(fd); return NULL; }
     struct snip_ime *owner = calloc(1, sizeof(*owner));
     if (!owner) { close(fd); *status = 3; return NULL; }
+    owner->popup.map_fd = -1;
     owner->display = wl_display_connect_to_fd(fd);
     if (!owner->display) { free(owner); *status = 3; return NULL; }
     *status = 0;
@@ -334,3 +375,4 @@ int snip_ime_replace(struct snip_ime *owner, uint64_t field, uint32_t serial,
     zwp_input_method_v2_commit(owner->method, serial);
     return synchronize(owner, check, context);
 }
+#include "inline_popup_wayland.c"

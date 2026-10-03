@@ -2,7 +2,7 @@
 <!-- Interoperability declarations from input-method-unstable-v2, version 1.
      https://raw.githubusercontent.com/swaywm/wlroots/master/protocol/input-method-unstable-v2.xml
      All request/event opcodes are retained, including unused popup/grab objects.
-     Snippets will not grab the hardware keyboard. -->
+     Hardware grabs are used only by an explicitly enabled suggestion popup. -->
 <protocol name="snippets_input_method_v2">
   <copyright>
     Copyright © 2008-2011 Kristian Høgsberg

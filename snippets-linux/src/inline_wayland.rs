@@ -28,7 +28,134 @@ impl Zeroize for RawFrame {
         self.text.zeroize();
     }
 }
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Span {
+    start: u32,
+    end: u32,
+}
+#[repr(C)]
+struct RawRow {
+    name: [u8; 513],
+    keyword: [u8; 257],
+    pinned: u32,
+    name_count: u32,
+    keyword_count: u32,
+    names: [Span; 120],
+    keywords: [Span; 120],
+}
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct Key {
+    field: u64,
+    serial: u32,
+    pub key: u32,
+    pub state: u32,
+    time: u32,
+    pub symbol: u32,
+    pub modifiers: u32,
+    pub kind: u32,
+    depressed: u32,
+    latched: u32,
+    locked: u32,
+    group: u32,
+    map_generation: u32,
+}
+impl Key {
+    pub fn context(&self) -> Context {
+        Context {
+            field: self.field,
+            serial: self.serial,
+        }
+    }
+    pub fn repeat(&self) -> (u32, u32) {
+        (self.symbol, self.time)
+    }
+}
+fn row(value: &suggestions::Row) -> Result<RawRow> {
+    if value.name.len() > 512
+        || value.keyword.len() > 256
+        || value.name_matches.len() > 120
+        || value.keyword_matches.len() > 120
+        || value.name.contains('\0')
+        || value.keyword.contains('\0')
+    {
+        return Err(UNSUPPORTED);
+    }
+    let mut row = RawRow {
+        name: [0; 513],
+        keyword: [0; 257],
+        pinned: value.pinned.into(),
+        name_count: value.name_matches.len() as u32,
+        keyword_count: value.keyword_matches.len() as u32,
+        names: [Span::default(); 120],
+        keywords: [Span::default(); 120],
+    };
+    row.name[..value.name.len()].copy_from_slice(value.name.as_bytes());
+    row.keyword[..value.keyword.len()].copy_from_slice(value.keyword.as_bytes());
+    for (to, (start, end)) in row.names.iter_mut().zip(&value.name_matches) {
+        *to = Span {
+            start: *start,
+            end: *end,
+        };
+    }
+    for (to, (start, end)) in row.keywords.iter_mut().zip(&value.keyword_matches) {
+        *to = Span {
+            start: *start,
+            end: *end,
+        };
+    }
+    Ok(row)
+}
+fn colors() -> [u32; 3] {
+    let mut values = [0x202124, 0xf1f3f4, 0x8ab4f8];
+    if let Some(path) = crate::desktop::theme_path()
+        && let Ok(Some(data)) = crate::model::read_regular(&path)
+        && data.len() <= 64 * 1024
+        && let Ok(text) = std::str::from_utf8(&data)
+        && let Ok(table) = text.parse::<toml::Table>()
+    {
+        for (i, key) in ["background", "foreground", "accent"]
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(value) = table.get(key).and_then(toml::Value::as_str)
+                && value.len() == 7
+                && value.starts_with('#')
+                && value[1..].bytes().all(|v| v.is_ascii_hexdigit())
+                && let Ok(value) = u32::from_str_radix(&value[1..], 16)
+            {
+                values[i] = value;
+            }
+        }
+    }
+    values
+}
 unsafe extern "C" {
+    fn snip_ime_popup(
+        owner: *mut c_void,
+        field: u64,
+        serial: u32,
+        rows: *const RawRow,
+        count: u32,
+        selected: u32,
+        colors: *const u32,
+        check: unsafe extern "C" fn(*mut c_void) -> c_int,
+        context: *mut c_void,
+    ) -> c_int;
+    fn snip_ime_popup_hide(
+        owner: *mut c_void,
+        check: unsafe extern "C" fn(*mut c_void) -> c_int,
+        context: *mut c_void,
+    ) -> c_int;
+    fn snip_ime_key_next(owner: *mut c_void, event: *mut Key) -> c_int;
+    fn snip_ime_key_route(
+        owner: *mut c_void,
+        event: *const Key,
+        consume: u32,
+        check: unsafe extern "C" fn(*mut c_void) -> c_int,
+        context: *mut c_void,
+    ) -> c_int;
     fn snip_ime_connect(
         check: unsafe extern "C" fn(*mut c_void) -> c_int,
         context: *mut c_void,
@@ -75,6 +202,74 @@ fn outcome(status: c_int) -> Result<()> {
 }
 pub(super) struct Connection(NonNull<c_void>);
 impl Connection {
+    pub fn popup(
+        &self,
+        choice: &suggestions::Choice,
+        guard: &dyn Fn() -> Result<()>,
+    ) -> Result<bool> {
+        guard()?;
+        let rows: Vec<_> = choice.rows().iter().map(row).collect::<Result<_>>()?;
+        let palette = colors();
+        let mut context = Check(guard);
+        let frame = choice.context();
+        let status = unsafe {
+            snip_ime_popup(
+                self.0.as_ptr(),
+                frame.field,
+                frame.serial,
+                rows.as_ptr(),
+                rows.len() as u32,
+                choice.selected() as u32,
+                palette.as_ptr(),
+                check,
+                (&mut context as *mut Check<'_>).cast(),
+            )
+        };
+        if status == 4 {
+            return Ok(false);
+        }
+        if status != 0 {
+            return Err(if status == 2 { CHANGED } else { UNAVAILABLE });
+        }
+        guard()?;
+        Ok(true)
+    }
+    pub fn hide_popup(&self, guard: &dyn Fn() -> Result<()>) -> Result<()> {
+        guard()?;
+        let mut context = Check(guard);
+        let status = unsafe {
+            snip_ime_popup_hide(
+                self.0.as_ptr(),
+                check,
+                (&mut context as *mut Check<'_>).cast(),
+            )
+        };
+        if status != 0 {
+            return Err(if status == 2 { CHANGED } else { UNAVAILABLE });
+        }
+        guard()
+    }
+    pub fn key(&self) -> Option<Key> {
+        let mut event = Key::default();
+        (unsafe { snip_ime_key_next(self.0.as_ptr(), &mut event) } != 0).then_some(event)
+    }
+    pub fn route(&self, key: &Key, consume: bool, guard: &dyn Fn() -> Result<()>) -> Result<()> {
+        guard()?;
+        let mut context = Check(guard);
+        let status = unsafe {
+            snip_ime_key_route(
+                self.0.as_ptr(),
+                key,
+                consume.into(),
+                check,
+                (&mut context as *mut Check<'_>).cast(),
+            )
+        };
+        if status != 0 {
+            return Err(if status == 2 { CHANGED } else { UNAVAILABLE });
+        }
+        guard()
+    }
     pub fn open(guard: &dyn Fn() -> Result<()>) -> Result<Self> {
         guard()?;
         let mut context = Check(guard);
@@ -192,4 +387,4 @@ mod tests {
 }
 #[cfg(test)]
 #[path = "inline_wayland_tests.rs"]
-mod protocol_tests;
+pub(crate) mod protocol_tests;

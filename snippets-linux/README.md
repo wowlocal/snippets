@@ -14,7 +14,7 @@ omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode wayland wayland-
 ```
 
 Requirements: Rust 1.92+, GTK 4.12+, libadwaita 1.5+, ICU, libsecret 0.21+, Linux-PAM,
-libqrencode 4.1+, Wayland, libxkbcommon and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
+libqrencode 4.1+, Wayland, libxkbcommon, Cairo/Pango and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
 are locked in `Cargo.lock`. The GUI links to the installed native GTK libraries.
 The CLI and storage model also build without GTK or libsecret using `--no-default-features`.
 
@@ -677,8 +677,24 @@ enabled ordinary keyword expands; enabled longer prefixes or duplicate keywords
 prevent replacement. Initial activation establishes a baseline. Password, PIN,
 sensitive, selected and unrecognized fields are excluded. The compositor must
 support input-method-v2 and have an unused input-method seat; Snippets does not
-evict another input method or grab the hardware keyboard. Some applications do
-not provide the required surrounding-text updates.
+evict another input method. Some applications do not provide the required
+surrounding-text updates. Exact-only expansion does not grab the hardware keyboard.
+
+Choose **Enable Suggestions…** separately to show up to eight ordinary names and
+keywords near the caret after `\`. Prefix and fuzzy name/keyword matches use
+matched-letter highlights, pins and a frozen local usage ranking. Use ↑/↓ or
+Ctrl+N/P to move, Return/Tab to insert, Shift+Tab to move backward, and Escape
+to dismiss the current trigger. Secure entries never enter this popup. A selected
+entry is reread before preparing the same echo-confirmed replacement.
+
+Suggestions use the compositor's native input-popup surface without switching
+to a Snippets window. While visible, the popup temporarily grabs the keyboard
+and forwards other raw keys and modifiers through a virtual keyboard on the
+same verified connection, using the compositor-provided XKB map. Stale rows
+cannot authorize selection. **Disable Suggestions** releases this owner before
+returning to exact-only expansion. Legacy expansion consent leaves suggestions
+disabled; enabling them has its own Cancel-default confirmation.
+
 
 Replacement uses native UTF-8 text commits without changing the clipboard.
 `{clipboard}` reads only a requested plain-text selection, bounded to 256 KiB and
@@ -690,8 +706,9 @@ cannot make replacement atomic on Hyprland; text can reach another field during
 a focus race. Check the destination before retrying. Interrupted text is never
 retried automatically. Snippets windows are excluded from this path.
 
-The native bridge, private protocol exchange and core checks are verified in
-isolation. Compositor peer-credential checks and the GTK settings smoke require
+The native bridge, popup renderer, raw-key passthrough, selected-entry guards and
+private protocol exchanges are verified in isolation. Popup buffers and queued
+keys are bounded. Compositor peer-credential checks and the GTK settings smoke require
 an unrestricted environment; live receiving-application behavior remains
 unverified here. Secure snippets use the separate authenticated picker insertion.
 

@@ -270,7 +270,7 @@ pub struct Snapshot {
     bindings: BTreeMap<String, BTreeMap<Uuid, f64>>,
 }
 impl Snapshot {
-    /// Only the picker uses this ordering. The library list retains model::search.
+    /// Picker and inline suggestions use this ordering. The library list retains model::search.
     pub fn rank(&self, snippets: &mut [Snippet], query: &str) {
         let folded = model::folded(query);
         // Very long free-text searches retain their existing deterministic display order.

@@ -99,6 +99,12 @@ fn main() {
             .probe("wayland-client")
             .expect("Wayland client development files are required");
         let mut ime = cc::Build::new();
+        let popup = pkg_config::Config::new()
+            .probe("pangocairo")
+            .expect("Pango/Cairo development files are required");
+        let keyboard = pkg_config::Config::new()
+            .probe("xkbcommon")
+            .expect("XKB development files are required");
         ime.file("src/inline_wayland.c")
             .file(output.join("snippets-ime-protocol.c"))
             .include(&output)
@@ -108,8 +114,17 @@ fn main() {
         for include in ime_wayland.include_paths {
             ime.include(include);
         }
+        for include in popup
+            .include_paths
+            .into_iter()
+            .chain(keyboard.include_paths)
+        {
+            ime.include(include);
+        }
         ime.compile("snippets_ime_wayland");
         println!("cargo:rerun-if-changed=src/inline_wayland.c");
+        println!("cargo:rerun-if-changed=src/inline_popup.c");
+        println!("cargo:rerun-if-changed=src/inline_popup_wayland.c");
         println!("cargo:rerun-if-changed={ime_protocol}");
     }
     let icu = pkg_config::Config::new()
