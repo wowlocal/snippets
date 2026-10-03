@@ -5,23 +5,99 @@ import XCTest
 /// Ordinary UI smoke runs skip this networked integration test. Use a disposable
 /// simulator and an ad hoc signed app: real Keychain access needs the simulator's
 /// Mach-O application-identifier/keychain entitlements, unlike in-memory unit tests.
-/// Set SNIPPETS_NATIVE_AUTH_E2E=1 in the test runner environment; the mailbox must
-/// be the host's local Mailpit instance (SNIPPETS_NATIVE_AUTH_MAILBOX).
+/// Set SNIPPETS_NATIVE_AUTH_E2E=1 in the test runner environment.
+///
+/// The test creates a disposable account, reads its generated key from the save
+/// screen into memory only, and then signs in with that key through Change Account.
+/// The key is never written to a fixture, file, or log by this test.
 final class SnippetsCloudNativeAuthUITests: XCTestCase {
     @MainActor
-    func testNativeEmailCodeConnectsAccountWithoutBrowserOrSyncingLibrary() async throws {
+    func testNativeAccountKeyCreatesAccountAndSignsInWithoutBrowserOrSyncingLibrary() throws {
         let environment = ProcessInfo.processInfo.environment
         try XCTSkipUnless(environment["SNIPPETS_NATIVE_AUTH_E2E"] == "1",
             "Native auth integration requires the opt-in disposable test environment.")
-        let mailbox = try XCTUnwrap(URL(string: environment["SNIPPETS_NATIVE_AUTH_MAILBOX"] ?? "http://127.0.0.1:8027"))
-        try XCTSkipUnless(["127.0.0.1", "localhost"].contains(mailbox.host ?? ""),
-            "The integration test reads codes only from a local test mailbox.")
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing-reset", "--ui-testing-native-cloud-auth"]
         app.launch()
-        let email = "native-ui-\(UUID().uuidString.lowercased())@example.test"
 
+        openSnippetsCloudAccount(in: app)
+        let signIn = app.cells.containing(.staticText, identifier: "Create account or sign in").firstMatch
+        try require(signIn, timeout: 5, message: "Cloud account sign-in action must be available")
+        signIn.tap()
+
+        let create = app.buttons["cloudSignInCreateAccount"]
+        try require(create, timeout: 5, message: "The native choice must open before networking")
+        XCTAssertTrue(app.buttons["cloudSignInUseAccountKey"].exists)
+        XCTAssertEqual(app.webViews.count, 0)
+        app.buttons["cloudSignInCancel"].tap()
+        XCTAssertFalse(create.exists)
+        XCTAssertEqual(app.alerts.count, 0, "Cancelling before any request must not show a failure")
+
+        // A locally mistyped key is rejected inline and never sent.
+        signIn.tap()
+        XCTAssertTrue(app.buttons["cloudSignInUseAccountKey"].waitForExistence(timeout: 5))
+        app.buttons["cloudSignInUseAccountKey"].tap()
+        let keyField = app.textFields["cloudSignInAccountKey"]
+        try require(keyField, timeout: 5, message: "Sign In with Account Key must show one key field")
+        keyField.tap()
+        // ADR 0006 test vector with a wrong check symbol.
+        keyField.typeText("7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ8")
+        app.buttons["cloudSignInSubmit"].tap()
+        let error = app.staticTexts["cloudSignInError"]
+        try require(error, timeout: 5, message: "A local typo must show an inline error")
+        XCTAssertEqual(error.label, "This isn’t a valid account key. Check it for typos.")
+        XCTAssertEqual(app.alerts.count, 0)
+        app.buttons["cloudSignInBack"].tap()
+
+        // Create a disposable account. The key is shown once for saving.
+        try require(create, timeout: 5, message: "Back must return to the account choice")
+        create.tap()
+        let keyValue = app.textViews["cloudAccountKeyValue"]
+        try require(keyValue, timeout: 30, message: "Account creation must show Save Your Account Key")
+        XCTAssertEqual(app.webViews.count, 0)
+        XCTAssertFalse(app.buttons["cloudSignInCancel"].exists,
+            "Only the explicit acknowledgement may leave the save screen")
+        let displayedKey = try XCTUnwrap(keyValue.value as? String)
+        XCTAssertEqual(displayedKey.count, 34, "The display form is seven groups of four")
+        app.buttons["cloudAccountKeySaved"].tap()
+
+        let switchConfirmation = app.alerts["Switch Sync to Snippets Cloud?"]
+        try require(switchConfirmation, timeout: 30,
+            message: "Account creation and encrypted library setup must ask before switching sync")
+        switchConfirmation.buttons["Cancel"].tap()
+
+        // Sign in to the same account with the saved key. The account page refreshes
+        // after sign-in and now shows the short Account ID instead of sign-in actions.
+        let accountID = app.staticTexts.matching(NSPredicate(
+            format: "label MATCHES %@", "Account ID [0-9A-F]{4}-[0-9A-F]{4}")).firstMatch
+        try require(accountID, timeout: 10, message: "A signed-in account shows its short Account ID")
+        let changeAccount = app.cells.containing(.staticText, identifier: "Change account").firstMatch
+        try require(changeAccount, timeout: 10, message: "A signed-in account must offer Change account")
+        XCTAssertTrue(app.cells.containing(.staticText, identifier: "Show account key").firstMatch.exists)
+        changeAccount.tap()
+        let chooseAnother = app.alerts.buttons["Choose Another Account"]
+        try require(chooseAnother, timeout: 5, message: "Change account must confirm first")
+        chooseAnother.tap()
+        try require(app.buttons["cloudSignInUseAccountKey"], timeout: 5,
+            message: "Change account must open the native choice")
+        app.buttons["cloudSignInUseAccountKey"].tap()
+        try require(keyField, timeout: 5, message: "Sign In with Account Key must show the key field")
+        keyField.tap()
+        keyField.typeText(displayedKey.lowercased())
+        app.buttons["cloudSignInSubmit"].tap()
+
+        try require(app.alerts["Switch Sync to Snippets Cloud?"], timeout: 30,
+            message: "Signing in with the saved key must reconnect the same library")
+        XCTAssertEqual(app.webViews.count, 0)
+        app.alerts["Switch Sync to Snippets Cloud?"].buttons["Cancel"].tap()
+        XCTAssertFalse(keyField.exists)
+        // Deliberately leave iCloud as the provider. This test verifies auth and
+        // bootstrap; it must not upload any library as part of signing in.
+    }
+
+    @MainActor
+    private func openSnippetsCloudAccount(in app: XCUIApplication) {
         let more = app.buttons["More"].firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 10))
         more.tap()
@@ -39,50 +115,8 @@ final class SnippetsCloudNativeAuthUITests: XCTestCase {
         XCTAssertTrue(provider.waitForExistence(timeout: 5))
         provider.tap()
         let cloud = app.buttons["Snippets Cloud…"].firstMatch
-        try require(cloud, timeout: 5, message: "Native cloud provider must be available")
+        XCTAssertTrue(cloud.waitForExistence(timeout: 5), "Native cloud provider must be available")
         cloud.tap()
-        let signIn = app.cells.containing(.staticText, identifier: "Sign in to Snippets Cloud").firstMatch
-        try require(signIn, timeout: 5, message: "Cloud account sign-in action must be available")
-        signIn.tap()
-
-        let emailField = app.textFields["cloudSignInEmail"]
-        try require(emailField, timeout: 5, message: "The native form must open before networking")
-        XCTAssertEqual(app.webViews.count, 0)
-        app.buttons["cloudSignInCancel"].tap()
-        XCTAssertFalse(emailField.exists)
-        XCTAssertEqual(app.alerts.count, 0, "Cancelling before email entry must not show a failure")
-        signIn.tap()
-        XCTAssertTrue(emailField.waitForExistence(timeout: 5))
-        emailField.tap()
-        emailField.typeText(email)
-        let submit = app.buttons["cloudSignInSubmit"]
-        XCTAssertTrue(submit.isEnabled)
-        submit.tap()
-        let codeField = app.textFields["cloudSignInCode"]
-        try require(codeField, timeout: 30, message: "Code delivery must open the native code field")
-        XCTAssertEqual(app.webViews.count, 0)
-        XCTAssertFalse(app.buttons["cloudSignInResend"].isEnabled)
-        let code = try await verificationCode(to: email, mailbox: mailbox)
-        codeField.tap()
-        codeField.typeText(code == "000000" ? "000001" : "000000")
-        submit.tap()
-        let error = app.staticTexts["cloudSignInError"]
-        try require(error, timeout: 30, message: "An incorrect code must show a native inline error")
-        XCTAssertTrue(codeField.exists)
-        XCTAssertEqual(app.alerts.count, 0)
-        codeField.tap()
-        codeField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + code)
-        XCTAssertTrue(submit.isEnabled)
-        submit.tap()
-
-        let switchConfirmation = app.alerts["Switch Sync to Snippets Cloud?"]
-        try require(switchConfirmation, timeout: 30,
-            message: "Verified sign-in and encrypted library setup must ask before switching sync")
-        XCTAssertEqual(app.webViews.count, 0)
-        switchConfirmation.buttons["Cancel"].tap()
-        XCTAssertFalse(app.textFields["cloudSignInCode"].exists)
-        // Deliberately leave iCloud as the provider. This test verifies auth and
-        // bootstrap; it must not upload any library as part of signing in.
     }
 
     @MainActor
@@ -93,28 +127,5 @@ final class SnippetsCloudNativeAuthUITests: XCTestCase {
         }
     }
 
-    private func verificationCode(to email: String, mailbox: URL) async throws -> String {
-        let deadline = Date().addingTimeInterval(30)
-        while Date() < deadline {
-            let (data, response) = try await URLSession.shared.data(from: mailbox.appending(path: "api/v1/messages"))
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Failure.mailboxUnavailable }
-            let messages = try JSONDecoder().decode(MessageList.self, from: data)
-            if let message = messages.messages.first(where: { $0.To.contains { $0.Address.lowercased() == email } }) {
-                let (body, response) = try await URLSession.shared.data(from: mailbox.appending(path: "api/v1/message/\(message.ID)"))
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Failure.mailboxUnavailable }
-                let text = try JSONDecoder().decode(Message.self, from: body).Text
-                if let range = text.range(of: #"(?<![0-9])[0-9]{6}(?![0-9])"#, options: .regularExpression) {
-                    return String(text[range])
-                }
-            }
-            try await Task.sleep(for: .seconds(1))
-        }
-        throw Failure.codeNotDelivered
-    }
-
-    private enum Failure: Error { case mailboxUnavailable, codeNotDelivered, missingElement }
-    private struct MessageList: Decodable { let messages: [Summary] }
-    private struct Summary: Decodable { let ID: String; let To: [Address] }
-    private struct Address: Decodable { let Address: String }
-    private struct Message: Decodable { let Text: String }
+    private enum Failure: Error { case missingElement }
 }

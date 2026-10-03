@@ -149,24 +149,80 @@ struct DiagnosticsTests {
         #expect(invalidStatus.fields["http_status"] == nil)
     }
 
-    @Test func nativeEmailSignInUsesClosedPrivacySafeVocabulary() throws {
-        for (stage, endpoint) in [(DiagnosticCloudSignInStage.emailCodeSend, DiagnosticCloudSignInEndpoint.emailCodeSend),
-                                  (.emailCodeVerify, .emailCodeVerify)] {
-            for reason in [DiagnosticCloudSignInReason.invalidEmail, .invalidCode, .codeExpired, .tooManyAttempts, .rateLimited] {
+    @Test func nativeAccountKeySignInUsesClosedPrivacySafeVocabulary() throws {
+        #expect(DiagnosticCloudSignInStage.accountCreate.rawValue == "account_create")
+        #expect(DiagnosticCloudSignInStage.accountSignIn.rawValue == "account_sign_in")
+        #expect(DiagnosticCloudSignInEndpoint.accountCreate.rawValue == "account_create")
+        #expect(DiagnosticCloudSignInEndpoint.accountSignIn.rawValue == "account_sign_in")
+        #expect(DiagnosticCloudSignInReason.invalidAccountKey.rawValue == "invalid_account_key")
+        // The email/code flow is gone: none of its values may parse from an export.
+        for removed in ["email_code_send", "email_code_verify"] {
+            #expect(DiagnosticCloudSignInStage(rawValue: removed) == nil)
+            #expect(DiagnosticCloudSignInEndpoint(rawValue: removed) == nil)
+        }
+        for removed in ["invalid_email", "invalid_code", "code_expired", "too_many_attempts"] {
+            #expect(DiagnosticCloudSignInReason(rawValue: removed) == nil)
+        }
+        let key = try #require(SnippetsCloudAccountKey(canonical: "7KQF9M2XR4TDH8WBZN3CP6YE1AQ7"))
+        let accountID = "e621e1f8-c36c-495a-93fc-0c247a3e6e5f"
+        // A key-bearing error must contribute only its family and numeric code.
+        let failure = DiagnosticFailure(NSError(domain: NSURLErrorDomain, code: -1011, userInfo: [
+            NSLocalizedDescriptionKey: "key \(key.canonical) display \(key.displayForm) account \(accountID)",
+        ]))
+        for (stage, endpoint) in [(DiagnosticCloudSignInStage.accountCreate, DiagnosticCloudSignInEndpoint.accountCreate),
+                                  (.accountSignIn, .accountSignIn)] {
+            for reason in [DiagnosticCloudSignInReason.invalidAccountKey, .rateLimited] {
                 let events: [DiagnosticEvent] = [
                     .cloudSignIn(stage: stage, outcome: .failed, durationMilliseconds: 1,
-                                 storedSessionPresent: nil, reason: reason, failure: nil),
+                                 storedSessionPresent: nil, reason: reason, failure: failure),
                     .cloudSignInRequest(endpoint: endpoint, outcome: .failed, durationMilliseconds: 1,
-                                        httpStatus: 429, reason: reason, failure: nil)
+                                        httpStatus: reason == .rateLimited ? 429 : 401, reason: reason, failure: failure)
                 ]
                 for event in events {
-                    let data = try DiagnosticRecord(event: event, timestamp: "2026-09-06T12:00:00.000Z", elapsedMilliseconds: 1, sessionIdentifier: "test-session", sequence: 1).jsonLine()
+                    let data = try DiagnosticRecord(event: event, timestamp: "2026-10-03T12:00:00.000Z", elapsedMilliseconds: 1, sessionIdentifier: "test-session", sequence: 1).jsonLine()
                     let text = String(decoding: data, as: UTF8.self)
                     #expect(text.contains(reason.rawValue))
-                    #expect(!text.contains("challengeId"))
+                    #expect(text.contains(stage.rawValue))
+                    #expect(!text.contains("7KQF"))
+                    #expect(!text.contains("1AQ7"))
+                    #expect(!text.contains("e621e1f8"))
+                    #expect(!text.contains("E621"))
+                    #expect(!text.lowercased().contains("email"))
                     #expect(!text.contains("refreshToken"))
                 }
             }
+        }
+    }
+
+    @Test func deviceSignInUsesClosedOperationsAndCarriesNoIdentifiers() throws {
+        #expect(DiagnosticCloudSignInStage.deviceRequest.rawValue == "device_request")
+        #expect(DiagnosticCloudSignInStage.deviceClaim.rawValue == "device_claim")
+        #expect(DiagnosticCloudSignInEndpoint.deviceRequest.rawValue == "device_request")
+        #expect(DiagnosticCloudSignInEndpoint.deviceApproval.rawValue == "device_approval")
+        #expect(DiagnosticCloudSignInEndpoint.deviceClaim.rawValue == "device_claim")
+        let events: [DiagnosticEvent] = [
+            .cloudSignIn(stage: .deviceRequest, outcome: .entered, durationMilliseconds: 1,
+                         storedSessionPresent: false, reason: nil, failure: nil),
+            .cloudSignIn(stage: .deviceClaim, outcome: .failed, durationMilliseconds: 1,
+                         storedSessionPresent: false, reason: .httpStatus, failure: nil),
+            .cloudSignInRequest(endpoint: .deviceRequest, outcome: .succeeded, durationMilliseconds: 1,
+                                httpStatus: 200, reason: nil, failure: nil),
+            .cloudSignInRequest(endpoint: .deviceApproval, outcome: .failed, durationMilliseconds: 1,
+                                httpStatus: nil, reason: .requestFailed, failure: nil),
+            .cloudSignInRequest(endpoint: .deviceClaim, outcome: .succeeded, durationMilliseconds: 0,
+                                httpStatus: nil, reason: nil, failure: nil),
+        ]
+        for event in events {
+            let data = try DiagnosticRecord(event: event, timestamp: "2026-10-03T12:00:00.000Z",
+                elapsedMilliseconds: 1, sessionIdentifier: "test-session", sequence: 1).jsonLine()
+            let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let fields = try #require(object["fields"] as? [String: Any])
+            // Closed values and bounded numbers only: no request, pairing or account
+            // identifiers, poll tokens, payloads or confirmation codes can be expressed.
+            #expect(Set(fields.keys).isSubset(of: [
+                "stage", "endpoint", "outcome", "duration_ms", "stored_session_present",
+                "http_status", "reason", "error_family", "error_code",
+            ]))
         }
     }
 

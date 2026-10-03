@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 import Security
 
-/// One trace spans UI preflight, native email sign-in and library setup. Nested owners borrow it;
+/// One trace spans UI preflight, native account-key sign-in and library setup. Nested owners borrow it;
 /// the outermost operation emits the sole terminal result. Cleanup cannot overwrite
 /// the first failure with the generic error eventually presented to the user.
 @MainActor
@@ -63,12 +63,11 @@ final class SnippetsCloudSignInDiagnostics {
 
     private static func classify(_ error: any Error) -> DiagnosticCloudSignInReason {
         if error is CancellationError { return .authorizationCancelled }
-        if let failure = error as? SnippetsCloudEmailSignInFailure {
+        if let failure = error as? SnippetsCloudAccountKeySignInFailure {
             return switch failure {
-            case .invalidEmail: .invalidEmail
-            case .invalidCode: .invalidCode
-            case .codeExpired: .codeExpired
-            case .tooManyAttempts: .tooManyAttempts
+            case .invalidAccountKey, .accountKeyNotAccepted: .invalidAccountKey
+            case .deviceSignInUnavailable: .invalidConfiguration
+            case .deviceSignInExpired, .deviceSignInRejected: .httpStatus
             case .rateLimited: .rateLimited
             case .unavailable: .requestFailed
             case .invalidResponse: .invalidJSON
@@ -700,30 +699,53 @@ final class SyncBackendSelectionStore {
         try commitProvider(.snippetsCloud)
     }
 
-    var cloudAccountDisplayName: String {
-        return SnippetsCloudNativeAuthClient(keychain: keychain).verifiedProfile()?.displayName
-            ?? "Snippets Cloud account"
+    /// `XXXX-XXXX` for the signed-in account, or nil without a readable session.
+    /// Shown in account UI only; never written to diagnostics.
+    var cloudAccountIdentifier: String? {
+        SnippetsCloudNativeAuthClient(keychain: keychain).storedAccountID()
+            .map(SnippetsCloudAccountIdentifier.displayForm)
     }
 
+    /// False on a device signed in by another device (ADR 0007): it never received the
+    /// account key, so **Show Account Key** explains instead of authenticating.
+    var cloudAccountKeyIsStored: Bool {
+        (try? SnippetsCloudNativeAuthClient(keychain: keychain).storedAccountKey()) != nil
+    }
 
+    /// Returns the stored key for **Show Account Key**. The caller must have just
+    /// completed the same fresh device-owner authentication that reveals the
+    /// recovery kit; the key is held only in the device-only session item.
+    func cloudAccountKeyAfterLocalAuthentication() throws -> SnippetsCloudAccountKey {
+        guard snippetsCloudEnabled else { throw Failure.featureDisabled }
+        guard let key = try SnippetsCloudNativeAuthClient(keychain: keychain).storedAccountKey() else {
+            throw Failure.missingCredential
+        }
+        return key
+    }
+
+    @discardableResult
     func signIn(
         serverURL: URL,
         diagnostics: SnippetsCloudSignInDiagnostics,
         requiresStrongAuthentication: Bool = false,
         chooseAccount: Bool = false,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        authenticate: @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void,
+        authenticate: @escaping @MainActor (SnippetsCloudAccountKeySignInFlow) async throws -> Void,
         preparePostAuthorization: @escaping (
             SnippetsCloudPostAuthorizationTarget
+        ) throws -> Void = { _ in },
+        prepareRecipientPairing: @escaping (
+            LibraryKeyBootstrap.PendingPairing
         ) throws -> Void = { _ in }
-    ) async throws {
+    ) async throws -> SnippetsCloudNativeAuthClient.SignInResult {
         guard snippetsCloudEnabled else { throw Failure.featureDisabled }
         try requireNoPendingPostAuthorization()
         try resumePendingLocalErase()
         if let failure = credentialLineageFailure() {
             switch failure {
             case .credentialCleanupRequired:
-                // The native flow owns serialized cleanup before sending an email code.
+                // The native flow owns serialized cleanup before creating an account
+                // or sending an account key.
                 break
             default:
                 throw failure
@@ -750,7 +772,7 @@ final class SyncBackendSelectionStore {
         } else {
             expectedStepUpTarget = nil
         }
-        _ = try await oauth.signIn(
+        return try await oauth.signIn(
             serverURL: pinnedServerURL,
             diagnostics: diagnostics,
             existingSpaceID: cloudCoordinates?.serverURL == serverURL
@@ -760,6 +782,7 @@ final class SyncBackendSelectionStore {
             chooseAccount: chooseAccount,
             expectedStepUpTarget: expectedStepUpTarget,
             expectedPostAuthorizationTarget: nil,
+            deviceSignInStore: bootstrapSecretsForRecovery,
             chooseLibrary: chooseLibrary,
             authenticate: authenticate,
             validateStepUpTarget: { [weak self] in
@@ -779,6 +802,8 @@ final class SyncBackendSelectionStore {
                     protocolMajor: result.protocolMajor,
                     spaceID: result.spaceID,
                     scopeBinding: result.scopeBinding))
+                // ADR 0007: the approved recipient pairing is durable before the session.
+                if let pairing = result.recipientPairing { try prepareRecipientPairing(pairing) }
             },
             commitCoordinates: { [defaults, keychain] result in
                 defaults.set(result.serverURL.absoluteString, forKey: Self.serverDefaultsKey)
@@ -873,7 +898,7 @@ final class SyncBackendSelectionStore {
 
     func reauthenticateSnippetsCloudPostAuthorization(
         _ target: SnippetsCloudPostAuthorizationTarget,
-        authenticate: @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void
+        authenticate: @escaping @MainActor (SnippetsCloudAccountKeySignInFlow) async throws -> Void
     ) async throws {
         guard snippetsCloudEnabled,
               target.serverURL == Self.bundledServerURL,
@@ -1432,6 +1457,8 @@ final class SnippetsCloudNativeAuthClient {
         let serverInstanceID: UUID
         let protocolMajor: Int
         let scopeBinding: String
+        /// ADR 0007: the approved pairing to claim with this device's own recipient key.
+        var recipientPairing: LibraryKeyBootstrap.PendingPairing? = nil
     }
 
     struct TransportCredential {
@@ -1457,7 +1484,7 @@ final class SnippetsCloudNativeAuthClient {
         var description: String {
             switch self {
             case .invalidServerURL: "Enter a valid HTTPS Snippets Cloud server."
-            case .insecureServerProfile: "This server does not support native email sign-in for Snippets Cloud."
+            case .insecureServerProfile: "This server does not support account-key sign-in for Snippets Cloud."
             case .discoveryUnavailable: "Snippets Cloud discovery is temporarily unavailable."
             case .identityProviderUnavailable: "The identity provider is temporarily unavailable."
             case .authorizationCancelled: "Sign-in was cancelled. Nothing changed."
@@ -1477,8 +1504,8 @@ final class SnippetsCloudNativeAuthClient {
     struct Discovery: Decodable {
         struct NativeAuth: Decodable {
             let flow: String
-            let startEndpoint: URL
-            let verifyEndpoint: URL
+            let createAccountEndpoint: URL
+            let signInEndpoint: URL
             let refreshEndpoint: URL
             let revokeEndpoint: URL
         }
@@ -1502,7 +1529,8 @@ final class SnippetsCloudNativeAuthClient {
     }
 
     struct TokenResponse: Decodable {
-        struct Account: Decodable { let id: String; let email: String }
+        /// ADR 0006: an account is identified only by its server UUID.
+        struct Account: Decodable { let id: String }
         let accessToken: String
         let refreshToken: String
         let expiresIn: Int
@@ -1518,16 +1546,61 @@ final class SnippetsCloudNativeAuthClient {
         }
     }
 
-    private struct EmailCodeResponse: Decodable {
-        let challengeId: String
-        let expiresIn: Int
-        let resendAfter: Int
-        let codeLength: Int
+    /// The create response carries the generated key exactly once. Its `session`
+    /// receives the same journal-first treatment as a sign-in grant.
+    private struct AccountCreationResponse: Decodable {
+        let accountKey: String
+        let session: TokenResponse
     }
 
+    private struct DeviceRequestResponse: Decodable {
+        let requestId: String
+        let pollToken: String
+        let expiresAt: String
+    }
+
+    /// Records the exact member set so pending and approved shapes are checked strictly,
+    /// while an approved session can still be journaled before that check rejects it.
+    private struct DeviceClaimResponse: Decodable {
+        private struct AnyKey: CodingKey {
+            let stringValue: String
+            var intValue: Int? { nil }
+            init(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { nil }
+        }
+        private enum Keys: String, CodingKey { case state, expiresAt, spaceId, pairingId, session }
+
+        let members: Set<String>
+        let state: String
+        let expiresAt: String
+        let spaceId: String?
+        let pairingId: String?
+        let session: TokenResponse?
+
+        init(from decoder: Decoder) throws {
+            members = Set(try decoder.container(keyedBy: AnyKey.self).allKeys.map(\.stringValue))
+            let values = try decoder.container(keyedBy: Keys.self)
+            state = try values.decode(String.self, forKey: .state)
+            expiresAt = try values.decode(String.self, forKey: .expiresAt)
+            spaceId = try values.decodeIfPresent(String.self, forKey: .spaceId)
+            pairingId = try values.decodeIfPresent(String.self, forKey: .pairingId)
+            session = try values.decodeIfPresent(TokenResponse.self, forKey: .session)
+        }
+    }
+
+    /// Schema 7 replaced the schema-6 profile with the account UUID and canonical
+    /// account key. Older schemas fail closed like any unreadable session.
+    static let storedSessionSchemaVersion = 7
+    static let nativeClientID = "native-account-key-v1"
+
     struct StoredSession: Codable {
-        var profile: SnippetsCloudVerifiedProfile? = nil
         let schemaVersion: Int
+        /// Server account UUID exactly as issued; validated with `UUID(uuidString:)`.
+        let accountID: String
+        /// Canonical key. It lives only in this device-only Keychain item and is erased
+        /// with the session. It never enters the credential journals. Nil on a device
+        /// signed in by another device (ADR 0007), which never receives the key.
+        let accountKey: String?
         let serverURL: URL
         let apiBase: URL?
         let serverInstanceID: UUID?
@@ -1588,15 +1661,16 @@ final class SnippetsCloudNativeAuthClient {
         chooseAccount: Bool,
         expectedStepUpTarget: SnippetsCloudStepUpTarget?,
         expectedPostAuthorizationTarget: SnippetsCloudPostAuthorizationTarget?,
+        deviceSignInStore: KeychainSecretStore? = nil,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        authenticate: @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void,
+        authenticate: @escaping @MainActor (SnippetsCloudAccountKeySignInFlow) async throws -> Void,
         validateStepUpTarget: @escaping () throws -> Void,
         prepareCoordinatesCommit: @escaping (SignInResult) throws -> Void,
         commitCoordinates: @escaping (SignInResult) throws -> Void
     ) async throws -> SignInResult {
         let diagnostics = suppliedDiagnostics ?? SnippetsCloudSignInDiagnostics()
         return try await diagnostics.run {
-            // Email proves account ownership, never phishing-resistant step-up.
+            // An account key proves account ownership, never phishing-resistant step-up.
             guard !requiresStrongAuthentication, expectedStepUpTarget == nil else {
                 throw Failure.invalidStoredSession
             }
@@ -1606,6 +1680,7 @@ final class SnippetsCloudNativeAuthClient {
                         serverURL: serverURL, diagnostics: diagnostics,
                         existingSpaceID: existingSpaceID, chooseAccount: chooseAccount,
                         expectedPostAuthorizationTarget: expectedPostAuthorizationTarget,
+                        deviceSignInStore: deviceSignInStore,
                         chooseLibrary: chooseLibrary, authenticate: authenticate,
                         prepareCoordinatesCommit: prepareCoordinatesCommit)
                     diagnostics.enter(.coordinateCommit)
@@ -1627,80 +1702,232 @@ final class SnippetsCloudNativeAuthClient {
         existingSpaceID: UUID?,
         chooseAccount: Bool,
         expectedPostAuthorizationTarget: SnippetsCloudPostAuthorizationTarget?,
+        deviceSignInStore: KeychainSecretStore?,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        authenticate: @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void,
+        authenticate: @escaping @MainActor (SnippetsCloudAccountKeySignInFlow) async throws -> Void,
         prepareCoordinatesCommit: @escaping (SignInResult) throws -> Void
     ) async throws -> SignInResult {
         let serverURL = try validatedBaseURL(serverURL)
         var sessionAtStart: StoredSession?
         var preparedDiscovery: Discovery?
-        var challengeID: String?
-        var requestedEmail: String?
         var candidate: StoredSession?
         var issuedToken: TokenResponse?
-        let flow = SnippetsCloudEmailSignInFlow(sendCode: { [self] email in
-            if preparedDiscovery == nil {
-                diagnostics.enter(.credentialCleanup)
-                try await retireSupersededInteractiveSessionsWithoutGate()
-                diagnostics.enter(.storedSession)
-                guard try keychain.loadItem(account: SyncBackendSelectionStore.oauthRevocationAccount) == nil else {
-                    throw Failure.invalidStoredSession
-                }
-                sessionAtStart = try loadSession()
-                diagnostics.storedSessionPresent = sessionAtStart != nil
-                diagnostics.enter(.serverDiscovery)
-                let discovery = try await nativeDiscovery(serverURL: serverURL)
-                diagnostics.enter(.sessionBinding)
-                if let sessionAtStart {
-                    try validateServerBinding(sessionAtStart, expectedServerURL: serverURL,
-                        expectedServerInstanceID: discovery.serverInstanceId, expectedProtocolMajor: 2)
-                }
-                preparedDiscovery = discovery
+        // Cleanup, saved-session checks and discovery run once, after the first explicit
+        // Create Account or Sign In action, never merely because the sheet appeared.
+        func prepare() async throws -> Discovery {
+            if let preparedDiscovery { return preparedDiscovery }
+            diagnostics.enter(.credentialCleanup)
+            try await retireSupersededInteractiveSessionsWithoutGate()
+            diagnostics.enter(.storedSession)
+            guard try keychain.loadItem(account: SyncBackendSelectionStore.oauthRevocationAccount) == nil else {
+                throw Failure.invalidStoredSession
             }
-            guard let discovery = preparedDiscovery else { throw Failure.invalidStoredSession }
-            diagnostics.enter(.emailCodeSend)
-            let response: EmailCodeResponse = try await nativeRequest(
-                endpoint: discovery.nativeAuth.startEndpoint, values: ["email": email], diagnosticEndpoint: .emailCodeSend)
-            guard (32...256).contains(response.challengeId.utf8.count),
-                  response.challengeId.utf8.allSatisfy({ (33...126).contains($0) }),
-                  (1...1_800).contains(response.expiresIn), (0...600).contains(response.resendAfter),
-                  response.codeLength == 6 else { throw SnippetsCloudEmailSignInFailure.invalidResponse }
-            challengeID = response.challengeId
-            requestedEmail = email
-            return SnippetsCloudEmailChallenge(email: email,
-                expiresAt: Date().addingTimeInterval(TimeInterval(response.expiresIn)),
-                resendAvailableAt: Date().addingTimeInterval(TimeInterval(response.resendAfter)),
-                codeLength: response.codeLength)
-        }, verifyCode: { [self] code in
-            guard let discovery = preparedDiscovery, let challengeID, candidate == nil else {
-                throw SnippetsCloudEmailSignInFailure.codeExpired
+            sessionAtStart = try loadSession()
+            diagnostics.storedSessionPresent = sessionAtStart != nil
+            diagnostics.enter(.serverDiscovery)
+            let discovery = try await nativeDiscovery(serverURL: serverURL)
+            diagnostics.enter(.sessionBinding)
+            if let sessionAtStart {
+                try validateServerBinding(sessionAtStart, expectedServerURL: serverURL,
+                    expectedServerInstanceID: discovery.serverInstanceId, expectedProtocolMajor: 2)
             }
-            diagnostics.enter(.emailCodeVerify)
-            let token: TokenResponse = try await nativeRequest(
-                endpoint: discovery.nativeAuth.verifyEndpoint,
-                values: ["challengeId": challengeID, "code": code], diagnosticEndpoint: .emailCodeVerify)
-            // A bounded token pair grants revocation authority even if the server's
-            // account/expiry metadata is rejected below.
+            preparedDiscovery = discovery
+            return discovery
+        }
+        // Create, sign-in and device-claim grants share one journal step. A bounded token
+        // pair grants revocation authority even if the server's account, expiry, key or
+        // device-claim metadata is rejected afterwards.
+        func journal(_ token: TokenResponse, accountKey: String?, discovery: Discovery) throws -> StoredSession {
             try validateNativeTokenPair(token)
             let stored = StoredSession(
-                profile: .init(issuer: serverURL.absoluteString, subject: token.account.id, name: nil, email: token.account.email),
-                schemaVersion: 6, serverURL: serverURL, apiBase: discovery.apiBase,
+                schemaVersion: Self.storedSessionSchemaVersion,
+                accountID: token.account.id, accountKey: accountKey,
+                serverURL: serverURL, apiBase: discovery.apiBase,
                 serverInstanceID: discovery.serverInstanceId, protocolMajor: 2,
                 issuer: serverURL, resource: serverURL,
                 tokenEndpoint: discovery.nativeAuth.refreshEndpoint,
                 revocationEndpoint: discovery.nativeAuth.revokeEndpoint,
-                clientID: "native-email-code-v1", maximumAccessTokenAgeSeconds: 300,
+                clientID: Self.nativeClientID, maximumAccessTokenAgeSeconds: 300,
                 accessToken: token.accessToken, refreshToken: token.refreshToken,
                 expiresAt: Date().addingTimeInterval(TimeInterval(min(max(token.expiresIn, 1), 300))))
             // No await between receiving credentials and recording their revocation authority.
             // Even cancellation of the native sheet must retire this candidate safely.
             diagnostics.enter(.credentialJournal)
             try storeSessionReplacementJournal(sessions: [sessionAtStart, stored].compactMap { $0 }, kind: .interactiveReplacement)
+            return stored
+        }
+        func accept(_ token: TokenResponse, accountKey: String, discovery: Discovery) throws {
+            let stored = try journal(token, accountKey: accountKey, discovery: discovery)
             try validateNativeToken(token)
-            guard token.account.email.lowercased() == requestedEmail else { throw Failure.authorizationMismatch }
+            guard SnippetsCloudAccountKey(canonical: accountKey) != nil else {
+                throw SnippetsCloudAccountKeySignInFailure.invalidResponse
+            }
             candidate = stored
             issuedToken = token
+        }
+
+        // ADR 0007 new device. Offered only to a signed-out sheet (not account change or
+        // target-bound reauthentication). The request's recipient material and poll token
+        // live in the device-only bootstrap Keychain until this sign-in attempt ends.
+        let deviceSignInAllowed = deviceSignInStore != nil
+            && !chooseAccount && expectedPostAuthorizationTarget == nil
+        var activeDeviceSignIn: LibraryKeyBootstrap.PendingDeviceSignIn?
+        var deviceGrant: (spaceID: UUID, pairingID: UUID, pending: LibraryKeyBootstrap.PendingDeviceSignIn)?
+        func discardDeviceSignIn() {
+            activeDeviceSignIn = nil
+            try? deviceSignInStore?.deleteItem(account: SnippetsCloudAccountBootstrap.deviceSignInAccount)
+        }
+        // Every non-crash exit ends this attempt's request: on success the draft lives on
+        // as the recipient pairing; on cancel or failure the request simply expires.
+        defer { if deviceSignInAllowed { discardDeviceSignIn() } }
+        func presentation(_ pending: LibraryKeyBootstrap.PendingDeviceSignIn) throws -> SnippetsCloudDeviceSignInPresentation {
+            let request = try pending.request
+            return .init(
+                qrPayload: pending.requestPayload,
+                confirmationCode: request.confirmationCode,
+                expiresAt: Date(timeIntervalSince1970: TimeInterval(request.expiresAtEpochSeconds)))
+        }
+        func recordClaim(_ outcome: DiagnosticCloudSignInRequestOutcome, reason: DiagnosticCloudSignInReason? = nil) {
+            // Pending polls are not logged; only the final claim outcome is.
+            Diagnostics.record(.cloudSignInRequest(endpoint: .deviceClaim, outcome: outcome,
+                durationMilliseconds: 0, httpStatus: nil, reason: reason, failure: nil))
+        }
+        let deviceSignIn = SnippetsCloudAccountKeySignInFlow.DeviceSignIn(isAvailable: { [self] in
+            guard deviceSignInAllowed,
+                  let discovery = try? await nativeDiscovery(serverURL: serverURL) else { return false }
+            return discovery.capabilities.contains(LibraryKeyBootstrap.deviceSignInCapability)
+        }, begin: { [self] in
+            guard deviceSignInAllowed, let store = deviceSignInStore else {
+                throw SnippetsCloudAccountKeySignInFailure.deviceSignInUnavailable
+            }
+            let discovery = try await prepare()
+            guard discovery.capabilities.contains(LibraryKeyBootstrap.deviceSignInCapability) else {
+                throw SnippetsCloudAccountKeySignInFailure.deviceSignInUnavailable
+            }
+            guard candidate == nil else { throw SnippetsCloudAccountKeySignInFailure.invalidResponse }
+            diagnostics.enter(.deviceRequest)
+            // A request left by an interrupted process is resumed while it has a useful
+            // lifetime; a repeated approved claim is safe because the server revokes the
+            // previously issued family.
+            if let raw = try? store.loadItem(account: SnippetsCloudAccountBootstrap.deviceSignInAccount),
+               let existing = try? LibraryKeyBootstrap.PendingDeviceSignIn(jsonData: raw),
+               let request = try? existing.request, request.serverURL == serverURL,
+               request.expiresAtEpochSeconds > Int64(Date().timeIntervalSince1970) + 60 {
+                activeDeviceSignIn = existing
+                return try presentation(existing)
+            }
+            let draft = LibraryKeyBootstrap.PairingDraft()
+            let created: DeviceRequestResponse = try await nativeRequest(
+                endpoint: serverURL.appending(path: "v2/auth/device-requests"),
+                values: [
+                    "recipientPublicKey": draft.recipientPublicKey.base64EncodedString(),
+                    "nonce": draft.nonce.base64EncodedString(),
+                ],
+                diagnosticEndpoint: .deviceRequest)
+            guard LibraryKeyBootstrap.isDevicePollToken(created.pollToken),
+                  let requestID = UUID(uuidString: created.requestId),
+                  requestID.uuidString.lowercased() == created.requestId.lowercased(),
+                  let expiresAt = SnippetsCloudBootstrapClient.parseServerDate(created.expiresAt),
+                  expiresAt.timeIntervalSinceNow > 0 else {
+                throw SnippetsCloudAccountKeySignInFailure.invalidResponse
+            }
+            let pending: LibraryKeyBootstrap.PendingDeviceSignIn
+            do {
+                pending = try LibraryKeyBootstrap.PendingDeviceSignIn(
+                    draft: draft,
+                    request: LibraryKeyBootstrap.DeviceSignInRequest(
+                        serverURL: serverURL,
+                        requestID: requestID,
+                        nonce: draft.nonce,
+                        recipientPublicKey: draft.recipientPublicKey,
+                        expiresAtEpochSeconds: Int64(expiresAt.timeIntervalSince1970.rounded(.down))),
+                    pollToken: created.pollToken)
+            } catch { throw SnippetsCloudAccountKeySignInFailure.invalidResponse }
+            try store.storeItem(try pending.jsonData, account: SnippetsCloudAccountBootstrap.deviceSignInAccount)
+            activeDeviceSignIn = pending
+            return try presentation(pending)
+        }, claim: { [self] in
+            guard let pending = activeDeviceSignIn, let discovery = preparedDiscovery else {
+                throw SnippetsCloudAccountKeySignInFailure.deviceSignInRejected
+            }
+            guard candidate == nil else { throw SnippetsCloudAccountKeySignInFailure.invalidResponse }
+            let request: LibraryKeyBootstrap.DeviceSignInRequest
+            do { request = try pending.request }
+            catch { throw SnippetsCloudAccountKeySignInFailure.deviceSignInExpired }
+            let response: DeviceClaimResponse
+            do {
+                response = try await nativeRequest(
+                    endpoint: serverURL.appending(
+                        path: "v2/auth/device-requests/\(request.requestID.uuidString.lowercased())/claim"),
+                    values: ["pollToken": pending.pollToken],
+                    terminalCodes: [
+                        "not_found": .deviceSignInRejected,
+                        "conflict": .deviceSignInRejected,
+                        "pairing_expired": .deviceSignInExpired,
+                    ])
+            } catch let failure as SnippetsCloudAccountKeySignInFailure
+                where failure == .deviceSignInRejected || failure == .deviceSignInExpired {
+                recordClaim(.failed, reason: .httpStatus)
+                throw failure
+            }
+            switch response.state {
+            case "pending":
+                guard response.members == ["state", "expiresAt"],
+                      SnippetsCloudBootstrapClient.parseServerDate(response.expiresAt) != nil else {
+                    throw SnippetsCloudAccountKeySignInFailure.invalidResponse
+                }
+                return .pending
+            case "approved":
+                guard let token = response.session else {
+                    throw SnippetsCloudAccountKeySignInFailure.invalidResponse
+                }
+                diagnostics.enter(.deviceClaim)
+                // The session is journaled before any other member is trusted. The stored
+                // session has no account key: this device never receives it.
+                let stored = try journal(token, accountKey: nil, discovery: discovery)
+                try validateNativeToken(token)
+                guard response.members == ["state", "expiresAt", "spaceId", "pairingId", "session"],
+                      let spaceText = response.spaceId, let pairingText = response.pairingId,
+                      let spaceID = UUID(uuidString: spaceText),
+                      let pairingID = UUID(uuidString: pairingText),
+                      SnippetsCloudBootstrapClient.parseServerDate(response.expiresAt) != nil else {
+                    recordClaim(.failed, reason: .invalidJSON)
+                    throw SnippetsCloudAccountKeySignInFailure.invalidResponse
+                }
+                recordClaim(.succeeded)
+                candidate = stored
+                issuedToken = token
+                deviceGrant = (spaceID, pairingID, pending)
+                return .approved
+            default:
+                throw SnippetsCloudAccountKeySignInFailure.invalidResponse
+            }
+        }, discard: {
+            discardDeviceSignIn()
         })
+        let flow = SnippetsCloudAccountKeySignInFlow(createAccount: { [self] in
+            let discovery = try await prepare()
+            guard candidate == nil else { throw SnippetsCloudAccountKeySignInFailure.invalidResponse }
+            diagnostics.enter(.accountCreate)
+            let response: AccountCreationResponse = try await nativeRequest(
+                endpoint: discovery.nativeAuth.createAccountEndpoint, values: nil,
+                diagnosticEndpoint: .accountCreate)
+            try accept(response.session, accountKey: response.accountKey, discovery: discovery)
+            // `accept` validated the key after journaling the grant; the sheet now shows
+            // it once for saving before library setup may continue.
+            guard let key = SnippetsCloudAccountKey(canonical: response.accountKey) else {
+                throw SnippetsCloudAccountKeySignInFailure.invalidResponse
+            }
+            return key
+        }, signIn: { [self] key in
+            let discovery = try await prepare()
+            guard candidate == nil else { throw SnippetsCloudAccountKeySignInFailure.invalidResponse }
+            diagnostics.enter(.accountSignIn)
+            let token: TokenResponse = try await nativeRequest(
+                endpoint: discovery.nativeAuth.signInEndpoint,
+                values: ["accountKey": key.canonical], diagnosticEndpoint: .accountSignIn)
+            try accept(token, accountKey: key.canonical, discovery: discovery)
+        }, deviceSignIn: deviceSignIn)
         do {
             // The native sheet appears before any discovery/cleanup network request.
             try await authenticate(flow)
@@ -1715,7 +1942,23 @@ final class SnippetsCloudNativeAuthClient {
         try Task.checkCancellation()
         diagnostics.enter(.librarySelection)
         let selectedMembership: SnippetsCloudLibraryChoice
-        if let expectedPostAuthorizationTarget {
+        var recipientPairing: LibraryKeyBootstrap.PendingPairing?
+        if let deviceGrant {
+            // ADR 0007: exactly the approved library, without a chooser; fail closed when
+            // this account cannot see it.
+            selectedMembership = try await resolveApprovedSpace(
+                deviceGrant.spaceID,
+                serverURL: serverURL,
+                serverInstanceID: discovery.serverInstanceId,
+                accessToken: token.accessToken)
+            recipientPairing = try await approvedRecipientPairing(
+                deviceGrant.pending,
+                spaceID: selectedMembership.spaceID,
+                pairingID: deviceGrant.pairingID,
+                serverURL: serverURL,
+                serverInstanceID: discovery.serverInstanceId,
+                accessToken: token.accessToken)
+        } else if let expectedPostAuthorizationTarget {
             let candidate: Space
             do {
                 candidate = try await authorizedJSON(
@@ -1769,7 +2012,8 @@ final class SnippetsCloudNativeAuthClient {
             spaceID: selectedMembership.spaceID,
             serverInstanceID: discovery.serverInstanceId,
             protocolMajor: discovery.protocolMajor,
-            scopeBinding: selectedMembership.scopeBinding ?? "")
+            scopeBinding: selectedMembership.scopeBinding ?? "",
+            recipientPairing: recipientPairing)
         guard (32...256).contains(result.scopeBinding.utf8.count) else {
             throw Failure.spaceSelectionRequired
         }
@@ -1809,6 +2053,80 @@ final class SnippetsCloudNativeAuthClient {
             try commitSelection(selected)
             return selected.spaceID
         }
+    }
+
+    /// ADR 0007: the library named by an approved device claim, writable and visible to
+    /// this account. Absence is a closed failure, never a reason to show a chooser.
+    private func resolveApprovedSpace(
+        _ spaceID: UUID,
+        serverURL: URL,
+        serverInstanceID: UUID,
+        accessToken: String
+    ) async throws -> SnippetsCloudLibraryChoice {
+        let response: SpacesResponse = try await authorizedJSON(
+            url: serverURL.appending(path: "v2/spaces"),
+            method: "GET",
+            accessToken: accessToken)
+        guard response.spaces.allSatisfy({
+            $0.scope.serverInstanceId == serverInstanceID
+                && (32...256).contains($0.scope.scopeBinding.utf8.count)
+                && ["owner", "writer", "reader"].contains($0.role)
+        }) else { throw Failure.insecureServerProfile }
+        guard let listed = response.spaces.first(where: { $0.spaceId == spaceID }) else {
+            throw Failure.spaceSelectionRequired
+        }
+        guard ["owner", "writer"].contains(listed.role) else { throw Failure.readOnlyLibraryUnavailable }
+        let current: Space = try await authorizedJSON(
+            url: serverURL.appending(path: "v2/spaces/\(spaceID.uuidString.lowercased())"),
+            method: "GET",
+            accessToken: accessToken)
+        guard current.scope.serverInstanceId == serverInstanceID,
+              current.scope.spaceId == spaceID,
+              current.scope.scopeBinding == listed.scope.scopeBinding,
+              ["owner", "writer"].contains(current.role) else {
+            throw Failure.spaceSelectionRequired
+        }
+        return SnippetsCloudLibraryChoice(
+            spaceID: current.scope.spaceId,
+            serverInstanceID: current.scope.serverInstanceId,
+            role: current.role,
+            scopeBinding: current.scope.scopeBinding)
+    }
+
+    /// The approved pairing must be for this device's own recipient key and nonce (the
+    /// existing pairing validation) and carry the code derived from them. The returned
+    /// pending pairing is what the recipient claim opens; nothing is decrypted here.
+    private func approvedRecipientPairing(
+        _ pending: LibraryKeyBootstrap.PendingDeviceSignIn,
+        spaceID: UUID,
+        pairingID: UUID,
+        serverURL: URL,
+        serverInstanceID: UUID,
+        accessToken: String
+    ) async throws -> LibraryKeyBootstrap.PendingPairing {
+        let client = try SnippetsCloudBootstrapClient(
+            baseURL: serverURL,
+            spaceID: spaceID,
+            serverInstanceID: serverInstanceID,
+            accessToken: { accessToken },
+            session: session)
+        let pairing = try await client.pairing(
+            pairingID,
+            publicKey: pending.draft.recipientPublicKey,
+            nonce: pending.draft.nonce)
+        guard pairing.pairingID == pairingID,
+              pairing.state == "approved",
+              pairing.authenticationTag == LibraryKeyBootstrap.confirmationCode(
+                nonce: pending.draft.nonce,
+                recipientPublicKey: pending.draft.recipientPublicKey) else {
+            throw Failure.authorizationMismatch
+        }
+        do {
+            return try pending.pendingPairing(
+                spaceID: spaceID,
+                pairingID: pairingID,
+                pairingExpiresAtEpochSeconds: Int64(pairing.expiresAt.timeIntervalSince1970))
+        } catch { throw Failure.authorizationMismatch }
     }
 
     func validateExistingMembership(
@@ -1958,9 +2276,9 @@ final class SnippetsCloudNativeAuthClient {
         try validateNativeTokenPair(token)
         let refreshToken = token.refreshToken
         let updated = StoredSession(
-            profile: .init(issuer: stored.serverURL.absoluteString, subject: token.account.id,
-                           name: nil, email: token.account.email),
-            schemaVersion: 6,
+            schemaVersion: Self.storedSessionSchemaVersion,
+            accountID: stored.accountID,
+            accountKey: stored.accountKey,
             serverURL: stored.serverURL,
             apiBase: stored.apiBase,
             serverInstanceID: stored.serverInstanceID,
@@ -1992,7 +2310,8 @@ final class SnippetsCloudNativeAuthClient {
             kind: .refreshRotation)
         try validateNativeToken(token)
         guard refreshToken != stored.refreshToken, token.accessToken != stored.accessToken,
-              token.account.id == stored.profile?.subject else { throw Failure.tokenExchangeFailed }
+              let refreshedAccount = UUID(uuidString: token.account.id),
+              refreshedAccount == UUID(uuidString: stored.accountID) else { throw Failure.tokenExchangeFailed }
         try keychain.storeItem(
             try JSONEncoder().encode(updated),
             account: SyncBackendSelectionStore.oauthSessionAccount)
@@ -2018,29 +2337,41 @@ final class SnippetsCloudNativeAuthClient {
         }
     }
 
-    func verifiedProfile() -> SnippetsCloudVerifiedProfile? { try? loadSession()?.profile }
+    /// The signed-in account UUID, or nil without a readable session.
+    func storedAccountID() -> UUID? {
+        guard let stored = try? loadSession() else { return nil }
+        return UUID(uuidString: stored.accountID)
+    }
+
+    /// The canonical key saved with the current session. Callers must gate disclosure
+    /// behind fresh device-owner authentication.
+    /// Nil without a session, or for a device signed in by another device (ADR 0007).
+    func storedAccountKey() throws -> SnippetsCloudAccountKey? {
+        guard let stored = try loadSession(), let canonical = stored.accountKey else { return nil }
+        guard let key = SnippetsCloudAccountKey(canonical: canonical) else {
+            throw Failure.invalidStoredSession
+        }
+        return key
+    }
 
     private func loadSession() throws -> StoredSession? {
         guard let data = try keychain.loadItem(
             account: SyncBackendSelectionStore.oauthSessionAccount) else { return nil }
         guard data.count <= 128 * 1_024,
               let value = try? JSONDecoder().decode(StoredSession.self, from: data),
-              value.schemaVersion == 6,
+              value.schemaVersion == Self.storedSessionSchemaVersion,
               value.serverInstanceID != nil, value.protocolMajor == 2,
               value.apiBase == value.serverURL.appending(path: "v2"),
-              value.clientID == "native-email-code-v1",
+              value.clientID == Self.nativeClientID,
               value.issuer == value.serverURL,
               value.tokenEndpoint == value.serverURL.appending(path: "v2/auth/refresh"),
               value.revocationEndpoint == value.serverURL.appending(path: "v2/auth/revoke"),
-              value.profile?.issuer == value.serverURL.absoluteString,
-              value.profile?.subject.isEmpty == false,
+              UUID(uuidString: value.accountID) != nil,
+              value.accountKey.map({ SnippetsCloudAccountKey(canonical: $0) != nil }) ?? true,
               !value.clientID.isEmpty, value.clientID.utf8.count <= 256,
               value.maximumAccessTokenAgeSeconds == 300,
               validToken(value.accessToken), validToken(value.refreshToken),
               value.accessToken != value.refreshToken,
-              value.profile.map({ (1...256).contains($0.subject.utf8.count)
-                  && !$0.subject.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
-                  && SnippetsCloudEmailSignInFlow.isValidEmail($0.email ?? "") }) == true,
               value.expiresAt.timeIntervalSince1970.isFinite,
               value.expiresAt.timeIntervalSinceNow <= 360,
               (try? validatedBaseURL(value.serverURL)) == value.serverURL,
@@ -2279,7 +2610,7 @@ final class SnippetsCloudNativeAuthClient {
               let journal = try? JSONDecoder().decode(RevocationJournal.self, from: data),
               journal.schemaVersion == 2,
               journal.issuer == journal.serverURL,
-              journal.clientID == "native-email-code-v1",
+              journal.clientID == Self.nativeClientID,
               journal.revocationEndpoint == journal.serverURL.appending(path: "v2/auth/revoke"),
               journal.replacementKind == nil
                 || account == SyncBackendSelectionStore.oauthSessionReplacementAccount,
@@ -2590,11 +2921,13 @@ final class SnippetsCloudNativeAuthClient {
               (1...16).contains(discovery.capabilities.count),
               Set(discovery.capabilities).count == discovery.capabilities.count,
               discovery.capabilities.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }),
-              ["native-email-code-v1", "library-action-proof-v1", "pairing-v2", "offline-recovery-v1", "resource-session-revocation"]
+              ["native-account-key-v1", "library-action-proof-v1", "pairing-v2", "offline-recovery-v1", "resource-session-revocation"]
                 .allSatisfy(discovery.capabilities.contains),
-              discovery.nativeAuth.flow == "email_code",
-              discovery.nativeAuth.startEndpoint == serverURL.appending(path: "v2/auth/email/start"),
-              discovery.nativeAuth.verifyEndpoint == serverURL.appending(path: "v2/auth/email/verify"),
+              discovery.nativeAuth.flow == "account_key",
+              // Pin every native endpoint to this origin so discovery cannot send an
+              // account key or a fresh grant anywhere else.
+              discovery.nativeAuth.createAccountEndpoint == serverURL.appending(path: "v2/auth/accounts"),
+              discovery.nativeAuth.signInEndpoint == serverURL.appending(path: "v2/auth/sign-in"),
               discovery.nativeAuth.refreshEndpoint == serverURL.appending(path: "v2/auth/refresh"),
               discovery.nativeAuth.revokeEndpoint == serverURL.appending(path: "v2/auth/revoke") else {
             throw Failure.insecureServerProfile
@@ -2610,23 +2943,25 @@ final class SnippetsCloudNativeAuthClient {
     private func validateNativeToken(_ token: TokenResponse) throws {
         try validateNativeTokenPair(token)
         guard token.tokenType == "Bearer", (1...300).contains(token.expiresIn),
-              (1...256).contains(token.account.id.utf8.count),
-              !token.account.id.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
-              SnippetsCloudEmailSignInFlow.isValidEmail(token.account.email) else {
+              UUID(uuidString: token.account.id) != nil else {
             throw Failure.tokenExchangeFailed
         }
     }
 
+    /// `values == nil` sends a bodyless POST, as account creation requires.
     private func nativeRequest<Response: Decodable>(
-        endpoint: URL, values: [String: String],
-        diagnosticEndpoint: DiagnosticCloudSignInEndpoint? = nil
+        endpoint: URL, values: [String: String]?,
+        diagnosticEndpoint: DiagnosticCloudSignInEndpoint? = nil,
+        terminalCodes: [String: SnippetsCloudAccountKeySignInFailure] = [:]
     ) async throws -> Response {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.httpBody = try JSONEncoder().encode(values)
         request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let values {
+            request.httpBody = try JSONEncoder().encode(values)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         let started = ProcessInfo.processInfo.systemUptime
         var status: Int?
         var reason: DiagnosticCloudSignInReason = .requestFailed
@@ -2641,23 +2976,23 @@ final class SnippetsCloudNativeAuthClient {
             let (data, response) = try await boundedResponse(request, maximumBytes: 256 * 1_024)
             reason = .unexpectedResponse
             guard let http = response as? HTTPURLResponse, response.url == request.url else {
-                throw SnippetsCloudEmailSignInFailure.invalidResponse
+                throw SnippetsCloudAccountKeySignInFailure.invalidResponse
             }
             status = http.statusCode
             reason = .httpStatus
             guard http.statusCode == 200 else {
                 let code = (try? JSONDecoder().decode(HTTPError.self, from: data))?.code
+                if let code, let terminal = terminalCodes[code] { throw terminal }
                 switch code {
-                case "invalid_email": reason = .invalidEmail; throw SnippetsCloudEmailSignInFailure.invalidEmail
-                case "invalid_code": reason = .invalidCode; throw SnippetsCloudEmailSignInFailure.invalidCode
-                case "code_expired": reason = .codeExpired; throw SnippetsCloudEmailSignInFailure.codeExpired
-                case "too_many_attempts": reason = .tooManyAttempts; throw SnippetsCloudEmailSignInFailure.tooManyAttempts
+                case "invalid_account_key":
+                    reason = .invalidAccountKey
+                    throw SnippetsCloudAccountKeySignInFailure.accountKeyNotAccepted
                 case "rate_limited":
                     let delay = Double(http.value(forHTTPHeaderField: "Retry-After") ?? "60") ?? 60
                     reason = .rateLimited
-                    throw SnippetsCloudEmailSignInFailure.rateLimited(delay.isFinite ? min(max(1, delay), 86_400) : 60)
+                    throw SnippetsCloudAccountKeySignInFailure.rateLimited(delay.isFinite ? min(max(1, delay), 86_400) : 60)
                 case "authentication_required": throw Failure.tokenExchangeFailed
-                default: throw SnippetsCloudEmailSignInFailure.unavailable
+                default: throw SnippetsCloudAccountKeySignInFailure.unavailable
                 }
             }
             reason = .invalidJSON
@@ -2667,8 +3002,8 @@ final class SnippetsCloudNativeAuthClient {
         } catch {
             record(.failed, error: error)
             if error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
-            if error is SnippetsCloudEmailSignInFailure || error is Failure { throw error }
-            throw SnippetsCloudEmailSignInFailure.unavailable
+            if error is SnippetsCloudAccountKeySignInFailure || error is Failure { throw error }
+            throw SnippetsCloudAccountKeySignInFailure.unavailable
         }
     }
 
@@ -2849,88 +3184,5 @@ private extension Data {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-    }
-}
-
-/// Minimal display data from a verified ID token, bound to the resource token's
-/// issuer and subject. Stored only with device-only credentials, never diagnostics.
-nonisolated struct SnippetsCloudVerifiedProfile: Codable, Equatable, Sendable {
-    let issuer: String
-    let subject: String
-    let name: String?
-    let email: String?
-    var displayName: String { name ?? email ?? "Snippets Cloud account" }
-
-    struct Keys: Decodable {
-        struct Key: Decodable {
-            let kid: String?; let kty: String; let alg: String?; let use: String?
-            let n: String?; let e: String?; let crv: String?; let x: String?; let y: String?
-        }
-        let keys: [Key]
-    }
-    enum Failure: Error { case invalidIdentity }
-
-    static func verify(idToken: String, accessToken: String, keys: Keys, issuer: String,
-                       clientID: String, resource: String, nonce: String, now: Date = Date()) throws -> Self {
-        let identity = try claims(idToken, keys: keys, issuer: issuer, audience: clientID, now: now)
-        let access = try claims(accessToken, keys: keys, issuer: issuer, audience: resource, now: now)
-        guard identity["nonce"] as? String == nonce,
-              let subject = identity["sub"] as? String, !subject.isEmpty, subject.utf8.count <= 256,
-              access["sub"] as? String == subject else { throw Failure.invalidIdentity }
-        func display(_ key: String, limit: Int) -> String? {
-            guard let value = identity[key] as? String, !value.isEmpty, value.utf8.count <= limit,
-                  !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
-            return value
-        }
-        return .init(issuer: issuer, subject: subject, name: display("name", limit: 256),
-                     email: identity["email_verified"] as? Bool == true ? display("email", limit: 320) : nil)
-    }
-
-    private static func claims(_ token: String, keys: Keys, issuer: String, audience: String,
-                               now: Date) throws -> [String: Any] {
-        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
-        guard token.utf8.count <= 16_384, parts.count == 3, (1...16).contains(keys.keys.count),
-              let header = try JSONSerialization.jsonObject(with: decode(String(parts[0]))) as? [String: Any],
-              let alg = header["alg"] as? String, ["RS256", "ES256"].contains(alg),
-              header["crit"] == nil, header["b64"] == nil,
-              let kid = header["kid"] as? String else { throw Failure.invalidIdentity }
-        let candidates = keys.keys.filter { $0.kid == kid && ($0.use == nil || $0.use == "sig") && ($0.alg == nil || $0.alg == alg) }
-        guard candidates.count == 1 else { throw Failure.invalidIdentity }
-        let key = candidates[0]
-        let signature = try decode(String(parts[2]))
-        let message = Data("\(parts[0]).\(parts[1])".utf8)
-        if alg == "ES256" {
-            guard key.kty == "EC", key.crv == "P-256", let x = key.x, let y = key.y else { throw Failure.invalidIdentity }
-            let publicKey = try P256.Signing.PublicKey(x963Representation: Data([4]) + decode(x) + decode(y))
-            guard try publicKey.isValidSignature(P256.Signing.ECDSASignature(rawRepresentation: signature), for: message) else { throw Failure.invalidIdentity }
-        } else {
-            guard key.kty == "RSA", let n = key.n, let e = key.e else { throw Failure.invalidIdentity }
-            let modulus = try decode(n), exponent = try decode(e)
-            guard (256...512).contains(modulus.count), (1...4).contains(exponent.count) else { throw Failure.invalidIdentity }
-            let encoded = der(0x30, integer(modulus) + integer(exponent))
-            let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeyClass: kSecAttrKeyClassPublic]
-            guard let publicKey = SecKeyCreateWithData(encoded as CFData, attributes as CFDictionary, nil),
-                  SecKeyVerifySignature(publicKey, .rsaSignatureMessagePKCS1v15SHA256, message as CFData, signature as CFData, nil) else { throw Failure.invalidIdentity }
-        }
-        guard let value = try JSONSerialization.jsonObject(with: decode(String(parts[1]))) as? [String: Any],
-              value["iss"] as? String == issuer, let expiry = value["exp"] as? Double,
-              let issued = value["iat"] as? Double, expiry > now.timeIntervalSince1970,
-              issued <= now.timeIntervalSince1970 + 60,
-              (value["nbf"] as? Double ?? 0) <= now.timeIntervalSince1970 + 60 else { throw Failure.invalidIdentity }
-        let audiences = (value["aud"] as? [String]) ?? (value["aud"] as? String).map { [$0] } ?? []
-        guard audiences.contains(audience), audiences.count == 1 || value["azp"] as? String == audience else { throw Failure.invalidIdentity }
-        return value
-    }
-    private static func decode(_ value: String) throws -> Data {
-        guard !value.contains("="), value.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }),
-              let data = Data(base64Encoded: value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") + String(repeating: "=", count: (4 - value.count % 4) % 4)),
-              data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") == value else { throw Failure.invalidIdentity }
-        return data
-    }
-    private static func integer(_ value: Data) -> Data { der(2, (value.first! >= 128 ? Data([0]) : Data()) + value) }
-    private static func der(_ tag: UInt8, _ value: Data) -> Data {
-        let length = value.count
-        let encoded: [UInt8] = length < 128 ? [UInt8(length)] : length < 256 ? [0x81, UInt8(length)] : [0x82, UInt8(length >> 8), UInt8(length & 255)]
-        return Data([tag] + encoded) + value
     }
 }

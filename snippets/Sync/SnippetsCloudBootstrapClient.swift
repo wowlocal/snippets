@@ -313,20 +313,64 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     }
 
     func createPairing(_ draft: LibraryKeyBootstrap.PairingDraft) async throws -> Pairing {
+        try await createPairing(
+            recipientPublicKey: draft.recipientPublicKey,
+            nonce: draft.nonce,
+            expiresInSeconds: LibraryKeyBootstrap.defaultPairingSeconds)
+    }
+
+    /// Creates a pairing for another device's recipient key and nonce. ADR 0007's
+    /// approving device uses this for a device sign-in request's material.
+    func createPairing(
+        recipientPublicKey: Data,
+        nonce: Data,
+        expiresInSeconds: Int
+    ) async throws -> Pairing {
+        guard (60...600).contains(expiresInSeconds) else { throw Failure.invalidConfiguration }
         let response: PairingResponseDTO = try await request(
             method: "POST",
             path: "pairings",
             body: CreatePairingDTO(
-                recipientPublicKey: draft.recipientPublicKey,
-                nonce: draft.nonce,
-                expiresInSeconds: LibraryKeyBootstrap.defaultPairingSeconds))
+                recipientPublicKey: recipientPublicKey,
+                nonce: nonce,
+                expiresInSeconds: expiresInSeconds))
         try validate(response.scope)
         return try validatedPairing(
             response.pairing,
             pairingID: nil,
-            publicKey: draft.recipientPublicKey,
-            nonce: draft.nonce,
+            publicKey: recipientPublicKey,
+            nonce: nonce,
             requireEnvelope: false)
+    }
+
+    /// ADR 0007: binds a device sign-in request to this account after this device has
+    /// approved the pairing for exactly the request's key and nonce. The server call is
+    /// idempotent, so a transport failure is retried with the same body.
+    func approveDeviceSignInRequest(
+        _ requestID: UUID,
+        pairingID: UUID,
+        retryDelays: [Duration] = [.seconds(1), .seconds(2), .seconds(4)]
+    ) async throws {
+        struct Body: Encodable { let spaceId: String; let pairingId: String }
+        let url = baseURL.appending(
+            path: "v2/auth/device-requests/\(requestID.uuidString.lowercased())/approval")
+        let body: Data
+        do {
+            body = try JSONEncoder().encode(Body(
+                spaceId: spaceID.uuidString.lowercased(),
+                pairingId: pairingID.uuidString.lowercased()))
+        } catch { throw Failure.invalidConfiguration }
+        var delays = retryDelays[...]
+        while true {
+            do {
+                let response = try await requestData(url: url, method: "POST", body: body, expectedStatus: 204)
+                guard response.isEmpty else { throw Failure.invalidResponse }
+                return
+            } catch Failure.network {
+                guard let delay = delays.popFirst() else { throw Failure.network }
+                try await Task.sleep(for: delay)
+            }
+        }
     }
 
     func pairing(_ pairingID: UUID, publicKey: Data, nonce: Data) async throws -> Pairing {
@@ -492,7 +536,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
     /// Swift's built-in `.iso8601` decoding has differed across OS releases in its
     /// handling of fractional seconds. Accept the two RFC 3339 forms emitted by the
     /// server explicitly and reject every other representation.
-    private static func parseServerDate(_ value: String) -> Date? {
+    static func parseServerDate(_ value: String) -> Date? {
         guard !value.isEmpty, value.utf8.count <= 64 else { return nil }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -512,6 +556,15 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
             resolvingAgainstBaseURL: false)
         components?.percentEncodedQuery = query
         guard let url = components?.url else { throw Failure.invalidConfiguration }
+        return try await requestData(url: url, method: method, body: body, expectedStatus: nil)
+    }
+
+    private func requestData(
+        url: URL,
+        method: String,
+        body: Data?,
+        expectedStatus: Int?
+    ) async throws -> Data {
         let token: String
         do { token = try await accessToken() }
         catch { throw Failure.service("sign_in_required") }
@@ -543,6 +596,7 @@ nonisolated struct SnippetsCloudBootstrapClient: Sendable {
                     ?? "http_\(http.statusCode)"
                 throw Failure.service(code)
             }
+            if let expectedStatus, http.statusCode != expectedStatus { throw Failure.invalidResponse }
             return data
         } catch let failure as Failure {
             throw failure

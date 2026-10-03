@@ -14,9 +14,12 @@ nonisolated enum LibraryKeyBootstrap {
     static let pairingAlgorithm = "snippets-pairing-p256-hkdf-sha256-aes256gcm-v1"
     static let recoveryAlgorithm = "snippets-recovery-hkdf-sha256-aes256gcm-v1"
     static let defaultPairingSeconds = 300
+    static let deviceSignInKind = "snippets-device-sign-in"
+    static let deviceSignInCapability = "native-device-sign-in-v1"
 
     private static let pairingSchema = 2
     private static let recoverySchema = 1
+    private static let deviceSignInSchema = 1
     private static let maximumQRBytes = 4_096
     private static let maximumEnvelopeBytes = 4_096
     private static let p256PublicKeyBytes = 65
@@ -128,12 +131,7 @@ nonisolated enum LibraryKeyBootstrap {
         let expiresAtEpochSeconds: Int64
 
         var confirmationCode: String {
-            var material = Data("snippets-pairing-confirm-v1".utf8)
-            material.append(nonce)
-            material.append(recipientPublicKey)
-            let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-            return SHA256.hash(data: material).prefix(8)
-                .map { String(alphabet[Int($0) & 31]) }.joined()
+            LibraryKeyBootstrap.confirmationCode(nonce: nonce, recipientPublicKey: recipientPublicKey)
         }
 
         func qrPayload() throws -> String {
@@ -241,6 +239,265 @@ nonisolated enum LibraryKeyBootstrap {
                 encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
                 return try encoder.encode(self)
             }
+        }
+    }
+
+    // MARK: ADR 0007 device-approved sign-in
+
+    /// Payload a signed-out device shows so an approved device can sign it in. It carries
+    /// only pairing recipient material and the request ID, never the poll token, and is
+    /// encoded with the pairing-invitation conventions: sorted keys, unescaped slashes,
+    /// unpadded Base64url, lowercase UUID, canonical HTTPS origin, at most 4,096 bytes.
+    struct DeviceSignInRequest: Equatable, Sendable, CustomStringConvertible {
+        let serverURL: URL
+        let requestID: UUID
+        let nonce: Data
+        let recipientPublicKey: Data
+        let expiresAtEpochSeconds: Int64
+
+        /// Unchanged pairing derivation, so it equals the server's authentication tag for
+        /// the pairing the approving device creates for this key and nonce.
+        var confirmationCode: String {
+            LibraryKeyBootstrap.confirmationCode(nonce: nonce, recipientPublicKey: recipientPublicKey)
+        }
+
+        var description: String { "DeviceSignInRequest(redacted)" }
+
+        init(
+            serverURL: URL,
+            requestID: UUID,
+            nonce: Data,
+            recipientPublicKey: Data,
+            expiresAtEpochSeconds: Int64,
+            nowEpochSeconds: Int64 = Int64(Date().timeIntervalSince1970)
+        ) throws {
+            self.serverURL = try canonicalServerURL(serverURL)
+            self.requestID = requestID
+            try validateRecipient(nonce: nonce, recipientPublicKey: recipientPublicKey)
+            guard expiresAtEpochSeconds > nowEpochSeconds - 30,
+                  expiresAtEpochSeconds <= nowEpochSeconds + 630 else { throw Failure.expired }
+            self.nonce = nonce
+            self.recipientPublicKey = recipientPublicKey
+            self.expiresAtEpochSeconds = expiresAtEpochSeconds
+        }
+
+        init(qrPayload: String, nowEpochSeconds: Int64 = Int64(Date().timeIntervalSince1970)) throws {
+            let data = Data(qrPayload.utf8)
+            guard data.count <= maximumQRBytes else { throw Failure.invalidFormat }
+            try requireKeys(data, [
+                "expiresAt", "kind", "nonce", "recipientPublicKey", "requestId",
+                "schemaVersion", "server",
+            ])
+            let payload: DeviceSignInQR
+            do { payload = try JSONDecoder().decode(DeviceSignInQR.self, from: data) }
+            catch { throw Failure.invalidFormat }
+            guard payload.schemaVersion == deviceSignInSchema,
+                  payload.kind == deviceSignInKind,
+                  let server = URL(string: payload.server),
+                  let requestID = UUID(uuidString: payload.requestId),
+                  requestID.uuidString.lowercased() == payload.requestId,
+                  let nonce = Data(base64URL: payload.nonce),
+                  let publicKey = Data(base64URL: payload.recipientPublicKey) else {
+                throw Failure.invalidFormat
+            }
+            try self.init(
+                serverURL: server,
+                requestID: requestID,
+                nonce: nonce,
+                recipientPublicKey: publicKey,
+                expiresAtEpochSeconds: payload.expiresAt,
+                nowEpochSeconds: nowEpochSeconds)
+            guard serverURL.absoluteString == payload.server else { throw Failure.invalidFormat }
+        }
+
+        func qrPayload() throws -> String {
+            try encodedJSONString(DeviceSignInQR(
+                expiresAt: expiresAtEpochSeconds,
+                kind: deviceSignInKind,
+                nonce: nonce.base64URL,
+                recipientPublicKey: recipientPublicKey.base64URL,
+                requestId: requestID.uuidString.lowercased(),
+                schemaVersion: deviceSignInSchema,
+                server: serverURL.absoluteString))
+        }
+
+        /// Routes scanned or pasted text by `kind` only; `init(qrPayload:)` validates it.
+        static func isDeviceSignInPayload(_ value: String) -> Bool {
+            let data = Data(value.utf8)
+            guard data.count <= maximumQRBytes,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return false
+            }
+            return object["kind"] as? String == deviceSignInKind
+        }
+    }
+
+    /// New-device state while a device request waits for approval. The recipient private
+    /// key and the poll token (the only claim credential) live only in device-only Keychain.
+    struct PendingDeviceSignIn: Codable, Equatable, Sendable, CustomStringConvertible {
+        let schemaVersion: Int
+        let draft: PairingDraft
+        let requestPayload: String
+        let pollToken: String
+
+        var request: DeviceSignInRequest {
+            get throws { try DeviceSignInRequest(qrPayload: requestPayload) }
+        }
+
+        var description: String { "PendingDeviceSignIn(redacted)" }
+
+        init(draft: PairingDraft, request: DeviceSignInRequest, pollToken: String) throws {
+            guard draft.nonce == request.nonce,
+                  draft.recipientPublicKey == request.recipientPublicKey,
+                  isDevicePollToken(pollToken) else { throw Failure.invalidFormat }
+            schemaVersion = deviceSignInSchema
+            self.draft = draft
+            requestPayload = try request.qrPayload()
+            self.pollToken = pollToken
+        }
+
+        init(jsonData: Data, nowEpochSeconds: Int64 = Int64(Date().timeIntervalSince1970)) throws {
+            guard jsonData.count <= maximumEnvelopeBytes * 2 else { throw Failure.invalidFormat }
+            try requireKeys(jsonData, ["schemaVersion", "draft", "requestPayload", "pollToken"])
+            guard let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let draftObject = object["draft"] as? [String: Any],
+                  Set(draftObject.keys) == ["recipientPublicKey", "nonce", "privateKey"] else {
+                throw Failure.invalidFormat
+            }
+            let decoded: PendingDeviceSignIn
+            do { decoded = try JSONDecoder().decode(PendingDeviceSignIn.self, from: jsonData) }
+            catch { throw Failure.invalidFormat }
+            let draft = try PairingDraft(jsonData: try decoded.draft.jsonData)
+            let request = try DeviceSignInRequest(
+                qrPayload: decoded.requestPayload, nowEpochSeconds: nowEpochSeconds)
+            guard decoded.schemaVersion == deviceSignInSchema else { throw Failure.invalidFormat }
+            self = try PendingDeviceSignIn(draft: draft, request: request, pollToken: decoded.pollToken)
+        }
+
+        var jsonData: Data {
+            get throws { try encodedJSONData(self) }
+        }
+
+        /// The ordinary recipient pairing for the pairing an approving device created for
+        /// this request. Opening its envelope uses the existing pairing AAD and checks.
+        func pendingPairing(
+            spaceID: UUID,
+            pairingID: UUID,
+            pairingExpiresAtEpochSeconds: Int64,
+            nowEpochSeconds: Int64 = Int64(Date().timeIntervalSince1970)
+        ) throws -> PendingPairing {
+            let request = try DeviceSignInRequest(
+                qrPayload: requestPayload, nowEpochSeconds: nowEpochSeconds)
+            let invitation = try PairingInvitation(
+                serverURL: request.serverURL,
+                spaceID: spaceID,
+                pairingID: pairingID,
+                nonce: request.nonce,
+                recipientPublicKey: request.recipientPublicKey,
+                expiresAtEpochSeconds: pairingExpiresAtEpochSeconds,
+                nowEpochSeconds: nowEpochSeconds)
+            return try PendingPairing(draft: draft, invitation: invitation)
+        }
+    }
+
+    /// Approving-device intent, written before any network call. The created pairing is
+    /// recorded before it is approved, so an interrupted approval reuses that pairing and
+    /// retries the idempotent request approval instead of creating another pairing.
+    struct PendingDeviceApproval: Codable, Equatable, Sendable, CustomStringConvertible {
+        let schemaVersion: Int
+        let requestPayload: String
+        let pairingPayload: String?
+
+        var request: DeviceSignInRequest {
+            get throws { try DeviceSignInRequest(qrPayload: requestPayload) }
+        }
+
+        var pairing: PairingInvitation? {
+            get throws { try pairingPayload.map { try PairingInvitation(qrPayload: $0) } }
+        }
+
+        var description: String { "PendingDeviceApproval(redacted)" }
+
+        init(request: DeviceSignInRequest, pairing: PairingInvitation?) throws {
+            if let pairing {
+                guard pairing.serverURL == request.serverURL,
+                      pairing.nonce == request.nonce,
+                      pairing.recipientPublicKey == request.recipientPublicKey else {
+                    throw Failure.invalidFormat
+                }
+            }
+            schemaVersion = deviceSignInSchema
+            requestPayload = try request.qrPayload()
+            pairingPayload = try pairing?.qrPayload()
+        }
+
+        init(jsonData: Data, nowEpochSeconds: Int64 = Int64(Date().timeIntervalSince1970)) throws {
+            guard jsonData.count <= maximumEnvelopeBytes * 2 else { throw Failure.invalidFormat }
+            try requireKeys(jsonData, ["schemaVersion", "requestPayload", "pairingPayload"])
+            let decoded: PendingDeviceApproval
+            do { decoded = try JSONDecoder().decode(PendingDeviceApproval.self, from: jsonData) }
+            catch { throw Failure.invalidFormat }
+            guard decoded.schemaVersion == deviceSignInSchema else { throw Failure.invalidFormat }
+            let request = try DeviceSignInRequest(
+                qrPayload: decoded.requestPayload, nowEpochSeconds: nowEpochSeconds)
+            let pairing = try decoded.pairingPayload.map {
+                try PairingInvitation(qrPayload: $0, nowEpochSeconds: nowEpochSeconds)
+            }
+            self = try PendingDeviceApproval(request: request, pairing: pairing)
+        }
+
+        var jsonData: Data {
+            get throws { try encodedJSONData(self) }
+        }
+
+        private enum CodingKeys: String, CodingKey { case schemaVersion, requestPayload, pairingPayload }
+
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(schemaVersion, forKey: .schemaVersion)
+            try values.encode(requestPayload, forKey: .requestPayload)
+            // Explicit null keeps the strict exact-key decoder's shape fixed.
+            if let pairingPayload {
+                try values.encode(pairingPayload, forKey: .pairingPayload)
+            } else {
+                try values.encodeNil(forKey: .pairingPayload)
+            }
+        }
+    }
+
+    /// ADR 0007: `expiresInSeconds = clamp(expiresAt − now − 5, 60, 600)`.
+    static func deviceSignInPairingSeconds(
+        requestExpiresAtEpochSeconds: Int64,
+        nowEpochSeconds: Int64
+    ) -> Int {
+        Int(min(600, max(60, requestExpiresAtEpochSeconds - nowEpochSeconds - 5)))
+    }
+
+    /// `sn_d_` plus 43 unpadded Base64url symbols encoding 32 bytes.
+    static func isDevicePollToken(_ value: String) -> Bool {
+        guard value.utf8.count == 48, value.hasPrefix("sn_d_"),
+              let bytes = Data(base64URL: String(value.dropFirst(5))) else { return false }
+        return bytes.count == 32
+    }
+
+    /// The pairing confirmation code: eight symbols of a domain-separated hash of the
+    /// pairing nonce and recipient key. The server derives the same authentication tag.
+    static func confirmationCode(nonce: Data, recipientPublicKey: Data) -> String {
+        var material = Data("snippets-pairing-confirm-v1".utf8)
+        material.append(nonce)
+        material.append(recipientPublicKey)
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        return SHA256.hash(data: material).prefix(8)
+            .map { String(alphabet[Int($0) & 31]) }.joined()
+    }
+
+    private static func validateRecipient(nonce: Data, recipientPublicKey: Data) throws {
+        guard nonce.count == pairingNonceBytes,
+              recipientPublicKey.count == p256PublicKeyBytes,
+              recipientPublicKey.first == 0x04,
+              (try? P256.KeyAgreement.PublicKey(
+                x963Representation: recipientPublicKey)) != nil else {
+            throw Failure.invalidFormat
         }
     }
 
@@ -409,6 +666,16 @@ nonisolated enum LibraryKeyBootstrap {
         let nonce: String
         let recipientPublicKey: String
         let expiresAt: Int64
+    }
+
+    private struct DeviceSignInQR: Codable {
+        let expiresAt: Int64
+        let kind: String
+        let nonce: String
+        let recipientPublicKey: String
+        let requestId: String
+        let schemaVersion: Int
+        let server: String
     }
 
     private struct RecoveryQR: Codable {

@@ -7,6 +7,13 @@ enum SnippetsCloudPairingApprovalCopy {
     }
 
     static func approveButtonTitle(code: String) -> String { "Approve \(code)" }
+
+    /// ADR 0007 approving-device copy, shown with the code before any network call.
+    static func deviceSignInMessage(code: String) -> String {
+        "Confirmation code: \(code)\n\nSign in a new device to this account? It will also receive this library’s key. Continue only if this code matches the code on the new device."
+    }
+
+    static let deviceSignInApprovedMessage = "The new device is signed in."
 }
 
 /// Process-local disclosure authority for a durably pending recovery kit. A new
@@ -55,6 +62,8 @@ final class SnippetsCloudAccountBootstrap {
     enum LocalAction: String, Equatable {
         case approveDevice
         case replaceRecovery
+        /// ADR 0007: approve a signed-out device's sign-in request with this library.
+        case signInDevice
     }
 
     enum State: Equatable {
@@ -68,6 +77,10 @@ final class SnippetsCloudAccountBootstrap {
             confirmationCode: String,
             expiresAt: Date)
         case approvalReady(confirmationCode: String)
+        /// A scanned or pasted ADR 0007 request awaits code comparison and owner authentication.
+        case deviceSignInApprovalReady(confirmationCode: String)
+        /// Transient result: the new device was signed in and received this library's key.
+        case deviceSignInApproved
         case localAuthenticationRequired(LocalAction)
         case recoveryKitAuthenticationRequired
         case recoveryKitReady(qrPayload: String, longCode: String)
@@ -81,10 +94,14 @@ final class SnippetsCloudAccountBootstrap {
         case recoveryKitReplaced
         case recoveryStatusUnconfirmed
         case accountMismatch
+        /// The server gave a final answer for an ADR 0007 request (expired, unknown, or
+        /// bound elsewhere). The approving device discarded its intent.
+        case deviceSignInRequestEnded
         case service(String)
 
         var description: String {
             switch self {
+            case .deviceSignInRequestEnded: "this device sign-in request is no longer valid"
             case .invalidState: "secure cloud setup is not in the expected state"
             case .invalidInvitation: "this device invitation is invalid"
             case .pairingExpired: "this device invitation expired"
@@ -112,6 +129,8 @@ final class SnippetsCloudAccountBootstrap {
                 "Snippets Cloud could not confirm the current recovery envelope. This device was not disconnected; try again when the service is reachable."
             case .accountMismatch:
                 "This code belongs to a different Snippets Cloud account or library. Your existing data is unchanged."
+            case .deviceSignInRequestEnded:
+                "This sign-in request is no longer valid. Start Sign In with Another Device again on the new device."
             case .service(let code):
                 Self.userFacingServiceFailure(code)
             }
@@ -230,6 +249,10 @@ final class SnippetsCloudAccountBootstrap {
 
     static let pairingAccount = "pairing-recipient-v2"
     static let approvalAccount = "pairing-approval-v2"
+    /// ADR 0007 new-device request: recipient material, request ID and poll token.
+    static let deviceSignInAccount = "device-sign-in-v1"
+    /// ADR 0007 approving-device intent and the pairing created for it.
+    static let deviceApprovalAccount = "device-approval-v1"
     static let pendingRecoveryAccount = "recovery-upload-v1"
     static let recoveryPresentationAccount = "recovery-display-v1"
     static let recoveryVerifiedAccount = "recovery-verified-v1"
@@ -238,6 +261,8 @@ final class SnippetsCloudAccountBootstrap {
     static let bootstrapSecretAccounts = [
         pairingAccount,
         approvalAccount,
+        deviceSignInAccount,
+        deviceApprovalAccount,
         pendingRecoveryAccount,
         recoveryPresentationAccount,
         recoveryVerifiedAccount,
@@ -336,6 +361,12 @@ final class SnippetsCloudAccountBootstrap {
         if let pending = try pendingRecovery() {
             return pending.newLibraryMaterial == nil ? .localAuthenticationRequired(.replaceRecovery) : .setupInterrupted
         }
+        if let raw = try secrets.loadItem(account: Self.deviceApprovalAccount),
+           let pending = try? LibraryKeyBootstrap.PendingDeviceApproval(jsonData: raw),
+           let request = try? pending.request,
+           request.serverURL == coordinates.serverURL {
+            return .deviceSignInApprovalReady(confirmationCode: request.confirmationCode)
+        }
         if let raw = try secrets.loadItem(account: Self.approvalAccount),
            let payload = String(data: raw, encoding: .utf8),
            let invitation = try? LibraryKeyBootstrap.PairingInvitation(qrPayload: payload),
@@ -405,7 +436,7 @@ final class SnippetsCloudAccountBootstrap {
         serverURL: URL,
         changeAccount: Bool = false,
         chooseLibrary: @escaping ([SnippetsCloudLibraryChoice]) async throws -> UUID,
-        authenticate: @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void
+        authenticate: @escaping @MainActor (SnippetsCloudAccountKeySignInFlow) async throws -> Void
     ) async throws -> State {
         let diagnostics = SnippetsCloudSignInDiagnostics()
         return try await diagnostics.run {
@@ -415,7 +446,7 @@ final class SnippetsCloudAccountBootstrap {
             } else {
                 .signIn
             }
-            try await selection.signIn(
+            let result = try await selection.signIn(
                 serverURL: serverURL,
                 diagnostics: diagnostics,
                 requiresStrongAuthentication: false,
@@ -425,6 +456,10 @@ final class SnippetsCloudAccountBootstrap {
                 preparePostAuthorization: { [weak self] target in
                     guard let self else { throw Failure.invalidState }
                     try self.storePendingPostAuthorization(target, operation: operation)
+                },
+                prepareRecipientPairing: { [weak self] pairing in
+                    guard let self else { throw Failure.invalidState }
+                    try self.secrets.storeItem(try pairing.jsonData, account: Self.pairingAccount)
                 })
             diagnostics.enter(.librarySetup)
             if let previousCoordinates,
@@ -437,6 +472,11 @@ final class SnippetsCloudAccountBootstrap {
             }
             if try await syncCheckpointRequiresReviewBeforeBootstrap() {
                 try discardBootstrapIntentAfterScopeChange(preservingPostAuthorization: true)
+            }
+            if let pairing = result.recipientPairing {
+                // ADR 0007: this sign-in's own approved pairing is not a stale intent.
+                // Post-authorization setup claims it with the stored recipient material.
+                try secrets.storeItem(try pairing.jsonData, account: Self.pairingAccount)
             }
             let state = try await finishPostAuthorization()
             try clearPendingPostAuthorization()
@@ -490,7 +530,7 @@ final class SnippetsCloudAccountBootstrap {
     @discardableResult
     func resumePostAuthorizationSetup(
         reauthenticatingIfNeededWith authenticate:
-            @escaping @MainActor (SnippetsCloudEmailSignInFlow) async throws -> Void
+            @escaping @MainActor (SnippetsCloudAccountKeySignInFlow) async throws -> Void
     ) async throws -> State {
         do {
             return try await resumePostAuthorizationSetup()
@@ -599,6 +639,9 @@ final class SnippetsCloudAccountBootstrap {
     /// the user to compare the short code and approve with Face ID / Touch ID.
     @discardableResult
     func prepareApproval(qrPayload: String) async throws -> State {
+        if LibraryKeyBootstrap.DeviceSignInRequest.isDeviceSignInPayload(qrPayload) {
+            return try prepareDeviceSignInApproval(qrPayload: qrPayload)
+        }
         let invitation = try LibraryKeyBootstrap.PairingInvitation(qrPayload: qrPayload)
         let (coordinates, client) = try client()
         guard invitation.serverURL == coordinates.serverURL,
@@ -622,8 +665,32 @@ final class SnippetsCloudAccountBootstrap {
         return .approvalReady(confirmationCode: invitation.confirmationCode)
     }
 
+    /// ADR 0007 approving device, step 1: validate the payload and record intent with no
+    /// network call, so the code and warning are shown before anything is sent. The
+    /// payload must name this device's own pinned origin; every later request goes
+    /// through `client()`, whose token provider refuses any other origin.
+    func prepareDeviceSignInApproval(qrPayload: String) throws -> State {
+        let request: LibraryKeyBootstrap.DeviceSignInRequest
+        do { request = try LibraryKeyBootstrap.DeviceSignInRequest(qrPayload: qrPayload) }
+        catch LibraryKeyBootstrap.Failure.expired { throw Failure.pairingExpired }
+        catch { throw Failure.invalidInvitation }
+        guard let coordinates = selection.cloudCoordinates, selection.hasCloudSession else {
+            throw Failure.invalidState
+        }
+        guard request.serverURL == coordinates.serverURL,
+              try installedMaterial(for: coordinates) != nil else {
+            throw Failure.accountMismatch
+        }
+        try secrets.deleteItem(account: Self.approvalAccount)
+        try secrets.storeItem(
+            try LibraryKeyBootstrap.PendingDeviceApproval(request: request, pairing: nil).jsonData,
+            account: Self.deviceApprovalAccount)
+        return .deviceSignInApprovalReady(confirmationCode: request.confirmationCode)
+    }
+
     func cancelApproval() throws {
         try secrets.deleteItem(account: Self.approvalAccount)
+        try secrets.deleteItem(account: Self.deviceApprovalAccount)
     }
 
     @discardableResult
@@ -823,6 +890,16 @@ final class SnippetsCloudAccountBootstrap {
 
     private func finishPostAuthorization(localAuthorized: Bool = false) async throws -> State {
         let (coordinates, client) = try client()
+        if let raw = try secrets.loadItem(account: Self.deviceApprovalAccount) {
+            guard localAuthorized else {
+                guard let request = try? LibraryKeyBootstrap.PendingDeviceApproval(jsonData: raw).request else {
+                    try secrets.deleteItem(account: Self.deviceApprovalAccount)
+                    throw Failure.deviceSignInRequestEnded
+                }
+                return .deviceSignInApprovalReady(confirmationCode: request.confirmationCode)
+            }
+            return try await finishDeviceSignInApproval(raw, coordinates: coordinates, client: client)
+        }
         if let raw = try secrets.loadItem(account: Self.approvalAccount),
            let payload = String(data: raw, encoding: .utf8) {
             let invitation = try LibraryKeyBootstrap.PairingInvitation(qrPayload: payload)
@@ -832,38 +909,25 @@ final class SnippetsCloudAccountBootstrap {
                   let material = try installedMaterial(for: coordinates) else {
                 throw Failure.accountMismatch
             }
-            let serverPairing = try await mapService {
-                try await client.pairing(
-                    invitation.pairingID,
-                    publicKey: invitation.recipientPublicKey,
-                    nonce: invitation.nonce)
-            }
-            guard serverPairing.pairingID == invitation.pairingID,
-                  serverPairing.authenticationTag == invitation.confirmationCode else {
-                throw Failure.invalidInvitation
-            }
-            if serverPairing.state == "approved" {
-                // The prior approval may have committed while its response was lost.
-                // Poll responses are redacted; the recipient still owns the only
-                // operation that can atomically take the stored envelope.
-                try secrets.deleteItem(account: Self.approvalAccount)
-                return .ready
-            }
-            guard serverPairing.state == "pending" else { throw Failure.invalidInvitation }
-            let ciphertext = try LibraryKeyBootstrap.seal(
-                LibraryKeyBootstrap.PortableKeyBundle(material: material),
-                for: invitation)
-            let approved = try await mapService {
-                try await client.approvePairing(
-                    invitation.pairingID,
-                    publicKey: invitation.recipientPublicKey,
-                    nonce: invitation.nonce,
-                    ciphertext: ciphertext, material: material)
-            }
-            guard approved.pairingID == invitation.pairingID,
-                  approved.state == "approved" else { throw Failure.invalidInvitation }
+            try await approvePairingIfPending(invitation, material: material, client: client)
             try secrets.deleteItem(account: Self.approvalAccount)
             return .ready
+        }
+
+        // A device-approved sign-in (ADR 0007) leaves an already approved recipient
+        // pairing. Claim it here, including after an interrupted setup, instead of
+        // offering a second pairing or recovery.
+        if try installedMaterial(for: coordinates) == nil,
+           let raw = try secrets.loadItem(account: Self.pairingAccount),
+           let pending = try? LibraryKeyBootstrap.PendingPairing(jsonData: raw),
+           let invitation = try? pending.invitation,
+           invitation.serverURL == coordinates.serverURL,
+           invitation.spaceID == coordinates.spaceID {
+            do {
+                return try await checkPairing()
+            } catch Failure.service(let code) where ["pairing_expired", "pairing_missing", "not_found"].contains(code) {
+                try secrets.deleteItem(account: Self.pairingAccount)
+            }
         }
 
         if let pending = try pendingRecovery() {
@@ -906,6 +970,135 @@ final class SnippetsCloudAccountBootstrap {
             try secrets.deleteItem(account: Self.pendingRecoveryAccount)
             return .needsTrustedDeviceOrRecovery
         }
+    }
+
+    /// Approves an ordinary pairing unless an earlier attempt already did. A lost
+    /// approval response leaves the pairing approved; only the recipient can take the
+    /// stored envelope, so the redacted poll is enough to treat it as done.
+    private func approvePairingIfPending(
+        _ invitation: LibraryKeyBootstrap.PairingInvitation,
+        material: Data,
+        client: SnippetsCloudBootstrapClient
+    ) async throws {
+        let serverPairing = try await mapService {
+            try await client.pairing(
+                invitation.pairingID,
+                publicKey: invitation.recipientPublicKey,
+                nonce: invitation.nonce)
+        }
+        guard serverPairing.pairingID == invitation.pairingID,
+              serverPairing.authenticationTag == invitation.confirmationCode else {
+            throw Failure.invalidInvitation
+        }
+        if serverPairing.state == "approved" { return }
+        guard serverPairing.state == "pending" else { throw Failure.invalidInvitation }
+        let ciphertext = try LibraryKeyBootstrap.seal(
+            LibraryKeyBootstrap.PortableKeyBundle(material: material),
+            for: invitation)
+        let approved = try await mapService {
+            try await client.approvePairing(
+                invitation.pairingID,
+                publicKey: invitation.recipientPublicKey,
+                nonce: invitation.nonce,
+                ciphertext: ciphertext, material: material)
+        }
+        guard approved.pairingID == invitation.pairingID,
+              approved.state == "approved" else { throw Failure.invalidInvitation }
+    }
+
+    /// ADR 0007 approving device, after fresh device-owner authentication: create a
+    /// pairing for exactly the request's key and nonce (recorded before approval), approve
+    /// it through the existing proof and envelope path, then bind the request to this
+    /// account. Request ID, payload, code and keys never reach diagnostics.
+    func finishDeviceSignInApproval(
+        _ raw: Data,
+        coordinates: SyncBackendSelectionStore.CloudCoordinates,
+        client: SnippetsCloudBootstrapClient,
+        now: () -> Date = Date.init,
+        record: (DiagnosticEvent) -> Void = { Diagnostics.record($0) }
+    ) async throws -> State {
+        let started = ProcessInfo.processInfo.systemUptime
+        func report(_ error: (any Error)?) {
+            var reason: DiagnosticCloudSignInReason?
+            if let error {
+                reason = switch error {
+                case is CancellationError: .authorizationCancelled
+                case SnippetsCloudBootstrapClient.Failure.network: .requestFailed
+                case Failure.service("rate_limited"): .rateLimited
+                case Failure.service: .httpStatus
+                case Failure.accountMismatch: .accountMismatch
+                default: .unexpectedResponse
+                }
+            }
+            record(.cloudSignInRequest(
+                endpoint: .deviceApproval, outcome: error == nil ? .succeeded : .failed,
+                durationMilliseconds: Int64(max(0, ProcessInfo.processInfo.systemUptime - started) * 1_000),
+                httpStatus: nil, reason: reason, failure: error.map { DiagnosticFailure($0) }))
+        }
+        do {
+            let pending: LibraryKeyBootstrap.PendingDeviceApproval
+            do { pending = try LibraryKeyBootstrap.PendingDeviceApproval(jsonData: raw) }
+            catch { throw Failure.deviceSignInRequestEnded }
+            let request = try pending.request
+            guard request.serverURL == coordinates.serverURL,
+                  let material = try installedMaterial(for: coordinates) else {
+                throw Failure.accountMismatch
+            }
+            let invitation: LibraryKeyBootstrap.PairingInvitation
+            if let recorded = try pending.pairing {
+                guard recorded.serverURL == coordinates.serverURL,
+                      recorded.spaceID == coordinates.spaceID else { throw Failure.accountMismatch }
+                invitation = recorded
+            } else {
+                let nowSeconds = Int64(now().timeIntervalSince1970)
+                guard request.expiresAtEpochSeconds > nowSeconds else { throw Failure.deviceSignInRequestEnded }
+                let created = try await mapService {
+                    try await client.createPairing(
+                        recipientPublicKey: request.recipientPublicKey,
+                        nonce: request.nonce,
+                        expiresInSeconds: LibraryKeyBootstrap.deviceSignInPairingSeconds(
+                            requestExpiresAtEpochSeconds: request.expiresAtEpochSeconds,
+                            nowEpochSeconds: nowSeconds))
+                }
+                // The server's tag must equal the code the user just compared.
+                guard created.state == "pending",
+                      created.authenticationTag == request.confirmationCode else {
+                    throw Failure.invalidInvitation
+                }
+                invitation = try LibraryKeyBootstrap.PairingInvitation(
+                    serverURL: coordinates.serverURL,
+                    spaceID: coordinates.spaceID,
+                    pairingID: created.pairingID,
+                    nonce: request.nonce,
+                    recipientPublicKey: request.recipientPublicKey,
+                    expiresAtEpochSeconds: Int64(created.expiresAt.timeIntervalSince1970))
+                // Recorded before approval: a retry reuses this pairing instead of another.
+                try secrets.storeItem(
+                    try LibraryKeyBootstrap.PendingDeviceApproval(request: request, pairing: invitation).jsonData,
+                    account: Self.deviceApprovalAccount)
+            }
+            try await approvePairingIfPending(invitation, material: material, client: client)
+            try await mapService {
+                try await client.approveDeviceSignInRequest(request.requestID, pairingID: invitation.pairingID)
+            }
+        } catch {
+            report(error)
+            // Only a final answer ends the intent; transport and transient failures keep
+            // it so the next approval retries with the same pairing.
+            switch error {
+            case Failure.deviceSignInRequestEnded, Failure.invalidInvitation, Failure.accountMismatch:
+                try? secrets.deleteItem(account: Self.deviceApprovalAccount)
+                throw error
+            case Failure.service(let code) where ["pairing_expired", "pairing_missing", "not_found", "conflict", "forbidden"].contains(code):
+                try? secrets.deleteItem(account: Self.deviceApprovalAccount)
+                throw Failure.deviceSignInRequestEnded
+            default:
+                throw error
+            }
+        }
+        report(nil)
+        try secrets.deleteItem(account: Self.deviceApprovalAccount)
+        return .deviceSignInApproved
     }
 
     private func uploadPendingRecovery(
