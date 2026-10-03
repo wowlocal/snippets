@@ -5,11 +5,11 @@
 
 | Приоритет | Проблема | Статус |
 |---|---|---|
-| P1 | [Потеря конкурентной версии Android](01-concurrent-body-loss.md) | Причина установлена (Linux sender/receiver + id копий Android), исправлено в `fix/cloud-sync-conflicts` |
-| P2 | [Лишние конфликтные копии после crash/recovery](02-post-crash-conflict-copies.md) | Причина установлена (reseal + recovery оставлял правку неотправленной), исправлено в `fix/cloud-sync-conflicts` |
-| P2 | [Keychain на главном потоке iOS](03-ios-main-thread-keychain.md) | Воспроизводимый тест + прослеженный путь вызова |
-| P2 | [CorePackage не собирается](04-corepackage-build.md) | Подтверждено штатной командой |
-| P3 | [Нестабильная граница тайм-аута Linux](05-linux-timeout-test.md) | Подтверждены повторения и расхождение разрешения часов |
+| P1 | [Потеря конкурентной версии Android](01-concurrent-body-loss.md) | Причина установлена (Linux sender/receiver + id копий Android), исправлено (влито в `work/cloud-account-key`); живой stateful-прогон после исправления ещё не выполнялся |
+| P2 | [Лишние конфликтные копии после crash/recovery](02-post-crash-conflict-copies.md) | Причина установлена (reseal + recovery оставлял правку неотправленной), исправлено (влито в `work/cloud-account-key`); живой stateful-прогон после исправления ещё не выполнялся |
+| P2 | [Keychain на главном потоке iOS](03-ios-main-thread-keychain.md) | Исправлено для стартовой проверки lineage; остаются чтения при активном Snippets Cloud-провайдере (`makeTransport`) |
+| P2 | [CorePackage не собирается](04-corepackage-build.md) | Исправлено: `swift test --package-path CorePackage` проходит |
+| P3 | [Нестабильная граница тайм-аута Linux](05-linux-timeout-test.md) | Не исправлялось в этой ветке: код secure insertion развивается в `work/omarchy-rust-checkpoint` |
 | — | [Ограничения стенда и ошибки тестового оркестратора](06-test-environment.md) | Не считать продуктовыми дефектами |
 
 Начинать с P1. Не подменять исправление смягчением проверок на сохранность текста или удалением конфликтных копий: сначала нужно установить, какая стадия теряет версию.
