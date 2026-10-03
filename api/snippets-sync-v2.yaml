@@ -42,37 +42,86 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
-  /v2/auth/email/start:
+  /v2/auth/accounts:
     post:
-      operationId: startEmailAuthentication
+      operationId: createNativeAccount
       security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/EmailStartRequest' }
       responses:
         '200':
-          description: Send a sign-in code without exposing whether an account exists.
+          description: Create an account, return its generated key exactly once, and issue a native session.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/EmailChallenge' }
+              schema: { $ref: '#/components/schemas/NativeAccountCreation' }
         default: { $ref: '#/components/responses/Error' }
-  /v2/auth/email/verify:
+  /v2/auth/sign-in:
     post:
-      operationId: verifyEmailAuthentication
+      operationId: signInWithAccountKey
       security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/EmailVerifyRequest' }
+            schema: { $ref: '#/components/schemas/AccountKeySignInRequest' }
       responses:
         '200':
-          description: Consume the code and issue a native session.
+          description: Issue a native session for the account that owns this key.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/NativeTokenResponse' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/auth/device-requests:
+    post:
+      operationId: createDeviceSignInRequest
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateDeviceSignInRequest' }
+      responses:
+        '200':
+          description: >-
+            Open a ten-minute request for an already signed-in device to approve. The poll
+            token is returned once and is the only claim credential.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeviceSignInRequest' }
+        default: { $ref: '#/components/responses/Error' }
+  /v2/auth/device-requests/{deviceRequest}/approval:
+    post:
+      operationId: approveDeviceSignInRequest
+      parameters:
+        - { $ref: '#/components/parameters/DeviceRequestID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveDeviceSignInRequest' }
+      responses:
+        '204':
+          description: >-
+            Bind the request to the caller's account. Requires an approved pairing in a
+            writable space whose recipient key and nonce equal the request's.
+        default: { $ref: '#/components/responses/Error' }
+  /v2/auth/device-requests/{deviceRequest}/claim:
+    post:
+      operationId: claimDeviceSignInRequest
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/DeviceRequestID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClaimDeviceSignInRequest' }
+      responses:
+        '200':
+          description: >-
+            Pending state, or a new session for the approving account plus the pairing to
+            claim. A repeated approved claim revokes the previously issued session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeviceSignInClaim' }
         default: { $ref: '#/components/responses/Error' }
   /v2/auth/refresh:
     post:
@@ -341,6 +390,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    DeviceRequestID:
+      name: deviceRequest
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   responses:
     Error:
       description: Closed protocol error with no arbitrary exception text.
@@ -374,35 +428,70 @@ components:
     NativeAuthDiscovery:
       type: object
       additionalProperties: false
-      required: [flow, startEndpoint, verifyEndpoint, refreshEndpoint, revokeEndpoint]
+      required: [flow, createAccountEndpoint, signInEndpoint, refreshEndpoint, revokeEndpoint]
       properties:
-        flow: { type: string, const: email_code }
-        startEndpoint: { type: string, format: uri, maxLength: 2048 }
-        verifyEndpoint: { type: string, format: uri, maxLength: 2048 }
+        flow: { type: string, const: account_key }
+        createAccountEndpoint: { type: string, format: uri, maxLength: 2048 }
+        signInEndpoint: { type: string, format: uri, maxLength: 2048 }
         refreshEndpoint: { type: string, format: uri, maxLength: 2048 }
         revokeEndpoint: { type: string, format: uri, maxLength: 2048 }
-    EmailStartRequest:
+    AccountKey:
+      description: >-
+        Canonical server-generated account key: 26 random Crockford Base32 symbols and two
+        check symbols. See server ADR 0006.
+      type: string
+      pattern: '^[0-9A-HJKMNP-TV-Z]{28}$'
+    AccountKeySignInRequest:
       type: object
       additionalProperties: false
-      required: [email]
+      required: [accountKey]
       properties:
-        email: { type: string, minLength: 1, maxLength: 254 }
-    EmailChallenge:
+        accountKey: { $ref: '#/components/schemas/AccountKey' }
+    NativeAccountCreation:
       type: object
       additionalProperties: false
-      required: [challengeId, expiresIn, resendAfter, codeLength]
+      required: [accountKey, session]
       properties:
-        challengeId: { type: string, minLength: 1, maxLength: 256 }
-        expiresIn: { type: integer, const: 600 }
-        resendAfter: { type: integer, const: 60 }
-        codeLength: { type: integer, const: 6 }
-    EmailVerifyRequest:
+        accountKey: { $ref: '#/components/schemas/AccountKey' }
+        session: { $ref: '#/components/schemas/NativeTokenResponse' }
+    CreateDeviceSignInRequest:
       type: object
       additionalProperties: false
-      required: [challengeId, code]
+      required: [recipientPublicKey, nonce]
       properties:
-        challengeId: { type: string, minLength: 1, maxLength: 256 }
-        code: { type: string, pattern: '^[0-9]{6}$' }
+        recipientPublicKey: { type: string, format: byte, minLength: 88, maxLength: 88 }
+        nonce: { type: string, format: byte, minLength: 44, maxLength: 44 }
+    DeviceSignInRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, pollToken, expiresAt]
+      properties:
+        requestId: { type: string, format: uuid }
+        pollToken: { type: string, minLength: 48, maxLength: 48 }
+        expiresAt: { type: string, format: date-time }
+    ApproveDeviceSignInRequest:
+      type: object
+      additionalProperties: false
+      required: [spaceId, pairingId]
+      properties:
+        spaceId: { type: string, format: uuid }
+        pairingId: { type: string, format: uuid }
+    ClaimDeviceSignInRequest:
+      type: object
+      additionalProperties: false
+      required: [pollToken]
+      properties:
+        pollToken: { type: string, minLength: 1, maxLength: 512 }
+    DeviceSignInClaim:
+      type: object
+      additionalProperties: false
+      required: [state, expiresAt]
+      properties:
+        state: { type: string, enum: [pending, approved] }
+        expiresAt: { type: string, format: date-time }
+        spaceId: { type: string, format: uuid }
+        pairingId: { type: string, format: uuid }
+        session: { $ref: '#/components/schemas/NativeTokenResponse' }
     NativeRefreshRequest:
       type: object
       additionalProperties: false
@@ -419,10 +508,9 @@ components:
     NativeAccount:
       type: object
       additionalProperties: false
-      required: [id, email]
+      required: [id]
       properties:
-        id: { type: string, minLength: 1, maxLength: 256 }
-        email: { type: string, minLength: 1, maxLength: 254 }
+        id: { type: string, format: uuid }
     NativeTokenResponse:
       type: object
       additionalProperties: false
@@ -668,7 +756,7 @@ components:
         limit: { type: integer, minimum: 0 }
     ErrorCode:
       type: string
-      enum: [invalid_email, invalid_code, code_expired, too_many_attempts, invalid_request, authentication_required, reauthentication_required, forbidden, not_found, conflict, cursor_invalid, dataset_reset, incompatible_version, payload_too_large, quota_exceeded, rate_limited, pairing_expired, dependency_unavailable, internal_error]
+      enum: [invalid_account_key, invalid_request, authentication_required, reauthentication_required, forbidden, not_found, conflict, cursor_invalid, dataset_reset, incompatible_version, payload_too_large, quota_exceeded, rate_limited, pairing_expired, dependency_unavailable, internal_error]
 
     LibraryActionProof:
       type: object

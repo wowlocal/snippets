@@ -2,13 +2,11 @@ package auth
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
-	"crypto/subtle"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
-	"fmt"
-	"math/big"
-	"net/mail"
 	"strings"
 	"time"
 
@@ -19,15 +17,8 @@ import (
 	"github.com/wowlocal/snippets/server/internal/domain"
 )
 
-type NativeChallenge struct {
-	ChallengeID string `json:"challengeId"`
-	ExpiresIn   int    `json:"expiresIn"`
-	ResendAfter int    `json:"resendAfter"`
-	CodeLength  int    `json:"codeLength"`
-}
 type NativeAccount struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
+	ID string `json:"id"`
 }
 type NativeTokens struct {
 	AccessToken  string        `json:"access_token"`
@@ -36,51 +27,42 @@ type NativeTokens struct {
 	TokenType    string        `json:"token_type"`
 	Account      NativeAccount `json:"account"`
 }
+type NativeAccountCreation struct {
+	AccountKey string
+	Session    NativeTokens
+}
+type NativeDeviceRequest struct {
+	ID        uuid.UUID
+	PollToken string
+	ExpiresAt time.Time
+}
+type NativeDeviceClaim struct {
+	Approved  bool
+	ExpiresAt time.Time
+	SpaceID   uuid.UUID
+	PairingID uuid.UUID
+	Session   NativeTokens
+}
 type NativeService interface {
 	Validator
-	Start(context.Context, string, string) (NativeChallenge, error)
-	Verify(context.Context, string, string, string) (NativeTokens, error)
+	CreateAccount(context.Context, string) (NativeAccountCreation, error)
+	SignIn(context.Context, string, string) (NativeTokens, error)
 	Refresh(context.Context, string, string) (NativeTokens, error)
 	Revoke(context.Context, string, string) error
+	CreateDeviceRequest(context.Context, []byte, []byte, string) (NativeDeviceRequest, error)
+	ApproveDeviceRequest(context.Context, [32]byte, uuid.UUID, uuid.UUID, uuid.UUID, []byte, []byte) error
+	ClaimDeviceRequest(context.Context, uuid.UUID, string, string) (NativeDeviceClaim, error)
 }
 type Native struct {
 	pool          *pgxpool.Pool
 	configuration config.NativeAuth
-	sender        CodeSender
 }
 
-func NewNative(pool *pgxpool.Pool, configuration config.NativeAuth, sender CodeSender) (*Native, error) {
-	if pool == nil || len(configuration.Secret) < 32 || len(configuration.IdentityPepper) < 32 || sender == nil {
+func NewNative(pool *pgxpool.Pool, configuration config.NativeAuth) (*Native, error) {
+	if pool == nil || len(configuration.Secret) < 32 || len(configuration.IdentityPepper) < 32 {
 		return nil, domain.NewError(domain.InternalError)
 	}
-	return &Native{pool: pool, configuration: configuration, sender: sender}, nil
-}
-func NormalizeEmail(raw string) (string, error) {
-	value := strings.ToLower(strings.TrimSpace(raw))
-	if len(value) == 0 || len(value) > 254 || strings.ContainsAny(value, "\r\n\x00") {
-		return "", domain.NewError(domain.InvalidEmail)
-	}
-	for _, c := range value {
-		if c > 126 || c < 33 {
-			return "", domain.NewError(domain.InvalidEmail)
-		}
-	}
-	parsed, err := mail.ParseAddress(value)
-	parts := strings.Split(value, "@")
-	if err != nil || parsed.Address != value || parsed.Name != "" || len(parts) != 2 || len(parts[0]) > 64 || strings.ContainsAny(parts[0], "\"\\") || !strings.Contains(parts[1], ".") {
-		return "", domain.NewError(domain.InvalidEmail)
-	}
-	for _, label := range strings.Split(parts[1], ".") {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return "", domain.NewError(domain.InvalidEmail)
-		}
-		for _, c := range label {
-			if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '-' {
-				return "", domain.NewError(domain.InvalidEmail)
-			}
-		}
-	}
-	return value, nil
+	return &Native{pool: pool, configuration: configuration}, nil
 }
 func randomOpaque(prefix string) (string, error) {
 	var value [32]byte
@@ -92,8 +74,10 @@ func randomOpaque(prefix string) (string, error) {
 func (n *Native) digest(label, value string) [32]byte {
 	return keyedDigest(n.configuration.Secret, "snippets-native-"+label+"-v1", []byte(value))
 }
-func (n *Native) codeDigest(challenge, code string) [32]byte {
-	return keyedDigest(n.configuration.Secret, "snippets-native-email-code-v1", []byte(challenge), []byte(code))
+
+// Account lookup survives NATIVE_AUTH_SECRET loss: it uses the persistent identity pepper.
+func (n *Native) accountKeyDigest(key string) [32]byte {
+	return keyedDigest(n.configuration.IdentityPepper, "snippets-native-account-key-v1", []byte(key))
 }
 func (n *Native) begin(ctx context.Context) (pgx.Tx, error) {
 	tx, err := n.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -105,11 +89,8 @@ func (n *Native) begin(ctx context.Context) (pgx.Tx, error) {
 
 // Rate rows are transactionally locked. A denied attempt still commits counters
 // already charged in this request, including the shared deployment-wide budget.
-func (n *Native) rates(ctx context.Context, tx pgx.Tx, operation, ip, email string) error {
+func (n *Native) rates(ctx context.Context, tx pgx.Tx, operation, ip string) error {
 	entries := [][2]string{{operation + "_global", "global"}, {operation + "_ip", ip}}
-	if operation == "start" {
-		entries = append(entries, [2]string{"start_email_cooldown", email}, [2]string{"start_email_hour", email}, [2]string{"start_email_day", email})
-	}
 	for _, entry := range entries {
 		digest := n.digest("rate-"+entry[0], entry[1])
 		var retry int
@@ -124,48 +105,6 @@ func (n *Native) rates(ctx context.Context, tx pgx.Tx, operation, ip, email stri
 		}
 	}
 	return nil
-}
-func (n *Native) Start(ctx context.Context, email, ip string) (NativeChallenge, error) {
-	email, err := NormalizeEmail(email)
-	if err != nil {
-		return NativeChallenge{}, err
-	}
-	challenge, err := randomOpaque("sn_c_")
-	if err != nil {
-		return NativeChallenge{}, err
-	}
-	number, err := rand.Int(rand.Reader, big.NewInt(1000000))
-	if err != nil {
-		return NativeChallenge{}, domain.NewError(domain.InternalError)
-	}
-	code := fmt.Sprintf("%06d", number.Int64())
-	digest := n.digest("challenge", challenge)
-	emailDigest := keyedDigest(n.configuration.IdentityPepper, "snippets-native-email-identity-v1", []byte(email))
-	codeDigest := n.codeDigest(challenge, code)
-	tx, err := n.begin(ctx)
-	if err != nil {
-		return NativeChallenge{}, err
-	}
-	defer tx.Rollback(ctx)
-	if err := n.rates(ctx, tx, "start", ip, email); err != nil {
-		return NativeChallenge{}, err
-	}
-	if _, err := tx.Exec(ctx, "SELECT snippets_private.native_cleanup()"); err != nil {
-		return NativeChallenge{}, domain.NewError(domain.DependencyUnavailable)
-	}
-	if _, err := tx.Exec(ctx, "SELECT snippets_private.native_start($1,$2,$3,$4)", digest[:], emailDigest[:], email, codeDigest[:]); err != nil {
-		return NativeChallenge{}, domain.NewError(domain.DependencyUnavailable)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return NativeChallenge{}, domain.NewError(domain.DependencyUnavailable)
-	}
-	if err := n.sender.SendCode(ctx, email, code); err != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-		defer cancel()
-		_, _ = n.pool.Exec(cleanupCtx, "SELECT snippets_private.native_drop_challenge($1)", digest[:])
-		return NativeChallenge{}, domain.NewError(domain.DependencyUnavailable)
-	}
-	return NativeChallenge{ChallengeID: challenge, ExpiresIn: 600, ResendAfter: 60, CodeLength: 6}, nil
 }
 func validOpaque(value, prefix string) bool {
 	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+43 {
@@ -185,67 +124,78 @@ func newNativeTokens() (NativeTokens, error) {
 	}
 	return NativeTokens{AccessToken: access, RefreshToken: refresh, ExpiresIn: 300, TokenType: "Bearer"}, nil
 }
-func (n *Native) Verify(ctx context.Context, challenge, code, ip string) (NativeTokens, error) {
-	if !validOpaque(challenge, "sn_c_") {
-		return NativeTokens{}, domain.NewError(domain.InvalidCode)
+
+// A key-digest collision is astronomically unlikely, but the unique index turns one into
+// a fresh generation rather than a shared account.
+const maximumAccountKeyAttempts = 3
+
+func (n *Native) CreateAccount(ctx context.Context, ip string) (NativeAccountCreation, error) {
+	tx, err := n.begin(ctx)
+	if err != nil {
+		return NativeAccountCreation{}, err
 	}
-	if len(code) != 6 {
-		return NativeTokens{}, domain.NewError(domain.InvalidCode)
+	defer tx.Rollback(ctx)
+	if err := n.rates(ctx, tx, "create", ip); err != nil {
+		return NativeAccountCreation{}, err
 	}
-	for _, c := range code {
-		if c < '0' || c > '9' {
-			return NativeTokens{}, domain.NewError(domain.InvalidCode)
+	if _, err := tx.Exec(ctx, "SELECT snippets_private.native_cleanup()"); err != nil {
+		return NativeAccountCreation{}, domain.NewError(domain.DependencyUnavailable)
+	}
+	for attempt := 0; attempt < maximumAccountKeyAttempts; attempt++ {
+		key, err := newAccountKey()
+		if err != nil {
+			return NativeAccountCreation{}, domain.NewError(domain.InternalError)
 		}
+		result, err := newNativeTokens()
+		if err != nil {
+			return NativeAccountCreation{}, err
+		}
+		keyDigest := n.accountKeyDigest(key)
+		access, refresh := n.digest("credential", result.AccessToken), n.digest("credential", result.RefreshToken)
+		var expires time.Time
+		err = tx.QueryRow(ctx, "SELECT id::text,expires_at FROM snippets_private.native_create($1,$2,$3,$4,$5)", uuid.New(), keyDigest[:], uuid.New(), access[:], refresh[:]).Scan(&result.Account.ID, &expires)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return NativeAccountCreation{}, domain.NewError(domain.DependencyUnavailable)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return NativeAccountCreation{}, domain.NewError(domain.DependencyUnavailable)
+		}
+		result.ExpiresIn = tokenLifetime(expires)
+		return NativeAccountCreation{AccountKey: key, Session: result}, nil
+	}
+	return NativeAccountCreation{}, domain.NewError(domain.InternalError)
+}
+func (n *Native) SignIn(ctx context.Context, key, ip string) (NativeTokens, error) {
+	// Malformed keys are refused before they consume a rate budget or reach PostgreSQL.
+	if !validAccountKey(key) {
+		return NativeTokens{}, domain.NewError(domain.InvalidAccountKey)
+	}
+	result, err := newNativeTokens()
+	if err != nil {
+		return NativeTokens{}, err
 	}
 	tx, err := n.begin(ctx)
 	if err != nil {
 		return NativeTokens{}, err
 	}
 	defer tx.Rollback(ctx)
-	if err := n.rates(ctx, tx, "verify", ip, ""); err != nil {
+	if err := n.rates(ctx, tx, "sign_in", ip); err != nil {
 		return NativeTokens{}, err
 	}
-	digest := n.digest("challenge", challenge)
-	provided := n.codeDigest(challenge, code)
-	var expected []byte
+	keyDigest := n.accountKeyDigest(key)
+	access, refresh := n.digest("credential", result.AccessToken), n.digest("credential", result.RefreshToken)
 	var expires time.Time
-	var attempts int
-	var consumed bool
-	err = tx.QueryRow(ctx, "SELECT code_digest,expires_at,attempts,consumed FROM snippets_private.native_lock_challenge($1)", digest[:]).Scan(&expected, &expires, &attempts, &consumed)
-	outcome := domain.ErrorCode("")
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		outcome = domain.InvalidCode
-	case err != nil:
-		return NativeTokens{}, domain.NewError(domain.DependencyUnavailable)
-	case consumed:
-		outcome = domain.InvalidCode
-	case !expires.After(time.Now()):
-		outcome = domain.CodeExpired
-	case attempts >= 5:
-		outcome = domain.TooManyAttempts
-	case subtle.ConstantTimeCompare(expected, provided[:]) != 1:
-		_, err = tx.Exec(ctx, "SELECT snippets_private.native_fail_challenge($1)", digest[:])
-		if err != nil {
-			return NativeTokens{}, domain.NewError(domain.DependencyUnavailable)
-		}
-		outcome = domain.InvalidCode
-		if attempts == 4 {
-			outcome = domain.TooManyAttempts
-		}
-	}
-	if outcome != "" {
+	err = tx.QueryRow(ctx, "SELECT id::text,expires_at FROM snippets_private.native_sign_in($1,$2,$3,$4)", keyDigest[:], uuid.New(), access[:], refresh[:]).Scan(&result.Account.ID, &expires)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Commit the charged rate counters; nothing else changed.
 		if err := tx.Commit(ctx); err != nil {
 			return NativeTokens{}, domain.NewError(domain.DependencyUnavailable)
 		}
-		return NativeTokens{}, domain.NewError(outcome)
+		return NativeTokens{}, domain.NewError(domain.InvalidAccountKey)
 	}
-	result, err := newNativeTokens()
-	if err != nil {
-		return NativeTokens{}, err
-	}
-	access, refresh := n.digest("credential", result.AccessToken), n.digest("credential", result.RefreshToken)
-	err = tx.QueryRow(ctx, "SELECT id::text,email,expires_at FROM snippets_private.native_issue($1,$2,$3,$4,$5)", digest[:], uuid.New(), uuid.New(), access[:], refresh[:]).Scan(&result.Account.ID, &result.Account.Email, &expires)
 	if err != nil {
 		return NativeTokens{}, domain.NewError(domain.DependencyUnavailable)
 	}
@@ -278,12 +228,12 @@ func (n *Native) Refresh(ctx context.Context, token, ip string) (NativeTokens, e
 		return NativeTokens{}, err
 	}
 	defer tx.Rollback(ctx)
-	if err := n.rates(ctx, tx, "refresh", ip, ""); err != nil {
+	if err := n.rates(ctx, tx, "refresh", ip); err != nil {
 		return NativeTokens{}, err
 	}
 	digest, access, refresh := n.digest("credential", token), n.digest("credential", result.AccessToken), n.digest("credential", result.RefreshToken)
 	var expires time.Time
-	err = tx.QueryRow(ctx, "SELECT id::text,email,expires_at FROM snippets_private.native_refresh($1,$2,$3)", digest[:], access[:], refresh[:]).Scan(&result.Account.ID, &result.Account.Email, &expires)
+	err = tx.QueryRow(ctx, "SELECT id::text,expires_at FROM snippets_private.native_refresh($1,$2,$3)", digest[:], access[:], refresh[:]).Scan(&result.Account.ID, &expires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Reuse revokes the family in the same transaction. Do not roll that back.
 		if err := tx.Commit(ctx); err != nil {
@@ -318,7 +268,7 @@ func (n *Native) Validate(ctx context.Context, token string, requirement Require
 		return domain.Principal{}, domain.NewError(domain.DependencyUnavailable)
 	}
 	identity := keyedDigest(n.configuration.IdentityPepper, "snippets-native-identity-v1", []byte(accountID))
-	return domain.Principal{IdentityDigest: identity, CredentialDigest: digest, ExpiresAt: expires, AuthenticatedAt: authenticated, AMR: []string{"email"}}, nil
+	return domain.Principal{IdentityDigest: identity, CredentialDigest: digest, ExpiresAt: expires, AuthenticatedAt: authenticated, AMR: []string{"account_key"}}, nil
 }
 func (n *Native) Revoke(ctx context.Context, token, hint string) error {
 	if hint != "access_token" && hint != "refresh_token" {
@@ -336,6 +286,115 @@ func (n *Native) Revoke(ctx context.Context, token, hint string) error {
 		return domain.NewError(domain.DependencyUnavailable)
 	}
 	return nil
+}
+
+// Device-approved sign-in (ADR 0007). The recipient key and nonce are the pairing
+// recipient material the requesting device will later use to claim the library key.
+func (n *Native) CreateDeviceRequest(ctx context.Context, publicKey, nonce []byte, ip string) (NativeDeviceRequest, error) {
+	if len(publicKey) != 65 || publicKey[0] != 4 || len(nonce) != 32 {
+		return NativeDeviceRequest{}, domain.NewError(domain.InvalidRequest)
+	}
+	if _, err := ecdh.P256().NewPublicKey(publicKey); err != nil {
+		return NativeDeviceRequest{}, domain.NewError(domain.InvalidRequest)
+	}
+	poll, err := randomOpaque("sn_d_")
+	if err != nil {
+		return NativeDeviceRequest{}, err
+	}
+	tx, err := n.begin(ctx)
+	if err != nil {
+		return NativeDeviceRequest{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := n.rates(ctx, tx, "device_request", ip); err != nil {
+		return NativeDeviceRequest{}, err
+	}
+	if _, err := tx.Exec(ctx, "SELECT snippets_private.native_cleanup()"); err != nil {
+		return NativeDeviceRequest{}, domain.NewError(domain.DependencyUnavailable)
+	}
+	request := NativeDeviceRequest{ID: uuid.New(), PollToken: poll}
+	pollDigest, keyHash := n.digest("device-poll", poll), sha256.Sum256(publicKey)
+	if err := tx.QueryRow(ctx, "SELECT snippets_private.native_device_request($1,$2,$3,$4)", request.ID, pollDigest[:], keyHash[:], nonce).Scan(&request.ExpiresAt); err != nil {
+		return NativeDeviceRequest{}, domain.NewError(domain.DependencyUnavailable)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return NativeDeviceRequest{}, domain.NewError(domain.DependencyUnavailable)
+	}
+	return request, nil
+}
+
+// The caller must already have verified, as the approving principal, that the pairing is
+// approved in a writable space. The account comes from the approving credential.
+func (n *Native) ApproveDeviceRequest(ctx context.Context, credential [32]byte, requestID, spaceID, pairingID uuid.UUID, publicKey, nonce []byte) error {
+	keyHash := sha256.Sum256(publicKey)
+	var outcome string
+	if err := n.pool.QueryRow(ctx, "SELECT snippets_private.native_approve_device($1,$2,$3,$4,$5,$6)", requestID, credential[:], spaceID, pairingID, keyHash[:], nonce).Scan(&outcome); err != nil {
+		return domain.NewError(domain.DependencyUnavailable)
+	}
+	switch outcome {
+	case "approved":
+		return nil
+	case "unauthenticated":
+		return domain.NewError(domain.AuthenticationRequired)
+	case "not_found":
+		return domain.NewError(domain.NotFound)
+	case "expired":
+		return domain.NewError(domain.PairingExpired)
+	default:
+		return domain.NewError(domain.Conflict)
+	}
+}
+
+func (n *Native) ClaimDeviceRequest(ctx context.Context, requestID uuid.UUID, poll, ip string) (NativeDeviceClaim, error) {
+	if !validOpaque(poll, "sn_d_") {
+		return NativeDeviceClaim{}, domain.NewError(domain.NotFound)
+	}
+	tokens, err := newNativeTokens()
+	if err != nil {
+		return NativeDeviceClaim{}, err
+	}
+	tx, err := n.begin(ctx)
+	if err != nil {
+		return NativeDeviceClaim{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := n.rates(ctx, tx, "device_claim", ip); err != nil {
+		return NativeDeviceClaim{}, err
+	}
+	pollDigest := n.digest("device-poll", poll)
+	access, refresh := n.digest("credential", tokens.AccessToken), n.digest("credential", tokens.RefreshToken)
+	var state string
+	var claim NativeDeviceClaim
+	var account, space, pairing *uuid.UUID
+	var tokenExpires *time.Time
+	err = tx.QueryRow(ctx, "SELECT state,request_expires_at,account,space,pairing,token_expires_at FROM snippets_private.native_claim_device($1,$2,$3,$4,$5)", requestID, pollDigest[:], uuid.New(), access[:], refresh[:]).Scan(&state, &claim.ExpiresAt, &account, &space, &pairing, &tokenExpires)
+	if errors.Is(err, pgx.ErrNoRows) {
+		state = "unknown"
+	} else if err != nil {
+		return NativeDeviceClaim{}, domain.NewError(domain.DependencyUnavailable)
+	}
+	// Commit charged rate counters for every outcome, and the issued family on approval.
+	if err := tx.Commit(ctx); err != nil {
+		return NativeDeviceClaim{}, domain.NewError(domain.DependencyUnavailable)
+	}
+	switch state {
+	case "pending":
+		return claim, nil
+	case "approved":
+		if account == nil || space == nil || pairing == nil || tokenExpires == nil {
+			return NativeDeviceClaim{}, domain.NewError(domain.InternalError)
+		}
+		tokens.Account.ID = account.String()
+		tokens.ExpiresIn = tokenLifetime(*tokenExpires)
+		claim.Approved, claim.SpaceID, claim.PairingID, claim.Session = true, *space, *pairing, tokens
+		return claim, nil
+	case "expired":
+		return NativeDeviceClaim{}, domain.NewError(domain.PairingExpired)
+	case "exhausted":
+		return NativeDeviceClaim{}, domain.NewError(domain.Conflict)
+	default:
+		return NativeDeviceClaim{}, domain.NewError(domain.NotFound)
+	}
 }
 
 var _ NativeService = (*Native)(nil)

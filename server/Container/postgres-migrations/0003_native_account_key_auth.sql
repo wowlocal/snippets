@@ -1,17 +1,10 @@
--- First-party email authentication is isolated from tenant tables. The application
+-- First-party account-key authentication is isolated from tenant tables. The application
 -- role can invoke only the bounded operations below, never enumerate credentials.
+-- Accounts hold no personal identifier: only a peppered digest of the generated key.
 CREATE TABLE snippets_private.native_accounts (
- id uuid PRIMARY KEY, email_digest bytea UNIQUE NOT NULL CHECK(octet_length(email_digest)=32),
- email text NOT NULL CHECK(octet_length(email)<=254), created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+ id uuid PRIMARY KEY, key_digest bytea UNIQUE NOT NULL CHECK(octet_length(key_digest)=32),
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
-CREATE TABLE snippets_private.native_challenges (
- digest bytea PRIMARY KEY CHECK(octet_length(digest)=32), email_digest bytea NOT NULL CHECK(octet_length(email_digest)=32),
- email text NOT NULL CHECK(octet_length(email)<=254), code_digest bytea NOT NULL CHECK(octet_length(code_digest)=32),
- attempts integer NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 5),
- expires_at timestamptz NOT NULL, consumed boolean NOT NULL DEFAULT false
-);
-CREATE INDEX native_challenge_email ON snippets_private.native_challenges(email_digest);
-CREATE INDEX native_challenge_expiry ON snippets_private.native_challenges(expires_at);
 CREATE TABLE snippets_private.native_families (
  id uuid PRIMARY KEY, account_id uuid NOT NULL REFERENCES snippets_private.native_accounts(id),
  created_at timestamptz NOT NULL DEFAULT clock_timestamp(), expires_at timestamptz NOT NULL,
@@ -31,19 +24,35 @@ CREATE TABLE snippets_private.native_rates (
  PRIMARY KEY(digest,kind)
 );
 CREATE INDEX native_rate_expiry ON snippets_private.native_rates(expires_at);
+-- Device-approved sign-in (ADR 0007). A signed-out device opens a request; an approved
+-- device binds it to its account only after approving a pairing for the same recipient
+-- key and nonce. Only the requesting device holds the poll token.
+CREATE TABLE snippets_private.native_device_requests (
+ id uuid PRIMARY KEY, poll_digest bytea NOT NULL CHECK(octet_length(poll_digest)=32),
+ recipient_key_hash bytea NOT NULL CHECK(octet_length(recipient_key_hash)=32),
+ nonce bytea NOT NULL CHECK(octet_length(nonce)=32), expires_at timestamptz NOT NULL,
+ account_id uuid REFERENCES snippets_private.native_accounts(id) ON DELETE CASCADE,
+ space_id uuid, pairing_id uuid, approved_at timestamptz,
+ family_id uuid REFERENCES snippets_private.native_families(id) ON DELETE SET NULL,
+ claims integer NOT NULL DEFAULT 0 CHECK(claims BETWEEN 0 AND 5),
+ CHECK((account_id IS NULL AND space_id IS NULL AND pairing_id IS NULL AND approved_at IS NULL)
+  OR (account_id IS NOT NULL AND space_id IS NOT NULL AND pairing_id IS NOT NULL AND approved_at IS NOT NULL))
+);
+CREATE INDEX native_device_request_expiry ON snippets_private.native_device_requests(expires_at);
 
 CREATE FUNCTION snippets_private.native_rate(k bytea, category text) RETURNS integer
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE budget integer; window_seconds integer; value snippets_private.native_rates; now_at timestamptz := clock_timestamp();
 BEGIN
  CASE category
- WHEN 'start_global' THEN budget:=1000; window_seconds:=3600;
- WHEN 'start_ip' THEN budget:=30; window_seconds:=3600;
- WHEN 'start_email_hour' THEN budget:=5; window_seconds:=3600;
- WHEN 'start_email_day' THEN budget:=10; window_seconds:=86400;
- WHEN 'start_email_cooldown' THEN budget:=1; window_seconds:=60;
- WHEN 'verify_global' THEN budget:=10000; window_seconds:=3600;
- WHEN 'verify_ip' THEN budget:=300; window_seconds:=3600;
+ WHEN 'create_global' THEN budget:=1000; window_seconds:=3600;
+ WHEN 'create_ip' THEN budget:=10; window_seconds:=3600;
+ WHEN 'sign_in_global' THEN budget:=10000; window_seconds:=3600;
+ WHEN 'sign_in_ip' THEN budget:=300; window_seconds:=3600;
+ WHEN 'device_request_global' THEN budget:=3000; window_seconds:=3600;
+ WHEN 'device_request_ip' THEN budget:=30; window_seconds:=3600;
+ WHEN 'device_claim_global' THEN budget:=100000; window_seconds:=3600;
+ WHEN 'device_claim_ip' THEN budget:=1800; window_seconds:=3600;
  WHEN 'refresh_global' THEN budget:=30000; window_seconds:=3600;
  WHEN 'refresh_ip' THEN budget:=1000; window_seconds:=3600;
  ELSE RAISE EXCEPTION 'invalid rate category' USING ERRCODE='22023';
@@ -65,46 +74,42 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 BEGIN
  -- Bounded work per invocation; hourly global admission limits bound creation.
  DELETE FROM snippets_private.native_rates WHERE ctid IN (SELECT ctid FROM snippets_private.native_rates WHERE expires_at<clock_timestamp()-interval '1 day' LIMIT 1000);
- DELETE FROM snippets_private.native_challenges WHERE ctid IN (SELECT ctid FROM snippets_private.native_challenges WHERE expires_at<clock_timestamp()-interval '1 hour' LIMIT 1000);
+ DELETE FROM snippets_private.native_device_requests WHERE ctid IN (SELECT ctid FROM snippets_private.native_device_requests WHERE expires_at<clock_timestamp()-interval '1 hour' LIMIT 1000);
  DELETE FROM snippets_private.native_tokens WHERE ctid IN (SELECT ctid FROM snippets_private.native_tokens WHERE kind='access_token' AND expires_at<clock_timestamp()-interval '10 minutes' LIMIT 1000);
  -- Keep credentials beyond expiry while previously admitted HTTP requests drain.
  -- The maximum request lifetime is 120 seconds; five minutes matches the denylist.
  DELETE FROM snippets_private.native_families WHERE id IN (SELECT id FROM snippets_private.native_families WHERE expires_at<clock_timestamp()-interval '5 minutes' LIMIT 100);
 END $$;
 
-CREATE FUNCTION snippets_private.native_start(d bytea,e bytea,address text,c bytea) RETURNS void
+-- Issues one session family for an account. Both entry points share it so creation and
+-- sign-in cannot diverge in token lifetimes.
+CREATE FUNCTION snippets_private.native_open_family(account uuid,family uuid,access_digest bytea,refresh_digest bytea)
+RETURNS TABLE(id uuid,expires_at timestamptz)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 BEGIN
- DELETE FROM snippets_private.native_challenges WHERE email_digest=e;
- INSERT INTO snippets_private.native_challenges(digest,email_digest,email,code_digest,expires_at)
- VALUES(d,e,address,c,clock_timestamp()+interval '10 minutes');
-END $$;
-CREATE FUNCTION snippets_private.native_drop_challenge(d bytea) RETURNS void
-LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
- DELETE FROM snippets_private.native_challenges WHERE digest=d;
-$$;
-CREATE FUNCTION snippets_private.native_lock_challenge(d bytea) RETURNS SETOF snippets_private.native_challenges
-LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
- SELECT * FROM snippets_private.native_challenges WHERE digest=d FOR UPDATE;
-$$;
-CREATE FUNCTION snippets_private.native_fail_challenge(d bytea) RETURNS void
-LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
- UPDATE snippets_private.native_challenges SET attempts=least(5,attempts+1) WHERE digest=d;
-$$;
-CREATE FUNCTION snippets_private.native_issue(d bytea,account uuid,family uuid,access_digest bytea,refresh_digest bytea)
-RETURNS TABLE(id uuid,email text,expires_at timestamptz)
-LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
-DECLARE challenge snippets_private.native_challenges; account_value snippets_private.native_accounts;
-BEGIN
- SELECT * INTO challenge FROM snippets_private.native_challenges WHERE digest=d FOR UPDATE;
- IF NOT FOUND OR challenge.consumed OR challenge.attempts>=5 OR challenge.expires_at<=clock_timestamp() THEN RETURN; END IF;
- UPDATE snippets_private.native_challenges SET consumed=true WHERE digest=d;
- INSERT INTO snippets_private.native_accounts(id,email_digest,email) VALUES(account,challenge.email_digest,challenge.email)
- ON CONFLICT(email_digest) DO UPDATE SET email=EXCLUDED.email RETURNING * INTO account_value;
- INSERT INTO snippets_private.native_families(id,account_id,expires_at) VALUES(family,account_value.id,clock_timestamp()+interval '30 days');
+ INSERT INTO snippets_private.native_families(id,account_id,expires_at) VALUES(family,account,clock_timestamp()+interval '30 days');
  INSERT INTO snippets_private.native_tokens VALUES(access_digest,family,'access_token',clock_timestamp()+interval '5 minutes',false),
  (refresh_digest,family,'refresh_token',clock_timestamp()+interval '30 days',false);
- RETURN QUERY SELECT account_value.id,account_value.email,t.expires_at FROM snippets_private.native_tokens t WHERE t.digest=access_digest;
+ RETURN QUERY SELECT account,t.expires_at FROM snippets_private.native_tokens t WHERE t.digest=access_digest;
+END $$;
+-- Returns no row on a key-digest collision; the caller generates another key.
+CREATE FUNCTION snippets_private.native_create(account uuid,k bytea,family uuid,access_digest bytea,refresh_digest bytea)
+RETURNS TABLE(id uuid,expires_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+BEGIN
+ INSERT INTO snippets_private.native_accounts(id,key_digest) VALUES(account,k) ON CONFLICT DO NOTHING;
+ IF NOT FOUND THEN RETURN; END IF;
+ RETURN QUERY SELECT * FROM snippets_private.native_open_family(account,family,access_digest,refresh_digest);
+END $$;
+-- Returns no row for an unknown key.
+CREATE FUNCTION snippets_private.native_sign_in(k bytea,family uuid,access_digest bytea,refresh_digest bytea)
+RETURNS TABLE(id uuid,expires_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE account uuid;
+BEGIN
+ SELECT a.id INTO account FROM snippets_private.native_accounts a WHERE a.key_digest=k;
+ IF NOT FOUND THEN RETURN; END IF;
+ RETURN QUERY SELECT * FROM snippets_private.native_open_family(account,family,access_digest,refresh_digest);
 END $$;
 
 -- Caller holds the family row before revoking. Credential locks match data-plane
@@ -125,7 +130,7 @@ BEGIN
 END $$;
 
 CREATE FUNCTION snippets_private.native_refresh(d bytea,access_digest bytea,refresh_digest bytea)
-RETURNS TABLE(id uuid,email text,expires_at timestamptz)
+RETURNS TABLE(id uuid,expires_at timestamptz)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
 DECLARE token_value snippets_private.native_tokens; family snippets_private.native_families;
 BEGIN
@@ -140,7 +145,7 @@ BEGIN
  UPDATE snippets_private.native_tokens SET used=true WHERE digest=d;
  INSERT INTO snippets_private.native_tokens VALUES(access_digest,family.id,'access_token',least(family.expires_at,clock_timestamp()+interval '5 minutes'),false),
  (refresh_digest,family.id,'refresh_token',family.expires_at,false);
- RETURN QUERY SELECT a.id,a.email,t.expires_at FROM snippets_private.native_accounts a, snippets_private.native_tokens t WHERE a.id=family.account_id AND t.digest=access_digest;
+ RETURN QUERY SELECT family.account_id,t.expires_at FROM snippets_private.native_tokens t WHERE t.digest=access_digest;
 END $$;
 
 CREATE FUNCTION snippets_private.native_validate(d bytea)
@@ -163,6 +168,59 @@ BEGIN
  END IF;
 END $$;
 
+CREATE FUNCTION snippets_private.native_device_request(request uuid,poll bytea,key_hash bytea,request_nonce bytea)
+RETURNS timestamptz
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+ INSERT INTO snippets_private.native_device_requests(id,poll_digest,recipient_key_hash,nonce,expires_at)
+ VALUES(request,poll,key_hash,request_nonce,clock_timestamp()+interval '10 minutes') RETURNING expires_at;
+$$;
+-- The caller has already proved under its own RLS identity that it can write the space
+-- and that the pairing is approved for exactly this key hash and nonce. The account is
+-- resolved from the presented access credential, never supplied by the caller.
+CREATE FUNCTION snippets_private.native_approve_device(request uuid,credential bytea,space uuid,pairing uuid,key_hash bytea,request_nonce bytea)
+RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE value snippets_private.native_device_requests; approver uuid;
+BEGIN
+ SELECT f.account_id INTO approver FROM snippets_private.native_tokens t JOIN snippets_private.native_families f ON f.id=t.family_id
+ WHERE t.digest=credential AND t.kind='access_token' AND NOT t.used AND NOT f.revoked AND t.expires_at>clock_timestamp()
+ AND f.expires_at>clock_timestamp() AND NOT snippets_private.is_access_token_revoked(credential);
+ IF NOT FOUND THEN RETURN 'unauthenticated'; END IF;
+ SELECT * INTO value FROM snippets_private.native_device_requests r WHERE r.id=request FOR UPDATE;
+ IF NOT FOUND THEN RETURN 'not_found'; END IF;
+ IF value.expires_at<=clock_timestamp() THEN RETURN 'expired'; END IF;
+ IF value.recipient_key_hash<>key_hash OR value.nonce<>request_nonce THEN RETURN 'conflict'; END IF;
+ IF value.approved_at IS NOT NULL THEN
+  IF value.account_id=approver AND value.space_id=space AND value.pairing_id=pairing THEN RETURN 'approved'; END IF;
+  RETURN 'conflict';
+ END IF;
+ UPDATE snippets_private.native_device_requests SET account_id=approver,space_id=space,pairing_id=pairing,approved_at=clock_timestamp() WHERE id=request;
+ RETURN 'approved';
+END $$;
+-- No row means an unknown request or a wrong poll token. A repeated approved claim
+-- follows a lost response: the undelivered family is revoked before a new one opens.
+CREATE FUNCTION snippets_private.native_claim_device(request uuid,poll bytea,family uuid,access_digest bytea,refresh_digest bytea)
+RETURNS TABLE(state text,request_expires_at timestamptz,account uuid,space uuid,pairing uuid,token_expires_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
+DECLARE value snippets_private.native_device_requests; issued timestamptz;
+BEGIN
+ SELECT * INTO value FROM snippets_private.native_device_requests r WHERE r.id=request FOR UPDATE;
+ IF NOT FOUND OR value.poll_digest<>poll THEN RETURN; END IF;
+ IF value.expires_at<=clock_timestamp() THEN
+  RETURN QUERY SELECT 'expired'::text,value.expires_at,NULL::uuid,NULL::uuid,NULL::uuid,NULL::timestamptz; RETURN;
+ END IF;
+ IF value.approved_at IS NULL THEN
+  RETURN QUERY SELECT 'pending'::text,value.expires_at,NULL::uuid,NULL::uuid,NULL::uuid,NULL::timestamptz; RETURN;
+ END IF;
+ IF value.claims>=5 THEN
+  RETURN QUERY SELECT 'exhausted'::text,value.expires_at,NULL::uuid,NULL::uuid,NULL::uuid,NULL::timestamptz; RETURN;
+ END IF;
+ IF value.family_id IS NOT NULL THEN PERFORM snippets_private.native_revoke_family(value.family_id); END IF;
+ SELECT o.expires_at INTO issued FROM snippets_private.native_open_family(value.account_id,family,access_digest,refresh_digest) o;
+ UPDATE snippets_private.native_device_requests r SET family_id=family,claims=r.claims+1 WHERE r.id=request;
+ RETURN QUERY SELECT 'approved'::text,value.expires_at,value.account_id,value.space_id,value.pairing_id,issued;
+END $$;
+
 DO $$
 DECLARE candidate record;
 BEGIN
@@ -175,7 +233,7 @@ BEGIN
  FOR candidate IN SELECT oid::regprocedure AS signature,proname FROM pg_proc WHERE pronamespace='snippets_private'::regnamespace AND proname LIKE 'native_%' LOOP
   EXECUTE format('ALTER FUNCTION %s OWNER TO snippets_function_owner',candidate.signature);
   EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC',candidate.signature);
-  IF candidate.proname <> 'native_revoke_family' THEN
+  IF candidate.proname NOT IN ('native_revoke_family','native_open_family') THEN
    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO snippets_runtime',candidate.signature);
   END IF;
  END LOOP;

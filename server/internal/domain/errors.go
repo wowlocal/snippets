@@ -6,10 +6,7 @@ type ErrorCode string
 
 const (
 	InvalidRequest         ErrorCode = "invalid_request"
-	InvalidEmail           ErrorCode = "invalid_email"
-	InvalidCode            ErrorCode = "invalid_code"
-	CodeExpired            ErrorCode = "code_expired"
-	TooManyAttempts        ErrorCode = "too_many_attempts"
+	InvalidAccountKey      ErrorCode = "invalid_account_key"
 	AuthenticationRequired ErrorCode = "authentication_required"
 	ReauthenticationNeeded ErrorCode = "reauthentication_required"
 	Forbidden              ErrorCode = "forbidden"
@@ -54,9 +51,9 @@ func AsServiceError(err error) *ServiceError {
 
 func Status(code ErrorCode) int {
 	switch code {
-	case InvalidRequest, InvalidEmail, InvalidCode, CodeExpired:
+	case InvalidRequest:
 		return 400
-	case AuthenticationRequired, ReauthenticationNeeded:
+	case AuthenticationRequired, ReauthenticationNeeded, InvalidAccountKey:
 		return 401
 	case Forbidden:
 		return 403
@@ -70,7 +67,7 @@ func Status(code ErrorCode) int {
 		return 413
 	case IncompatibleVersion:
 		return 426
-	case QuotaExceeded, RateLimited, TooManyAttempts:
+	case QuotaExceeded, RateLimited:
 		return 429
 	case DependencyUnavailable:
 		return 503

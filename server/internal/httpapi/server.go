@@ -472,12 +472,20 @@ func validateRequiredShape(operation string, raw any) error {
 		}
 	}
 	switch operation {
-	case "native_email_start":
-		if !hasExactObjectShape(object, []string{"email"}, nil) {
+	case "native_sign_in":
+		if !hasExactObjectShape(object, []string{"accountKey"}, nil) {
 			return domain.NewError(domain.InvalidRequest)
 		}
-	case "native_email_verify":
-		if !hasExactObjectShape(object, []string{"challengeId", "code"}, nil) {
+	case "native_device_request":
+		if !hasExactObjectShape(object, []string{"recipientPublicKey", "nonce"}, nil) {
+			return domain.NewError(domain.InvalidRequest)
+		}
+	case "native_device_approval":
+		if !hasExactObjectShape(object, []string{"spaceId", "pairingId"}, nil) {
+			return domain.NewError(domain.InvalidRequest)
+		}
+	case "native_device_claim":
+		if !hasExactObjectShape(object, []string{"pollToken"}, nil) {
 			return domain.NewError(domain.InvalidRequest)
 		}
 	case "native_refresh":
@@ -660,9 +668,21 @@ func policyForRequest(method, path string) operationPolicy {
 		return operationPolicy{name: "readiness", public: true, requirement: auth.Standard}
 	}
 	if method == http.MethodPost {
-		names := map[string]string{"/v2/auth/email/start": "native_email_start", "/v2/auth/email/verify": "native_email_verify", "/v2/auth/refresh": "native_refresh", "/v2/auth/revoke": "native_revoke"}
+		if path == "/v2/auth/accounts" {
+			return operationPolicy{name: "native_account_create", public: true, requirement: auth.Standard}
+		}
+		names := map[string]string{"/v2/auth/sign-in": "native_sign_in", "/v2/auth/refresh": "native_refresh", "/v2/auth/revoke": "native_revoke", "/v2/auth/device-requests": "native_device_request"}
 		if name, ok := names[path]; ok {
 			return operationPolicy{name: name, public: true, hasBody: true, requirement: auth.Standard}
+		}
+		if parts := strings.Split(strings.Trim(path, "/"), "/"); len(parts) == 5 && parts[0] == "v2" && parts[1] == "auth" && parts[2] == "device-requests" && validUUID(parts[3]) {
+			switch parts[4] {
+			case "approval":
+				// Bearer-authenticated, but keeps the native no-store and body bounds.
+				return operationPolicy{name: "native_device_approval", hasBody: true, requirement: auth.Standard}
+			case "claim":
+				return operationPolicy{name: "native_device_claim", public: true, hasBody: true, requirement: auth.Standard}
+			}
 		}
 	}
 	if path == "/v2/session" && method == http.MethodDelete {

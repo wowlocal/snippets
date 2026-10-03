@@ -58,8 +58,8 @@ func (h *Handler) GetDiscovery(context.Context, api.GetDiscoveryRequestObject) (
 	}
 	if h.configuration.AuthMode == "native" {
 		origin := h.configuration.PublicBaseURL.String() + "/v2/auth"
-		result.NativeAuth = &api.NativeAuthDiscovery{Flow: api.EmailCode, StartEndpoint: origin + "/email/start", VerifyEndpoint: origin + "/email/verify", RefreshEndpoint: origin + "/refresh", RevokeEndpoint: origin + "/revoke"}
-		capabilities = append(capabilities, "native-email-code-v1")
+		result.NativeAuth = &api.NativeAuthDiscovery{Flow: api.NativeAuthDiscoveryFlowAccountKey, CreateAccountEndpoint: origin + "/accounts", SignInEndpoint: origin + "/sign-in", RefreshEndpoint: origin + "/refresh", RevokeEndpoint: origin + "/revoke"}
+		capabilities = append(capabilities, "native-account-key-v1", "native-device-sign-in-v1")
 	} else {
 		result.Oidc = &api.OIDCDiscovery{Issuer: h.configuration.OIDC.Issuer.String(), Resource: h.configuration.PublicBaseURL.String(), ClientId: h.configuration.OIDC.ClientID, Scopes: append([]string(nil), h.configuration.OIDC.Scopes...), AuthorizationFlow: api.AuthorizationCodePkce, MaxAccessTokenAgeSeconds: int(h.configuration.OIDC.MaximumTokenAge / time.Second)}
 		capabilities = append(capabilities, "account-without-required-email", "oauth-refresh-token-rotation", "oauth-resource-indicators", "oauth-token-revocation", "oidc-pkce")

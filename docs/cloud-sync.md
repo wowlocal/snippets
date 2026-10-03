@@ -725,7 +725,7 @@ Two bugs the fake caught that a real backend would have taught us slowly and exp
 - **An expired token is not a halt.** Treating a non-retryable rejection uniformly put a sticky,
   scary error in front of someone who just needed to sign in again.
 
-Snippets Cloud uses native email-code sign-in and opaque access/refresh tokens issued by
+Snippets Cloud uses generated account-key sign-in and opaque access/refresh tokens issued by
 the build-pinned HTTPS server. Credential replacement and sign-out use device-only encrypted
 journals so a pending or superseded interactive grant can be retired after interruption.
 Access-token revocation affects the exact credential; refresh-token revocation closes its
@@ -777,20 +777,31 @@ binding; only **Use This Account** may repin that binding.
 ### Snippets Cloud account UX contract
 
 The account UI presents six distinct facts in order: account, selected library, library-key
-access, recovery status, active sync provider, and current sync result. Email-code verification or a
+access, recovery status, active sync provider, and current sync result. Account-key sign-in or a
 locally available key means **Account connected**, never **Ready**. **Up to date** is reserved for
 a completed sync round whose final engine state contains a successful timestamp.
 
 The macOS, iOS/iPadOS, and Android clients expose a dedicated Snippets Cloud account screen.
-Sign-in opens a native email form immediately, then a six-digit-code form with resend cooldown,
-email editing, cancellation and in-place errors. No browser, WebView or Account Center is needed.
-Discovery and authentication requests remain on the configured HTTPS origin; discovery cannot
-redirect email, codes or tokens to another host. Sessions retain the server-verified email and
-opaque immutable account ID in device-bound secret storage. The email is account display data;
-it never substitutes for the server's account ID or the selected library's verified scope.
+Signed out, the screen offers **Create Account** and **Sign In with Account Key**; there is no
+email, password choice, browser, WebView or Account Center. The server generates the account key
+([ADR 0006](../server/ADR/0006-generated-account-key-authentication.md)); clients normalize typing
+and reject a failed check locally. After creation, **Save Your Account Key** must be acknowledged
+before continuing. Discovery and authentication requests remain on the configured HTTPS origin;
+discovery cannot redirect keys or tokens to another host. Sessions retain the account key and the
+opaque immutable account ID in device-bound secret storage, and sign-out removes both. The account
+screen shows a short Account ID derived from that UUID and offers **Show Account Key** behind the
+same device-owner authentication that protects recovery-kit disclosure.
+
+**Sign In with Another Device** avoids typing the key
+([ADR 0007](../server/ADR/0007-device-approved-sign-in.md)). The new device shows a QR code and
+confirmation code; an approved device scans it, confirms the code, authenticates its owner, then
+creates and approves an ordinary pairing for the new device's recipient key and binds the request
+to its account. The new device receives a session for that account and claims the library key
+through the existing pairing path. The server refuses the binding without that approved pairing,
+so a bearer token alone cannot sign in another device.
 
 The account screen also shows a short Library ID derived from the pinned server instance and
-space. It is stable across that library's devices, independent of the account email, and stays
+space. It is stable across that library's devices, independent of the account, and stays
 out of diagnostics. Successful account sign-in does not provide an existing library's key:
 that still requires approved-device pairing or the offline recovery kit.
 
@@ -913,9 +924,11 @@ notarization does **not** check that.
 | CLI reveal is app-brokered | A CLI that can decrypt unattended makes every `curl \| sh` an exfiltration primitive; routing through the app puts a human in the loop | Never revealing at all (simpler, ~900 lines lighter); giving the CLI the Keychain group unconditionally |
 | Peer check anchored to the team ID | The CLI is a bare Mach-O with its own signing identifier, so a bundle-id requirement would not match it | Checking the bundle id; trusting `LOCAL_PEERPID` alone (racy — pids are reused) |
 
-Snippets Cloud account login now uses native email and one-time-code screens backed by the
-server's `nativeAuth` API. This replaces the unshipped browser/OIDC login described in
-[`server/ADR/0004-conventional-account-login.md`](../server/ADR/0004-conventional-account-login.md).
+Snippets Cloud account login now uses a server-generated account key backed by the server's
+`nativeAuth` API ([ADR 0006](../server/ADR/0006-generated-account-key-authentication.md)). This
+replaces both the unshipped browser/OIDC login of
+[`server/ADR/0004-conventional-account-login.md`](../server/ADR/0004-conventional-account-login.md)
+and the unshipped email-code login of ADR 0005.
 Device proof of the library key still protects approval and recovery replacement. Recovery-kit
 deferral allows sync and leaves a Settings reminder. CloudKit authentication is unchanged.
 
