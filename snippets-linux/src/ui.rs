@@ -26,6 +26,8 @@ mod history;
 mod inline;
 #[path = "settings_ui.rs"]
 mod settings;
+#[path = "shortcuts_ui.rs"]
+mod shortcuts;
 #[path = "usage_ui.rs"]
 mod usage_settings;
 
@@ -78,6 +80,7 @@ struct App {
     usage_settings: RefCell<Option<Rc<usage_settings::Settings>>>,
     settings: RefCell<Option<Rc<settings::Settings>>>,
     tray: RefCell<Option<Rc<crate::tray::Tray>>>,
+    shortcuts: RefCell<Option<Rc<shortcuts::Service>>>,
     usage_quitting: Cell<bool>,
     hold: RefCell<Option<gio::ApplicationHoldGuard>>,
     copy_serial: Cell<u64>,
@@ -235,6 +238,41 @@ impl App {
         if let Some(settings) = self.settings.borrow().as_ref() {
             settings.cancel_quit();
             settings.present();
+        }
+    }
+    fn start_shortcuts(self: &Rc<Self>) {
+        if self.shortcuts.borrow().is_some() {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        let service =
+            shortcuts::Service::new(self.library.borrow().root.clone(), move |action, target| {
+                if let Some(app) = weak.upgrade()
+                    && !app.usage_quitting.get()
+                {
+                    match action {
+                        crate::global_shortcuts::Action::Open => app.present(),
+                        crate::global_shortcuts::Action::Picker
+                            if app.application.is_action_enabled("picker") =>
+                        {
+                            app.open_picker(target)
+                        }
+                        crate::global_shortcuts::Action::Capture
+                            if app.application.is_action_enabled("capture") =>
+                        {
+                            app.capture()
+                        }
+                        _ => (),
+                    }
+                }
+            });
+        *self.shortcuts.borrow_mut() = Some(service);
+    }
+    fn open_shortcuts(self: &Rc<Self>) {
+        self.start_shortcuts();
+        if let Some(service) = self.shortcuts.borrow().as_ref() {
+            service.cancel_quit();
+            service.present(&self.application);
         }
     }
     fn start_inline(&self) {
@@ -734,6 +772,11 @@ impl App {
         if self.usage_quitting.get() {
             return;
         }
+        let shortcuts_idle = self
+            .shortcuts
+            .borrow()
+            .as_ref()
+            .is_none_or(|s| s.prepare_quit());
         let settings_idle = self
             .settings
             .borrow()
@@ -766,6 +809,10 @@ impl App {
             .is_none_or(|worker| worker.prepare_quit());
         if !settings_idle {
             self.toast("Waiting for desktop settings to save. Try Quit again shortly.");
+            return;
+        }
+        if !shortcuts_idle {
+            self.toast("Waiting for global shortcuts to stop. Try Quit again shortly.");
             return;
         }
         if !control_idle {
@@ -825,6 +872,9 @@ impl App {
             if let Some(settings) = self.settings.borrow().as_ref() {
                 settings.cancel_quit();
             }
+            if let Some(service) = self.shortcuts.borrow().as_ref() {
+                service.cancel_quit();
+            }
             workspace.present(None);
             return;
         }
@@ -881,6 +931,9 @@ impl App {
             if let Some(settings) = self.settings.borrow().as_ref() {
                 settings.cancel_quit();
             }
+            if let Some(service) = self.shortcuts.borrow().as_ref() {
+                service.cancel_quit();
+            }
             self.present();
         }
     }
@@ -928,6 +981,7 @@ impl App {
             "inline",
             "usage",
             "settings",
+            "shortcuts",
             "search",
             "save",
             "copy",
@@ -956,6 +1010,7 @@ impl App {
                         "inline",
                         "usage",
                         "settings",
+                        "shortcuts",
                     ]
                     .contains(&name)
                         && !app.ensure_library()
@@ -976,6 +1031,7 @@ impl App {
                         "inline" => app.open_inline(),
                         "usage" => app.open_usage(),
                         "settings" => app.open_settings(),
+                        "shortcuts" => app.open_shortcuts(),
                         "secure" => app.open_secure(None),
                         "new" => {
                             app.main().new_entry("");
@@ -2142,6 +2198,7 @@ pub fn run() -> glib::ExitCode {
         usage_settings: RefCell::new(None),
         settings: RefCell::new(None),
         tray: RefCell::new(None),
+        shortcuts: RefCell::new(None),
         usage_quitting: Cell::new(false),
         hold: RefCell::new(None),
         copy_serial: Cell::new(0),
@@ -2166,6 +2223,7 @@ pub fn run() -> glib::ExitCode {
             *app.hold.borrow_mut() = Some(application.hold());
             app.actions();
             app.start_tray();
+            app.start_shortcuts();
             if let Some(display) = gdk::Display::default() {
                 gtk::style_context_add_provider_for_display(
                     &display,
@@ -2341,6 +2399,7 @@ mod tests {
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
             tray: RefCell::new(None),
+            shortcuts: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2471,6 +2530,7 @@ mod tests {
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
             tray: RefCell::new(None),
+            shortcuts: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2541,6 +2601,7 @@ mod tests {
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
             tray: RefCell::new(None),
+            shortcuts: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),
@@ -2647,6 +2708,7 @@ mod tests {
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
             tray: RefCell::new(None),
+            shortcuts: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),

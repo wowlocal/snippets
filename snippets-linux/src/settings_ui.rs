@@ -43,6 +43,11 @@ const PAGES: &[SettingsPage] = &[
         "input-keyboard-symbolic",
         &[
             (
+                "Global Keyboard Shortcuts",
+                "Open, paste picker and capture from other applications",
+                "shortcuts",
+            ),
+            (
                 "Inline Expansion",
                 "Keywords, caret suggestions and keyboard selection",
                 "inline",

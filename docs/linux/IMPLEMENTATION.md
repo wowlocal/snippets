@@ -33,6 +33,9 @@ actions, asynchronous clipboard/file dialogs, and single-instance activation.
 `src/tray.rs` exports a bounded StatusNotifierItem and DBusMenu on that primary
 application's existing authenticated GIO connection. It forwards fixed public
 commands to the same native actions and observes watcher restarts.
+`src/global_shortcuts.rs`, `shortcuts_worker.rs` and `shortcuts_wayland.c` own
+explicit local shortcut consent and three native Hyprland actions. The primary
+GTK service in `shortcuts_ui.rs` supplies setup, status and cancellation.
 `src/desktop.rs` reads the Omarchy palette, guards short-lived Hyprland targets,
 and observes session locks off the GTK thread. `src/crypto.rs`, `src/vault.rs`, and
 `src/clock.rs` implement encrypted bodies, bounded owner sessions, durable vault
@@ -222,6 +225,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | --- | --- | --- |
 | Native workspace | GTK list/editor, search, tags, pins, autosave, keyboard actions, searchable settings, configurable close behavior, explicit background login startup and gated startup recovery | Earlier native lifecycle smoke passes with fatal GTK warnings; recovery crash/access checks pass, new recovery UI compiles and needs a live display check |
 | Native desktop tray | Primary-process StatusNotifierItem, fixed DBusMenu actions, public ARGB icon, recovery/enable-state updates and watcher restart registration | Eight isolated menu/icon tests pass, including an independent C/GIO/Cairo decoder; authenticated private-bus fixture cannot bind its Unix socket here; live panel rendering, registration, restart, action routing and focus remain unverified |
+| Global keyboard shortcuts | Explicit local enable preference, primary native Wayland registration for open/picker/capture, native setup/status/retry controls, captured receiving target, bounded revocable dispatch and quit fence | Independent socketpair protocol and worker/consent checks pass; native peer authentication, actual key assignment, GTK settings and receiving-field focus remain unverified |
 | Library | CRUD, bounded/strict JSON, file permissions, process lock, atomic replacement, CAS conflicts, undo/redo | Rust core and concurrent CLI writer tests pass |
 | Editor assistance | Safe derived keyword buttons, existing metadata references, shared next-part Tab completion, duplicate and bidirectional prefix warnings, explicit bounded ordinary placeholder preview | Frozen Mac examples, Unicode boundary, reservation, disabled-keyword and preview grammar/limit tests pass; native widget smoke requires a live display |
 | Transfers | Native and Raycast JSON import, ordinary sharing export and native portable encrypted-backup export/import with interrupted-import recovery | Round-trip, timestamps, collisions, exact-key authentication, encrypted two-file redo, cancellation and independent OpenSSL backup format checks pass; live native dialogs and Apple app round trips remain unverified |
@@ -2959,3 +2963,80 @@ introduced. Actual panel rendering, watcher restart, native action routing,
 compositor activation and window focus remain part of the unfinished desktop
 verification. No user desktop settings, clipboard, input, login entry, account,
 keyring or library were changed by these checks.
+
+## Native global keyboard shortcuts
+
+The three public actions `open`, `picker` and `capture` register under
+`com.khm.snippets.linux` using Hyprland's
+[global-shortcuts-v1 protocol](https://raw.githubusercontent.com/hyprwm/hyprland-protocols/main/protocols/hyprland-global-shortcuts-v1.xml).
+The compositor owns physical key assignment. Source inspection of the
+[Hyprland handler](https://raw.githubusercontent.com/hyprwm/Hyprland/main/src/protocols/GlobalShortcuts.cpp)
+confirms that dispatcher events reach the registered app/action pair. The
+[Hyprland portal implementation](https://raw.githubusercontent.com/hyprwm/xdg-desktop-portal-hyprland/master/src/portals/GlobalShortcuts.cpp)
+also delegates to that protocol without a key-selection dialog. The Omarchy
+client therefore uses the native protocol directly; it needs no portal identity
+override or external shortcut process. These are source findings, not proof of
+live compositor behavior.
+
+`global-shortcuts.json` is a separate, bounded schema-1 local boolean preference,
+absent and disabled by default. Reading it creates nothing. Explicit writes use
+the common root lock and private atomic replacement; malformed, unknown, linked,
+nonregular or oversized files refuse and survive unchanged. The preference
+contains no keys or library metadata. It does not alter login startup, inline
+expansion or clipboard-history consent.
+
+Only primary `GApplication` startup creates the service. Disabled consent creates
+no Wayland connection or session monitor. The enabled worker uses the original
+Wayland environment, a bounded nonblocking connection and two-second native
+synchronization deadlines. Before registering actions, it checks the socket's
+same-user peer credentials and matches the process against the current Hyprland
+instance and display. Missing or ambiguous managers, removed globals, invalid
+timestamps, native errors and cancelled waits refuse. No alternate display,
+identity or authentication fallback is introduced.
+
+The C client registers only those three static IDs and labels. It obtains no
+seat, keyboard, keymap, text input, clipboard or surrounding-text interface.
+Held presses do not repeat an action. Its eight-event buffer fails on overflow;
+the Rust delivery channel admits at most three calls. Each call expires after
+at most 1.5 seconds using suspend-aware uptime, including time already queued in
+C. The fresh unlocked-session epoch fences a lock/unlock before GTK delivery.
+The worker captures the original paste target before showing the picker; existing
+ordinary/secure delivery owners retain their subsequent checks. GTK rechecks
+local consent and native action availability before invoking existing handlers.
+
+The native searchable **Global Keyboard Shortcuts** window is linked from
+**Settings → Input & Clipboard**. It distinguishes registered actions from
+physical bindings, offers fixed examples and explicit Copy, and exposes a retry
+after registration or compositor failure. Its examples were executed through
+the installed Omarchy Lua helper with inert dispatcher doubles: all three used
+`hl.dsp.global`, and none became an `exec_cmd`. No configuration was loaded or
+changed. On a failed registration there is no automatic reconnect loop. Quit
+revokes delivery immediately and waits for the accepted preference write and
+listener termination; a cancelled save restores admission through the same
+explicitly enabled owner. The listener also rechecks consent and the original
+instance/display environment during native waits. Its monitor belongs to the
+worker lifetime and stops when registration ends.
+
+Verification on 2026-10-03: eleven default-feature shortcut tests passed, with
+one ignored native credential check; two headless preference tests also passed.
+Four default tests run the actual C/libwayland client against an
+independent fictional socketpair peer and verify registration wire fields,
+press/release/repeat behavior, manager absence/ambiguity/removal, malformed
+nanoseconds, overflow and cancellation. Worker tests verify no connection without
+consent, epoch/expiry refusal, bounded queued calls, immediate quit fencing and
+durable revocation. The final run also passed three desktop adapter tests, seven
+settings tests, eight tray tests, nine editor tests, the background/settings
+command test and 26 core integration tests. Both all-target Clippy configurations
+passed with warnings denied; formatting and all three release builds passed.
+Two temporary-prefix installs checked binaries, modes, preservation and CLI
+refusals, including absence of global shortcut consent in the isolated CLI root.
+Native source hashes matched before and after every final gate.
+
+The explicitly attempted peer-credential check returned an invalid zero process
+from the private socketpair and failed before establishing the production peer
+proof. The isolated native settings smoke stopped at GTK initialization before
+creating a window or starting a listener. No user key bindings, input, clipboard,
+login entry, account, keyring or library were changed. Real compositor
+authentication, action registration, actual physical shortcuts, GTK controls,
+activation/focus and receiving-field behavior remain unverified parts of the
+full desktop port.

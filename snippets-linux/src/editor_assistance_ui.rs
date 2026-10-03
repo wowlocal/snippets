@@ -477,6 +477,7 @@ mod tests {
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
             tray: RefCell::new(None),
+            shortcuts: RefCell::new(None),
             usage_quitting: Cell::new(false),
             copy_serial: Cell::new(0),
             css: gtk::CssProvider::new(),

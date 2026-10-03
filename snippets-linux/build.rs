@@ -126,6 +126,38 @@ fn main() {
         println!("cargo:rerun-if-changed=src/inline_popup.c");
         println!("cargo:rerun-if-changed=src/inline_popup_wayland.c");
         println!("cargo:rerun-if-changed={ime_protocol}");
+        let shortcuts_protocol = "data/hyprland-global-shortcuts-v1.xml";
+        for (mode, file) in [
+            ("client-header", "snippets-shortcuts.h"),
+            ("private-code", "snippets-shortcuts-protocol.c"),
+        ] {
+            assert!(
+                std::process::Command::new("wayland-scanner")
+                    .arg(mode)
+                    .arg(shortcuts_protocol)
+                    .arg(output.join(file))
+                    .status()
+                    .expect("wayland-scanner is required")
+                    .success()
+            );
+        }
+        let shortcuts_wayland = pkg_config::Config::new()
+            .probe("wayland-client")
+            .expect("Wayland client development files are required");
+        let mut shortcuts = cc::Build::new();
+        shortcuts
+            .file("src/shortcuts_wayland.c")
+            .file(output.join("snippets-shortcuts-protocol.c"))
+            .include(&output)
+            .flag_if_supported("-Wall")
+            .flag_if_supported("-Wextra")
+            .flag_if_supported("-Werror");
+        for include in shortcuts_wayland.include_paths {
+            shortcuts.include(include);
+        }
+        shortcuts.compile("snippets_shortcuts_wayland");
+        println!("cargo:rerun-if-changed=src/shortcuts_wayland.c");
+        println!("cargo:rerun-if-changed={shortcuts_protocol}");
     }
     let icu = pkg_config::Config::new()
         .probe("icu-i18n")

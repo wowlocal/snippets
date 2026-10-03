@@ -927,6 +927,38 @@ Validate config edits with `hyprctl reload` and `hyprctl configerrors`.
 
 ## Keyboard commands
 
+Open **Settings → Input & Clipboard → Global Keyboard Shortcuts** to register
+native Hyprland actions for opening Snippets, opening its targeted paste picker
+and capturing clipboard text. **Enable Global Shortcuts** is off by default and
+stored only on this device. Snippets must be running; **Launch at Login** can
+keep the owner available in the background.
+
+Physical keys belong to the compositor. The window provides examples and an
+explicit **Copy** button; choose unused keys after checking
+`omarchy menu keybindings --print`, then add the adjusted lines to
+`~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + ALT + S", "Snippets", hl.dsp.global("com.khm.snippets.linux:open"))
+o.bind("SUPER + ALT + P", "Snippets paste picker", hl.dsp.global("com.khm.snippets.linux:picker"))
+o.bind("SUPER + ALT + C", "Snippets capture", hl.dsp.global("com.khm.snippets.linux:capture"))
+```
+
+Use these as an alternative to CLI bindings for the same keys. Reload Hyprland
+and inspect `hyprctl configerrors`. The application does not edit those bindings
+or assign the example keys automatically. **Desktop Connection** reports
+registration separately from key assignment; **Retry Connection** retries after
+a missing or restarted compositor, duplicate registration or connection error.
+Other desktops can keep using the CLI bindings above.
+
+The listener accepts only three fixed public actions and never grabs the keyboard
+or reads surrounding text. A locked or unavailable desktop, an expired queued
+call, disabled consent or Quit prevents activation. The picker captures its
+receiving window before presentation and keeps the existing paste checks.
+Independent private-wire and worker tests pass; real compositor peer credentials,
+physical key assignment, focus and the native settings window remain unverified
+in the restricted development environment.
+
 | Shortcut | Action |
 | --- | --- |
 | Ctrl+N | New snippet |
@@ -1019,6 +1051,14 @@ cargo test --locked --manifest-path snippets-linux/Cargo.toml --no-default-featu
 # Private authenticated bus and independent GIO client; requires Unix socket binding.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib tray::tests::isolated_native_tray_registration -- --ignored --test-threads=1
+# Independent private shortcut protocol peer; no compositor, clipboard or input.
+cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib global_shortcuts:: -- --test-threads=1
+G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib native_global_shortcuts_settings_default_off -- --ignored --test-threads=1
+# Native peer authentication requires unrestricted SO_PEERCRED.
+cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib native_shortcut_peer_credentials_match -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib ui::tests::native_lifecycle -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
