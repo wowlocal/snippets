@@ -12,6 +12,8 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
 };
+#[path = "protected_paste_ui.rs"]
+mod paste_ui;
 
 fn body_layout(area: &gtk::DrawingArea, text: &str, width: i32) -> gtk::pango::Layout {
     let layout = area.create_pango_layout(Some(text));
@@ -95,6 +97,9 @@ pub struct ProtectedEditor {
     allowed: Cell<bool>,
     revealed: Cell<bool>,
     editable: Cell<bool>,
+    desktop: RefCell<Option<crate::desktop::SessionWitness>>,
+    paste: RefCell<Option<Rc<protected_edit::PasteRequest>>>,
+    paste_task: RefCell<Option<glib::JoinHandle<()>>>,
     im: gtk::IMContextSimple,
     notify: RefCell<Option<ChangeCallback>>,
 }
@@ -111,7 +116,7 @@ impl ProtectedEditor {
             "Protected content. Reveal to edit. Copy and text extraction are disabled.",
         )]);
         area.update_property(&[gtk::accessible::Property::Description(
-            "Shift with arrow keys selects text. Control+A selects all. Control with Left/Right or Backspace/Delete moves or removes words. Control+Z undoes a body edit; Control+Shift+Z or Control+Y redoes it. Shift+Tab leaves the editor. Escape hides content.",
+            "Shift with arrow keys selects text. Control+A selects all. Control+V pastes clipboard text into the revealed editor. Control with Left/Right or Backspace/Delete moves or removes words. Control+Z undoes a body edit; Control+Shift+Z or Control+Y redoes it. Shift+Tab leaves the editor. Escape hides content.",
         )]);
         let im = gtk::IMContextSimple::new();
         im.set_client_widget(Some(&area));
@@ -128,6 +133,9 @@ impl ProtectedEditor {
             allowed: Cell::new(false),
             revealed: Cell::new(false),
             editable: Cell::new(true),
+            desktop: RefCell::new(None),
+            paste: RefCell::new(None),
+            paste_task: RefCell::new(None),
             im,
             notify: RefCell::new(None),
         });
@@ -191,6 +199,7 @@ impl ProtectedEditor {
             if !this.authorized() || !this.revealed.get() {
                 return glib::Propagation::Stop;
             }
+            this.cancel_paste();
             if key == gdk::Key::Escape {
                 this.reveal(false);
                 return glib::Propagation::Stop;
@@ -201,6 +210,10 @@ impl ProtectedEditor {
             let control = mods.contains(gdk::ModifierType::CONTROL_MASK);
             let extend = mods.contains(gdk::ModifierType::SHIFT_MASK);
             if mods.intersects(gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK) {
+                return glib::Propagation::Stop;
+            }
+            if control && matches!(key, gdk::Key::v | gdk::Key::V) {
+                this.paste();
                 return glib::Propagation::Stop;
             }
             if control && matches!(key, gdk::Key::z | gdk::Key::Z | gdk::Key::y | gdk::Key::Y) {
@@ -265,7 +278,11 @@ impl ProtectedEditor {
         let im = this.im.clone();
         focus.connect_enter(move |_| im.focus_in());
         let im = this.im.clone();
+        let weak = Rc::downgrade(&this);
         focus.connect_leave(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.cancel_paste();
+            }
             im.reset();
             im.focus_out();
         });
@@ -314,6 +331,7 @@ impl ProtectedEditor {
         *self.notify.borrow_mut() = Some(Box::new(callback));
     }
     fn edit(&self, edit: Edit, insertion: &str, extend: bool) {
+        self.cancel_paste();
         if !self.authorized() || !self.revealed.get() || !self.editable.get() {
             return;
         }
@@ -348,6 +366,7 @@ impl ProtectedEditor {
             && self.history.borrow().can_step(redo)
     }
     pub fn undo(&self, redo: bool) {
+        self.cancel_paste();
         if !self.authorized() || !self.revealed.get() || !self.editable.get() {
             return;
         }
@@ -376,6 +395,7 @@ impl ProtectedEditor {
         Ok(())
     }
     fn place_pointer(&self, x: f64, y: f64, extend: bool) {
+        self.cancel_paste();
         if !self.authorized()
             || !self.revealed.get()
             || !self.editable.get()
@@ -437,6 +457,7 @@ impl ProtectedEditor {
         }
     }
     pub fn reveal(&self, value: bool) {
+        self.cancel_paste();
         self.revealed.set(value && self.allowed.get());
         if !self.revealed.get() {
             self.selection
@@ -485,6 +506,7 @@ impl ProtectedEditor {
         )
     }
     pub fn finish_recovery(&self, prepared: crate::vault::PreparedDraftRecovery) -> Result<()> {
+        self.cancel_paste();
         let mut draft = self.draft.borrow_mut();
         self.vault.borrow_mut().finish_draft_recovery(
             draft.as_mut().ok_or(Error(
@@ -500,6 +522,7 @@ impl ProtectedEditor {
         Ok(())
     }
     pub fn load(&self, id: uuid::Uuid) -> Result<()> {
+        self.cancel_paste();
         let mut vault = self.vault.borrow_mut();
         let body = vault.body(id)?;
         let expected = vault
@@ -516,6 +539,7 @@ impl ProtectedEditor {
         Ok(())
     }
     pub fn create(&self) -> Result<()> {
+        self.cancel_paste();
         *self.draft.borrow_mut() = Some(self.vault.borrow_mut().protect_draft(
             Metadata::new(),
             b"",
@@ -530,6 +554,7 @@ impl ProtectedEditor {
         Ok(())
     }
     pub fn ephemeral(&self, bytes: &[u8]) -> Result<()> {
+        self.cancel_paste();
         *self.draft.borrow_mut() = Some(self.vault.borrow_mut().protect_draft(
             Metadata::new(),
             bytes,
@@ -552,6 +577,7 @@ impl ProtectedEditor {
         self.reveal(false);
     }
     pub fn save(&self, library: &Library, metadata: Metadata) -> Result<()> {
+        self.cancel_paste();
         let mut draft = self.draft.borrow_mut();
         let draft = draft
             .as_mut()
@@ -569,6 +595,7 @@ impl ProtectedEditor {
         Ok(())
     }
     pub fn delete(&self, library: &Library) -> Result<()> {
+        self.cancel_paste();
         let draft = self.draft.borrow();
         let draft = draft
             .as_ref()
@@ -582,6 +609,7 @@ impl ProtectedEditor {
             .delete(library, draft.metadata.id, expected)
     }
     pub fn rewrap(&self, transition: &crate::vault::DraftRewrap) -> Result<()> {
+        self.cancel_paste();
         if let Some(draft) = self.draft.borrow_mut().as_mut() {
             self.history
                 .borrow_mut()

@@ -226,7 +226,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Target validation tested; actual cross-window delivery still requires verification |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; live native GTK/keyring/PAM verification remains unavailable |
-| Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery/repair dialogs compile but display initialization is unavailable; live keyboard/reveal workflow remains open |
+| Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor with bounded encrypted Undo/Redo and explicit Paste, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery/repair dialogs compile but display initialization is unavailable; live keyboard/reveal workflow remains open |
 | Secure delivery and transfers | Native portable encrypted-backup export/import, fresh-authenticated direct virtual-keyboard insertion and one-cycle vault authentication for receiving/sending | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private Wayland fixture cannot initialize under restricted peer credentials; live receiving-field and authenticated-sync validation plus fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; current environment cannot run loopback fixtures or initialize the new GTK smoke; complete conflict-owned recovery and live automatic workflow verification remain pending; CloudKit is Apple-only |
 | Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent child deletions and unknown versions remain separate review boundaries; live password-dialog verification remains open |
@@ -269,6 +269,19 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-03
 
+- Explicit protected body Paste adds fourteen isolated checks: eleven encrypted
+  receipt tests and three additional shared-reader tests. Selected regressions
+  pass 98 default library tests, 90 headless library tests and 24 core/helper
+  integration tests. Public fictional vaults, temporary roots, memory GIO
+  streams and stalled futures cover one-use encrypted Undo, no implicit Save,
+  empty input, metadata/CAS/body/selection/root/session changes, observed
+  lock/unlock, queued-request expiry, full-size selected replacement, invalid
+  text, read revocation, clock bounds and immediate task-abort release. Clippy
+  passes with warnings denied for all targets in both configurations;
+  formatting, three release binaries and two temporary-prefix installs pass.
+  The extended native secure lifecycle fixture stops at GTK initialization
+  before widget creation. Actual clipboard MIME negotiation, shortcuts, toolbar,
+  focus/cancellation and assistive-technology behavior remain unverified.
 - Encrypted body Undo/Redo adds fifteen isolated checks: thirteen history-owner
   tests plus two snapshot-authentication tests. Selected regressions pass 73
   library tests in each feature configuration and 24 core/helper integration
@@ -2178,6 +2191,56 @@ hidden, foreign or busy owners cannot apply history. The GTK native text undo
 system never receives the body. Live key/button/focus and assistive-technology
 verification remains part of the full port.
 
+### Explicit protected body Paste
+
+Ctrl+V and the native Paste toolbar button read only explicitly requested plain
+clipboard text into the allowed, revealed, editable body in the active window.
+The toolbar restores body focus before capture; body focus must remain present
+while waiting. Read-only recovery-key displays carry no desktop witness and
+cannot request Paste. No clipboard output, primary-selection ownership, native
+text buffer, drag provider or accessible body value is introduced.
+
+`src/protected_edit_paste.rs` captures a one-use receipt containing only the
+current encrypted draft (including metadata and expected saved-record CAS),
+offset selection including direction/preferred column, root/vault/entry binding,
+vault generation and revocable desktop epoch witness. Completion requires the
+same unlocked vault, draft and selection. A failed or completed receipt cannot
+be reused. `src/protected_paste_ui.rs` also binds the read to the exact pending
+request and focused widget; a superseded reply cannot clear a newer request.
+Hiding, focus loss, input/navigation/pointer actions, Undo/Redo, load/create,
+discard, Save, recovery, rewrap, owner-window deactivation and observed vault
+reload changes revoke the pending request. Cancellation and editor destruction abort the retained GLib
+task immediately, dropping its GIO future; completed tasks release their handle
+before UI notifications so callbacks cannot abort the currently polling future.
+An observed lock/unlock cannot
+reattach it even if the editor becomes usable again.
+
+`src/sensitive_clipboard.rs` now shares the bounded native reader with secure
+insertion's explicit clipboard placeholder. It accepts only plain text MIME
+streams, strictly checks UTF-8, refuses NUL and limits input to 256 KiB. A single
+two-second deadline covers negotiation and every read using both Instant and
+suspend-aware CLOCK_BOOTTIME; missing or backwards clocks refuse. Validation
+runs before and after each operation and while stalled futures await 30-ms
+ticks. Dropping the GIO future cancels its native operation. The Rust read
+buffer allocates its full bounded capacity once to avoid abandoning unwiped
+prefixes during growth. Owned Rust bytes and the returned string are zeroed;
+native GTK/GIO/input/compositor copies remain outside that guarantee.
+
+The receipt also expires two seconds after the Paste action, using both clocks;
+a delayed GTK task cannot restart the admission window when it eventually begins
+reading. An empty response is a no-op even with a selection. A nonempty response passes
+through the existing encrypted history edit boundary, accounts for removed
+selected bytes before enforcing the body limit and records one Undo step. It
+changes no saved record or library file; Save remains explicit. Eleven isolated
+receipt tests use the public fictional vault and temporary roots. Five reader
+tests use only memory GIO streams and stalled futures, including task-abort
+release, revocation
+mid-read/after readiness and suspend/missing/backwards clock refusal. The native
+secure lifecycle fixture uses a supplied fictional string through the editor's
+actual completion method; it never accesses the real clipboard. Live keyboard,
+clipboard MIME negotiation, focus races, cancellation and accessibility still
+need a successfully initialized GTK display.
+
 ## Freshly authenticated secure insertion
 
 The picker now retains its ephemeral original-window destination when opening a
@@ -2210,8 +2273,9 @@ noncooperating concurrent writer.
 
 Placeholder expansion uses a wipeable one-pass buffer with a 256 KiB bound.
 The original body is dropped before native I/O. Only templates containing
-`{clipboard}` read the clipboard; `src/secure_insertion_clipboard.rs` requests
-text MIME types and reads bounded GIO-stream chunks under one two-second
+`{clipboard}` read the clipboard; `src/secure_insertion_clipboard.rs` delegates to
+`src/sensitive_clipboard.rs`, which requests text MIME types and reads bounded
+GIO-stream chunks under one two-second
 deadline. Authorization is checked while awaiting each future; revocation or
 timeout drops the future and cancels its native operation. Core tests use only
 fictional memory streams and stalled futures, never the user's clipboard.

@@ -607,8 +607,13 @@ undoing after Save creates an unsaved body change without reverting current
 metadata or its saved-record conflict check. A new body edit discards Redo;
 navigation and unchanged edits keep it. Discard, loading another entry and
 completed previous-vault recovery clear history. A verified passphrase change
-preserves it. There are no clipboard operations, external text drag,
-plaintext undo history or body extraction through accessibility. Accessible instructions
+preserves it. Ctrl+V or the Paste toolbar button reads plain clipboard text into
+the revealed editor. Reading is limited to two seconds and 256 KiB; hiding,
+leaving the editor, changing the selection or draft, Save, vault lock or an
+observed desktop lock cancels a pending request. An empty clipboard leaves the
+body and selection intact. A paste replaces the selection as one encrypted Undo
+step and remains unsaved until Save. No clipboard output, external text drag,
+plaintext undo history or body extraction through accessibility is provided. Accessible instructions
 describe the keyboard controls without exposing the body. Revealed pixels can
 still be captured by the desktop, and input methods/font libraries are outside
 Rust's memory-erasure guarantees. Rendering and pointer hit testing use transient

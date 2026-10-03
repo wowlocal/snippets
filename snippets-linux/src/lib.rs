@@ -44,6 +44,8 @@ pub mod secure_insertion;
 #[cfg(feature = "desktop")]
 mod secure_ui;
 pub mod sender;
+#[cfg(feature = "desktop")]
+mod sensitive_clipboard;
 pub mod snapshot_review;
 pub mod sync;
 #[cfg(feature = "desktop")]

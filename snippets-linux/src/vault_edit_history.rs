@@ -2,7 +2,7 @@
 //! Debug or serialization is retained in a history frame.
 use super::*;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct EditBinding {
     identity: Identity,
     id: Uuid,

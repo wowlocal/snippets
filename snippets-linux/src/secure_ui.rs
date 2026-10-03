@@ -70,6 +70,7 @@ pub struct Workspace {
     reveal: gtk::ToggleButton,
     undo: gtk::Button,
     redo: gtk::Button,
+    paste: gtk::Button,
     dirty: Cell<bool>,
     loading: Cell<bool>,
     busy: Cell<bool>,
@@ -190,6 +191,11 @@ impl Workspace {
         let redo = gtk::Button::from_icon_name("edit-redo-symbolic");
         redo.set_tooltip_text(Some("Redo protected body edit (Ctrl+Shift+Z)"));
         redo.update_property(&[gtk::accessible::Property::Label("Redo protected body edit")]);
+        let paste = gtk::Button::from_icon_name("edit-paste-symbolic");
+        paste.set_tooltip_text(Some("Paste into revealed protected body (Ctrl+V)"));
+        paste.update_property(&[gtk::accessible::Property::Label(
+            "Paste into protected body",
+        )]);
         let insert = gtk::Button::with_label("Insert into Original Window…");
         insert.set_visible(false);
         insert.update_property(&[gtk::accessible::Property::Label(
@@ -205,6 +211,7 @@ impl Workspace {
             &reveal.clone().upcast::<gtk::Widget>(),
             &undo.clone().upcast(),
             &redo.clone().upcast(),
+            &paste.clone().upcast(),
             &save.clone().upcast(),
             &discard.clone().upcast(),
             &delete.clone().upcast(),
@@ -216,7 +223,7 @@ impl Workspace {
         fields.append(&toolbar);
         let editor = ProtectedEditor::new(vault.clone());
         fields.append(&editor.area);
-        fields.append(&label("Select with Shift+arrows or the mouse; Ctrl+A selects all. Ctrl+Z / Ctrl+Shift+Z undoes or redoes body edits. Reveal hides when this window loses focus. Protected content cannot be copied, dragged to another app or exported as plaintext."));
+        fields.append(&label("Select with Shift+arrows or the mouse; Ctrl+A selects all. Ctrl+V pastes clipboard text into the revealed body. Ctrl+Z / Ctrl+Shift+Z undoes or redoes body edits. Reveal hides when this window loses focus. Protected content cannot be copied, dragged to another app or exported as plaintext."));
         let this = Rc::new(Self {
             window,
             library,
@@ -237,6 +244,7 @@ impl Workspace {
             reveal,
             undo,
             redo,
+            paste,
             dirty: Cell::new(false),
             loading: Cell::new(false),
             busy: Cell::new(false),
@@ -259,6 +267,8 @@ impl Workspace {
             repair_dialog: RefCell::new(None),
             repair_worker: Cell::new(false),
         });
+        this.editor
+            .observe_desktop(this.desktop.as_ref().map(|monitor| monitor.witness()));
         let weak = Rc::downgrade(&this);
         this.query.connect_search_changed(move |_| {
             if let Some(this) = weak.upgrade() {
@@ -337,6 +347,12 @@ impl Workspace {
                 }
             });
         }
+        let weak = Rc::downgrade(&this);
+        this.paste.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.editor.paste();
+            }
+        });
         let weak = Rc::downgrade(&this);
         this.unlock.connect_clicked(move |_| {
             if let Some(this) = weak.upgrade() {
@@ -565,6 +581,8 @@ impl Workspace {
             .set_sensitive(editable && self.editor.can_undo(false));
         self.redo
             .set_sensitive(editable && self.editor.can_undo(true));
+        self.paste
+            .set_sensitive(editable && self.editor.can_paste());
         self.reveal
             .set_sensitive(editable && self.editor.metadata().is_some());
         self.draft_recovery.set_visible(foreign);
@@ -610,12 +628,14 @@ impl Workspace {
             Ok(changed) => {
                 self.reading_failed.set(false);
                 if changed {
+                    self.editor.cancel_paste();
                     self.cancel_insertion();
                     self.cancel_legacy_repair();
                     self.refresh();
                 }
             }
             Err(error) => {
+                self.editor.cancel_paste();
                 self.cancel_insertion();
                 self.cancel_legacy_repair();
                 if !self.reading_failed.replace(true) {
@@ -722,6 +742,7 @@ impl Workspace {
         self.dirty.get() || self.editor.is_dirty()
     }
     pub fn save(&self) -> bool {
+        self.editor.cancel_paste();
         if self.draft_worker.get() || self.insertion_worker.get() || self.repair_worker.get() {
             self.toast("Wait for the secure operation to stop before saving.");
             return false;
@@ -1193,7 +1214,7 @@ mod tests {
         assert!(!workspace.editor.is_dirty());
         workspace
             .editor
-            .fixture_edit("Replacement public fixture 👩🏽‍💻\r\n")
+            .fixture_paste("Replacement public fixture 👩🏽‍💻\r\n")
             .unwrap();
         workspace.editor.fixture_undo(false).unwrap();
         assert!(!workspace.editor.is_dirty());

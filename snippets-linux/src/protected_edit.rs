@@ -8,8 +8,12 @@ use zeroize::Zeroizing;
 mod history;
 #[cfg(feature = "desktop")]
 pub(crate) use history::History;
+#[path = "protected_edit_paste.rs"]
+mod paste;
+#[cfg(feature = "desktop")]
+pub(crate) use paste::Request as PasteRequest;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Selection {
     anchor: usize,
     head: usize,
