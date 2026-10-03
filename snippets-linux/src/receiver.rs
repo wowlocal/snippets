@@ -326,14 +326,20 @@ impl Owner<'_> {
             while let Some(remote_record) = checkpoint.journal.inbox.next().cloned() {
                 (self.validate_session)()?;
                 let id = remote_record.envelope.id;
-                // A tombstone cannot satisfy a retained original-copy delivery.
-                // Review it even when a newer local copy wins the merge or the
-                // physical copy is absent; only the native choice can stage repair.
-                if remote_record.envelope.deleted && checkpoint.journal.is_preservation_copy(id) {
+                let current = primary::current(self.library, &checkpoint.journal, &device)?;
+                // Deletion of a retained original or current raw carrier group
+                // is a native decision even if a live version wins the merge.
+                // Vault authentication alone must not consume that saved page.
+                if crate::deletion_review::requires_remote_delete(
+                    &checkpoint.journal,
+                    &current,
+                    &remote_record.envelope,
+                )
+                .map_err(|_| Failure::InvalidPage)?
+                {
                     progress.status = Status::DeletionReview;
                     return Ok(progress);
                 }
-                let current = primary::current(self.library, &checkpoint.journal, &device)?;
                 // Absent known live primary can be an unjournaled local deletion.
                 // A future explicit absence boundary will stamp it; never resurrect.
                 if !current.contains_key(&id)
@@ -489,4 +495,4 @@ impl Fault {
 
 #[cfg(test)]
 #[path = "receiver_tests.rs"]
-mod tests;
+pub(crate) mod tests;

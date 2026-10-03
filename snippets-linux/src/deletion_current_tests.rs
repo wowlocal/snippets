@@ -1772,6 +1772,90 @@ fn confirmed_remote_deletion_still_needs_actual_current_group_source_receipt() {
 }
 
 #[test]
+fn confirmed_deleted_source_is_retained_when_repairing_its_acknowledged_copy() {
+    for choice in [Choice::Keep, Choice::Delete] {
+        let (_temp, library, mut server, _, source, id) = fixture(true, true);
+        let key = key();
+        let scope = scope();
+        let owner = owner(&library, &key, &scope, &|| Ok(()));
+        let review = owner.prepare_deletion_review(&mut server).unwrap();
+        let mut vault = unlock_vault(&library);
+        owner
+            .decide_deletion_review_with_vault(
+                &mut server,
+                review,
+                Choice::Delete,
+                Some(&mut vault),
+            )
+            .unwrap();
+        drop(vault);
+        assert!(owner.receive(&mut server, 1).unwrap().status == receiver::Status::Current);
+        assert!(owner.send(&mut server, 1).unwrap().status == sender::Status::MoreBatches);
+        let before = load(&library);
+        let deleted = before
+            .journal
+            .confirmed(source.id)
+            .unwrap()
+            .envelope
+            .clone();
+        assert!(deleted.deleted && before.journal.entry(source.id).is_none());
+        assert!(before.journal.deletion_approved(&deleted).unwrap());
+        let original = before.journal.preservation_original(id).unwrap().clone();
+        let marker = original
+            .tombstone(
+                crate::clock::Hlc::foreign(0xffff_ffff_ff30),
+                "22222222".into(),
+                true,
+            )
+            .unwrap();
+        server.add(&marker);
+        let mut queued = load(&library);
+        let requested = queued.journal.inbox.cursor().cloned();
+        queued
+            .journal
+            .inbox
+            .receive(
+                &feed(3),
+                requested.as_ref(),
+                vec![Confirmed {
+                    envelope: marker,
+                    record_version: server.records[&id].1.clone(),
+                }],
+                cursor("confirmed-source-copy-deletion"),
+                false,
+                false,
+            )
+            .unwrap();
+        queued.save(&library, &key, &SALT).unwrap();
+        let before_review = load(&library);
+        let current = primary::current(&library, &before_review.journal, "11111111").unwrap();
+        let mut unapproved = before_review.journal.clone();
+        unapproved.deletion_approvals.remove(&source.id);
+        assert!(matches!(
+            unapproved.deletion_repair(id, &current, &original),
+            Err(journal::Failure::InvalidState)
+        ));
+        let review = owner.prepare_deletion_review(&mut server).unwrap();
+        assert!(review.repair.is_some());
+        let mut vault = unlock_vault(&library);
+        owner
+            .decide_deletion_review_with_vault(&mut server, review, choice, Some(&mut vault))
+            .unwrap();
+        drop(vault);
+        let decided = load(&library);
+        assert!(decided.journal.known_absence(source.id));
+        assert!(
+            decided.journal.deletion_approvals.get(&source.id)
+                == before.journal.deletion_approvals.get(&source.id)
+        );
+        missing_originals::finish(&owner, &library, &mut server);
+        assert!(server.records[&source.id].0.deleted);
+        assert!(server.records[&id].0.deleted == (choice == Choice::Delete));
+        assert!(!load(&library).journal.has_preservation_work());
+    }
+}
+
+#[test]
 fn current_carrier_decisions_freeze_originals_and_finish_all_published_wal_phases() {
     for unstaged in [false, true] {
         for remote in [false, true] {

@@ -3,6 +3,67 @@ use super::*;
 use crate::{materializer::Keyring, vault::Document};
 
 #[test]
+fn current_carrier_cloud_deletion_keeps_the_real_cas_receipt_with_or_without_vault_keys() {
+    for authenticated in [false, true] {
+        let (_temp, library, document, winner) = crate::receiver::tests::current_carrier_fixture();
+        let raw_primary = fs::read(library.root.join("Vault/vault.json")).unwrap();
+        let mut clean = document.clone();
+        clean.records[0] = crate::projection::vault_record(&winner, None, &document.kid)
+            .unwrap()
+            .unwrap();
+        model::atomic_write(
+            &library.root.join("Vault/vault.json"),
+            &clean.encode().unwrap(),
+        )
+        .unwrap();
+        let deleted = winner
+            .tombstone(Hlc::foreign(0xffff_ff00_0000), "22222222".into(), true)
+            .unwrap();
+        let mut server = Server::new();
+        server.put(WireRecord::seal(&deleted, &key(), &SALT).unwrap());
+        server.lose_response = true;
+        assert!(
+            owner(&library, &key(), &scope(), &|| Ok(()))
+                .send(&mut server, 1)
+                .is_err()
+        );
+        let original_packet = load(&library).journal.outbound.unwrap();
+        model::atomic_write(&library.root.join("Vault/vault.json"), &raw_primary).unwrap();
+        let wire_key = key();
+        let binding = scope();
+        let root = RootKey::from_bytes(&[0x11; 32]).unwrap();
+        let keys = Keyring::new(&root, &document).unwrap();
+        let mut sender = owner(&library, &wire_key, &binding, &|| Ok(()));
+        if authenticated {
+            sender.vault_keys = Some(&keys);
+        }
+        assert!(sender.send(&mut server, 1).unwrap().status == Status::DeletionReview);
+        let retained = load(&library).journal.outbound.unwrap();
+        assert!(
+            retained.offers == original_packet.offers
+                && retained.position == 0
+                && retained.receipts.is_some()
+        );
+        assert!(server.submitted.len() == 2);
+        assert!(server.submitted[0].len() == server.submitted[1].len());
+        assert!(
+            server.submitted[0]
+                .iter()
+                .zip(&server.submitted[1])
+                .all(|(a, b)| {
+                    a.record == b.record && a.expected_record_version == b.expected_record_version
+                })
+        );
+        assert!(fs::read(library.root.join("Vault/vault.json")).unwrap() == raw_primary);
+        let checkpoint = fs::read(library.root.join("Sync/journal.bin")).unwrap();
+        assert!(sender.send(&mut server, 1).unwrap().status == Status::DeletionReview);
+        assert!(server.submitted.len() == 2);
+        assert!(fs::read(library.root.join("Sync/journal.bin")).unwrap() == checkpoint);
+        assert!(fs::read(library.root.join("Vault/vault.json")).unwrap() == raw_primary);
+    }
+}
+
+#[test]
 fn authenticated_send_preserves_secure_loser_before_replacing_the_saved_cas_winner() {
     let temporary = tempfile::tempdir().unwrap();
     let library = Library::open(temporary.path().into()).unwrap();

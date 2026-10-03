@@ -1,7 +1,7 @@
 //! Mapped snapshot review reached through real cursor-invalid HTTPS responses.
 use super::*;
 
-fn checkpoint(root: &Path) -> crate::journal::Checkpoint {
+pub(super) fn checkpoint(root: &Path) -> crate::journal::Checkpoint {
     let root = root.to_owned();
     let (sender, receiver) = mpsc::channel();
     let worker = thread::spawn(move || {

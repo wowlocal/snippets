@@ -4,10 +4,14 @@ use super::*;
 use crate::{
     clock::Hlc,
     cloud::Binding,
-    model::Snippet,
+    model::{self, Snippet},
     wire::{Envelope, WireRecord},
 };
-use std::{cell::Cell, collections::VecDeque, fs};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, VecDeque},
+    fs,
+};
 use uuid::Uuid;
 #[path = "receiver_secure_tests.rs"]
 mod secure;
@@ -656,6 +660,104 @@ fn remote_tombstone_stays_queued_until_deletion_review_exists() {
     );
     assert_eq!(body(&library, 1), "Public retained live body");
     assert!(load(&library).journal.inbox.has_pending_page());
+}
+
+pub(crate) fn current_carrier_fixture()
+-> (tempfile::TempDir, Library, crate::vault::Document, Envelope) {
+    let temp = tempfile::tempdir().unwrap();
+    let library = Library::open(temp.path().into()).unwrap();
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/crypto-v1.json")).unwrap();
+    let mut document =
+        crate::vault::Document::decode(&serde_json::to_vec(&fixture["document"]).unwrap()).unwrap();
+    document.records[0].hlc = Some(Hlc::parse("100000000000-0000-11111111").unwrap());
+    let local = crate::projection::current(
+        &[],
+        Some(&document),
+        "11111111",
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap()
+    .into_values()
+    .next()
+    .unwrap();
+    let vault_key = RootKey::from_bytes(&[0x11; 32]).unwrap();
+    let body = b"Public current-carrier transport winner";
+    let mut winner = local.clone();
+    winner.hlc = Hlc::foreign(0xffff_0000_0000);
+    winner.fields.as_mut().unwrap().content = zeroize::Zeroizing::new(
+        crate::crypto::seal_record(
+            body,
+            &vault_key,
+            &document.salt().unwrap(),
+            &document.kid,
+            winner.id,
+            false,
+        )
+        .unwrap()
+        .text()
+        .as_bytes()
+        .to_vec(),
+    );
+    winner.extensions.insert(
+        "vaultContentHash".into(),
+        crate::canonical::Value::text(crate::crypto::content_hash(
+            body,
+            &vault_key,
+            &document.salt().unwrap(),
+        )),
+    );
+    let raw = merge::merge(None, Some(&local), Some(&winner))
+        .unwrap()
+        .survivor
+        .unwrap();
+    assert!(merge::has_unresolved(Some(&raw)));
+    document.records[0] = crate::projection::vault_record(&raw, None, &document.kid)
+        .unwrap()
+        .unwrap();
+    fs::create_dir(library.root.join("Vault")).unwrap();
+    model::atomic_write(
+        &library.root.join("Vault/vault.json"),
+        &document.encode().unwrap(),
+    )
+    .unwrap();
+    (temp, library, document, winner)
+}
+
+#[test]
+fn current_carrier_cloud_deletion_stays_queued_with_or_without_vault_keys() {
+    for authenticated in [false, true] {
+        let (_temp, library, document, winner) = current_carrier_fixture();
+        let deleted = winner
+            .tombstone(Hlc::foreign(0xffff_ff00_0000), "22222222".into(), true)
+            .unwrap();
+        let before = fs::read(library.root.join("Vault/vault.json")).unwrap();
+        let wire_key = key();
+        let binding = scope();
+        let root = RootKey::from_bytes(&[0x11; 32]).unwrap();
+        let keys = crate::materializer::Keyring::new(&root, &document).unwrap();
+        let mut receiver = owner(&library, &wire_key, &binding, &|| Ok(()));
+        if authenticated {
+            receiver.vault_keys = Some(&keys);
+        }
+        let mut remote = RemoteFixture::new(vec![page(
+            vec![record(&deleted, "deleted-current")],
+            "current",
+            true,
+            false,
+        )]);
+        assert!(receiver.receive(&mut remote, 1).unwrap().status == Status::DeletionReview);
+        assert!(fs::read(library.root.join("Vault/vault.json")).unwrap() == before);
+        let saved = load(&library);
+        assert!(saved.journal.inbox.next().unwrap().envelope == deleted);
+        assert!(saved.journal.confirmed(winner.id).is_none());
+        let checkpoint = fs::read(library.root.join("Sync/journal.bin")).unwrap();
+        assert!(receiver.receive(&mut remote, 1).unwrap().status == Status::DeletionReview);
+        assert!(remote.requested.len() == 1);
+        assert!(fs::read(library.root.join("Sync/journal.bin")).unwrap() == checkpoint);
+        assert!(fs::read(library.root.join("Vault/vault.json")).unwrap() == before);
+    }
 }
 
 #[test]

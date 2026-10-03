@@ -37,7 +37,7 @@ if [[ ${1:-} == --in-bus ]]; then
 fi
 if [[ $# -lt 1 || $# -gt 2 || ! -x $1 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${HYPRLAND_INSTANCE_SIGNATURE:-} || -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--automatic-sync|--automatic-reader|--vault-sync|--sync-review] (in the unlocked desktop session)' >&2
+  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete] (in the unlocked desktop session)' >&2
   exit 2
 fi
 case ${2:-} in
@@ -46,6 +46,8 @@ case ${2:-} in
   --automatic-reader) test_name=account_ui::live_tests::live_automatic_reader ;;
   --vault-sync) test_name=account_ui::live_tests::vault::live_manual_and_vault_sync ;;
   --sync-review) test_name=account_ui::live_tests::vault::review::live_secure_conflict_and_deletion ;;
+  --current-review-keep) test_name=account_ui::live_tests::vault::review::current::live_current_carrier_keep ;;
+  --current-review-delete) test_name=account_ui::live_tests::vault::review::current::live_current_carrier_delete ;;
   *) printf '%s\n' 'Unknown native account fixture.' >&2; exit 2 ;;
 esac
 if ! "$1" --list | rg -Fx "$test_name: test" > /dev/null; then

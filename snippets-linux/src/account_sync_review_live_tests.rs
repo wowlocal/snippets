@@ -1,6 +1,8 @@
 //! Actual HTTPS CAS conflicts, protected originals and mapped deletion reviews.
 use super::*;
 use crate::clock::Hlc;
+#[path = "account_current_review_live_tests.rs"]
+mod current;
 #[path = "account_snapshot_live_tests.rs"]
 mod snapshot;
 
@@ -12,7 +14,22 @@ fn review(window: &Rc<AccountWindow>) -> adw::AlertDialog {
             .borrow()
             .as_ref()
             .is_some_and(|d| d.is_mapped())
+            || !window.busy.get()
     });
+    assert!(
+        window
+            .snapshot_dialog
+            .borrow()
+            .as_ref()
+            .is_some_and(|d| d.is_mapped()),
+        "preservation_required={}, send_pending={}, unavailable={}, changed={}, apply_refused={}",
+        window.status.label()
+            == "Preserve the pending conflict copies before deciding this deletion.",
+        window.status.label() == "Finish the saved send before reviewing this incoming deletion.",
+        window.status.label() == "No saved deletion needs review.",
+        window.status.label() == "The local or cloud library changed. Review this deletion again.",
+        window.status.label() == "This deletion could not be applied safely. Review it again."
+    );
     let dialog = window.snapshot_dialog.borrow().clone().unwrap();
     assert!(window.busy.get());
     assert!(

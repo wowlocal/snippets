@@ -249,6 +249,23 @@ impl Journal {
                             .filter(|_| self.known_absence(source.id))
                             .map(|e| &e.desired)
                     })
+                    // A reviewed cloud tombstone can already be confirmed and
+                    // have no entry while its actual post-C0 source ACK remains
+                    // owed. Preserve that exact absence; the permission check
+                    // below still rejects unreviewed or changed tombstones.
+                    .or(self
+                        .delivery
+                        .get(&source.id)
+                        .filter(|e| e.deleted && self.known_absence(source.id)))
+                    .or(self
+                        .projected
+                        .get(&source.id)
+                        .filter(|e| e.deleted && self.known_absence(source.id)))
+                    .or_else(|| {
+                        self.confirmed(source.id)
+                            .map(|c| &c.envelope)
+                            .filter(|e| e.deleted && self.known_absence(source.id))
+                    })
                     .or_else(|| (source.id == id).then_some(retained)))
                 .ok_or(Failure::InvalidState)?;
             if target.deleted

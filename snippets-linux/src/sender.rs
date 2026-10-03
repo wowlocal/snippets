@@ -515,6 +515,16 @@ impl Owner<'_> {
                             }
                             let current =
                                 primary::current(self.library, &checkpoint.journal, &device)?;
+                            if crate::deletion_review::requires_remote_delete(
+                                &checkpoint.journal,
+                                &current,
+                                &remote,
+                            )
+                            .map_err(|_| Failure::InvalidPage)?
+                            {
+                                progress.status = Status::DeletionReview;
+                                return Ok(progress);
+                            }
                             if !current.contains_key(&remote.id)
                                 && !offer.offered.envelope.deleted
                                 && !checkpoint.journal.known_absence(remote.id)

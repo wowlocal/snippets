@@ -325,7 +325,11 @@ authorization. Explicit same-vault routing also passes sealed exchange while the
 vault stays locked. A retained strict-CAS secure conflict now passes native
 preservation: its disabled protected copy is acknowledged before the source
 changes. Fresh-authorized restoration of a missing copy preserves its nonce.
-Current raw/nested graph and prerequisite-deletion review remain separate checks.
+Flat current secure v1 cloud-source Keep/Delete and acknowledged-copy deletion
+repair now pass native acceptance with independent mixed source/copy choices and
+retained source rejection packets. Nested/journal-only C1, independent raw child
+decisions, local-absence source review and unrelated ambiguous packets remain
+separate checks.
 
 After reconnecting, selecting a library and verifying its keys, choose **Enable
 Automatic Sync for This Library**. Snippets resumes that exact saved account and
@@ -656,8 +660,11 @@ Sync Now/Receive/Send controls and fresh passphrase/recovery-key cycles also pas
 combined live acceptance. Retained secure-conflict preservation, protected-copy
 restoration and basic cloud deletion Cancel/Keep/Delete also pass. Missing-snapshot
 Cancel/focus/stale-primary refusal and explicit resumption now pass for acknowledged
-ordinary and protected records, with preserved nonce and fresh create CAS. Current
-raw/nested deletion groups, pairing and signed operations remain under live acceptance. The native
+ordinary and protected records, with preserved nonce and fresh create CAS. Flat
+current secure v1 source and acknowledged-copy deletion repair also pass with fresh
+credentials, cancellation refusal and exact CAS ordering. Nested/journal-only
+groups, independent raw child decisions, local-absence source review, unrelated
+ambiguous packets, pairing and signed operations remain under live acceptance. The native
 interrupted-startup recovery fixture passes with temporary data; full file-dialog
 and Apple-app backup round trips remain separate.
 
@@ -1192,6 +1199,10 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 # Retained secure CAS conflict, protected-copy restore, cloud Cancel/Keep/Delete,
 # then cursor-invalid snapshot Cancel/focus/stale-primary refusal and resumption.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --sync-review
+# Flat current secure v1 source Keep/Delete, then separate acknowledged-copy
+# deletion repair while an actual source rejection packet is retained.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --current-review-keep
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --current-review-delete
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib clipboard_history::wayland::protocol_tests::private_libwayland -- --ignored --test-threads=1

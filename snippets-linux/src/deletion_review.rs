@@ -140,9 +140,9 @@ fn retained_live<'a>(
     .flatten()
     .find(|e| !e.deleted)
 }
-fn requires_remote_delete(
+pub(crate) fn requires_remote_delete(
     journal: &Journal,
-    snapshot: &primary::Snapshot,
+    current: &std::collections::BTreeMap<Uuid, Envelope>,
     e: &Envelope,
 ) -> Result<bool> {
     if !e.deleted {
@@ -151,17 +151,17 @@ fn requires_remote_delete(
     if journal.is_preservation_copy(e.id) {
         return Ok(true);
     }
-    if retained_live(journal, snapshot.records.get(&e.id), e.id)
+    if retained_live(journal, current.get(&e.id), e.id)
         .is_some_and(|live| merge::has_unresolved(Some(live)))
     {
         return Ok(true);
     }
-    if !snapshot.records.contains_key(&e.id) {
+    if !current.contains_key(&e.id) {
         return Ok(false);
     }
     let outcome = merge::merge(
         journal.merge_ancestor(e.id),
-        journal.local_intent(e.id, snapshot.records.get(&e.id))?,
+        journal.local_intent(e.id, current.get(&e.id))?,
         Some(e),
     )
     .map_err(|_| Failure::PreservationRequired)?;
@@ -187,12 +187,12 @@ fn candidate(
             .and_then(|r| r.get(packet.position))
     {
         let e = wire.open(owner.wire_key, owner.wire_salt)?;
-        if requires_remote_delete(journal, snapshot, &e)? {
+        if requires_remote_delete(journal, &snapshot.records, &e)? {
             return Ok((e.id, Source::Outbound(e, version.clone())));
         }
     }
     if let Some(record) = journal.inbox.next()
-        && requires_remote_delete(journal, snapshot, &record.envelope)?
+        && requires_remote_delete(journal, &snapshot.records, &record.envelope)?
     {
         if journal.outbound.as_ref().is_some_and(|packet| {
             packet.receipts.is_some()

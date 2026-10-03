@@ -26,8 +26,10 @@ pub(super) struct State {
     pub changed_scope: bool,
     pub defer_fetch: bool,
     pub invalidate_cursor: bool,
+    pub reject_once: Option<uuid::Uuid>,
     pub fetched: Vec<Option<String>>,
     pub submitted: Vec<Vec<(WireRecord, Option<String>)>>,
+    pub acknowledgements: Vec<(uuid::Uuid, String)>,
     public: Option<Value>,
     ciphertext: Option<Value>,
     records: BTreeMap<uuid::Uuid, (WireRecord, String)>,
@@ -313,6 +315,11 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
             .map(|item| {
                 let record: WireRecord = serde_json::from_value(item["record"].clone()).unwrap();
                 record.validate().unwrap();
+                if state.reject_once == Some(record.id) {
+                    state.reject_once = None;
+                    partial = true;
+                    return json!({"kind":"rejected","errorCode":"rate_limited","retryAfterSeconds":1});
+                }
                 let expected = item["expectedRecordVersion"].as_str();
                 let actual = state.records.get(&record.id).map(|(_, v)| v.as_str());
                 if expected != actual {
@@ -324,6 +331,8 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
                     let id = record.id;
                     state.put(record);
                     let (record, version) = state.records.get(&id).unwrap();
+                    assert!(state.acknowledgements.len() < 32 * 50);
+                    state.acknowledgements.push((id, version.clone()));
                     json!({"kind":"accepted","recordVersion":version,"revision":record.rev})
                 }
             })
