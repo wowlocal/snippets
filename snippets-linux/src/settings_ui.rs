@@ -367,6 +367,10 @@ impl Settings {
     }
 }
 #[cfg(test)]
+#[path = "login_startup_live_tests.rs"]
+mod live_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

@@ -237,7 +237,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 
 | Area | Rust implementation | Verification / next work |
 | --- | --- | --- |
-| Native workspace | GTK list/editor, search, tags, pins, autosave, keyboard actions, searchable settings, configurable close behavior, explicit background login startup and gated startup recovery | Current native lifecycle, startup recovery, searchable Settings and local-learning windows pass with fatal GTK warnings; single Quit waits for native workers, while save conflicts cancel exit |
+| Native workspace | GTK list/editor, search, tags, pins, autosave, keyboard actions, searchable settings, configurable close behavior, explicit background login startup and gated startup recovery | Current native lifecycle, startup recovery, searchable Settings and local-learning windows pass with fatal GTK warnings; the mapped login switch, real XDG generator and installed release pass activation through unique runtime units in the actual Omarchy user manager; same-primary foreground/background and opt-out pass; a full new sign-in remains separate; single Quit waits for native workers, while save conflicts cancel exit |
 | Native desktop tray | Primary-process StatusNotifierItem, fixed DBusMenu actions, public ARGB icon, recovery/enable-state updates and watcher restart registration | Independent C/GIO/Cairo and authenticated private-bus checks pass; the installed release's real Omarchy icon/menu render, pointer selection focuses Settings, and the same primary re-registers and activates after a real host restart |
 | Global keyboard shortcuts | Explicit local enable preference, primary native Wayland registration for open/picker/capture, native setup/status/retry controls, captured receiving target, bounded revocable dispatch and quit fence | Private protocol/worker/consent, native peer authentication and GTK controls pass; temporary real compositor key assignments with native virtual-keyboard events verify Open, Picker/Return with receiving-field delivery and clipboard restoration, and Capture; one Quit revokes registrations; physical keyboard input remains separate |
 | Library | CRUD, bounded/strict JSON, file permissions, process lock, atomic replacement, CAS conflicts, undo/redo | Rust core and concurrent CLI writer tests pass |
@@ -260,7 +260,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Empty-target first keys | Separate bounded Secret Service candidate history, exact key/envelope before POST, owner-only native create/resume, fresh server reconciliation and reviewed activation | Twenty-seven desktop tests (twenty-six without desktop features) cover writes, races, restart, scope/account/schema/capacity refusal, old-key preservation, reviewed reuse across changed pins/accounts and offline completion/retirement of promoted recovery-code copies; combined live workflow remains unverified |
 | Local owner authorization | Bounded unprivileged PAM worker, exact-purpose/scope/generation gate, single-use permit and revocable disclosure lease; password dialog and focus/lock UI wired | Fresh private-policy libpam success, refusal, timeout and cancellation checks pass; mapped native recovery-password cancellation/wrong-password refusal, real private-policy PAM authorization, actual focus-loss revocation and fresh reauthorization/confirmation pass; host login-policy authentication remains separate |
 | Cloud credentials | Native Secret Service backend, credential lineage, serialized sign-in/refresh/logout/restart cleanup, bounded live access tokens; native sign-in/reconnect/sign-out UI | Fresh isolated GNOME Keyring and existing fault/restart/worker ownership checks pass; combined native wrong-code retry/sign-in, explicit library selection, new-worker reconnect with token rotation and sign-out pass through the real private keyring and verified HTTPS, preserving the library key; startup connects only with explicit saved automatic consent |
-| Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; current native toggle smoke and combined private-keyring/verified-HTTPS/GTK writer/reader checks pass: transient backoff, actual hidden-window timer exchange, protected-consent startup in a new worker, in-flight disable preserving primary/checkpoint bytes, opt-out restart without HTTP and changed-membership halt; primary process login startup and secure/review workflows remain separate |
+| Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; current native toggle smoke and combined private-keyring/verified-HTTPS/GTK writer/reader checks pass: transient backoff, actual hidden-window timer exchange, protected-consent startup in a new worker, in-flight disable preserving primary/checkpoint bytes, opt-out restart without HTTP and changed-membership halt; generated-service primary startup passes in the live user manager; full new sign-in and secure/review workflows remain separate |
 | Cloud library creation | Explicit native create/resume/open and create-another actions; bounded retained intents; one-use confirmation binds account session and existing protected state; original idempotency key retained before POST | Twenty-four fault/restart/schema/expiry tests plus bootstrap admission and reviewed-switch integration; combined live GTK/keyring/HTTPS workflow remains unverified; preserves active keys and sync checkpoint |
 | Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, current v1 conflict-owned absence/deletion crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; ordinary native automatic receiving/sending now passes against verified HTTPS with a real private keyring; live snapshot/deletion, secure-sync, conflict and reviewed-switch workflows remain open |
 | Inline expansion | Native input-method-v2 owner, separate opt-in fuzzy input-popup with keyboard navigation and raw passthrough, conditional bounded clipboard read and move-only chunked replacement | Core, native pixels/FD/protocol and controller checks cover selection, dismissal, legacy consent, frozen ranking, queue/buffer bounds, UTF-8, field/file changes, cancellation and full 256 KiB output; real peer credentials, native settings and independent GTK exact/suggestion/echo receiving-field checks pass; other application compatibility remains under review |
@@ -3508,3 +3508,55 @@ Primary-process login startup, native manual and vault-authenticated sync contro
 pairing/signed mutations, reviewed switching and snapshot/conflict/deletion flows,
 fuller secure editing/recovery/accessibility and Apple-app backup round trips
 remain under live acceptance.
+
+### Native generated login-service acceptance (2026-10-03)
+
+`tests/login-startup-live.sh` explicitly selects the ignored GTK fixture and an
+actual release directory. It requires the unlocked live desktop and refuses an
+existing Snippets primary. The real graphical-session and XDG autostart targets
+are active; the user manager's Wayland, compositor, runtime and D-Bus environment
+matches that of the native test. Private config/data and a copied installation
+with spaces isolate the scenario from user settings and library contents.
+
+The mapped native **Launch at Login** switch writes its real registration through
+the production asynchronous handler. Desktop validation and the installed systemd
+XDG generator admit it and generate one linked autostart service. The fixture
+retains that service's ExecStart, service type, slice and graphical-session
+ordering, adding only private config/data and GTK fatal warnings. A unique
+runtime-only target requests the uniquely named service through its dependency
+link in the actual desktop user manager. Neither shared session target is
+restarted, and the user's login entry is unchanged.
+
+The actual installed primary owns the desktop application bus name and matches
+the systemd MainPID and copied executable. Background activation maps no window.
+Its copied CLI passes normal native peer admission and reports a locked empty
+vault catalogue. Another background command retains the same process without
+mapping a window; foreground activation opens exactly one window in that process.
+A subsequent background command preserves the visible window. Turning the mapped
+login switch off writes Hidden=true; fresh XDG generation produces no service and
+preserves the currently running primary. One native Quit drains the primary and
+leaves the generated service inactive with a successful result. Removing the
+private dependency link and activating the private target again starts no app.
+
+The primary creates its normal private empty Usage lock, with checked 0700/0600
+permissions and an empty single-link file. No snippets, vault, sync checkpoint,
+automatic consent, clipboard-history or learned-usage payload is created. All
+owned runtime files, links, targets, services and test windows are removed.
+
+The combined activation check passes again against the freshly rebuilt release.
+Native Settings, ordinary lifecycle and interrupted-startup recovery checks pass
+with fatal GTK warnings, along with seven desktop settings tests, six headless
+settings cases, command exclusivity and the single-Quit/shortcut regression.
+Both all-target Clippy configurations, formatting, shell syntax, three release
+artifacts and two isolated-prefix installations pass on the same 272-file native
+fingerprint. This checkpoint adds acceptance code and documentation; production
+startup and registration behavior are unchanged. GTK 4.22.4/libadwaita 1.9.3,
+real Wayland peer credentials, desktop D-Bus tray ownership, DNS and verified
+external HTTPS are rechecked. Stay Awake and the existing 2026-10-05 09:00 Minsk
+lock-restoration timer are preserved.
+
+This establishes generated-service activation in the current graphical session.
+A full logout and new sign-in remain unverified. Native manual and
+vault-authenticated sync controls, pairing/signed mutations, reviewed switching
+and snapshot/conflict/deletion flows, fuller secure editing/recovery/accessibility
+and Apple-app backup round trips remain under live acceptance.

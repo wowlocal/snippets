@@ -65,8 +65,12 @@ percent signs are checked with independent native launchers.
 
 Omarchy's UWSM handles [XDG autostart](https://raw.githubusercontent.com/Vladimir-csp/uwsm/master/README.md).
 The registration follows the [desktop autostart specification](https://specifications.freedesktop.org/autostart/latest/).
-The native Settings window and isolated login-entry/launch checks pass. An actual
-login-startup trial remains a separate acceptance check.
+The mapped Settings switch, actual XDG generator and installed release pass a
+live user-systemd activation check in Omarchy. The background primary has no
+window; opening the application activates that same process, and one Quit stops
+the service. Disabling registration prevents its next private target activation.
+The fixture uses private config/data and unique runtime units, preserving the
+user's login entry. A full logout and new sign-in remain a separate check.
 
 ## Desktop tray
 
@@ -1161,6 +1165,9 @@ G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.
 # then restores it after stopping all collectors. Private keyring/bus/data only.
 # Obtain the library-test executable with cargo test --lib --no-run first.
 bash snippets-linux/tests/clipboard-history-live.sh /absolute/path/to/library-test-binary
+# Live host user-systemd/GTK activation of an installed release through a generated
+# service and unique temporary target. No existing Snippets primary may be running.
+bash snippets-linux/tests/login-startup-live.sh /absolute/path/to/library-test-binary /absolute/path/to/release-directory
 # Mapped account/password dialogs, real private keyring, verified loopback HTTPS
 # and private-policy PAM; no login-keyring or host-PAM-policy access.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary
@@ -1234,7 +1241,14 @@ helper is tested only with malformed requests that cannot authenticate a real
 account. The account-window lifecycle fixture injects its worker and authorization,
 uses only public visual/input material, and never accesses a real keyring, account,
 PAM service or server. It must run on the normal host bus, separately from the
-keyring harness. Its current unlocked run passes after waiting for the parent
+keyring harness. The login-launch fixture also uses the normal desktop bus and
+user manager. It copies the GUI/CLI/helper release artifacts into a private path
+with spaces and checks peer admission against the actual generated-service owner.
+It writes only private registration/data and unique runtime units; it starts no
+shared desktop target and performs no logout. Ordinary primary startup creates
+its normal empty private Usage lock, but no snippets, vault, sync, history or
+learned usage payload. All owned services, units and windows are removed.
+The account lifecycle's current unlocked run passes after waiting for the parent
 window to map before presenting its child and applying the selected-library
 state before testing pairing controls.
 The separate combined account fixture uses the real serial account owner and
