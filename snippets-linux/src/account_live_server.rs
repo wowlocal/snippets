@@ -25,6 +25,7 @@ pub(super) struct State {
     pub reader: bool,
     pub changed_scope: bool,
     pub defer_fetch: bool,
+    pub submitted: Vec<Vec<(WireRecord, Option<String>)>>,
     public: Option<Value>,
     ciphertext: Option<Value>,
     records: BTreeMap<uuid::Uuid, (WireRecord, String)>,
@@ -42,6 +43,9 @@ impl State {
     }
     pub fn record(&self, id: uuid::Uuid) -> Option<WireRecord> {
         self.records.get(&id).map(|(record, _)| record.clone())
+    }
+    pub fn version(&self, id: uuid::Uuid) -> Option<String> {
+        self.records.get(&id).map(|(_, version)| version.clone())
     }
     fn known(&self) -> BTreeMap<uuid::Uuid, String> {
         self.records
@@ -270,6 +274,23 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
         assert!(request.body["expectedScope"] == observed_scope(state));
         let items = request.body["items"].as_array().unwrap();
         assert!(!items.is_empty() && items.len() <= 50);
+        // Retain only encrypted offers and their positional CAS for explicit
+        // native acceptance. No bodies, keys or credentials reach this peer.
+        assert!(state.submitted.len() < 32);
+        state.submitted.push(
+            items
+                .iter()
+                .map(|item| {
+                    let record: WireRecord =
+                        serde_json::from_value(item["record"].clone()).unwrap();
+                    record.validate().unwrap();
+                    (
+                        record,
+                        item["expectedRecordVersion"].as_str().map(String::from),
+                    )
+                })
+                .collect(),
+        );
         state.batches += 1;
         let mut partial = false;
         let outcomes: Vec<_> = items

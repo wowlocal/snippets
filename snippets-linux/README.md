@@ -322,7 +322,10 @@ focus loss and replacement of the captured file preserve primary/checkpoint
 bytes. A fresh passphrase cycle receives an unmarked legacy secure edit and sends
 the local secure edit; another such incoming edit requires a new recovery-key
 authorization. Explicit same-vault routing also passes sealed exchange while the
-vault stays locked. Secure-conflict preservation remains a separate live check.
+vault stays locked. A retained strict-CAS secure conflict now passes native
+preservation: its disabled protected copy is acknowledged before the source
+changes. Fresh-authorized restoration of a missing copy preserves its nonce.
+Current raw/nested graph and prerequisite-deletion review remain separate checks.
 
 After reconnecting, selecting a library and verifying its keys, choose **Enable
 Automatic Sync for This Library**. Snippets resumes that exact saved account and
@@ -650,8 +653,10 @@ computer's local changes, and a connected account or verified key does not mean
 snippets have synchronized. Ordinary automatic receiving/sending now passes the
 combined live GTK, private native keyring and verified HTTPS workflow. Explicit
 Sync Now/Receive/Send controls and fresh passphrase/recovery-key cycles also pass
-combined live acceptance. Snapshot/deletion review, secure-conflict preservation,
-pairing and signed operations remain under live acceptance. The native
+combined live acceptance. Retained secure-conflict preservation, protected-copy
+restoration and basic cloud deletion Cancel/Keep/Delete also pass. Snapshot
+review, current raw/nested deletion groups, pairing and signed operations remain
+under live acceptance. The native
 interrupted-startup recovery fixture passes with temporary data; full file-dialog
 and Apple-app backup round trips remain separate.
 
@@ -1183,6 +1188,8 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --automatic-reader
 # Manual Receive/Send/Sync Now and fresh passphrase/recovery-key vault cycles.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --vault-sync
+# Retained secure CAS conflict, protected-copy restore and cloud Cancel/Keep/Delete.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --sync-review
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib clipboard_history::wayland::protocol_tests::private_libwayland -- --ignored --test-threads=1
@@ -1285,7 +1292,12 @@ same-vault exchange, fresh passphrase/recovery methods, cancellation, focus and
 source revocation, encrypted local/remote edit convergence and a second cycle
 requiring new proof. It never enables automatic scheduling, and only the test
 thread opens fixture bodies to verify the result. The HTTPS server keeps opaque
-wire records. Only closed status/failure enums and counts appear in failure output.
+wire records. The review variant captures bounded encrypted POST packets and
+positional CAS, proving protected-copy acknowledgement before the source update.
+It also verifies missing-copy restoration with fresh credentials and the same
+sealed nonce, cancellation/wrong credentials without writes, actual review focus
+revocation, and ordinary cloud Keep/Delete decisions preserving unrelated data.
+Only closed status/failure enums and counts appear in failure output.
 The independent QR reader test uses public payloads and explicitly disables
 zbar's D-Bus publication. Recovery-disclosure/confirmation tests use an explicitly synthetic proof;
 they cover suffix normalization, secret retirement, schema migration and both sides

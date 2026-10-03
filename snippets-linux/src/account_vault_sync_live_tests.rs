@@ -7,6 +7,8 @@ use crate::{
     wire::{Envelope, WireRecord},
 };
 use std::os::unix::fs::PermissionsExt;
+#[path = "account_sync_review_live_tests.rs"]
+mod review;
 
 const CURRENT: &str =
     "Synchronization complete. Cloud changes received and local changes confirmed.";
