@@ -172,6 +172,55 @@ Its id is derived deterministically (UUIDv5 over the record id and the losing co
 devices mint the *same* copy and a third sync is a no-op. With a random id, conflict copies breed
 without bound; that is the classic way this feature goes wrong.
 
+That local-file id (`conflict|content|updatedAt`) is only for merges of `snippets.json` on one
+Mac. Across devices the identity is defined on the wire, below.
+
+### Conflict-copy identity across clients (wire contract)
+
+Every client — Apple (`SyncMerge.mergeEnvelopeOutcome`), Linux (`merge::merge`) and Android
+(`AndroidBridge` reconciliation) — must follow these rules. The 2026-10-03 audit
+(`docs/issues/cloud-account-key/01-concurrent-body-loss.md`) lost a concurrent body because two of
+them did not.
+
+1. **A copy is a function of the exact losing envelope.** For a plain loser the copy id is
+   `UUIDv5(sourceID, "sync-content-conflict-v1|" + fingerprint)`, where `fingerprint` is the
+   lowercase SHA-256 of the canonical snapshot `{version: 1, sourceID, sourceHLC, sourceOrigin,
+   secure, fields, x: {vault keys only}}`. The copy keeps the loser's fields with the conflict
+   name, an empty keyword, `isEnabled = false`, `isPinned = false` and the `conflict` tag, keeps the
+   loser's HLC and origin, and carries `x["conflictCopy.v1"] = {version, sourceID, fingerprint}`.
+   Any number of devices that preserve the same *published* version therefore mint one
+   byte-identical record; the second upload is an exact CAS echo. A copy of the same text from a
+   different envelope (for example a device's own merged survivor) is a different version and a
+   different record. The shared vectors are `snippets-linux/tests/fixtures/conflict-copy-v1.json`,
+   checked by Swift (`SyncConflictCopyVectorTests`), Android (`AndroidConflictCopyTests`) and Rust
+   (`canonical_conflict_copies_match_the_cross_client_vectors`).
+2. **An unpublished local loser** has no wire envelope yet. Its device derives one
+   deterministically from the edit (`HLC.wallMs = updatedAt`, its own device id and origin) so
+   the copy identity is stable across retries until the base advances. No other device can mint
+   that copy.
+3. **Extensions belong to the record.** Re-encoding an edited plain record keeps its `x` bag
+   (minus vault keys); in particular a renamed or re-enabled copy keeps `conflictCopy.v1`, which
+   every peer uses to verify the deterministic id before accepting the record.
+4. **A CAS version is only ever attached to bytes merged with that version.** After an
+   authoritative CAS conflict a client merges the returned value into its intent and offers the
+   merge. It never re-offers older bytes — a frozen post-copy source release, a rejected offer —
+   under the newer version: that silently overwrites the other device's body, and every peer that
+   fetches in between treats the overwrite as a newer edit. If the source of an active
+   copy-before-source epoch is merged with a newer authoritative value, the merge *refines* that
+   epoch (new copies join its prerequisites; the merged value becomes the post-copy release),
+   exactly like `SyncJournal.stageConflictDependency`. Linux queues frozen generations only for
+   local decisions and archived restorations.
+5. **Only the newest generation of a record is merged.** Apple coalesces each fetched batch to the
+   last occurrence per record. Linux applies delta generations in order, but skips a generation
+   that precedes, in the same durable page, the version a receipt already confirmed (normally its
+   own acknowledged write): merging that ancestor against the newer confirmed value would roll the
+   record back or copy a version both sides already superseded.
+6. **A recovery round finishes the intent it unblocks.** Settling a frozen offer (an exact echo
+   after a lost reply, or a wire-key reseal of confirmed bytes) can expose newer local intent for
+   the same record. The production `SyncEngine` runs bounded follow-up rounds
+   (`productionFollowUpRounds`) while each round settles offers, instead of reporting Synced with
+   the user's edit still unsent until the next trigger.
+
 **Tags** are merged as a three-way set. With an ancestor, the add-vs-remove conflict an OR-Set
 exists to solve cannot arise — removing needs the tag in base, adding needs it absent from base.
 The ancestor *is* the causal context an OR-Set carries per element, already paid for.

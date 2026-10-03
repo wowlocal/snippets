@@ -5,8 +5,8 @@
 
 | Приоритет | Проблема | Статус |
 |---|---|---|
-| P1 | [Потеря конкурентной версии Android](01-concurrent-body-loss.md) | Подтверждена на реальном backend; зависит от порядка, включая сценарий без удалений |
-| P2 | [Лишние конфликтные копии после crash/recovery](02-post-crash-conflict-copies.md) | Наблюдается на чистой библиотеке; точный механизм ещё не установлен |
+| P1 | [Потеря конкурентной версии Android](01-concurrent-body-loss.md) | Причина установлена (Linux sender/receiver + id копий Android), исправлено в `fix/cloud-sync-conflicts` |
+| P2 | [Лишние конфликтные копии после crash/recovery](02-post-crash-conflict-copies.md) | Причина установлена (reseal + recovery оставлял правку неотправленной), исправлено в `fix/cloud-sync-conflicts` |
 | P2 | [Keychain на главном потоке iOS](03-ios-main-thread-keychain.md) | Воспроизводимый тест + прослеженный путь вызова |
 | P2 | [CorePackage не собирается](04-corepackage-build.md) | Подтверждено штатной командой |
 | P3 | [Нестабильная граница тайм-аута Linux](05-linux-timeout-test.md) | Подтверждены повторения и расхождение разрешения часов |
