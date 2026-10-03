@@ -129,8 +129,8 @@ format. Linux never opens Apple's live support directory or CloudKit checkpoints
 metadata reserves identifiers and keywords; ordinary operations fail closed on
 an unreadable vault. Explicit bidirectional **Sync Now**, cloud receiving, sending, missing-snapshot review
 and single-record deletion/restore decisions are available. Opt-in automatic
-synchronization is implemented; complete conflict-owned deletion recovery remains pending. Saved local
-changes can now be reviewed and restored from library-switch history.
+synchronization and current v1 conflict-owned absence/deletion recovery are implemented.
+Saved local changes can be reviewed and restored from library-switch history.
 Remote deletion of materialized conflict originals can now be reviewed while
 retaining original requests and later local edits. Protected repairs require the
 matching vault's passphrase or recovery key. Missing originals and known current
@@ -595,9 +595,11 @@ partial failure. A server's retry delay is retained across restart. Body conflic
 preserve a disabled copy before the source and later copy edits can be sent.
 An edited remote copy cannot substitute for the immutable preservation receipt.
 
-Account/key replacement, conflict-owned deletion recovery
-and some secure conflict recovery remain unfinished. Missing primary files stop
-sending; they never become cloud deletions. Receiving does not send this
+Account/library/key changes use an explicitly reviewed handover that retains the
+previous protected state. Current v1 conflict recovery preserves immutable originals
+and later edits, including independently reviewed missing/deleted copies. Unknown
+variant versions, damaged originals or ambiguous body ownership still refuse recovery.
+Missing primary files stop sending; they never become cloud deletions. Receiving does not send this
 computer's local changes, and a connected account or verified key does not mean
 snippets have synchronized. The combined live GTK, keyring and HTTPS workflow,
 including Sync Now, receiving, sending, snapshot/deletion review, pairing and signed operations,
