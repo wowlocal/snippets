@@ -167,6 +167,14 @@ fn requires_remote_delete(
     .map_err(|_| Failure::PreservationRequired)?;
     Ok(outcome.survivor.is_some_and(|e| e.deleted))
 }
+fn missing_source(journal: &Journal, id: Uuid) -> Source {
+    journal
+        .entry(id)
+        .map(|entry| &entry.desired)
+        .filter(|e| e.deleted)
+        .map(|e| Source::Pending(e.clone()))
+        .unwrap_or(Source::Local)
+}
 fn candidate(
     journal: &Journal,
     snapshot: &primary::Snapshot,
@@ -205,14 +213,14 @@ fn candidate(
         .chain(journal.projected().values())
     {
         if !e.deleted && !snapshot.records.contains_key(&e.id) && !journal.known_absence(e.id) {
-            return Ok((e.id, Source::Local));
+            return Ok((e.id, missing_source(journal, e.id)));
         }
     }
     for variant in journal.unmaterialized_variants()? {
         if !snapshot.records.contains_key(&variant.copy_id)
             && !journal.known_absence(variant.copy_id)
         {
-            return Ok((variant.copy_id, Source::Local));
+            return Ok((variant.copy_id, missing_source(journal, variant.copy_id)));
         }
     }
     // Preserve a prepared tombstone's original wire bytes and generation.
@@ -272,6 +280,10 @@ impl Owner<'_> {
             (self.validate_session)()?;
             if !visited.insert(id) {
                 return Err(Failure::PreservationRequired);
+            }
+            if prerequisite_sources.is_empty() && !checkpoint.journal.is_preservation_copy(id) {
+                prerequisite_sources =
+                    sources::find_prerequisite_sources(&checkpoint.journal, &snapshot.records, id)?;
             }
             let live = retained_live(&checkpoint.journal, snapshot.records.get(&id), id).cloned();
             let current_sources = if let Some(live) = &live

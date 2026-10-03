@@ -3,6 +3,39 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Find the exact raw v1 owner in the already pinned local view. This never
+/// infers an original from its UUID alone or grants the source any consent.
+pub(super) fn find_prerequisite_sources(
+    journal: &Journal,
+    current: &BTreeMap<Uuid, Envelope>,
+    id: Uuid,
+) -> Result<Vec<Envelope>> {
+    let known = journal.projection_knowledge();
+    let ids: BTreeSet<_> = current
+        .keys()
+        .chain(known.keys())
+        .chain(journal.projected().keys())
+        .copied()
+        .collect();
+    let mut found = None;
+    for source_id in ids {
+        let Some(live) = retained_live(journal, current.get(&source_id), source_id) else {
+            continue;
+        };
+        if merge::secure_variants(live)
+            .map_err(|_| Failure::PreservationRequired)?
+            .iter()
+            .any(|variant| variant.copy_id == id)
+        {
+            if found.is_some() {
+                return Err(Failure::PreservationRequired);
+            }
+            found = Some(current_group(journal, current, live)?);
+        }
+    }
+    Ok(found.unwrap_or_default())
+}
+
 pub(super) fn prerequisite_variant(
     sources: &[Envelope],
     id: Uuid,

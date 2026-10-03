@@ -269,6 +269,20 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-03
 
+- Direct raw-child review adds three isolated regressions: both child choices
+  with a live parent, all four sibling choice combinations, and related versus
+  unrelated unknown-version boundaries. Existing suites now cover both direct
+  and parent-routed reviews through all five WAL phases and eight refusal modes
+  for each choice. Public fictional vaults and positional memory peers prove
+  exact pending tombstones, unchanged parent files, complete C0-before-source
+  delivery, consent retirement and key-free published redo.
+  Selected regressions pass 190 default library tests,
+  190 headless library tests and 24 core/helper integration tests.
+  Clippy passes with warnings denied for all targets in both configurations;
+  formatting, three release binaries and two temporary-prefix installs pass.
+  The native account fixture stops at GTK initialization before widget
+  assertions. Live selection/dialogs and combined native/cloud behavior remain
+  unverified.
 - Raw-carrier prerequisite recovery adds four isolated regression tests.
   They cover all eight local/remote-parent and child/parent choices, both child
   decisions through all five WAL phases, eight refusal modes for each decision,
@@ -2203,6 +2217,32 @@ Published redo needs no live vault key. The ambiguous-request fixture also
 checks exact original bytes/CAS and a retained C0 across the later parent
 review and real positional-CAS completion. These fixtures do not establish a
 live native dialog or combined cloud workflow.
+
+Directly selected pending raw children now use the same authenticated recovery
+owner when the parent remains live and has no deletion decision. Preparation
+finds the exact v1 copy identity in the already pinned primary/journal view,
+then retains its complete current carrier group. It rejects duplicate owners
+and unknown variants in the related group; an unrelated future-version record
+is neither claimed nor modified. No original is inferred from a UUID alone.
+The existing before-image, checkpoint, feed, session, vault and WAL checks still
+bind confirmation. The parent gets no primary outcome, consent or receipt.
+
+Missing projected or unmaterialized originals whose own desired intent is a
+tombstone now select that exact pending decision rather than creating a new
+local-absence tombstone. This matters after a first sibling review has frozen
+all originals: a second sibling retains its independently saved hash and intent.
+Restore or delete can finish for both siblings without a parent deletion review.
+Actual C0 acknowledgements still precede the source, and exact deletion consent
+retires only after the selected final target is accepted.
+
+Three additional isolated tests cover both directly selected child choices,
+all four sibling choice combinations, and related/unrelated unknown-version
+boundaries. The existing raw-source suites now exercise both direct and
+parent-routed decisions: both choices through all five WAL interruption phases
+and eight refusal modes. Direct choice without authentication leaves all files
+and consent unchanged. They use public fictional vaults, temporary roots and
+positional memory CAS peers; live native dialogs and combined cloud behavior
+remain unverified.
 
 ## Protected body selection and editing
 

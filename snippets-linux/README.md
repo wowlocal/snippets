@@ -79,6 +79,11 @@ with no preservation frame yet, can also be restored. Both choices authenticate
 the matching vault and retain the encrypted original before applying the child's
 own decision. The parent's contents or absence and previous cloud requests stay
 intact until its separate review.
+Directly selected pending raw-copy deletions can also be restored while their
+parent remains live. Each sibling keeps its own exact pending decision, even
+when a previous review has already retained the whole group's originals.
+An unsupported variant in the related group keeps that decision unavailable;
+unrelated records are not included in the child's decision.
 
 The account-review journal and its durable key owner preserve encrypted previous
 state, local intent and old key/recovery/pairing capabilities across an explicitly
