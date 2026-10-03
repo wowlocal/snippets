@@ -1,0 +1,13 @@
+{
+  "revocation_requests": 9,
+  "revoked_or_already_revoked": 9,
+  "access_tokens_checked": 9,
+  "denied": 9,
+  "removed_simulators": 2,
+  "disposable_avd_removed": true,
+  "tunnel_closed": true,
+  "backends_left_running": [
+    8087,
+    8088
+  ]
+}

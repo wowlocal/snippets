@@ -1,0 +1,99 @@
+{
+  "phases": [
+    {
+      "role": "macos",
+      "stage": "seed",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "prepare",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "prepare",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "prepare",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    }
+  ],
+  "status": "passed",
+  "same_remote_ancestor_verified": true,
+  "send_order": "android,linux,macos",
+  "cycles": 3,
+  "counts": [
+    5,
+    5,
+    5
+  ],
+  "equal": true,
+  "preserved_bodies": [
+    "macos",
+    "android",
+    "linux"
+  ]
+}
