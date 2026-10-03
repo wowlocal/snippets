@@ -134,6 +134,9 @@ pub struct Document {
 mod recovery_header;
 pub(crate) use recovery_header::MAX_HEADER_BYTES;
 pub use recovery_header::{RecoveryHeader, RecoveryOwner};
+#[cfg(any(test, feature = "desktop"))]
+#[path = "vault_control.rs"]
+pub(crate) mod control;
 #[path = "vault_insertion.rs"]
 #[cfg(any(test, feature = "desktop"))]
 mod insertion;
@@ -997,6 +1000,17 @@ impl Vault {
         }
         let mut metadata = metadata.validate()?;
         let _guard = library.lock()?;
+        self.save_locked(library, &mut metadata, body, expected, &|| Ok(()))
+    }
+    /// Caller holds the common lock. A fresh control owner uses the same encrypted writer.
+    fn save_locked(
+        &mut self,
+        library: &Library,
+        metadata: &mut Metadata,
+        body: &[u8],
+        expected: Option<&Record>,
+        authorize: &dyn Fn() -> Result<()>,
+    ) -> Result<()> {
         self.reload_locked()?;
         self.touch()?;
         let previous = self.record(metadata.id);
@@ -1045,7 +1059,7 @@ impl Vault {
                 false,
             )?,
             content_hash: crypto::content_hash(body, key, &document.salt()?),
-            metadata,
+            metadata: metadata.clone(),
             hlc: Some(hlc),
             extra: previous.map(|r| r.extra).unwrap_or_default(),
         };
@@ -1058,6 +1072,7 @@ impl Vault {
         } else {
             document.records.push(record);
         }
+        authorize()?;
         self.write(&document)?;
         self.reload_locked()?;
         Ok(())

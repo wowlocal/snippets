@@ -857,10 +857,8 @@ Validate config edits with `hyprctl reload` and `hyprctl configerrors`.
 
 ## CLI
 
-The Linux CLI still lacks the Mac app's approved `reveal`, `secure-status` and
-`add --secure` workflows. Secure bodies remain inaccessible through the CLI.
-
-Commands return JSON; errors use a nonzero exit status and safe stderr messages.
+Ordinary commands return JSON; errors use a nonzero exit status and safe stderr
+messages. `reveal` returns raw UTF-8 bytes without an added newline.
 
 ```sh
 snippets-cli add --keyword dashboard --name "Team dashboard" \
@@ -877,6 +875,56 @@ snippets-cli import snippets-export.json
 entries only. `list` includes secure metadata with an empty `content`; `search`
 returns `{"secure": BOOLEAN, "snippet": OBJECT}` rows. Secure bodies, wraps and
 keys are absent from CLI output; secure keywords/IDs reject `get`, update and delete.
+
+Secure creation and reveal go through the running desktop app:
+
+```sh
+snippets-cli secure-status
+snippets-cli add --secure --keyword service-token --name "Service token" --prompt
+snippets-cli add --secure --keyword private-note --content-file /path/to/private-note
+snippets-cli reveal service-token
+```
+
+The native window identifies the verified CLI and its reported parent program,
+defaults to **Deny**, and requires fresh vault passphrase or recovery-key
+authentication after approval. An unlocked editor does not authorize a request;
+the request does not unlock or extend the editor session. Secure creation adds a
+new entry and returns only its UUID, keyword and `secure: true`; duplicates refuse.
+Secure updates and deletion remain desktop-editor operations. Reveal sends
+plaintext to stdout, where scripts, logging or downstream tools may retain it.
+
+Exactly one private input source is required for `add --secure`: `--content -`
+for stdin, `--content-file`, `--content-fd`, or `--prompt` for one hidden terminal
+line. The app is verified before input is read. Literal body arguments and
+environment-variable body sources are not accepted. Input must be non-empty UTF-8
+without NUL, at most 256 KiB. Files must be owned by the current user, have no
+group/other access and no symbolic or hard links; stdin/descriptors accept private
+regular files or pipes. Terminal stdin is refused; use `--prompt`. Hidden input
+restores terminal settings on success, cancellation and handled termination or
+job-control signals. User-provided files are not removed by the CLI.
+
+Install the app and CLI together. The private runtime socket uses Linux
+`SO_PEERCRED` and `SO_PEERPIDFD`, same-user checks and pinned installed executable
+identities on both sides. Unsupported or denied kernel proof fails closed.
+Executable identity is not Apple code signing: a script can invoke the genuine
+CLI, so review the caller and operation before approval. The parent label is
+informational; this does not defend a fully compromised same-user process or
+installation. No body or caller path is logged. Consent expires after 30 seconds,
+fresh authentication after 60; focus loss, desktop lock, quit, disconnect or a
+changed source revokes delivery. Only one secure prompt is active and at most five
+requests per minute are admitted. The client buffers a complete validated reveal
+before writing stdout. Failed requests are not automatically retried; check the
+library before repeating creation when its receipt was lost.
+
+`secure-status` returns `secureCount`, `appAvailable` and `unlocked`. With no app,
+only local metadata is read and `unlocked` is `null`. Exit codes are 0 for success,
+2 for invalid usage, 3 for an unavailable app, 4 for denial/cancellation/expiry,
+5 for unavailable vault authentication, 6 for no unique secure entry, 7 for an
+unsupported protocol, and 1 for other refusals or uncertain completion.
+
+The isolated IPC, vault and private-input tests pass, including hidden input on a
+private PTY. Native approval and real kernel peer verification remain unverified
+in the restricted tool environment; see the implementation evidence.
 
 ## Verification
 

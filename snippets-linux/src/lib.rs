@@ -13,6 +13,9 @@ pub mod canonical;
 pub mod clipboard_history;
 pub mod clock;
 pub mod cloud;
+pub mod control;
+#[cfg(feature = "desktop")]
+mod control_ui;
 pub mod crypto;
 pub mod deletion_review;
 pub mod desktop;
@@ -39,6 +42,7 @@ pub mod receiver;
 #[cfg(feature = "desktop")]
 mod recovery_qr;
 pub mod secret_store;
+pub mod secure_input;
 #[cfg(any(test, feature = "desktop"))]
 pub mod secure_insertion;
 #[cfg(feature = "desktop")]

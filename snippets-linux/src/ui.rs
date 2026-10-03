@@ -65,6 +65,7 @@ struct App {
     backup: RefCell<Option<Rc<BackupExport>>>,
     history: RefCell<Option<Rc<history::Service>>>,
     inline: RefCell<Option<Rc<inline::Service>>>,
+    control: RefCell<Option<Rc<crate::control_ui::Service>>>,
     usage: RefCell<Option<crate::usage_store::Handle>>,
     usage_settings: RefCell<Option<Rc<usage_settings::Settings>>>,
     usage_quitting: Cell<bool>,
@@ -138,6 +139,52 @@ fn row(snippet: &Snippet, secure: bool) -> gtk::ListBoxRow {
     gtk::ListBoxRow::builder().child(&content).build()
 }
 impl App {
+    fn start_control(self: &Rc<Self>) {
+        if self.control.borrow().is_some() {
+            return;
+        }
+        let before = Rc::downgrade(self);
+        let created = Rc::downgrade(self);
+        let unlocked = Rc::downgrade(self);
+        *self.control.borrow_mut() = Some(crate::control_ui::Service::new(
+            &self.application,
+            self.library.borrow().root.clone(),
+            move || {
+                let Some(app) = before.upgrade() else {
+                    return false;
+                };
+                if !app.ensure_library() || app.usage_quitting.get() {
+                    return false;
+                }
+                if app.main.borrow().as_ref().is_some_and(|main| !main.save()) {
+                    return false;
+                }
+                if let Some(workspace) = app.secure.borrow().as_ref() {
+                    if !workspace.save() {
+                        return false;
+                    }
+                    workspace.lock();
+                }
+                true
+            },
+            move || {
+                if let Some(app) = created.upgrade() {
+                    app.wake_sync(Wake::LocalEdit);
+                    if let Some(main) = app.main.borrow().as_ref() {
+                        main.poll();
+                    }
+                }
+            },
+            move || {
+                unlocked.upgrade().is_some_and(|app| {
+                    app.secure
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|workspace| workspace.session_unlocked())
+                })
+            },
+        ));
+    }
     fn learn(&self, id: uuid::Uuid, event: crate::usage::Event, query: Option<&str>) {
         if let Some(usage) = self.usage.borrow().as_ref() {
             usage.record(id, event, query);
@@ -618,6 +665,11 @@ impl App {
         if self.usage_quitting.get() {
             return;
         }
+        let control_idle = self
+            .control
+            .borrow()
+            .as_ref()
+            .is_none_or(|service| service.prepare_quit());
         let inline_idle = self
             .inline
             .borrow()
@@ -638,6 +690,10 @@ impl App {
             .borrow()
             .as_ref()
             .is_none_or(|worker| worker.prepare_quit());
+        if !control_idle {
+            self.toast("Waiting for the CLI request to stop. Try Quit again shortly.");
+            return;
+        }
         if !inline_idle {
             self.toast("Waiting for inline expansion to stop. Try Quit again shortly.");
             return;
@@ -676,6 +732,9 @@ impl App {
         if let Some(workspace) = self.secure.borrow().as_ref()
             && !workspace.save()
         {
+            if let Some(service) = self.control.borrow().as_ref() {
+                service.cancel_quit();
+            }
             if let Some(worker) = self.account_worker.borrow().as_ref() {
                 worker.cancel_quit();
             }
@@ -726,6 +785,9 @@ impl App {
                 self.application.quit();
             }
         } else {
+            if let Some(service) = self.control.borrow().as_ref() {
+                service.cancel_quit();
+            }
             if let Some(worker) = self.account_worker.borrow().as_ref() {
                 worker.cancel_quit();
             }
@@ -1957,6 +2019,7 @@ pub fn run() -> glib::ExitCode {
         backup: RefCell::new(None),
         history: RefCell::new(None),
         inline: RefCell::new(None),
+        control: RefCell::new(None),
         usage: RefCell::new(None),
         usage_settings: RefCell::new(None),
         usage_quitting: Cell::new(false),
@@ -1979,6 +2042,7 @@ pub fn run() -> glib::ExitCode {
             }
             app.start_history();
             app.start_inline();
+            app.start_control();
             *app.hold.borrow_mut() = Some(application.hold());
             app.actions();
             if let Some(display) = gdk::Display::default() {
@@ -2112,6 +2176,7 @@ mod tests {
             backup: RefCell::new(None),
             history: RefCell::new(None),
             inline: RefCell::new(None),
+            control: RefCell::new(None),
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             usage_quitting: Cell::new(false),
@@ -2239,6 +2304,7 @@ mod tests {
             backup: RefCell::new(None),
             history: RefCell::new(None),
             inline: RefCell::new(None),
+            control: RefCell::new(None),
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             usage_quitting: Cell::new(false),
@@ -2306,6 +2372,7 @@ mod tests {
             backup: RefCell::new(None),
             history: RefCell::new(None),
             inline: RefCell::new(None),
+            control: RefCell::new(None),
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             usage_quitting: Cell::new(false),
@@ -2409,6 +2476,7 @@ mod tests {
             backup: RefCell::new(None),
             history: RefCell::new(None),
             inline: RefCell::new(None),
+            control: RefCell::new(None),
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             usage_quitting: Cell::new(false),

@@ -543,6 +543,9 @@ impl Workspace {
         self.editor.allow(false);
         self.update();
     }
+    pub(crate) fn session_unlocked(&self) -> bool {
+        self.desktop_allowed() && self.vault.borrow_mut().is_unlocked()
+    }
     fn desktop_allowed(&self) -> bool {
         self.desktop
             .as_ref()

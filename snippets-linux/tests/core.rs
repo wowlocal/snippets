@@ -463,3 +463,129 @@ fn cli_exposes_only_secure_metadata_and_refuses_secure_mutations() {
     assert!(fs::read(library.path()).unwrap() == before_library);
     assert!(fs::read(&path).unwrap() == b"{truncated");
 }
+
+#[test]
+fn secure_cli_checks_app_before_private_input_and_does_not_seed_state_without_it() {
+    let temporary = tempfile::tempdir().unwrap();
+    let runtime = temporary.path().join("runtime");
+    fs::create_dir(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let support = temporary.path().join("absent-support");
+    for args in [
+        vec!["reveal", "public-absent"],
+        vec![
+            "add",
+            "--secure",
+            "--keyword",
+            "public",
+            "--content-file",
+            "/public/absent-file",
+        ],
+        vec![
+            "add",
+            "--secure",
+            "--keyword",
+            "public",
+            "--content-fd",
+            "99",
+        ],
+        vec!["add", "--secure", "--keyword", "public", "--content", "-"],
+        vec!["add", "--secure", "--keyword", "public", "--prompt"],
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_snippets-cli"))
+            .env("SNIPPETS_SUPPORT_DIR", &support)
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(3));
+        assert!(result.stdout.is_empty());
+        assert!(!support.exists());
+        assert!(!runtime.join("snippets-control").exists());
+    }
+    let result = Command::new(env!("CARGO_BIN_EXE_snippets-cli"))
+        .env("SNIPPETS_SUPPORT_DIR", &support)
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .arg("secure-status")
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&result.stdout).unwrap(),
+        json!({"secureCount":0,"appAvailable":false,"unlocked":null})
+    );
+    assert!(!support.exists());
+}
+
+#[test]
+fn secure_cli_rejects_body_arguments_and_updates_without_echoing_or_authoring_them() {
+    let temporary = tempfile::tempdir().unwrap();
+    let support = temporary.path().join("absent-support");
+    for args in [
+        vec![
+            "add",
+            "--secure",
+            "--keyword",
+            "public",
+            "--content",
+            "Public fictional argument body",
+        ],
+        vec!["add", "--secure", "--keyword", "public"],
+        vec![
+            "update",
+            "public",
+            "--secure",
+            "--content",
+            "Public fictional argument body",
+        ],
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_snippets-cli"))
+            .env("SNIPPETS_SUPPORT_DIR", &support)
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(2));
+        assert!(result.stdout.is_empty());
+        assert!(
+            !String::from_utf8_lossy(&result.stderr).contains("Public fictional argument body")
+        );
+        assert!(!support.exists());
+    }
+}
+
+#[test]
+fn offline_secure_status_returns_only_metadata_and_never_claims_an_app_unlock() {
+    let (directory, _library) = store();
+    let runtime = tempfile::tempdir().unwrap();
+    fs::set_permissions(runtime.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/crypto-v1.json")).unwrap();
+    fs::create_dir(directory.path().join("Vault")).unwrap();
+    let path = directory.path().join("Vault/vault.json");
+    let bytes = serde_json::to_vec(&fixture["document"]).unwrap();
+    model::atomic_write(&path, &bytes).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_snippets-cli"))
+        .env("SNIPPETS_SUPPORT_DIR", directory.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .arg("secure-status")
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&result.stdout).unwrap(),
+        json!({"secureCount":1,"appAvailable":false,"unlocked":null})
+    );
+    assert_eq!(fs::read(path).unwrap(), bytes);
+    assert!(!directory.path().join("Sync").exists());
+    assert!(!directory.path().join("Usage").exists());
+    let linked = runtime.path().join("public-linked-root");
+    symlink(directory.path(), &linked).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_snippets-cli"))
+        .env("SNIPPETS_SUPPORT_DIR", &linked)
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .arg("secure-status")
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(1));
+    assert!(result.stdout.is_empty());
+}

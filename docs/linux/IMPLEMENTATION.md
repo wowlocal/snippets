@@ -222,7 +222,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Transfers | Native and Raycast JSON import, ordinary sharing export and native portable encrypted-backup export/import with interrupted-import recovery | Round-trip, timestamps, collisions, exact-key authentication, encrypted two-file redo, cancellation and independent OpenSSL backup format checks pass; live native dialogs and Apple app round trips remain unverified |
 | Placeholders | Native ICU date/time formats, one-pass clipboard, locale, calendar offsets | Fixed-date, month-end, literal grammar tests pass |
 | CLI | Ordinary mutations/get/import and combined metadata catalogue | Concurrent writer and secure output/refusal tests pass |
-| Approved secure CLI | Not implemented: native approval/peer authentication for `reveal`, `secure-status` and `add --secure` | Remaining product parity work; the CLI continues to refuse secure body access |
+| Approved secure CLI | App-owned `reveal`, `secure-status` and `add --secure`; native default-deny consent, fresh vault credentials, private bounded input, same-user pidfd/executable proof, source-bound disclosure and quit cancellation | Isolated stream/owner/CLI tests and private hidden-input PTY pass; native GTK and actual SO_PEERCRED/SO_PEERPIDFD session checks remain unavailable in the restricted environment |
 | Omarchy theme | Active XDG state palette, periodic refresh, validated colors | Parser and CSS injection tests pass |
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Target validation tested; actual cross-window delivery still requires verification |
 | Local suggestion learning | Frozen picker snapshots; relevance/keyword/pin priority before bounded prefix memory and 14-day frecency; successful copy/paste/inline/secure insertion recording; native toggles and independent resets; separate private debounced persistence | Isolated math/schema/concurrency/privacy tests and compiled native controls; live picker/settings/input behavior remains unverified |
@@ -271,6 +271,40 @@ new unsaved draft. Its native dialog still needs live display verification.
 
 ## Verification on 2026-10-03
 
+- Approved secure CLI adds app-mediated `reveal`, `secure-status` and creation
+  through `add --secure`. Bodies use separate zeroizing bounded binary frames;
+  GTK offers/notices contain public metadata and receipts only. The installed
+  app/CLI are verified before private input, using same-user kernel credentials,
+  a peer pidfd and a pinned executable image. There is no environment bypass or
+  PID-reuse fallback. Native consent defaults to Deny, names the CLI/reported
+  parent, permits one prompt and five requests per minute, and expires separately
+  from fresh vault passphrase/recovery authentication. This is vault authentication,
+  not PAM or a cached editor key. Focus/lock/quit/cancellation revoke authorization.
+  Reveal retains exact source/readiness checks around every framed output chunk;
+  creation reuses the common encrypted writer and checks authorization before the
+  final replacement. A lost creation receipt has no automatic retry.
+  Twenty-one new tests cover closed/bounded frames, nonce/role/status checks,
+  partial IO and revocation, private runtime endpoints, unsafe/replaced images,
+  bounded caller labels, private file/FD/pipe input, stalled-pipe cancellation,
+  fresh creation/reveal, wrong credentials, source/lock/busy/CAS/collision refusal,
+  source changes after decryption, metadata-only notices, no-app CLI behavior,
+  forbidden body arguments and unknown offline unlock state. Nineteen new tests
+  pass; the private PTY fixture independently verifies hidden long UTF-8 input,
+  codepoint backspace and echo/termios restoration on success and cancellation.
+  Selected verification passes 59 default tests and 40 headless tests, including
+  16 existing vault tests and CLI/core regressions. Two explicit native attempts
+  remain unverified: the default-deny/credential widget fixture stops at GTK
+  initialization, and the real socketpair pidfd fixture fails at peer proof.
+  An independent private socketpair probe reports errno 1 (`EPERM`) for both
+  `SO_PEERCRED` and `SO_PEERPIDFD`. All positive IPC owner tests use a test-only
+  lease over isolated socketpair descriptor IO; they do not prove installed peer
+  authentication or interactive consent. No real vault, account, keyring, PAM,
+  clipboard or user terminal was used.
+  Clippy passes with warnings denied for desktop and headless configurations;
+  formatting and all three release binaries pass. Two isolated temporary-prefix
+  installations verify executable bytes/modes and preserve unrelated files. The
+  installed CLI verifies offline metadata status and no-app reveal/creation
+  refusal without reading a body or creating Vault, Sync, Usage or a control socket.
 - Local suggestion learning adds fifteen isolated tests for decay/rebase and
   the single-copy floor, optimal fuzzy scoring, match/pin precedence, frozen
   snapshots, durable corrections, bounded prefixes/entries, separate resets,
@@ -286,7 +320,7 @@ new unsaved draft. Its native dialog still needs live display verification.
   widgets or a usage worker; live picker/settings/input behavior is unverified.
   A final hide-on-close property keeps the settings window reusable; desktop
   Clippy, formatting, release binaries and installations were repeated for it.
-  App-approved secure CLI operations remain unimplemented product parity work.
+  This learning checkpoint preceded the app-approved secure CLI implementation.
 - Direct raw-child review adds three isolated regressions: both child choices
   with a live parent, all four sibling choice combinations, and related versus
   unrelated unknown-version boundaries. Existing suites now cover both direct
