@@ -884,12 +884,18 @@ Missing keys are never silently replaced. Unreadable or concurrently changed
 preferences require **Reset History Settings**, which turns collection off while
 preserving ciphertext. Exit waits for acquisition and the serial storage worker.
 
-The storage, cancellation and privacy tests pass; the backend and GTK view compile.
-The private libwayland-server protocol fixture cannot create its client in the
-restricted test environment, and the GTK fixture cannot initialize a display.
-Background acquisition and the interactive history workflow still need an
-unrestricted, unlocked Hyprland verification. Other Wayland compositors require
-ext-data-control-v1 support and the current Hyprland session/source checks.
+Storage, cancellation, privacy, private libwayland-server protocol and disabled
+GTK controls pass. Live unlocked Omarchy acceptance also exercises the production
+data-control/storage workers and mapped GTK controls against an independent C/GTK
+clipboard owner, with a private D-Bus, GNOME Keyring and XDG data root. Cancelled
+consent creates no history key; collection ignores the initial selection, continues
+after closing the view, skips sensitivity/internal markers and stops after opt-out.
+The view decrypts the retained copy, searches and copies it without recapture.
+Deletion and clear require their own default-Cancel confirmations and preserve the
+current clipboard. The image has private permissions and contains no fixture
+plaintext. This fixture disables accessibility services on its private test bus;
+accessibility and physical input remain separate acceptance work. Other Wayland
+compositors require ext-data-control-v1 and the current Hyprland session/source checks.
 
 ## Local suggestion learning
 
@@ -1133,6 +1139,10 @@ G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.
   --lib secure_ui::legacy_repair::tests::native_legacy_repair -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib ui::history::tests::native_disabled_history -- --ignored --test-threads=1
+# Explicit live selection replacement; saves prior ordinary text in memory,
+# then restores it after stopping all collectors. Private keyring/bus/data only.
+# Obtain the library-test executable with cargo test --lib --no-run first.
+bash snippets-linux/tests/clipboard-history-live.sh /absolute/path/to/library-test-binary
 # Private socket-pair compositor; requires unrestricted Wayland peer credentials.
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib clipboard_history::wayland::protocol_tests::private_libwayland -- --ignored --test-threads=1

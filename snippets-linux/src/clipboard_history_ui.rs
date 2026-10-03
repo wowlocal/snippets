@@ -667,6 +667,10 @@ impl HistoryWindow {
 }
 
 #[cfg(test)]
+#[path = "clipboard_history_live_tests.rs"]
+mod live_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

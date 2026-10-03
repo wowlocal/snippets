@@ -259,7 +259,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, current v1 conflict-owned absence/deletion crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; live native/cloud verification remains open |
 | Inline expansion | Native input-method-v2 owner, separate opt-in fuzzy input-popup with keyboard navigation and raw passthrough, conditional bounded clipboard read and move-only chunked replacement | Core, native pixels/FD/protocol and controller checks cover selection, dismissal, legacy consent, frozen ranking, queue/buffer bounds, UTF-8, field/file changes, cancellation and full 256 KiB output; real peer credentials, native settings and independent GTK exact/suggestion/echo receiving-field checks pass; other application compatibility remains under review |
 | Encrypted backup | Portable encrypted-backup export/import and recovery wired to GTK; independent all-layer codec verification | Live backup password/file-dialog workflow and Apple app round trips remain unverified |
-| Clipboard history | Explicit opt-in GTK view, separate local AES-GCM image/key, bounded seven-day retention/search/delete/clear, read-only Wayland data-control worker, foreground exclusions and sensitivity/internal markers, revocable acquisition and quit barriers | Isolated core/worker/privacy tests pass and native backend compiles; the private libwayland-server protocol fixture and native disabled-history controls now pass; background/live history collection remains pending |
+| Clipboard history | Explicit opt-in GTK view, separate local AES-GCM image/key, bounded seven-day retention/search/delete/clear, read-only Wayland data-control worker, foreground exclusions and sensitivity/internal markers, revocable acquisition and quit barriers | Core/worker/privacy, private libwayland-server and native disabled-history controls pass; real Omarchy collection with a separate C/GTK owner and private native keyring verifies consent cancellation, initial-offer exclusion, collection with the view closed, encrypted viewing/search/copy, sensitivity/internal skips, opt-out barriers and confirmed deletion/clear without changing the current clipboard |
 | Persistent diagnostics | One primary-process Rust backend, typed inert core facade, bounded private JSONL retention, safe native system mirror and searchable Settings export/delete with plaintext review | Privacy/schema, file and directory replacement, stale/linked destination, rollover/quota/age, corruption, torn-final-line, duplicate-sequence, deletion and queue/shutdown tests pass; native cancellation controls pass; a real release primary writes private records and mirrors the exact sanitized records to the system journal; full export/delete interaction remains under live review |
 
 ### Completion audit, 2026-10-03
@@ -3348,5 +3348,47 @@ pass on the same native source fingerprint. GTK 4.22.4/libadwaita 1.9.3, the new
 compositor's real socket credentials, D-Bus tray host, DNS and certificate-verified
 HTTPS are rechecked. Final native action/menu checks use executable copies matching
 those release artifacts. Combined native accounts, history acquisition, actual
+login startup, fuller secure recovery and Apple backup round trips remain under
+acceptance.
+
+### Live clipboard history collection and controls (2026-10-03)
+
+The explicit live fixture now exercises production `Service`, data-control and
+serial storage workers in the unlocked Omarchy compositor. An independent C/GTK
+application owns fixed public clipboard offers. A separate D-Bus with no service
+activation directories, foreground GNOME Keyring, XDG data root and short private
+runtime keep keys and files outside the user's library/login keyring. Only the
+existing compositor sockets are shared. The normal `SNIPPETS_SUPPORT_DIR`
+isolation guards remain unchanged: this fixture uses the production default-root
+calculation with private `XDG_DATA_HOME` instead of bypassing those guards.
+
+Mapped native confirmations use Cancel as their default and close response.
+Cancelling initial consent creates neither a history image nor a keyring owner;
+accepted consent starts the actual background collector. The initial public offer
+is ignored. Closing the history window hides and scrubs its view while another
+application's new copy is retained. The AES-GCM image has `0600` permissions inside
+`0700`, contains no fixture plaintext, and the native GTK view decrypts its single
+entry through the real private keyring. Search hides and restores its row, and Copy
+never recaptures history. Independent sensitivity-hinted and internally marked
+offers leave ciphertext unchanged. Turning collection off drains collectors,
+persists opt-out and refuses the next public offer without discarding history.
+
+Cancelling Delete Entry preserves ciphertext; confirming it removes the selected
+entry through the real worker. Cancelling Clear History preserves the image;
+confirming it removes the image. A fresh native data-control read confirms that
+these operations preserve the current public clipboard. Quit drains all history
+workers, the independent child is reaped and the prior admitted ordinary selection
+is restored from memory. The private bus/keyring/data/runtime teardown completes.
+Accessibility services are disabled only in this deliberately incomplete private
+test session; accessibility and physical input are separate acceptance boundaries.
+
+The final live fixture, 28 desktop history tests, 20 headless history tests, private
+libwayland-server protocol fixture, disabled native GTK controls, desktop/headless
+all-target Clippy, formatting, shell syntax, all three release builds and two private
+prefix installs pass against the same 267-file native fingerprint. GTK 4.22.4,
+libadwaita 1.9.3, matching real Wayland socket credentials, the desktop D-Bus tray
+host, DNS and certificate-verified HTTPS are rechecked after cleanup. The compositor
+remains unlocked with no configuration errors and the existing 2026-10-05 09:00
+Minsk lock-restoration timer remains scheduled. Combined account flows, actual
 login startup, fuller secure recovery and Apple backup round trips remain under
 acceptance.
