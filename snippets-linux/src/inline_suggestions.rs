@@ -82,7 +82,6 @@ impl Suggestions {
             let old_text = old.admitted_text()?;
             if frame.context.field != old.context.field
                 || frame.context.serial == old.context.serial
-                || frame.change_cause != 1
                 || frame.content_type != old.content_type
                 || ordinary.len() > model::MAX_SNIPPETS
             {

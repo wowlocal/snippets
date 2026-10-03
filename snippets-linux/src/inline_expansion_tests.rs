@@ -126,7 +126,7 @@ fn activation_edits_selection_sensitive_unknown_and_malformed_frames_cannot_auth
             7 => next.content_type = Some((0, 9)),
             8 => next.content_type = Some((0x8000, 0)),
             9 => next.content_type = Some((0, 14)),
-            10 => next.change_cause = 0,
+            10 => next.change_cause = 2,
             11 => next.context.serial = 1,
             12 => next.content_type = Some((0x1000, 0)),
             _ => unreachable!(),
@@ -151,6 +151,25 @@ fn activation_edits_selection_sensitive_unknown_and_malformed_frames_cannot_auth
     assert!(engine.observe(frame("\\cafe", 2, 1), &ordinary).is_none());
     engine.reset();
     assert!(engine.observe(frame("\\cafe", 3, 1), &ordinary).is_none());
+}
+
+#[test]
+fn committed_keyboard_appends_support_both_known_causes_and_reset_makes_echo_a_baseline() {
+    let ordinary = vec![
+        snippet("cafe", "\\cafe \\other"),
+        snippet("other", "Public body"),
+    ];
+    for cause in [0, 1] {
+        let mut engine = Engine::default();
+        engine.observe(frame("\\caf", 1, 1), &ordinary);
+        let mut appended = frame("\\cafe", 2, 1);
+        appended.change_cause = cause;
+        assert!(engine.observe(appended, &ordinary).is_some());
+        engine.reset();
+        let mut echo = frame("\\cafe \\other", 3, 1);
+        echo.change_cause = 0;
+        assert!(engine.observe(echo, &ordinary).is_none());
+    }
 }
 
 struct Field {

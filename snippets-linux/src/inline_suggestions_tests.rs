@@ -142,7 +142,7 @@ fn foreign_or_unconfirmed_host_edits_drop_choices_and_reset_frozen_ranking() {
         let mut next = frame("Public \\ref", 3);
         match case {
             0 => next.context.field += 1,
-            1 => next.change_cause = 0,
+            1 => next.change_cause = 2,
             2 => next.context.serial = 2,
             3 => next.content_type = Some((0x80, 0)),
             4 => next.text = Some(Zeroizing::new("Other! \\ref".into())),
@@ -153,6 +153,37 @@ fn foreign_or_unconfirmed_host_edits_drop_choices_and_reset_frozen_ranking() {
             Observation::Hidden
         ));
         assert!(engine.ranking.is_none());
+    }
+}
+
+#[test]
+fn committed_keyboard_queries_support_both_known_causes_and_reset_fences_replacement_echo() {
+    let values = [
+        snippet("Public cafe", "cafe"),
+        snippet("Public other", "other"),
+    ];
+    for cause in [0, 1] {
+        let mut model = Suggestions::default();
+        model.observe(frame("Public ", 1), &values, &Snapshot::default());
+        let mut query = frame("Public \\caf", 2);
+        query.change_cause = cause;
+        assert!(matches!(
+            model.observe(query, &values, &Snapshot::default()),
+            Observation::Choices(_)
+        ));
+        let mut exact = frame("Public \\cafe", 3);
+        exact.change_cause = cause;
+        assert!(matches!(
+            model.observe(exact, &values, &Snapshot::default()),
+            Observation::Automatic(_)
+        ));
+        model.reset();
+        let mut echo = frame("Public \\cafe \\other", 4);
+        echo.change_cause = 0;
+        assert!(matches!(
+            model.observe(echo, &values, &Snapshot::default()),
+            Observation::Hidden
+        ));
     }
 }
 #[test]

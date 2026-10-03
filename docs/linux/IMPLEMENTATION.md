@@ -17,11 +17,13 @@ repair action using fresh vault authentication. Incoming legacy own echoes can
 be recognized without a key, and the primary core authenticates changed own
 unstamped bodies. Native fresh current-vault authentication now supplies one
 bounded receiving/sending cycle. Unreferenced recovery files now have an explicit
-reviewed cleanup action; live desktop verification remains unfinished. Ordinary inline expansion now has a native
-Wayland owner and opt-in GTK settings; live receiving-field verification is open.
-Freshly authenticated secure insertion is now wired to the picker and native
-virtual keyboard. Its core checks pass; live focus, credential-dialog and
-receiving-application verification remain unfinished.
+reviewed cleanup action; live desktop verification remains unfinished. Ordinary
+inline expansion now has a native Wayland owner and opt-in GTK settings. Exact
+expansion, Return-selected suggestions and replacement-echo isolation pass in an
+independent GTK receiver on Omarchy. Freshly authenticated secure insertion also
+reaches that receiver through the real password dialog and native virtual keyboard,
+including Cancel and wrong-password refusal. The remaining live acceptance scope
+is recorded in the current table and latest milestones below.
 
 ## Architecture
 
@@ -255,7 +257,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; native toggle smoke compiles but cannot initialize GTK here; live keyring/HTTPS workflow remains unverified |
 | Cloud library creation | Explicit native create/resume/open and create-another actions; bounded retained intents; one-use confirmation binds account session and existing protected state; original idempotency key retained before POST | Twenty-four fault/restart/schema/expiry tests plus bootstrap admission and reviewed-switch integration; combined live GTK/keyring/HTTPS workflow remains unverified; preserves active keys and sync checkpoint |
 | Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, current v1 conflict-owned absence/deletion crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; live native/cloud verification remains open |
-| Inline expansion | Native input-method-v2 owner, separate opt-in fuzzy input-popup with keyboard navigation and raw passthrough, conditional bounded clipboard read and move-only chunked replacement | Core, native pixels/FD/protocol and controller checks cover selection, dismissal, legacy consent, frozen ranking, queue/buffer bounds, UTF-8, field/file changes, cancellation and full 256 KiB output; real compositor peer credentials, native GTK settings and live receiving-field behavior remain unverified |
+| Inline expansion | Native input-method-v2 owner, separate opt-in fuzzy input-popup with keyboard navigation and raw passthrough, conditional bounded clipboard read and move-only chunked replacement | Core, native pixels/FD/protocol and controller checks cover selection, dismissal, legacy consent, frozen ranking, queue/buffer bounds, UTF-8, field/file changes, cancellation and full 256 KiB output; real peer credentials, native settings and independent GTK exact/suggestion/echo receiving-field checks pass; other application compatibility remains under review |
 | Encrypted backup | Portable encrypted-backup export/import and recovery wired to GTK; independent all-layer codec verification | Live backup password/file-dialog workflow and Apple app round trips remain unverified |
 | Clipboard history | Explicit opt-in GTK view, separate local AES-GCM image/key, bounded seven-day retention/search/delete/clear, read-only Wayland data-control worker, foreground exclusions and sensitivity/internal markers, revocable acquisition and quit barriers | Isolated core/worker/privacy tests pass and native backend compiles; the private libwayland-server protocol fixture and native disabled-history controls now pass; background/live history collection remains pending |
 | Persistent diagnostics | One primary-process Rust backend, typed inert core facade, bounded private JSONL retention, safe native system mirror and searchable Settings export/delete with plaintext review | Privacy/schema, file and directory replacement, stale/linked destination, rollover/quota/age, corruption, torn-final-line, duplicate-sequence, deletion and queue/shutdown tests pass; native cancellation controls pass; a real release primary writes private records and mirrors the exact sanitized records to the system journal; full export/delete interaction remains under live review |
@@ -3270,3 +3272,35 @@ an isolated local vault; inline expansion, combined account/synchronization work
 physical shortcuts, tray interactions and Apple backup interoperability remain
 separate acceptance items. User Stay Awake and its scheduled restoration remain
 unchanged.
+
+## Confirmed GTK inline expansion and suggestions, 2026-10-03
+
+Three explicitly selected native tests now run the production inline worker against
+an independent C/GTK receiver identified by its owned process and public title.
+They observe exact keyword expansion, a suggestion that waits for Return before
+inserting, and replacement text containing another live keyword without recursively
+expanding it. Keys travel through the real native virtual keyboard; the receiver
+reports only a current-field match marker and bounded counts/booleans. Each test
+uses a private opted-in ordinary library, stops its workers, reaps its receiver
+and verifies unchanged library bytes with no vault or sync checkpoint created.
+
+This exposed a real GTK compatibility defect: confirmed keyboard appends arrived
+with the protocol's `input_method` cause, while both trigger matchers required
+`other`. [GTK 4.22.4's Wayland input context](https://raw.githubusercontent.com/GNOME/gtk/4.22.4/gtk/gtkimcontextwayland.c)
+commits printable keyboard input through the same input-method cause. Both known
+causes now admit a literal confirmed append; unknown causes, initial baselines,
+selection, field/session changes, sensitive content and all saved-record guards
+remain refusals. Before starting a replacement the worker resets both the exact
+matcher and suggestion popup. Its own replacement echo can only establish the
+next baseline. Chunk continuation still requires the exact fresh expected echo
+with `input_method` cause; that admission was not relaxed.
+
+All three live receiving checks pass with GTK fatal warnings enabled. Thirty-seven
+desktop and twenty-two headless inline core tests, both all-target Clippy checks,
+formatting, seven settings tests, command options, all three release builds and
+two temporary-prefix installations pass on the unchanged native source fingerprint.
+No user library, clipboard, key assignment, login configuration or Stay Awake
+setting was changed. Broader receiving-application compatibility, physical
+shortcuts, visible tray/menu interaction, history acquisition, combined native
+account workflows and Apple backup interoperability remain separate acceptance
+items.

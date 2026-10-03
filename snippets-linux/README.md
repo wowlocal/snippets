@@ -804,9 +804,12 @@ retried automatically. Snippets windows are excluded from this path.
 
 The native bridge, popup renderer, raw-key passthrough, selected-entry guards and
 private protocol exchanges are verified in isolation. Popup buffers and queued
-keys are bounded. Compositor peer-credential checks and the GTK settings smoke require
-an unrestricted environment; live receiving-application behavior remains
-unverified here. Secure snippets use the separate authenticated picker insertion.
+keys are bounded. The unrestricted Omarchy session also passes peer authentication,
+native settings and three independent GTK receiving-field checks: exact keyword
+expansion, suggestion selection with Return and replacement containing another
+keyword without recursive expansion. These use native injected keys; compatibility
+with other receiving applications and physical keyboard assignments remains a
+separate check. Secure snippets use the separate authenticated picker insertion.
 
 ### Insert saved secure text
 
@@ -933,8 +936,9 @@ ordinary entry copied and explains the fallback. In-app Ctrl+K opens a copy pick
 
 The picker uses the ordinary system clipboard. Prior plain text is restored after
 1.5 seconds if Snippets still owns the same clipboard provider. Newer copies win.
-Image and rich-text formats are not preserved. Compositor acknowledgement cannot
-prove an application accepted paste; the live receiving-field check remains open.
+Image and rich-text formats are not preserved. An independent GTK receiving-field
+check verifies ordinary delivery and clipboard restoration on Omarchy. Delivery
+to other applications still depends on their paste handling.
 
 The app rereads Omarchy's active XDG state `colors.toml` every two seconds. Colors
 are validated before CSS generation; light/dark mode follows the palette. No theme
@@ -984,9 +988,9 @@ The listener accepts only three fixed public actions and never grabs the keyboar
 or reads surrounding text. A locked or unavailable desktop, an expired queued
 call, disabled consent or Quit prevents activation. The picker captures its
 receiving window before presentation and keeps the existing paste checks.
-Independent private-wire and worker tests pass; real compositor peer credentials,
-physical key assignment, focus and the native settings window remain unverified
-in the restricted development environment.
+Independent private-wire and worker tests pass. The unrestricted Omarchy session
+also verifies real compositor peer credentials, registration, native settings and
+picker focus/paste. Physical key assignment remains a separate acceptance check.
 
 | Shortcut | Action |
 | --- | --- |
@@ -1085,8 +1089,10 @@ an independent GTK receiving process with clipboard restoration. The installed
 primary registers three real global actions and exits on one Quit request; its
 installed CLI also verifies that primary. Freshly authenticated secure insertion
 now reaches the independent receiving process too, with cancellation and incorrect
-password refusal. Inline insertion, combined account workflows and remaining
-native interactions are still under review; see the latest implementation milestone.
+password refusal. Exact inline expansion, suggestion selection with Return and
+replacement-echo isolation pass in that independent GTK receiver too. Combined
+account workflows and remaining native interactions are still under review; see
+the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
 
 ```sh
@@ -1128,6 +1134,13 @@ G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.
 # Real fresh vault authentication and virtual keyboard; separate owned receiving app.
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib secure_ui::insertion::live_tests::live_secure_paste -- --exact --ignored --test-threads=1
+# Real inline worker and independent GTK receiver; run each in its own process.
+G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib inline_expansion::worker::live_tests::live_inline_expansion -- --exact --ignored --test-threads=1
+G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib inline_expansion::worker::live_tests::live_inline_suggestions -- --exact --ignored --test-threads=1
+G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib inline_expansion::worker::live_tests::live_inline_echo_guard -- --exact --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib account_ui::tests::native_account -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \

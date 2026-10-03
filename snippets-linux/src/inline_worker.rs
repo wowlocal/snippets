@@ -18,6 +18,9 @@ use std::{
 const STOPPED: Error = Error("Inline expansion stopped. Check the text field before trying again.");
 const CLIPBOARD: Error =
     Error("The clipboard placeholder could not be read safely within its size and time limits.");
+#[cfg(test)]
+#[path = "inline_live_tests.rs"]
+mod live_tests;
 #[path = "inline_selection_worker.rs"]
 mod selection;
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -498,7 +501,15 @@ fn run(
             if let Some(plan) = plan {
                 let id = plan.snippet.id;
                 let query = plan.selected_query.clone();
+                // GTK commits keyboard characters with the input-method cause
+                // too. Reset both matchers before owning the replacement echo;
+                // its first subsequent frame is a baseline, never another trigger.
                 engine.reset();
+                if popup.clear(&connection, &guard).is_err() {
+                    report(Status::Stopped);
+                    previous = None;
+                    continue;
+                }
                 if deliver(plan, &library, &mut connection, witness.clone(), &guard).is_err() {
                     report(Status::Stopped);
                 } else if let Some(usage) = &usage {
