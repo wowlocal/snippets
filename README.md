@@ -21,7 +21,8 @@ A native Rust + GTK desktop port for **Omarchy / Linux** is in development in
 tags, pins, JSON transfers, encrypted backups, optional automatic Cloud sync,
 placeholders, CLI, an encrypted vault workspace with retained-draft recovery, and
 Omarchy theme integration, editor keyword assistance and resolved previews,
-searchable native settings, explicit login startup, a native desktop tray and opt-in global shortcuts
+searchable native settings, explicit login startup, a native desktop tray, opt-in global shortcuts
+and bounded structured diagnostics with native export/delete controls
 are implemented. [Current verification and remaining desktop work](docs/linux/IMPLEMENTATION.md).
 Python is not required to build, install or run the Linux application.
 

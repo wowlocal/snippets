@@ -534,6 +534,7 @@ impl Workspace {
         self.overlay.add_toast(adw::Toast::new(message));
     }
     pub fn lock(&self) {
+        let was_unlocked = self.vault.borrow_mut().is_unlocked();
         self.cancel_legacy_repair();
         self.cancel_insertion();
         self.cancel_draft_recovery();
@@ -541,6 +542,14 @@ impl Workspace {
         self.vault.borrow_mut().lock();
         self.reveal.set_active(false);
         self.editor.allow(false);
+        if was_unlocked {
+            crate::diagnostics::record(crate::diagnostics::Event::Vault {
+                operation: crate::diagnostics::VaultOperation::Lock,
+                outcome: crate::diagnostics::Outcome::Succeeded,
+                duration_ms: crate::diagnostics::Milliseconds::new(Duration::ZERO),
+                failure: None,
+            });
+        }
         self.update();
     }
     pub(crate) fn session_unlocked(&self) -> bool {
@@ -774,7 +783,21 @@ impl Workspace {
         let Some(metadata) = self.draft_metadata() else {
             return false;
         };
-        match self.editor.save(&self.library, metadata) {
+        let started = std::time::Instant::now();
+        let result = self.editor.save(&self.library, metadata);
+        crate::diagnostics::record(crate::diagnostics::Event::Vault {
+            operation: crate::diagnostics::VaultOperation::Save,
+            outcome: if result.is_ok() {
+                crate::diagnostics::Outcome::Succeeded
+            } else {
+                crate::diagnostics::Outcome::Failed
+            },
+            duration_ms: crate::diagnostics::Milliseconds::new(started.elapsed()),
+            failure: result.as_ref().err().map(|_| {
+                crate::diagnostics::Failure::classified(crate::diagnostics::Family::Vault)
+            }),
+        });
+        match result {
             Ok(()) => {
                 self.dirty.set(false);
                 self.status.set_label("Saved encrypted locally");

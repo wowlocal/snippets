@@ -18,6 +18,7 @@ pub(super) struct Settings {
     busy: Cell<bool>,
     loading: Cell<bool>,
     quitting: Cell<bool>,
+    diagnostics: Rc<diagnostic_controls::Controls>,
 }
 type SettingsLink = (&'static str, &'static str, &'static str);
 type SettingsPage = (&'static str, &'static str, &'static [SettingsLink]);
@@ -82,16 +83,21 @@ const PAGES: &[SettingsPage] = &[
     ),
 ];
 impl Settings {
-    pub fn new(application: &adw::Application, root: PathBuf) -> Rc<Self> {
+    pub fn new(
+        application: &adw::Application,
+        root: PathBuf,
+        diagnostics: Option<std::sync::Arc<crate::diagnostics_service::Service>>,
+    ) -> Rc<Self> {
         let registration = Registration::from_environment();
         let executable = std::env::current_exe().ok();
-        Self::with_registration(application, root, registration, executable)
+        Self::with_registration(application, root, registration, executable, diagnostics)
     }
     fn with_registration(
         application: &adw::Application,
         root: PathBuf,
         registration: Result<Registration, Error>,
         executable: Option<PathBuf>,
+        diagnostics: Option<std::sync::Arc<crate::diagnostics_service::Service>>,
     ) -> Rc<Self> {
         let preference = Preferences::read(&root);
         let close_action = preference
@@ -176,6 +182,8 @@ impl Settings {
             page.add(&group);
             window.add(&page);
         }
+        let diagnostics = diagnostic_controls::Controls::new(&window, diagnostics);
+        window.add(&diagnostics.page);
         let this = Rc::new(Self {
             window,
             root,
@@ -192,6 +200,7 @@ impl Settings {
             busy: Cell::new(false),
             loading: Cell::new(false),
             quitting: Cell::new(false),
+            diagnostics,
         });
         let weak = Rc::downgrade(&this);
         this.startup.connect_active_notify(move |row| {
@@ -223,18 +232,20 @@ impl Settings {
         this
     }
     pub fn can_quit(&self) -> bool {
-        !self.busy.get()
+        !self.busy.get() && self.diagnostics.can_quit()
     }
     pub fn prepare_quit(&self) -> bool {
         self.quitting.set(true);
+        self.diagnostics.prepare_quit();
         self.refresh();
         self.can_quit()
     }
     pub fn cancel_quit(&self) {
         self.quitting.set(false);
+        self.diagnostics.cancel_quit();
         self.refresh();
     }
-    pub fn present(&self) {
+    pub fn present(self: &Rc<Self>) {
         if !self.busy.get() {
             self.error.set(None);
             match Preferences::read(&self.root) {
@@ -253,6 +264,7 @@ impl Settings {
             self.refresh();
         }
         self.window.present();
+        self.diagnostics.refresh();
     }
     fn refresh(&self) {
         self.window.set_sensitive(!self.quitting.get());
@@ -369,6 +381,7 @@ mod tests {
             root.clone(),
             Registration::new(config.clone()),
             std::env::current_exe().ok(),
+            None,
         );
         assert!(settings.window.is_search_enabled());
         assert!(!settings.startup.is_active());

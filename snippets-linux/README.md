@@ -89,6 +89,33 @@ launcher or `snippets`. The public icon and menu checks pass; live panel renderi
 registration, host restart, menu activation and window focus remain unverified
 in the restricted development environment.
 
+## Local diagnostic logs
+
+**Settings → Diagnostics** shows local log storage and offers **Export Logs…**
+and **Delete Logs…**. The primary desktop process writes structured plaintext
+JSONL under the library root's `Diagnostics/Logs/`. Ordinary CLI and headless
+startup do not create diagnostics or install a logging backend.
+
+Logs contain closed operation/stage/outcome labels, aggregate counts, durations
+and classified numeric errors. Snippet bodies, names, keywords, tags, clipboard
+contents, record/account/device identities, paths, ciphertext and keys are excluded.
+Only these sanitized records are mirrored to the native system log. Logs stay
+local and are absent from library synchronization and encrypted backups.
+System-log copies follow the host's retention and are outside **Delete Logs**.
+
+Retention is limited to 14 days, 64 files and 24 MiB; files roll at 1 MiB or
+24 hours. Directories use `0700` and files `0600`. Export asks for confirmation,
+validates the exact Linux event vocabulary and saves one JSONL file beginning
+with a manifest, capped at 25 MiB. Only a torn final line can be skipped.
+Linked/non-regular inputs, duplicate sequences, unknown fields and changed
+destinations are refused. Review the plaintext file before sharing it.
+
+Deletion removes retained app-owned logs, including corrupt regular logs;
+new operations can create new logs. It preserves library and recovery data,
+unrelated files and unsafe linked inputs. Storage, schema, privacy, rotation
+and export checks use temporary roots; the native controls and actual system-log
+mirror still need a live desktop check.
+
 ## Library
 
 - Start empty, create entries, or import a Mac/iOS **Export for Sharing** file.

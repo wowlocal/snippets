@@ -24,6 +24,8 @@ use std::{
     time::Duration,
 };
 use zeroize::Zeroizing;
+#[path = "account_diagnostics.rs"]
+mod diagnostic;
 
 #[path = "account_restoration.rs"]
 pub(crate) mod restoration_task;
@@ -1061,6 +1063,15 @@ impl Owner {
         Ok(())
     }
     fn handle_scheduled(&mut self, command: Command) -> Result<Reply> {
+        let operation = diagnostic::operation(&command);
+        let started = std::time::Instant::now();
+        let result = self.handle_scheduled_inner(command);
+        if let Some(operation) = operation {
+            crate::diagnostics::record(diagnostic::event(operation, started, &result));
+        }
+        result
+    }
+    fn handle_scheduled_inner(&mut self, command: Command) -> Result<Reply> {
         let keep = command.keeps_automatic() && !matches!(command, Command::Automatic(false));
         if !command.keeps_automatic() || matches!(command, Command::Automatic(false)) {
             self.disable_automatic()?;

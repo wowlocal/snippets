@@ -18,6 +18,8 @@ use std::{
     rc::{Rc, Weak},
     time::Duration,
 };
+#[path = "diagnostics_ui.rs"]
+mod diagnostic_controls;
 #[path = "editor_assistance_ui.rs"]
 mod editor_assistance_ui;
 #[path = "clipboard_history_ui.rs"]
@@ -79,6 +81,7 @@ struct App {
     usage: RefCell<Option<crate::usage_store::Handle>>,
     usage_settings: RefCell<Option<Rc<usage_settings::Settings>>>,
     settings: RefCell<Option<Rc<settings::Settings>>>,
+    diagnostics: RefCell<Option<std::sync::Arc<crate::diagnostics_service::Service>>>,
     tray: RefCell<Option<Rc<crate::tray::Tray>>>,
     shortcuts: RefCell<Option<Rc<shortcuts::Service>>>,
     usage_quitting: Cell<bool>,
@@ -233,6 +236,7 @@ impl App {
             *self.settings.borrow_mut() = Some(settings::Settings::new(
                 &self.application,
                 self.library.borrow().root.clone(),
+                self.diagnostics.borrow().clone(),
             ));
         }
         if let Some(settings) = self.settings.borrow().as_ref() {
@@ -910,10 +914,10 @@ impl App {
                     if let Err(error) = result {
                         eprintln!("{error}");
                     }
-                    app.application.quit();
+                    app.finish_quit();
                 });
             } else {
-                self.application.quit();
+                self.finish_quit();
             }
         } else {
             if let Some(service) = self.control.borrow().as_ref() {
@@ -936,6 +940,28 @@ impl App {
             }
             self.present();
         }
+    }
+    fn finish_quit(self: &Rc<Self>) {
+        self.usage_quitting.set(true);
+        crate::diagnostics::record(crate::diagnostics::Event::Lifecycle {
+            state: crate::diagnostics::Lifecycle::WillTerminate,
+        });
+        let Some(service) = self.diagnostics.borrow().clone() else {
+            self.application.quit();
+            return;
+        };
+        service.stop();
+        let app = self.clone();
+        glib::spawn_future_local(async move {
+            let start = std::time::Instant::now();
+            while !service.finished() && start.elapsed() < Duration::from_secs(3) {
+                glib::timeout_future(Duration::from_millis(30)).await;
+            }
+            if !service.finished() {
+                eprintln!("Diagnostics could not finish before exit.");
+            }
+            app.application.quit();
+        });
     }
     fn restore_encrypted_backup(self: &Rc<Self>) {
         let recovery = match crate::backup::import::pending(&self.library.borrow().root) {
@@ -1682,10 +1708,25 @@ impl MainWindow {
             return true;
         };
         let id = snippet.id;
+        let started = std::time::Instant::now();
         let result = app
             .library
             .borrow_mut()
             .save(snippet, self.expected.borrow().as_ref());
+        crate::diagnostics::record(crate::diagnostics::Event::Storage {
+            area: crate::diagnostics::Area::Library,
+            operation: crate::diagnostics::StorageOperation::Save,
+            outcome: if result.is_ok() {
+                crate::diagnostics::Outcome::Succeeded
+            } else {
+                crate::diagnostics::Outcome::Failed
+            },
+            duration_ms: crate::diagnostics::Milliseconds::new(started.elapsed()),
+            count: crate::diagnostics::Count::new(1),
+            failure: result.as_ref().err().map(|_| {
+                crate::diagnostics::Failure::classified(crate::diagnostics::Family::Storage)
+            }),
+        });
         match result {
             Ok(()) => {
                 let saved = app.library.borrow().get(id);
@@ -2197,6 +2238,7 @@ pub fn run() -> glib::ExitCode {
         usage: RefCell::new(None),
         usage_settings: RefCell::new(None),
         settings: RefCell::new(None),
+        diagnostics: RefCell::new(None),
         tray: RefCell::new(None),
         shortcuts: RefCell::new(None),
         usage_quitting: Cell::new(false),
@@ -2211,6 +2253,23 @@ pub fn run() -> glib::ExitCode {
             // GApplication emits startup only in the primary process. A
             // secondary --picker/--quit invocation never starts another owner.
             let root = app.library.borrow().root.clone();
+            // Install diagnostics only in the primary process, before other workers.
+            // Secondary commands and ordinary CLI/headless startup create no logs.
+            match crate::diagnostics_service::Service::shared(root.clone()) {
+                Ok(service) => {
+                    *app.diagnostics.borrow_mut() = Some(service);
+                    crate::diagnostics::record(crate::diagnostics::Event::Lifecycle {
+                        state: crate::diagnostics::Lifecycle::Started,
+                    });
+                    crate::diagnostics::record(crate::diagnostics::Event::Readiness {
+                        recovery_required: app.recovery_required.get(),
+                        ordinary_count: crate::diagnostics::Count::new(
+                            app.library.borrow().snippets.len(),
+                        ),
+                    });
+                }
+                Err(_) => eprintln!("Diagnostic storage could not start."),
+            }
             // Usage is local and its worker is started only by the primary desktop owner.
             *app.usage.borrow_mut() = Some(crate::usage_store::Handle::start(root.clone()));
             match AccountWorker::new(root) {
@@ -2398,6 +2457,7 @@ mod tests {
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
+            diagnostics: RefCell::new(None),
             tray: RefCell::new(None),
             shortcuts: RefCell::new(None),
             usage_quitting: Cell::new(false),
@@ -2529,6 +2589,7 @@ mod tests {
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
+            diagnostics: RefCell::new(None),
             tray: RefCell::new(None),
             shortcuts: RefCell::new(None),
             usage_quitting: Cell::new(false),
@@ -2600,6 +2661,7 @@ mod tests {
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
+            diagnostics: RefCell::new(None),
             tray: RefCell::new(None),
             shortcuts: RefCell::new(None),
             usage_quitting: Cell::new(false),
@@ -2707,6 +2769,7 @@ mod tests {
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
+            diagnostics: RefCell::new(None),
             tray: RefCell::new(None),
             shortcuts: RefCell::new(None),
             usage_quitting: Cell::new(false),

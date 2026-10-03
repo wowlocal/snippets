@@ -1,6 +1,19 @@
 # Persistent diagnostics
 
 Snippets writes structured JSON Lines through CocoaLumberjack on macOS and iOS/iPadOS.
+The native Linux port uses an independent Rust app backend with the same file,
+retention and export limits. **Settings → Diagnostics** exports or deletes its
+app-owned logs; ordinary CLI/headless startup never installs that backend.
+Its `linux_` event vocabulary records lifecycle/readiness, ordinary and vault saves,
+serialized account-operation results, sync states/counts and bounded queue loss.
+These are owner-operation outcomes, not proof of GUI rendering or delivered text.
+Linux events exclude keywords as well as the private fields listed below. The
+sanitized JSON is mirrored through native syslog; system copies follow the host's
+retention and are outside **Delete Logs**. Linux's closed export validator is
+independent of the Apple event validator. See the
+[Linux log controls](../snippets-linux/README.md#local-diagnostic-logs) and
+[implementation evidence](linux/IMPLEMENTATION.md).
+
 The app keeps at most 14 days, rolls at 1 MiB or 24 hours, retains at most 64
 archives, and caps the log directory at 24 MiB. The diagnostics directory is excluded
 from backup; directories use owner-only permissions, files use owner read/write, and
@@ -19,7 +32,7 @@ entitlements as described in `AGENTS.md` or use the validation in `install-ios.s
 
 The event API cannot accept snippet bodies, display names, tags, paths, record IDs,
 ciphertext, keys, arbitrary error descriptions, or `NSError.userInfo`. Errors are reduced
-to a known family and numeric code. Secure-snippet keywords are explicitly approved
+to a known family and numeric code. In the Apple vocabulary, secure-snippet keywords are explicitly approved
 metadata; they are normalized and bounded to 256 UTF-8 bytes.
 
 Snippets Cloud native email login uses two events in the `sync` category:

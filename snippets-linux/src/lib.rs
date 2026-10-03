@@ -20,6 +20,9 @@ pub mod crypto;
 pub mod deletion_review;
 pub mod desktop;
 pub mod desktop_settings;
+pub mod diagnostics;
+#[cfg(feature = "desktop")]
+mod diagnostics_service;
 pub mod editor_assistance;
 pub mod global_shortcuts;
 pub mod inbound;

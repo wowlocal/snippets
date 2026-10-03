@@ -36,6 +36,11 @@ commands to the same native actions and observes watcher restarts.
 `src/global_shortcuts.rs`, `shortcuts_worker.rs` and `shortcuts_wayland.c` own
 explicit local shortcut consent and three native Hyprland actions. The primary
 GTK service in `shortcuts_ui.rs` supplies setup, status and cancellation.
+`src/diagnostics.rs` defines a closed, path/text/key-free event facade. The single
+primary-process backend in `diagnostics_service.rs` serializes private bounded
+JSONL storage, maintenance, validated export and deletion off GTK. Its native
+`diagnostics_ui.rs` controls are part of searchable Settings. CLI/headless startup
+installs no sink; the native system mirror receives only the same sanitized JSON.
 `src/desktop.rs` reads the Omarchy palette, guards short-lived Hyprland targets,
 and observes session locks off the GTK thread. `src/crypto.rs`, `src/vault.rs`, and
 `src/clock.rs` implement encrypted bodies, bounded owner sessions, durable vault
@@ -253,7 +258,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Inline expansion | Native input-method-v2 owner, separate opt-in fuzzy input-popup with keyboard navigation and raw passthrough, conditional bounded clipboard read and move-only chunked replacement | Core, native pixels/FD/protocol and controller checks cover selection, dismissal, legacy consent, frozen ranking, queue/buffer bounds, UTF-8, field/file changes, cancellation and full 256 KiB output; real compositor peer credentials, native GTK settings and live receiving-field behavior remain unverified |
 | Encrypted backup | Portable encrypted-backup export/import and recovery wired to GTK; independent all-layer codec verification | Live backup password/file-dialog workflow and Apple app round trips remain unverified |
 | Clipboard history | Explicit opt-in GTK view, separate local AES-GCM image/key, bounded seven-day retention/search/delete/clear, read-only Wayland data-control worker, foreground exclusions and sensitivity/internal markers, revocable acquisition and quit barriers | Isolated core/worker/privacy tests pass and native backend compiles; private libwayland-server fixture cannot create a client in this restricted environment, GTK cannot initialize a display; full protocol and background/live history verification remain pending |
-| Persistent diagnostics | The Apple apps' structured persistent backend and Settings export/delete controls have not been ported to Linux | A native backend, closed privacy schema, bounded retention and validated export/delete workflow remain implementation work; Linux currently has no equivalent persistent diagnostic log |
+| Persistent diagnostics | One primary-process Rust backend, typed inert core facade, bounded private JSONL retention, safe native system mirror and searchable Settings export/delete with plaintext review | Privacy/schema, file and directory replacement, stale/linked destination, rollover/quota/age, corruption, torn-final-line, duplicate-sequence, deletion and queue/shutdown tests pass; native controls compile but live GTK and the actual system-log mirror remain unverified |
 
 ### Completion audit, 2026-10-03
 
@@ -278,9 +283,9 @@ Unsupported conflict versions, damaged immutable originals, duplicate body owner
 and missing whole primary files are deliberate refusals. They must not acquire
 implicit deletion consent or be bypassed to claim the port is complete.
 
-Persistent diagnostics is a concrete remaining implementation gap compared with
-the Apple app. Its eventual native backend must preserve the repository's typed
-privacy contract and stay out of ordinary CLI/headless startup. CocoaLumberjack,
+Persistent diagnostics was a concrete remaining implementation gap at the audited
+checkpoint; the native milestone below implements it. Its backend preserves the
+repository's typed privacy contract and stays out of ordinary CLI/headless startup. CocoaLumberjack,
 MetricKit, Apple keychain, CloudKit and Sparkle are platform-specific dependencies;
 Linux already uses native GTK, Secret Service, PAM, Wayland and Snippets Cloud for
 the corresponding implemented desktop, authorization and synchronization workflows.
@@ -3090,3 +3095,55 @@ login entry, account, keyring or library were changed. Real compositor
 authentication, action registration, actual physical shortcuts, GTK controls,
 activation/focus and receiving-field behavior remain unverified parts of the
 full desktop port.
+
+## Native persistent diagnostics
+
+The primary desktop process now installs one process-wide Rust backend through
+`diagnostics_service::Service::shared` before starting its other workers. The
+portable core facade in `diagnostics.rs` accepts only closed enums,
+bounded counts/durations and safe failure families/numeric codes. CLI/headless
+startup installs no sink and creates no diagnostic files. Production mirror
+output is exactly the sanitized JSON, through native syslog; isolated services
+do not register globally or mirror to the system.
+
+Records use schema 1 with UTC timestamps, a random process-session identifier,
+monotonic elapsed time and an ordered sequence. The closed Linux vocabulary
+currently covers lifecycle/readiness, ordinary/vault saves and locks, terminal
+serialized account operations, receive/send/sync states and aggregate counts,
+and bounded queue loss. Read-only account inspection and invitation polling are
+quiet. Nested operation failures remain attention/failure outcomes. Server
+error names map to fixed numeric codes without response text or retry payloads.
+These records assert the owning operation's result, not UI rendering or
+cross-application insertion. Names, keywords, bodies, tags, clipboard content,
+identities, paths, ciphertext and key/recovery material cannot enter the event API.
+
+The worker holds private directory descriptors and an independent single-owner
+lock, revalidating directory and lock identities. Normal writes use a bounded
+queue; terminal/high-risk facts request fsync with a bounded caller wait.
+Retention is 14 days, 64 files and 24 MiB, with 1-MiB/24-hour rollover, private
+permissions and periodic maintenance. The backend never takes the library's
+process lock. Interrupted final writes remain bounded to one trailing line per file.
+
+Searchable **Settings → Diagnostics** supplies storage summary, plaintext export
+review, native destination selection and destructive-delete confirmation.
+Its accepted work participates in Quit; confirmation and file selection can be
+cancelled. Export validates every complete record, rejects duplicate fields and
+session sequences, re-encodes only the closed schema, prepends a Linux manifest
+and enforces 25 MiB. A valid last record without a newline is retained; only an
+EOF-torn final line may be skipped. Inputs must remain regular/private/single-link;
+source and destination before-images are rechecked before atomic publication.
+Deletion includes corrupt regular app logs, preserving unrelated files and unsafe
+inputs. New operations can create new logs. System-log copies follow the host's
+retention and are outside app-owned log deletion.
+
+Core/backend/controller checks use temporary roots and fictional credentials;
+native GUI and actual system-log behavior still require an unlocked desktop.
+The broader live acceptance items in the completion audit remain open.
+
+Final serial checks pass 20 desktop diagnostic tests, five headless facade tests,
+20 automatic kernel/worker tests, seven desktop-settings tests, the command-options
+test and 26 core integration tests. Both all-target Clippy configurations, format,
+three release binaries and two isolated installs pass. The CLI creates no
+`Diagnostics/`. All 260 native source-file hashes match before and after the gates.
+The attempted native controls smoke fails at GTK initialization before creating
+its window, temporary storage or backend; it establishes no live UI result.

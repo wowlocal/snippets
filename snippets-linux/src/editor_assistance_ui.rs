@@ -476,6 +476,7 @@ mod tests {
             usage: RefCell::new(None),
             usage_settings: RefCell::new(None),
             settings: RefCell::new(None),
+            diagnostics: RefCell::new(None),
             tray: RefCell::new(None),
             shortcuts: RefCell::new(None),
             usage_quitting: Cell::new(false),
