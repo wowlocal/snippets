@@ -239,12 +239,12 @@ keywords, including during imports and undo. Tests use temporary directories.
 | CLI | Ordinary mutations/get/import and combined metadata catalogue | Concurrent writer and secure output/refusal tests pass |
 | Approved secure CLI | App-owned `reveal`, `secure-status` and `add --secure`; native default-deny consent, fresh vault credentials, private bounded input, same-user pidfd/executable proof, source-bound disclosure and quit cancellation | Isolated stream/owner/CLI tests and private hidden-input PTY pass; native GTK cancellation and private SO_PEERCRED/SO_PEERPIDFD checks pass; the installed CLI verifies the real owned primary for secure-status; actual disclosure/add consent remains under live review |
 | Omarchy theme | Active XDG state palette, periodic refresh, validated colors | Parser and CSS injection tests pass |
-| Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Live ordinary paste reaches the expected field in an independent C/GTK application and restores the clipboard; secure insertion remains under live review |
+| Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Live ordinary paste reaches the expected field in an independent C/GTK application and restores the clipboard; fresh vault-authenticated secure insertion also reaches that independent receiver |
 | Local suggestion learning | Frozen picker snapshots; relevance/keyword/pin priority before bounded prefix memory and 14-day frecency; successful copy/paste/inline/secure insertion recording; native toggles and independent resets; separate private debounced persistence | Isolated math/schema/concurrency/privacy tests and compiled native controls; live picker/settings/input behavior remains unverified |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; live native GTK/keyring/PAM verification remains unavailable |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor with bounded encrypted Undo/Redo and explicit Paste, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; native secure lifecycle smoke passed earlier; current recovery/repair dialogs compile but display initialization is unavailable; live keyboard/reveal workflow remains open |
-| Secure delivery and transfers | Native portable encrypted-backup export/import, fresh-authenticated direct virtual-keyboard insertion and one-cycle vault authentication for receiving/sending | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private Wayland fixture cannot initialize under restricted peer credentials; live receiving-field and authenticated-sync validation plus fuller editing/accessibility review remain pending |
+| Secure delivery and transfers | Native portable encrypted-backup export/import, fresh-authenticated direct virtual-keyboard insertion and one-cycle vault authentication for receiving/sending | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private native Wayland input fixture and live fresh vault-authenticated insertion into an independent GTK receiving field pass; authenticated-sync validation and fuller editing/accessibility review remain pending |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, current v1 conflict-owned deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; fresh verified loopback HTTPS onboarding/recipient checks pass in the unrestricted session; combined native automatic workflow verification remains pending; CloudKit is Apple-only |
 | Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent pending child deletions are selected for their own decision before the parent; unknown versions remain a separate boundary; live password-dialog verification remains open |
 | Library-key setup | Portable sync-v1 bundle, P-256 pairing, recovery QR/code and envelope, Ed25519 authority/proofs and request hashes; bound control-plane HTTP; durable first-key, recovery, recipient activation and signed mutations; native setup, recipient pairing, trusted-device approval, recovery replacement, disclosure, library-switch review/resume/cancel/offline finish and empty-target first-key UI wired | Independent vectors, retained proofs, interrupted Secret Service writes, schema migration, response ownership, exact authorization targets, mutation recovery and offline switch cancellation/completion pass; earlier verified loopback TLS passes; independent QR decoder passes for recovery and pairing payloads; terminal history retirement is wired; combined live UI/HTTPS/keyring verification remains pending |
@@ -3238,3 +3238,35 @@ unchanged across those gates. No user library, vault, key binding, login entry o
 Stay Awake setting was modified. The remaining full acceptance items include
 physical shortcuts, tray interaction, inline/secure delivery, background history,
 combined native account workflows and Apple backup interoperability.
+
+
+## Fresh secure insertion into an independent receiver, 2026-10-03
+
+The explicitly selected `secure_ui::insertion::live_tests::live_secure_paste`
+now verifies the real native secure-insertion workflow. It creates only a private
+temporary vault with public fixture text and a known test passphrase, saves one
+encrypted entry, and closes that vault's unlocked session. The separate C/GTK
+receiving process is identified by its exact owned process and public window
+before the locked workspace presents its insertion destination.
+
+The test activates the native insertion button, waits for the mapped password
+dialog, and first checks Cancel and incorrect-password refusal. It then enters
+the correct test passphrase and activates Authenticate and Insert. Real off-thread
+vault authentication, source admission, desktop observation and the native
+virtual-keyboard transport deliver the exact expected field text in the other
+process. No synthetic authorization or cached decrypted editor capability is
+installed. A public match marker observes delivery; received text is never written
+to a test result or failure message. Password entries clear, the dialog retires,
+and the vault before-image is unchanged.
+
+The initial eight-second worker wait was too short for this guarded native
+transport. With bounded thirty-second waits and a sixty-second receiver lifetime,
+the completed scenario passes, as do ordinary cross-process paste, native secure
+lifecycle and the insertion-review credential/default-cancel test. Both all-target
+Clippy configurations and formatting pass on the same native source fingerprint.
+All fixture processes, the app's bus ownership and its shortcut registrations
+are absent after cleanup. This closes the fresh secure receiving-field check for
+an isolated local vault; inline expansion, combined account/synchronization work,
+physical shortcuts, tray interactions and Apple backup interoperability remain
+separate acceptance items. User Stay Awake and its scheduled restoration remain
+unchanged.

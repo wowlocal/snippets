@@ -1083,9 +1083,10 @@ checks pass after fixing GTK markup handling. Eight current native window tests
 pass, including account cancellation, backup credentials and ordinary paste into
 an independent GTK receiving process with clipboard restoration. The installed
 primary registers three real global actions and exits on one Quit request; its
-installed CLI also verifies that primary. Combined account workflows, secure/inline
-insertion and remaining native interactions are still under review; see the latest
-implementation milestone.
+installed CLI also verifies that primary. Freshly authenticated secure insertion
+now reaches the independent receiving process too, with cancellation and incorrect
+password refusal. Inline insertion, combined account workflows and remaining
+native interactions are still under review; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
 
 ```sh
@@ -1124,6 +1125,9 @@ cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib secure_insertion::wayland::protocol_tests::private_input_protocol -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib secure_ui::insertion::tests::native_insertion_review -- --ignored --test-threads=1
+# Real fresh vault authentication and virtual keyboard; separate owned receiving app.
+G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib secure_ui::insertion::live_tests::live_secure_paste -- --exact --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib account_ui::tests::native_account -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
@@ -1148,9 +1152,15 @@ The secure smoke test checks native catalogue/editor construction, real worker
 authentication, programmatic encrypted edits, save, and draft retention after
 lock. The retained-draft recovery fixture checks both password fields, input
 bounds and cancellation with public fictional text; it uses no vault keys,
-keyring, PAM, clipboard or account. These fixtures do not establish a live
-keyboard/reveal or credential-dialog workflow. The separate live
-paste test requires an unlocked session before any clipboard change or input.
+keyring, PAM, clipboard or account. The separate live secure-insertion test
+creates a temporary vault, starts with its editor locked, enters its public test
+passphrase into the native password dialog and activates its response button.
+It checks cancellation and an incorrect password before valid authentication,
+observes exact field contents through the independent receiving application's
+match marker, and checks credential clearing and an unchanged vault. It uses the
+real session monitor, native virtual keyboard and source admission without a
+synthetic authorization. The live ordinary paste test requires an unlocked
+session before any clipboard change or input.
 It compiles a separate C/GTK receiving application, verifies its exact owned
 window and process before sending input, and observes the expected public text
 in that application's field. It refuses non-text clipboards and restores prior

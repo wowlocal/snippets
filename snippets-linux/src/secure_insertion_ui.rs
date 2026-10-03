@@ -4,6 +4,9 @@ use super::*;
 use crate::secure_insertion::{Authorization, wayland::Native};
 #[path = "secure_insertion_clipboard.rs"]
 mod clipboard;
+#[cfg(test)]
+#[path = "secure_insertion_live_tests.rs"]
+mod live_tests;
 fn review_dialog(
     application: &str,
     has_passphrase: bool,

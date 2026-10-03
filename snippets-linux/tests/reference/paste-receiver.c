@@ -37,7 +37,7 @@ int main(int argc, char **argv) {
         "com.khm.snippets.linux.PasteReceiver", G_APPLICATION_NON_UNIQUE);
     g_signal_connect(application, "activate", G_CALLBACK(activate), NULL);
     // Bound cleanup even if the Rust test aborts before its owned-child guard.
-    g_timeout_add_seconds(15, finish, application);
+    g_timeout_add_seconds(60, finish, application);
     int status = g_application_run(G_APPLICATION(application), argc, argv);
     g_object_unref(application);
     return status;
