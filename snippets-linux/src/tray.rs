@@ -50,62 +50,52 @@ impl Action {
 struct Entry {
     id: i32,
     label: &'static str,
-    icon: &'static str,
     action: Option<Action>,
 }
 const ENTRIES: [Entry; 9] = [
     Entry {
         id: 1,
         label: "Open Snippets",
-        icon: "window-new-symbolic",
         action: Some(Action::Open),
     },
     Entry {
         id: 2,
         label: "Find a Snippet…",
-        icon: "edit-find-symbolic",
         action: Some(Action::Picker),
     },
     Entry {
         id: 3,
         label: "Capture Clipboard",
-        icon: "edit-paste-symbolic",
         action: Some(Action::Capture),
     },
     Entry {
         id: 4,
         label: "Clipboard History…",
-        icon: "document-open-recent-symbolic",
         action: Some(Action::History),
     },
     Entry {
         id: 5,
         label: "Settings…",
-        icon: "preferences-system-symbolic",
         action: Some(Action::Settings),
     },
     Entry {
         id: 6,
         label: "Secure Snippets…",
-        icon: "changes-prevent-symbolic",
         action: Some(Action::Secure),
     },
     Entry {
         id: 7,
         label: "Account & Recovery…",
-        icon: "avatar-default-symbolic",
         action: Some(Action::Account),
     },
     Entry {
         id: 8,
         label: "",
-        icon: "",
         action: None,
     },
     Entry {
         id: 9,
         label: "Quit Snippets",
-        icon: "application-exit-symbolic",
         action: Some(Action::Quit),
     },
 ];
@@ -214,7 +204,9 @@ impl Menu {
             let entry = ENTRIES.iter().find(|e| e.id == id).ok_or(UNKNOWN)?;
             if let Some(action) = entry.action {
                 properties.insert("label".into(), entry.label.to_variant());
-                properties.insert("icon-name".into(), entry.icon.to_variant());
+                // DBusMenu icons are optional. GTK symbolic names are not
+                // resolved by Omarchy's Qt host and render as missing textures.
+                // Keep the public actions readable without a theme dependency.
                 properties.insert("enabled".into(), (self.enabled)(action).to_variant());
                 properties.insert("visible".into(), true.to_variant());
             } else {

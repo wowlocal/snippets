@@ -232,8 +232,8 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Area | Rust implementation | Verification / next work |
 | --- | --- | --- |
 | Native workspace | GTK list/editor, search, tags, pins, autosave, keyboard actions, searchable settings, configurable close behavior, explicit background login startup and gated startup recovery | Current native lifecycle, startup recovery, searchable Settings and local-learning windows pass with fatal GTK warnings; single Quit waits for native workers, while save conflicts cancel exit |
-| Native desktop tray | Primary-process StatusNotifierItem, fixed DBusMenu actions, public ARGB icon, recovery/enable-state updates and watcher restart registration | Independent C/GIO/Cairo and authenticated private-bus registration/restart checks pass; a release primary also registers on the real Omarchy host and accepts tray activation; panel rendering, menu interactions and focus remain under live review |
-| Global keyboard shortcuts | Explicit local enable preference, primary native Wayland registration for open/picker/capture, native setup/status/retry controls, captured receiving target, bounded revocable dispatch and quit fence | Independent socketpair protocol, worker/consent and native peer authentication checks pass; native GTK shortcut controls pass; real installed primary registers three actions and one Quit revokes them and exits; physical key assignment remains under live review |
+| Native desktop tray | Primary-process StatusNotifierItem, fixed DBusMenu actions, public ARGB icon, recovery/enable-state updates and watcher restart registration | Independent C/GIO/Cairo and authenticated private-bus checks pass; the installed release's real Omarchy icon/menu render, pointer selection focuses Settings, and the same primary re-registers and activates after a real host restart |
+| Global keyboard shortcuts | Explicit local enable preference, primary native Wayland registration for open/picker/capture, native setup/status/retry controls, captured receiving target, bounded revocable dispatch and quit fence | Private protocol/worker/consent, native peer authentication and GTK controls pass; temporary real compositor key assignments with native virtual-keyboard events verify Open, Picker/Return with receiving-field delivery and clipboard restoration, and Capture; one Quit revokes registrations; physical keyboard input remains separate |
 | Library | CRUD, bounded/strict JSON, file permissions, process lock, atomic replacement, CAS conflicts, undo/redo | Rust core and concurrent CLI writer tests pass |
 | Editor assistance | Safe derived keyword buttons, existing metadata references, shared next-part Tab completion, duplicate and bidirectional prefix warnings, explicit bounded ordinary placeholder preview | Frozen Mac examples, Unicode boundary, reservation, disabled-keyword and preview grammar/limit tests pass; current native editor-assistance window/popover smoke passes in the unlocked session |
 | Transfers | Native and Raycast JSON import, ordinary sharing export and native portable encrypted-backup export/import with interrupted-import recovery | Round-trip, timestamps, collisions, exact-key authentication, encrypted two-file redo, cancellation and independent OpenSSL backup format checks pass; native backup/restore credential cancellation/confirmation checks pass; actual file-dialog and Apple app round trips remain unverified |
@@ -292,16 +292,14 @@ MetricKit, Apple keychain, CloudKit and Sparkle are platform-specific dependenci
 Linux already uses native GTK, Secret Service, PAM, Wayland and Snippets Cloud for
 the corresponding implemented desktop, authorization and synchronization workflows.
 
-Full desktop acceptance still requires an unlocked Omarchy session with real
-compositor and process credentials. The outstanding checks are:
+This audit initially required an unlocked Omarchy session with real compositor
+and process credentials. Later milestones close native Settings/startup recovery,
+separate ordinary/inline/secure receiving fields, global-action assignment and
+visible tray/menu interaction. The remaining full acceptance checks are:
 
-- Settings, secure editor, password/recovery dialogs and startup recovery, including
-  dismissal, focus loss, lock and quit while work is outstanding.
-- Tray registration, host restart and native action activation; global-action
-  registration, actual key assignment and picker focus.
-- Observed text in a separate receiving application for ordinary paste, inline
-  suggestions/expansion and freshly authenticated secure insertion. A compositor
-  dispatcher acknowledgement alone is insufficient.
+- Fuller secure editor/recovery interaction, focus loss and lock while credentials
+  or authenticated work are outstanding; compatibility with additional receiving
+  applications and physical keyboard input beyond the tested native event path.
 - Clipboard-history opt-in/background collection and actual login startup.
 - Native account/keyring/PAM/HTTPS sign-in, pairing, key setup, reviewed switching,
   synchronization and conflict/deletion recovery using an isolated library.
@@ -3304,3 +3302,51 @@ setting was changed. Broader receiving-application compatibility, physical
 shortcuts, visible tray/menu interaction, history acquisition, combined native
 account workflows and Apple backup interoperability remain separate acceptance
 items.
+
+## Omarchy tray menu and assigned native actions, 2026-10-03
+
+A privately installed release primary now passes the complete public global-action
+path on the restored Omarchy profile. Three temporary compositor bindings send
+native virtual-keyboard events to Open, Picker and Capture. Open maps the library;
+Picker captures the independent C/GTK receiver before presentation, and Return
+delivers the exact public fixture body to that field. The receiver retains focus
+and the production clipboard lease restores a public prior text fixture. Capture
+saves the new public clipboard draft in the private library while preserving its
+original entry. One Quit exits and removes all three registrations; the temporary
+bindings are removed and the original compositor binding list is unchanged.
+
+The real Omarchy tray shows the app icon and public action menu. A native pointer
+click on Settings maps and focuses its GTK window. This exposed broken textures
+for GTK symbolic menu-icon names in the Qt host. DBusMenu action icons are optional;
+those names are now omitted, leaving readable labels and the existing public
+StatusNotifierItem icon. The updated menu renders without missing textures and
+its pointer selection still works. A separate real Omarchy shell restart verifies
+that the same owned primary registers with the new host and accepts activation
+afterward, then quits normally without creating a library, vault or checkpoint.
+
+The copied shortcut example now uses Super+Alt+N for Open. The former Super+Alt+S
+example conflicted with Omarchy's existing scratchpad action. The revised N/P/C
+examples are tested as temporary assignments; no user binding file is edited and
+the app continues to leave assignment to the compositor.
+
+An initial test-driver cleanup crashed Hyprland 0.56.2 in its Lua keybind-object
+API. The core, disassembly and [upstream removal code](https://github.com/hyprwm/Hyprland/blob/v0.56.2/src/config/lua/objects/LuaKeybind.cpp)
+point to an expired handle after multi-key bindings shared the legacy empty-key,
+zero-keycode removal tuple. This is a diagnostic inference, not a repeated crash
+experiment. The driver now removes its checked temporary display keys through
+`hl.unbind`, and releases Return to the still-owned receiving window after Picker
+hides. Hyprland's watchdog restarted the compositor with a generated recovery
+profile. Only that runtime file was redirected to the unchanged user profile;
+reload/configerrors checks pass, all 228 user bindings return, and Omarchy shell
+was restored. The extracted core was deleted. Stay Awake remains enabled and its
+existing Monday 2026-10-05 09:00 Minsk restoration timer remains scheduled.
+
+Eight tray core tests, the independent private-bus registration/restart client,
+eleven global-shortcut tests, desktop all-target Clippy, formatting, seven settings
+tests, command options, all three release builds and two private-prefix installs
+pass on the same native source fingerprint. GTK 4.22.4/libadwaita 1.9.3, the new
+compositor's real socket credentials, D-Bus tray host, DNS and certificate-verified
+HTTPS are rechecked. Final native action/menu checks use executable copies matching
+those release artifacts. Combined native accounts, history acquisition, actual
+login startup, fuller secure recovery and Apple backup round trips remain under
+acceptance.

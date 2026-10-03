@@ -77,10 +77,11 @@ fn layout_is_bounded_public_and_preserves_depth_and_property_filters() {
         let (id, properties, children) = child.get::<Layout>().unwrap();
         assert_eq!(id, entry.id);
         assert!(children.is_empty());
-        assert!(properties.keys().all(|key| matches!(
-            key.as_str(),
-            "label" | "icon-name" | "enabled" | "visible" | "type"
-        )));
+        assert!(
+            properties
+                .keys()
+                .all(|key| matches!(key.as_str(), "label" | "enabled" | "visible" | "type"))
+        );
     }
     assert!(menu.layout(0, 0, &[]).unwrap().2.is_empty());
     assert_eq!(menu.layout(0, 1, &[]).unwrap().2.len(), 9);

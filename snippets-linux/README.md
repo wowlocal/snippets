@@ -65,8 +65,8 @@ percent signs are checked with independent native launchers.
 
 Omarchy's UWSM handles [XDG autostart](https://raw.githubusercontent.com/Vladimir-csp/uwsm/master/README.md).
 The registration follows the [desktop autostart specification](https://specifications.freedesktop.org/autostart/latest/).
-The native window compiles and isolated login-entry/launch checks pass. A live
-GTK session and actual sign-in trial remain unverified in this environment.
+The native Settings window and isolated login-entry/launch checks pass. An actual
+login-startup trial remains a separate acceptance check.
 
 ## Desktop tray
 
@@ -85,9 +85,11 @@ steps. The tray exposes only fixed public labels and a generic recovery status.
 This requires a running StatusNotifier host, supplied by the current Omarchy
 shell. The app uses its existing session connection and re-registers when the
 host restarts. If the host is absent, open Snippets through the application
-launcher or `snippets`. The public icon and menu checks pass; live panel rendering,
-registration, host restart, menu activation and window focus remain unverified
-in the restricted development environment.
+launcher or `snippets`. The public icon, registration and host-restart checks pass
+on the real Omarchy shell. Its visible menu opens Settings through a native pointer
+click and focuses that window. Menu actions use labels without optional GTK
+symbolic icons, which the Qt host could not resolve. The status item retains its
+public application icon.
 
 ## Local diagnostic logs
 
@@ -952,7 +954,7 @@ For a global shortcut on current Omarchy, choose an unused key after checking
 `omarchy menu keybindings --print`, then add to `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + ALT + S", "Snippets", "snippets")
+o.bind("SUPER + ALT + N", "Snippets", "snippets")
 o.bind("SUPER + ALT + P", "Snippets picker", "snippets --picker")
 ```
 
@@ -971,8 +973,11 @@ explicit **Copy** button; choose unused keys after checking
 `omarchy menu keybindings --print`, then add the adjusted lines to
 `~/.config/hypr/bindings.lua`:
 
+The Open example uses N because Omarchy already assigns Super+Alt+S to moving
+a window to the scratchpad. Review your own assignments before adding any keys.
+
 ```lua
-o.bind("SUPER + ALT + S", "Snippets", hl.dsp.global("com.khm.snippets.linux:open"))
+o.bind("SUPER + ALT + N", "Snippets", hl.dsp.global("com.khm.snippets.linux:open"))
 o.bind("SUPER + ALT + P", "Snippets paste picker", hl.dsp.global("com.khm.snippets.linux:picker"))
 o.bind("SUPER + ALT + C", "Snippets capture", hl.dsp.global("com.khm.snippets.linux:capture"))
 ```
@@ -990,7 +995,10 @@ call, disabled consent or Quit prevents activation. The picker captures its
 receiving window before presentation and keeps the existing paste checks.
 Independent private-wire and worker tests pass. The unrestricted Omarchy session
 also verifies real compositor peer credentials, registration, native settings and
-picker focus/paste. Physical key assignment remains a separate acceptance check.
+picker focus/paste. Temporary compositor key assignments also pass Open, Picker
+with Return and Capture using native virtual-keyboard events. Their bindings are
+removed after testing; saved user key assignments and physical keyboard input
+remain separate checks.
 
 | Shortcut | Action |
 | --- | --- |
@@ -1091,8 +1099,9 @@ installed CLI also verifies that primary. Freshly authenticated secure insertion
 now reaches the independent receiving process too, with cancellation and incorrect
 password refusal. Exact inline expansion, suggestion selection with Return and
 replacement-echo isolation pass in that independent GTK receiver too. Combined
-account workflows and remaining native interactions are still under review; see
-the latest implementation milestone.
+account workflows and remaining native interactions are still under review. All
+three globally assigned actions, visible tray-menu selection/focus and re-registration
+with a restarted Omarchy host pass; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
 
 ```sh

@@ -77,7 +77,7 @@ impl Action {
     }
 }
 /// Examples only: physical keys remain the user's compositor configuration.
-pub const BINDINGS: &str = "o.bind(\"SUPER + ALT + S\", \"Snippets\", hl.dsp.global(\"com.khm.snippets.linux:open\"))\no.bind(\"SUPER + ALT + P\", \"Snippets paste picker\", hl.dsp.global(\"com.khm.snippets.linux:picker\"))\no.bind(\"SUPER + ALT + C\", \"Snippets capture\", hl.dsp.global(\"com.khm.snippets.linux:capture\"))";
+pub const BINDINGS: &str = "o.bind(\"SUPER + ALT + N\", \"Snippets\", hl.dsp.global(\"com.khm.snippets.linux:open\"))\no.bind(\"SUPER + ALT + P\", \"Snippets paste picker\", hl.dsp.global(\"com.khm.snippets.linux:picker\"))\no.bind(\"SUPER + ALT + C\", \"Snippets capture\", hl.dsp.global(\"com.khm.snippets.linux:capture\"))";
 
 #[cfg(feature = "desktop")]
 #[path = "shortcuts_worker.rs"]
