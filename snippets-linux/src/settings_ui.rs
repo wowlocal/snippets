@@ -134,12 +134,14 @@ impl Settings {
             .description("Snippets can keep running after its library window closes.")
             .build();
         let startup = adw::SwitchRow::builder()
+            .use_markup(false)
             .title("Launch at Login")
             .subtitle("Start Snippets in the background when you sign in.")
             .active(snapshot.as_ref().is_some_and(|s| s.enabled))
             .build();
         group.add(&startup);
         let installed = adw::ActionRow::builder()
+            .use_markup(false)
             .title("Application Installation")
             .subtitle("Update login startup after moving or reinstalling Snippets.")
             .build();
@@ -150,13 +152,17 @@ impl Settings {
         group.add(&installed);
         let model = gtk::StringList::new(&["Hide and Keep Running", "Quit Snippets"]);
         let close = adw::ComboRow::builder()
+            .use_markup(false)
             .title("When Library Window Closes")
             .subtitle("Quit waits for saved drafts and running operations.")
             .model(&model)
             .selected(u32::from(close_action == CloseAction::Quit))
             .build();
         group.add(&close);
-        let status = adw::ActionRow::builder().title("Desktop Settings").build();
+        let status = adw::ActionRow::builder()
+            .use_markup(false)
+            .title("Desktop Settings")
+            .build();
         status.set_subtitle("Settings are local to this device.");
         group.add(&status);
         general.add(&group);
@@ -168,10 +174,10 @@ impl Settings {
                 .build();
             let group = adw::PreferencesGroup::new();
             for (title, description, action) in *entries {
-                let row = adw::ActionRow::builder()
-                    .title(*title)
-                    .subtitle(*description)
-                    .build();
+                let row = adw::ActionRow::builder().use_markup(false).build();
+                // Set text after construction so title bindings see markup disabled.
+                row.set_title(title);
+                row.set_subtitle(description);
                 let open = button("go-next-symbolic", title);
                 open.set_valign(gtk::Align::Center);
                 open.set_action_name(Some(&format!("app.{action}")));

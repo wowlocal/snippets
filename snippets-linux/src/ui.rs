@@ -1305,7 +1305,7 @@ impl MainWindow {
             &adw::StatusPage::builder()
                 .icon_name("dialog-warning-symbolic")
                 .title("Finish the interrupted update")
-                .description("Open Account & Recovery, reconnect your saved account and library, then choose Sync Now. Your entries stay hidden until recovery finishes.")
+                .description(glib::markup_escape_text("Open Account & Recovery, reconnect your saved account and library, then choose Sync Now. Your entries stay hidden until recovery finishes."))
                 .build(),
             Some("recovery"),
         );
@@ -1578,11 +1578,11 @@ impl MainWindow {
             .child_by_name("recovery")
             .and_then(|widget| widget.downcast::<adw::StatusPage>().ok())
         {
-            page.set_description(Some(if backup_recovery {
+            page.set_description(Some(&glib::markup_escape_text(if backup_recovery {
                 "Choose Resume Backup Import and enter the password of the backup used for the interrupted import. Your entries stay hidden until both library files are recovered."
             } else {
                 "Open Account & Recovery, reconnect your saved account and library, then choose Sync Now. Your entries stay hidden until recovery finishes."
-            }));
+            })));
         }
         if blocked && !self.recovery.is_revealed() {
             if let Some(picker) = app.picker.borrow().as_ref() {

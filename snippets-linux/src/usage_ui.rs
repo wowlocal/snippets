@@ -211,6 +211,11 @@ mod tests {
             .build();
         application.register(None::<&gio::Cancellable>).unwrap();
         let settings = Settings::new(&application, handle, || {});
+        settings.window.present();
+        while glib::MainContext::default().pending() {
+            glib::MainContext::default().iteration(false);
+        }
+        assert!(settings.window.is_realized());
         assert!(settings.ranking.is_active() && settings.memory.is_active());
         assert!(settings.ranking.is_sensitive() && settings.memory.is_sensitive());
         assert_eq!(
@@ -225,6 +230,7 @@ mod tests {
         }
         assert!(!library.path().exists());
         assert!(!library.root.join("Sync").exists());
+        settings.window.close();
         settings.window.destroy();
     }
 }

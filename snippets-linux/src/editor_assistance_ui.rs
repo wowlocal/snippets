@@ -526,6 +526,20 @@ mod tests {
                 .blocked_by_longer,
             1
         );
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !main.window.is_active()
+            || !main.assistance.preview_button.is_mapped()
+            || main.assistance.preview_button.width() == 0
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Preview needs its visible, allocated button in the active fixture window."
+            );
+            while glib::MainContext::default().pending() {
+                glib::MainContext::default().iteration(false);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
         main.assistance.popover.popup();
         assert!(!main.assistance.preview_text.label().is_empty());
         main.buffer.insert_at_cursor(" ordinary change");

@@ -2577,6 +2577,7 @@ mod tests {
         let permit = window.gate.borrow_mut().accept(proof).unwrap();
         Disclosure::fixture(permit, target)
     }
+    #[track_caller]
     fn settle_until(finished: impl Fn() -> bool) {
         let started = std::time::Instant::now();
         let context = glib::MainContext::default();

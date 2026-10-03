@@ -1074,6 +1074,17 @@ in the restricted tool environment; see the implementation evidence.
 
 ## Verification
 
+The unrestricted Omarchy session now passes native peer authentication, private
+D-Bus tray registration/restart, private Wayland clipboard/input protocols, PAM,
+verified HTTPS and an isolated Secret Service fixture. A real release primary also
+registers with the Omarchy tray host, accepts activation and mirrors its exact
+sanitized diagnostics to the system journal. Native library/recovery and Settings
+checks pass after fixing GTK markup handling. Ordinary live paste reached a field
+in a separate test window and restored the clipboard. Combined account workflows,
+a separate receiving application, secure/inline insertion and remaining native
+interactions are still under review; see the latest implementation milestone.
+Focus-dependent checks require an unlocked session for their entire lifetime.
+
 ```sh
 cargo test --locked --manifest-path snippets-linux/Cargo.toml
 cargo test --locked --manifest-path snippets-linux/Cargo.toml --no-default-features
