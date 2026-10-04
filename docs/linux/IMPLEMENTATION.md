@@ -248,7 +248,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Transfers | Native and Raycast JSON import, ordinary sharing export and native portable encrypted-backup export/import with interrupted-import recovery | Round-trip, timestamps, collisions, exact-key authentication, encrypted two-file redo, cancellation and independent OpenSSL backup format checks pass; complete native Save/Open portal, credential/confirmation cancellation and matching/new-vault restoration pass in Debug and Release; actual Apple app exchange remains open |
 | Placeholders | Native ICU date/time formats, one-pass clipboard, locale, calendar offsets | Fixed-date, month-end, literal grammar tests pass |
 | CLI | Ordinary mutations/get/import and combined metadata catalogue | Concurrent writer and secure output/refusal tests pass |
-| Approved secure CLI | App-owned `reveal`, `secure-status` and `add --secure`; native default-deny consent, fresh vault credentials, private bounded input, same-user pidfd/executable proof, source-bound disclosure and quit cancellation | Isolated stream/owner/CLI, hidden-input PTY and native SO_PEERCRED/SO_PEERPIDFD checks pass; actual installed Release app/CLI consent, fresh passphrase/recovery disclosure, secure creation and independent OpenSSL verification pass; Deny/Cancel, wrong credentials, focus/disconnect, unchanged deadlines/rate limit, image mismatch, duplicates and changed vault sources refuse delivery; background editor stays locked |
+| Approved secure CLI | App-owned `reveal`, `secure-status` and `add --secure`; native default-deny consent, fresh vault credentials, private bounded input, same-user pidfd/executable proof, source-bound disclosure and quit cancellation | Isolated stream/owner/CLI, hidden-input PTY and native SO_PEERCRED/SO_PEERPIDFD checks pass; actual installed Release app/CLI consent, fresh passphrase/recovery disclosure, secure creation and independent OpenSSL verification pass; Deny/Cancel, wrong credentials, focus/disconnect, unchanged deadlines/rate limit, image mismatch, duplicates and changed vault sources refuse delivery; the actual native editor is also unlocked before each request, observed through the installed CLI, then locked without borrowing its key; only new consent and fresh credentials allow reveal/create |
 | Omarchy theme | Active XDG state palette, periodic refresh, validated colors | Parser and CSS injection tests pass |
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Live ordinary paste reaches the expected field in an independent C/GTK application and restores the clipboard; fresh vault-authenticated secure insertion also reaches that independent receiver |
 | Local suggestion learning | Frozen picker snapshots; relevance/keyword/pin priority before bounded prefix memory and 14-day frecency; successful copy/paste/inline/secure insertion recording; native toggles and independent resets; separate private debounced persistence | Isolated math/schema/concurrency/privacy tests and compiled native controls; live picker/settings/input behavior remains unverified |
@@ -4083,3 +4083,52 @@ Live approval while an editor is already unlocked, fuller editing/recovery and
 accessibility, pairing/signed mutations, reviewed switching, pending raw-child
 and source-absence review, actual Apple-app backup exchange, a full new sign-in
 and broader physical receiving-application compatibility remain separate work.
+
+
+### Secure CLI after a real native editor unlock (2026-10-04)
+
+The optional `unlocked-editor` variant of `tests/control-live.sh` now opens the
+actual installed Release workspace through its exported GApplication action.
+Before each of five secure commands, a PID/window-scoped AT-SPI actor clicks the
+native Unlock control, fills the real PasswordEntry via stdin and activates its
+native response. The installed CLI's actual `secure-status` confirms
+`appAvailable: true`, the saved count and `unlocked: true`; no editor key/session
+or authentication response is injected.
+
+The existing admission boundary saves pending edits and locks the workspace
+before opening separate secure-CLI consent. The fixture observes locked status
+while the actual consent is mapped. Deny, wrong fresh credentials and credential
+Cancel return no plaintext and preserve both primary files. Correct fresh
+credentials reveal the exact fixture bytes. Fresh consent and credentials also
+create a new encrypted record; OpenSSL independently verifies its seal/hash,
+the ordinary library remains unchanged and the editor remains locked afterward.
+CLI requests do not borrow, reopen or extend the editor session.
+
+The common saved-files lock is nonblocking in the status worker, so a read-only
+probe can refuse while the workspace polls or authenticates. The driver waits
+at most five seconds for a complete validated status answer and repeats only a
+zero-output, known unconfirmed-status refusal. No peer/protocol error, malformed JSON, wrong count, unavailable primary or
+nonempty failed stdout is accepted as a status answer. Disclosure/creation commands execute exactly
+once and are never retried. The scope remains the actual installed app and CLI.
+
+The actor's only selectable parent titles are the actual CLI request and secure
+workspace, with an exact owned PID, unique mapped native control, active window
+and unlocked compositor checks. Retained diagnostics from both variants pass
+the shared JSON-aware checks for fixture body, credential, display name, caller
+path and record UUID. All fixtures use private data/installation/runtime/bus
+roots and public fictional content. The host keyring, PAM, clipboard, desktop
+configuration and production control implementation are unchanged.
+
+All 20 distinct tests pass across 13 serial gates on one frozen 285-file native
+fingerprint. Both installed-app variants pass with Debug and optimized Release
+harnesses; the gates also cover control/owner and CLI refusals, native credential
+field clearing, both all-target Clippy configurations, formatting, shell syntax
+and all three Release executables. GTK/libadwaita, actual Wayland peer credentials,
+unlocked state, D-Bus portal/tray ownership, DNS and certificate-verified HTTPS
+are rechecked after cleanup. Stay Awake and the 2026-10-05 09:00 Minsk timer are
+preserved. The checkpoint contains source/artifact hashes and gate evidence.
+
+Fuller secure editing/recovery and accessibility, pairing/signed mutations,
+reviewed switching, pending raw-child/source-absence review, actual Apple-app
+backup exchange, full new sign-in and broader physical receiving-application
+compatibility remain separate acceptance work.

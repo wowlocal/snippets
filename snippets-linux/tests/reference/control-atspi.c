@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *mode;
+static const char *mode, *window_title;
 static AtspiAccessible *window, *target;
 static guint nodes, windows, targets, owned_apps;
 
@@ -22,13 +22,15 @@ static void visit(AtspiAccessible *item, guint depth, gboolean scoped) {
   g_clear_error(&error);
   gchar *name = atspi_accessible_get_name(item, &error);
   g_clear_error(&error);
-  gboolean is_window = name && strcmp(name, "Snippets CLI Request") == 0 &&
+  gboolean is_window = name && strcmp(name, window_title) == 0 &&
     (role == ATSPI_ROLE_FRAME || role == ATSPI_ROLE_WINDOW || role == ATSPI_ROLE_DIALOG) && showing(item);
   if (is_window) { windows++; g_set_object(&window, item); }
   scoped |= is_window;
   const char *wanted = strcmp(mode,"approve") == 0 ? "Approve and Authenticate" :
     strcmp(mode,"deny") == 0 ? "Deny" : strcmp(mode,"authenticate") == 0 ? "Authenticate" :
     strcmp(mode,"cancel") == 0 ? "Cancel" :
+    strcmp(mode,"editor-unlock") == 0 ? "Unlock…" :
+    strcmp(mode,"editor-authenticate") == 0 ? "Unlock" :
     (!strcmp(mode,"recovery") || !strcmp(mode,"recovery-selected")) ? "Use recovery key" : NULL;
   gboolean match = scoped && showing(item) && wanted && name && strcmp(wanted,name) == 0 &&
     (role == ATSPI_ROLE_PUSH_BUTTON || role == ATSPI_ROLE_CHECK_BOX);
@@ -47,9 +49,13 @@ static void visit(AtspiAccessible *item, guint depth, gboolean scoped) {
 int main(int argc,char **argv) {
   if (argc != 2) return 2;
   mode = argv[1];
+  window_title = g_getenv("SNIPPETS_CONTROL_TEST_WINDOW");
+  if (!window_title) window_title="Snippets CLI Request";
+  if (strcmp(window_title,"Snippets CLI Request") && strcmp(window_title,"Secure Snippets")) return 2;
   if (strcmp(mode,"approve") && strcmp(mode,"deny") && strcmp(mode,"authenticate") &&
       strcmp(mode,"cancel") && strcmp(mode,"recovery") &&
-      strcmp(mode,"recovery-selected") && strcmp(mode,"input")) return 2;
+      strcmp(mode,"recovery-selected") && strcmp(mode,"input") &&
+      strcmp(mode,"editor-unlock") && strcmp(mode,"editor-authenticate")) return 2;
   const char *value = g_getenv("SNIPPETS_CONTROL_TEST_PID");
   if (!value || !*value) return 2;
   char *end = NULL; unsigned long parsed = strtoul(value,&end,10);

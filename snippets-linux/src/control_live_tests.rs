@@ -81,9 +81,11 @@ fn prompt(pid: u32) -> bool {
     })
 }
 fn active(pid: u32) -> bool {
+    active_window(pid, "Snippets CLI Request")
+}
+fn active_window(pid: u32, title: &str) -> bool {
     let window = query("activewindow");
-    window["title"].as_str() == Some("Snippets CLI Request")
-        && window["pid"].as_u64() == Some(u64::from(pid))
+    window["title"].as_str() == Some(title) && window["pid"].as_u64() == Some(u64::from(pid))
 }
 struct Fixture {
     _directory: tempfile::TempDir,
@@ -198,18 +200,81 @@ impl Fixture {
         app
     }
     fn status(&self, count: usize) {
+        self.status_state(count, false);
+    }
+    fn status_state(&self, count: usize, unlocked: bool) {
+        assert!(self.state(count) == unlocked);
+    }
+    fn state(&self, count: usize) -> bool {
+        let mut value = None;
+        // The status worker's common file lock is nonblocking; native editor
+        // polling/authentication can briefly own it. Only this read-only probe
+        // may repeat a transport refusal. Secure requests are never retried.
+        until("read-only CLI status admission", 5, || {
+            value = self.try_state(count);
+            value.is_some()
+        });
+        value.unwrap()
+    }
+    fn try_state(&self, count: usize) -> Option<bool> {
         let output = self
             .command("snippets-cli")
             .arg("secure-status")
             .output()
             .unwrap();
-        assert!(output.status.success() && output.stderr.is_empty());
-        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let failure = [
+            ("peer", control::REFUSED.0),
+            ("closed", control::CLOSED.0),
+            ("refused", Status::Refused.message()),
+            ("unconfirmed", Status::Error.message()),
+        ]
+        .into_iter()
+        .find(|(_, message)| output.stderr == format!("{message}\n").as_bytes())
+        .map_or("other", |(label, _)| label);
+        if output.status.code() == Some(1) && output.stdout.is_empty() && failure == "unconfirmed" {
+            return None;
+        }
         assert!(
-            value["appAvailable"] == true
-                && value["secureCount"] == count
-                && value["unlocked"] == false
+            output.status.success() && output.stderr.is_empty(),
+            "Read-only CLI status failed: code={:?}, stdout_empty={}, stderr_empty={}, family={failure}",
+            output.status.code(),
+            output.stdout.is_empty(),
+            output.stderr.is_empty()
         );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(value["appAvailable"] == true && value["secureCount"] == count);
+        Some(value["unlocked"].as_bool().unwrap())
+    }
+    fn unlock_editor(&self, app: &Process, count: usize) {
+        let activated = ProcessCommand::new("gdbus")
+            .args([
+                "call",
+                "--session",
+                "--dest",
+                "com.khm.snippets.linux",
+                "--object-path",
+                "/com/khm/snippets/linux",
+                "--method",
+                "org.gtk.Actions.Activate",
+                "secure",
+                "[]",
+                "{}",
+            ])
+            .output()
+            .unwrap();
+        assert!(activated.status.success() && activated.stderr.is_empty());
+        until("actual secure editor activation", 10, || {
+            active_window(app.id(), "Secure Snippets")
+        });
+        self.status(count);
+        assert!(self.action_in(app, "Secure Snippets", "editor-unlock", None) == 0);
+        assert!(self.action_in(app, "Secure Snippets", "input", Some(&self.password)) == 0);
+        assert!(self.action_in(app, "Secure Snippets", "editor-authenticate", None) == 0);
+        println!("The actual native editor credential was submitted; awaiting unlocked status.");
+        until("actual editor session unlocked", 30, || self.state(count));
+        assert!(active_window(app.id(), "Secure Snippets"));
+        self.status_state(count, true);
+        println!("The installed CLI observed the actual unlocked editor session.");
     }
     fn reveal(&self, keyword: &str) -> Process {
         Process::start(self.command("snippets-cli").args(["reveal", keyword]))
@@ -238,15 +303,21 @@ impl Fixture {
         assert!(desktop::session_state() == SessionState::Unlocked);
     }
     fn action(&self, app: &Process, mode: &str, secret: Option<&str>) -> i32 {
+        self.action_in(app, "Snippets CLI Request", mode, secret)
+    }
+    fn action_in(&self, app: &Process, title: &str, mode: &str, secret: Option<&str>) -> i32 {
+        assert!(matches!(title, "Snippets CLI Request" | "Secure Snippets"));
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             assert!(
-                desktop::session_state() == SessionState::Unlocked && active(app.id()),
+                desktop::session_state() == SessionState::Unlocked
+                    && active_window(app.id(), title),
                 "Only the exact active owned CLI window may receive an action."
             );
             let mut child = ProcessCommand::new(&self.actor)
                 .arg(mode)
                 .env("SNIPPETS_CONTROL_TEST_PID", app.id().to_string())
+                .env("SNIPPETS_CONTROL_TEST_WINDOW", title)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -362,6 +433,151 @@ impl Fixture {
             model::read_regular(&self.root.join("Vault/vault.json")).unwrap(),
         )
     }
+    fn assert_diagnostics(&self, id: uuid::Uuid) {
+        let mut retained_events = 0;
+        for path in self.root.join("Diagnostics/Logs").read_dir().unwrap() {
+            let path = path.unwrap().path();
+            if !path.is_file() {
+                continue;
+            }
+            let bytes = fs::read(path).unwrap();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            for line in text.lines() {
+                let event: serde_json::Value = serde_json::from_str(line).unwrap();
+                retained_events += 1;
+                fn check(value: &serde_json::Value, forbidden: &[&str]) {
+                    match value {
+                        serde_json::Value::String(value) => {
+                            assert!(
+                                forbidden.iter().all(|text| !value
+                                    .to_lowercase()
+                                    .contains(&text.to_lowercase())),
+                                "Retained diagnostics must contain no body, credential, name, caller path or record ID."
+                            );
+                        }
+                        serde_json::Value::Array(values) => {
+                            values.iter().for_each(|value| check(value, forbidden))
+                        }
+                        serde_json::Value::Object(values) => {
+                            values.values().for_each(|value| check(value, forbidden))
+                        }
+                        _ => {}
+                    }
+                }
+                check(
+                    &event,
+                    &[
+                        std::str::from_utf8(&self.body).unwrap().trim(),
+                        "Public CLI creation body",
+                        &self.password,
+                        "Public CLI created entry",
+                        "Public concurrent metadata edit",
+                        &id.to_string(),
+                        self.binaries.to_str().unwrap(),
+                        self.root.to_str().unwrap(),
+                    ],
+                );
+            }
+        }
+        assert!(retained_events > 0);
+    }
+}
+
+#[test]
+#[ignore = "unlocked Omarchy; actual installed Release editor and CLI, public private-root fixture only"]
+fn live_installed_cli_does_not_borrow_unlocked_editor() {
+    assert!(
+        std::env::var_os("SNIPPETS_CONTROL_LIVE").as_deref()
+            == Some(std::ffi::OsStr::new("public-private-roots"))
+    );
+    assert!(
+        std::env::var_os("DBUS_SESSION_BUS_ADDRESS")
+            != std::env::var_os("SNIPPETS_CONTROL_HOST_BUS")
+    );
+    assert!(desktop::session_state() == SessionState::Unlocked);
+    adw::init().unwrap();
+    let fixture = Fixture::new();
+    let mut app = fixture.start(1);
+    let before = fixture.images();
+    for outcome in 0..4 {
+        fixture.unlock_editor(&app, 1);
+        assert!(fixture.images() == before);
+        let mut cli = fixture.reveal(&fixture.keyword);
+        fixture.wait_prompt(&app);
+        fixture.status(1);
+        assert!(
+            !cli.finished(),
+            "An unlocked editor must not disclose before consent."
+        );
+        match outcome {
+            0 => {
+                assert!(fixture.action(&app, "deny", None) == 0);
+                fixture.finish(&app, &mut cli, 4, None);
+            }
+            1 => {
+                fixture.approve(&app, "Wrong public control credential", false);
+                fixture.finish(&app, &mut cli, 5, None);
+            }
+            2 => {
+                assert!(fixture.action(&app, "approve", None) == 0);
+                assert!(fixture.action(&app, "authenticate", None) == 6);
+                assert!(fixture.action(&app, "input", Some(&fixture.password)) == 0);
+                assert!(fixture.action(&app, "cancel", None) == 0);
+                fixture.finish(&app, &mut cli, 4, None);
+            }
+            _ => {
+                fixture.approve(&app, &fixture.password, false);
+                fixture.finish(&app, &mut cli, 0, Some(&fixture.body));
+            }
+        }
+        fixture.status(1);
+        assert!(fixture.images() == before);
+    }
+    println!(
+        "Actual native editor unlock preceded every reveal; Deny, wrong fresh credentials and Cancel refused, and only a fresh authenticated reveal returned exact bytes. The prior editor session stayed locked."
+    );
+
+    fixture.unlock_editor(&app, 1);
+    let mut cli = fixture.create();
+    fixture.wait_prompt(&app);
+    fixture.status(1);
+    assert!(!cli.finished());
+    fixture.approve(&app, &fixture.password, false);
+    until(
+        "secure creation from an initially unlocked editor",
+        30,
+        || cli.finished(),
+    );
+    let output = cli.output();
+    assert!(output.status.success() && output.stderr.is_empty());
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        receipt.as_object().unwrap().len() == 3
+            && receipt["keyword"] == "public-cli-created"
+            && receipt["secure"] == true
+    );
+    let id = uuid::Uuid::parse_str(receipt["id"].as_str().unwrap()).unwrap();
+    assert!(!id.is_nil());
+    until("creation consent removed", 5, || !prompt(app.id()));
+    fixture.status(2);
+    let created = fixture.images();
+    assert!(created.0 == before.0 && created.1 != before.1);
+    let document = Document::decode(created.1.as_ref().unwrap()).unwrap();
+    assert!(document.records.len() == 2 && document.records.iter().any(|r| r.metadata.id == id));
+    let reference = ProcessCommand::new("python3")
+        .arg("-B")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/control-vault.py"))
+        .arg(fixture.root.join("Vault/vault.json"))
+        .arg(&fixture.input)
+        .output()
+        .unwrap();
+    assert!(reference.status.success());
+    fixture.stop(&mut app);
+    fixture.assert_diagnostics(id);
+    assert!(!fixture.root.join("Sync").exists());
+    println!(
+        "Actual native secure creation from an initially unlocked editor still required fresh consent/authentication; OpenSSL authenticated the new seal, ordinary data stayed unchanged and the editor stayed locked."
+    );
 }
 
 #[test]
@@ -554,52 +770,7 @@ fn live_installed_cli_secure_create_and_reveal() {
     assert!(fixture.images() == edited);
     fixture.status(2);
     fixture.stop(&mut app);
-    let mut retained_events = 0;
-    for path in fixture.root.join("Diagnostics/Logs").read_dir().unwrap() {
-        let path = path.unwrap().path();
-        if !path.is_file() {
-            continue;
-        }
-        let bytes = fs::read(path).unwrap();
-        let text = std::str::from_utf8(&bytes).unwrap();
-        for line in text.lines() {
-            let event: serde_json::Value = serde_json::from_str(line).unwrap();
-            retained_events += 1;
-            fn check(value: &serde_json::Value, forbidden: &[&str]) {
-                match value {
-                    serde_json::Value::String(value) => {
-                        assert!(
-                            forbidden
-                                .iter()
-                                .all(|text| !value.to_lowercase().contains(&text.to_lowercase())),
-                            "Retained diagnostics must contain no body, credential, name, caller path or record ID."
-                        );
-                    }
-                    serde_json::Value::Array(values) => {
-                        values.iter().for_each(|value| check(value, forbidden))
-                    }
-                    serde_json::Value::Object(values) => {
-                        values.values().for_each(|value| check(value, forbidden))
-                    }
-                    _ => {}
-                }
-            }
-            check(
-                &event,
-                &[
-                    std::str::from_utf8(&fixture.body).unwrap().trim(),
-                    "Public CLI creation body",
-                    &fixture.password,
-                    "Public CLI created entry",
-                    "Public concurrent metadata edit",
-                    receipt["id"].as_str().unwrap(),
-                    fixture.binaries.to_str().unwrap(),
-                    fixture.root.to_str().unwrap(),
-                ],
-            );
-        }
-    }
-    assert!(retained_events > 0);
+    fixture.assert_diagnostics(id);
     assert!(!fixture.root.join("Sync").exists());
     println!(
         "Real executable mismatch and changed-source fences refused delivery; retained diagnostics contained no body, credential or created record ID."

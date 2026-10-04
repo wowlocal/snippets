@@ -1098,8 +1098,10 @@ snippets-cli reveal service-token
 
 The native window identifies the verified CLI and its reported parent program,
 defaults to **Deny**, and requires fresh vault passphrase or recovery-key
-authentication after approval. An unlocked editor does not authorize a request;
-the request does not unlock or extend the editor session. Secure creation adds a
+authentication after approval. An unlocked editor does not authorize a request.
+Before admitting a secure command, the app saves pending editor changes and
+locks its existing vault session; a save conflict refuses the command. The
+request does not unlock or extend the editor session. Secure creation adds a
 new entry and returns only its UUID, keyword and `secure: true`; duplicates refuse.
 Secure updates and deletion remain desktop-editor operations. Reveal sends
 plaintext to stdout, where scripts, logging or downstream tools may retain it.
@@ -1140,7 +1142,10 @@ An independent OpenSSL decoder authenticates the created record and its content
 hash. Deny, Cancel, wrong credentials, focus loss, disconnect, both unchanged
 deadlines, the request limit, executable mismatch, duplicates and changed vault
 sources refuse delivery. The fixture uses public fictional content on private
-D-Bus/AT-SPI buses and data roots; the desktop editor remains locked.
+D-Bus/AT-SPI buses and data roots; the desktop editor remains locked. A separate
+fixture starts every request with the actual editor unlocked, verifies that
+status through the installed CLI, and proves that only new consent and fresh
+credentials allow disclosure or creation.
 
 ## Verification
 
@@ -1265,6 +1270,9 @@ cargo build --locked --manifest-path snippets-linux/Cargo.toml --release \
   --bin snippets --bin snippets-cli --bin snippets-owner-auth
 bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
   /absolute/path/to/cargo-target/release
+# Start each secure CLI request with an actually unlocked native editor.
+bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
+  /absolute/path/to/cargo-target/release unlocked-editor
 # Optional independent reader check; requires zbarimg (Arch package: zbar).
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib recovery_qr::tests::independent_reader -- --ignored --test-threads=1
@@ -1312,8 +1320,12 @@ uses native Tab/Space with observed focus/check state. No password or snippet bo
 is passed as a command argument or printed. It requires `atspi-2` development
 files, `dbus-run-session`, `gdbus`, the distro AT-SPI broker/registry and OpenSSL.
 All private app, input and bus roots are removed after exit. Host services,
-keyring, PAM and clipboard are untouched. The fixture lasts about two minutes
-because it preserves the real 30/60-second deadlines.
+keyring, PAM and clipboard are untouched. The default fixture lasts about two
+minutes because it preserves the real 30/60-second deadlines. The
+`unlocked-editor` variant opens the actual installed workspace through its native
+GApplication action and unlocks it through its real password dialog before each
+request. Its bounded read-only status probes can repeat a failed admission while
+the nonblocking common file lock is occupied. Secure requests are never retried.
 
 Local-owner tests exercise libpam against a disposable private policy and a
 public fictional password module. They cover incorrect passwords, account
