@@ -55,6 +55,19 @@ final class SnippetExpansionEngine {
     private var workspaceActivationObserver: NSObjectProtocol?
     private var accessibilityPrimedPIDs: Set<pid_t> = []
     private var enhancedAccessibilityPrimedPIDs: Set<pid_t> = []
+    /// Processes whose focused window never published a focused element during one complete
+    /// `LazyAccessibilityFocus` wait. The launch date keeps a reused PID from inheriting this.
+    private var hostsWithoutLazyFocus: Set<ProcessIdentity> = []
+
+    private struct ProcessIdentity: Hashable {
+        let pid: pid_t
+        let launchDate: Date?
+
+        init(_ app: NSRunningApplication) {
+            pid = app.processIdentifier
+            launchDate = app.launchDate
+        }
+    }
 
     private var typedBuffer = ""
     private let maxBufferLength = 120
@@ -293,6 +306,12 @@ final class SnippetExpansionEngine {
         let context: SecurePasteFieldSelection
         /// nil means the descendant positively reported keyboard focus.
         let explicitPoint: SecurePasteScreenPoint?
+    }
+
+    /// Focus reads spent by one capture, reported once in its diagnostic event.
+    private struct SecurePasteFocusRead {
+        var attempts = 1
+        var unresolvedError: AXError?
     }
 
     enum SecurePasteTargetCapture {
@@ -696,7 +715,8 @@ final class SnippetExpansionEngine {
     func captureClipboardHistoryTarget() -> SecurePasteTarget? {
         let previousStatus = statusText
         defer { statusText = previousStatus }
-        guard case .target(let target) = captureSecurePasteTargetImpl(),
+        var focusRead = SecurePasteFocusRead()
+        guard case .target(let target) = captureSecurePasteTargetImpl(focusRead: &focusRead),
               !target.isSecureTextField, !target.secureInputWasEnabledAtCapture else { return nil }
         return target
     }
@@ -788,7 +808,8 @@ final class SnippetExpansionEngine {
     /// No field value is read; password fields commonly refuse that read by design.
     func captureSecurePasteTarget() -> SecurePasteTargetCapture {
         let startedAt = ContinuousClock.now
-        let result = captureSecurePasteTargetImpl()
+        var focusRead = SecurePasteFocusRead()
+        let result = captureSecurePasteTargetImpl(focusRead: &focusRead)
         let outcome: DiagnosticSecurePasteOutcome
         let reason: DiagnosticSecurePasteReason
         var target: SecurePasteTarget?
@@ -800,11 +821,14 @@ final class SnippetExpansionEngine {
         case .unavailable: outcome = .failed; reason = .unavailable
         }
         recordSecurePaste(stage: .capture, outcome: outcome, target: target,
-                          reason: reason, startedAt: startedAt)
+                          reason: reason, startedAt: startedAt, attempts: focusRead.attempts,
+                          axErrorCode: focusRead.unresolvedError.map { Int($0.rawValue) })
         return result
     }
 
-    private func captureSecurePasteTargetImpl() -> SecurePasteTargetCapture {
+    private func captureSecurePasteTargetImpl(
+        focusRead: inout SecurePasteFocusRead
+    ) -> SecurePasteTargetCapture {
         guard !isPreparingForTermination else { return .unavailable }
         guard let app = NSWorkspace.shared.frontmostApplication else {
             resetTypingContext()
@@ -829,7 +853,16 @@ final class SnippetExpansionEngine {
         }
 
         let budget = AXMessagingBudget()
-        guard let focusedElement = frontmostFocusedElement(axBudget: budget) else {
+        var focusedElement = frontmostFocusedElement(axBudget: budget)
+        if focusedElement == nil, budget.canContinue,
+           !hostsWithoutLazyFocus.contains(ProcessIdentity(app)) {
+            let wait = lazilyPublishedFocusedElement(in: app, axBudget: budget)
+            focusedElement = wait.element
+            focusRead.attempts += wait.attempts
+            focusRead.unresolvedError = wait.lastError
+            if wait.neverPublished { hostsWithoutLazyFocus.insert(ProcessIdentity(app)) }
+        }
+        guard let focusedElement else {
             resetTypingContext()
             statusText = "No text field is focused. Choose an ordinary snippet to copy it."
             return .noTextField
@@ -5426,23 +5459,60 @@ final class SnippetExpansionEngine {
         from app: NSRunningApplication,
         axBudget: AXMessagingBudget? = nil
     ) -> AXUIElement? {
+        readFocusedElement(from: app, axBudget: axBudget).element
+    }
+
+    /// Keeps the AX answer so explicit capture can tell a host that has not yet published
+    /// its focus (`kAXErrorNoValue`) from one that cannot be read.
+    private func readFocusedElement(
+        from app: NSRunningApplication,
+        axBudget: AXMessagingBudget?
+    ) -> (element: AXUIElement?, error: AXError) {
         guard let appElement = withBoundedMessagingTimeout(
             AXUIElementCreateApplication(app.processIdentifier),
             axBudget: axBudget
-        ) else { return nil }
+        ) else { return (nil, .cannotComplete) }
         var focusedValue: CFTypeRef?
-        guard copyAttributeValue(
+        let result = copyAttributeValue(
             of: appElement,
             attribute: kAXFocusedUIElementAttribute as CFString,
             into: &focusedValue,
             axBudget: axBudget
-        ) == .success,
-              let focusedValue,
+        )
+        guard result == .success else { return (nil, result) }
+        guard let focusedValue,
               CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
-            return nil
+            return (nil, .failure)
         }
 
-        return withBoundedMessagingTimeout(focusedValue as! AXUIElement, axBudget: axBudget)
+        guard let focused = withBoundedMessagingTimeout(focusedValue as! AXUIElement,
+                                                        axBudget: axBudget)
+        else { return (nil, .cannotComplete) }
+        return (focused, .success)
+    }
+
+    /// See `LazyAccessibilityFocus`. Only explicit capture may wait here: keystroke paths
+    /// meet many hosts that legitimately have no focused element.
+    private func lazilyPublishedFocusedElement(
+        in app: NSRunningApplication,
+        axBudget: AXMessagingBudget
+    ) -> LazyAccessibilityFocus.Report<AXUIElement> {
+        LazyAccessibilityFocus.wait(hasFocusedWindow: {
+            guard let appElement = withBoundedMessagingTimeout(
+                AXUIElementCreateApplication(app.processIdentifier), axBudget: axBudget
+            ) else { return false }
+            return elementAttribute(of: appElement, attribute: kAXFocusedWindowAttribute as CFString,
+                                    axBudget: axBudget) != nil
+        }, pause: { axBudget.pause(for: $0) }) {
+            let read = readFocusedElement(from: app, axBudget: axBudget)
+            guard let focused = read.element else {
+                return read.error == .noValue ? .unpublished : .failed(read.error)
+            }
+            guard let deepest = deepestFocusedElement(startingAt: focused, maxDepth: 4,
+                                                      axBudget: axBudget)
+            else { return .failed(.cannotComplete) }
+            return .focused(deepest)
+        }
     }
 
     private func deepestFocusedElement(

@@ -61,6 +61,17 @@ final class AXMessagingBudget {
         return Self.seconds(in: startedAt.duration(to: current)) * 1_000
     }
 
+    /// Blocks the calling thread for `duration`, but never past the deadline. Returns false once
+    /// the budget is spent, so a caller polling a slow host stops instead of oversleeping.
+    func pause(
+        for duration: Duration,
+        sleep: (Double) -> Void = { Thread.sleep(forTimeInterval: $0) }
+    ) -> Bool {
+        guard let remaining = remainingSeconds() else { return false }
+        sleep(min(Self.seconds(in: duration), remaining))
+        return canContinue
+    }
+
     /// Applies the remaining timeout to this exact object. A message must not be sent when this
     /// returns false: doing so would silently fall back to Accessibility's multi-second default.
     @discardableResult
@@ -170,6 +181,75 @@ final class AXMessagingBudget {
         let components = duration.components
         return Double(components.seconds)
             + Double(components.attoseconds) / 1_000_000_000_000_000_000
+    }
+}
+
+/// WebKit publishes a new WKWebView's accessibility tree only after the first AX message
+/// reaches that view. Until then its host answers `AXFocusedUIElement` with
+/// `kAXErrorNoValue` although a web field already owns keyboard focus, and an immediate
+/// retry gets the same answer. On macOS 27 the tree appeared 13–20 ms after the first
+/// message for a login-sized page and about 160 ms for a 24,000-element page; every new
+/// web view starts unpublished again. Explicit capture polls through that window instead
+/// of concluding that no field is focused. Any other answer is conclusive.
+///
+/// The wait applies only while the host reports a focused window. AppKit answers with the
+/// window itself when no control has focus, so "no value" beside a focused window means a
+/// tree is still being built; an application without a window has nothing to wait for.
+/// A host with its own accessibility implementation may give that answer permanently;
+/// `neverPublished` lets the caller stop paying for it after one complete wait.
+@MainActor
+enum LazyAccessibilityFocus {
+    enum Read<Element> {
+        case focused(Element)
+        /// `kAXErrorNoValue`: the host has not published a focused element yet.
+        case unpublished
+        case failed(AXError)
+    }
+
+    struct Report<Element> {
+        let element: Element?
+        /// Reads made while waiting, excluding the caller's initial read.
+        let attempts: Int
+        /// The last unsuccessful answer; nil when focus was found or nothing was read.
+        let lastError: AXError?
+
+        /// Every read through the whole schedule answered no value. A web view publishes
+        /// well within it, so this host is not one; an exhausted budget proves nothing.
+        var neverPublished: Bool {
+            element == nil && lastError == .noValue
+                && attempts == LazyAccessibilityFocus.retryDelays.count
+        }
+    }
+
+    // 250 ms in total, dense at first because small pages publish within tens of
+    // milliseconds. The caller's budget still bounds the whole interaction.
+    nonisolated static let retryDelays: [Duration] = [
+        .milliseconds(5), .milliseconds(5), .milliseconds(10), .milliseconds(10),
+        .milliseconds(20), .milliseconds(20), .milliseconds(30), .milliseconds(50),
+        .milliseconds(50), .milliseconds(50),
+    ]
+
+    static func wait<Element>(
+        hasFocusedWindow: () -> Bool,
+        pause: (Duration) -> Bool,
+        read: () -> Read<Element>
+    ) -> Report<Element> {
+        guard hasFocusedWindow() else { return Report(element: nil, attempts: 0, lastError: nil) }
+        var attempts = 0
+        var lastError: AXError?
+        for delay in retryDelays {
+            guard pause(delay) else { break }
+            attempts += 1
+            switch read() {
+            case .focused(let element):
+                return Report(element: element, attempts: attempts, lastError: nil)
+            case .unpublished:
+                lastError = .noValue
+            case .failed(let error):
+                return Report(element: nil, attempts: attempts, lastError: error)
+            }
+        }
+        return Report(element: nil, attempts: attempts, lastError: lastError)
     }
 }
 

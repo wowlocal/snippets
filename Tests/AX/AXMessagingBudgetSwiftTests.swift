@@ -383,6 +383,122 @@ struct AXMessagingBudgetSwiftTests {
         #expect(!AXMessagingBudget.primingResultIsCacheable(.illegalArgument))
     }
 
+    @Test("a pause never sleeps past the aggregate deadline")
+    func pauseIsClampedToDeadline() {
+        var now = ContinuousClock().now
+        var slept: [Double] = []
+        let budget = AXMessagingBudget(totalTimeoutSeconds: 0.1, now: { now })
+        // A real sleep never wakes early; round the fake one up to whole microseconds.
+        let sleep: (Double) -> Void = { seconds in
+            slept.append(seconds)
+            now = now.advanced(by: .microseconds(Int64((seconds * 1_000_000).rounded(.up))))
+        }
+
+        #expect(budget.pause(for: .milliseconds(30), sleep: sleep))
+        #expect(!budget.pause(for: .milliseconds(500), sleep: sleep))
+        #expect(!budget.pause(for: .milliseconds(5), sleep: sleep))
+        #expect(slept.count == 2)
+        #expect(abs(slept[0] - 0.03) <= 0.0001)
+        #expect(abs(slept[1] - 0.07) <= 0.0001)
+        #expect(budget.stopReason == .deadlineExceeded)
+    }
+
+    @Test("a lazily published web focus is found once the host publishes it")
+    func lazyFocusIsAwaited() {
+        var reads = 0
+        let report = LazyAccessibilityFocus.wait(hasFocusedWindow: { true }, pause: { _ in true }) {
+            reads += 1
+            return reads < 4 ? .unpublished : .focused("field")
+        }
+        #expect(report.element == "field")
+        #expect(report.attempts == 4)
+        #expect(report.lastError == nil)
+        #expect(!report.neverPublished)
+    }
+
+    @Test("any answer other than no-value is conclusive", arguments: [
+        AXError.cannotComplete, .apiDisabled, .invalidUIElement, .failure,
+    ])
+    func otherFocusErrorsStopImmediately(error: AXError) {
+        var pauses = 0
+        let report: LazyAccessibilityFocus.Report<String> = LazyAccessibilityFocus.wait(
+            hasFocusedWindow: { true }, pause: { _ in pauses += 1; return true }, read: { .failed(error) })
+        #expect(report.element == nil)
+        #expect(report.attempts == 1)
+        #expect(pauses == 1)
+        #expect(report.lastError == error)
+        #expect(!report.neverPublished)
+    }
+
+    @Test("a host that never publishes focus is abandoned within 250 milliseconds")
+    func unpublishedFocusIsBounded() {
+        var waited = Duration.zero
+        let report: LazyAccessibilityFocus.Report<String> = LazyAccessibilityFocus.wait(
+            hasFocusedWindow: { true }, pause: { waited += $0; return true }, read: { .unpublished })
+        #expect(report.element == nil)
+        #expect(report.attempts == LazyAccessibilityFocus.retryDelays.count)
+        #expect(report.lastError == .noValue)
+        #expect(waited == .milliseconds(250))
+        #expect(report.neverPublished)
+        // The diagnostic attempts field includes the caller's initial read and caps at 16.
+        #expect(report.attempts + 1 <= 16)
+    }
+
+    @Test("an application without a focused window is not waited for")
+    func noFocusedWindowSkipsLazyFocusWait() {
+        var pauses = 0
+        var reads = 0
+        let report: LazyAccessibilityFocus.Report<String> = LazyAccessibilityFocus.wait(
+            hasFocusedWindow: { false }, pause: { _ in pauses += 1; return true },
+            read: { reads += 1; return .unpublished })
+        #expect(report.element == nil)
+        #expect(report.attempts == 0)
+        #expect(report.lastError == nil)
+        #expect(pauses == 0)
+        #expect(reads == 0)
+        #expect(!report.neverPublished)
+    }
+
+    @Test("a wait cut short by the budget does not mark the host as never publishing")
+    func budgetLimitedWaitProvesNothing() {
+        var pauses = 0
+        let report: LazyAccessibilityFocus.Report<String> = LazyAccessibilityFocus.wait(
+            hasFocusedWindow: { true }, pause: { _ in pauses += 1; return pauses < 4 },
+            read: { .unpublished })
+        #expect(report.element == nil)
+        #expect(report.attempts == 3)
+        #expect(report.lastError == .noValue)
+        #expect(!report.neverPublished)
+    }
+
+    @Test("an exhausted budget stops the wait without another read")
+    func exhaustedBudgetStopsLazyFocusWait() {
+        var reads = 0
+        let report: LazyAccessibilityFocus.Report<String> = LazyAccessibilityFocus.wait(
+            hasFocusedWindow: { true }, pause: { _ in false }, read: { reads += 1; return .unpublished })
+        #expect(report.element == nil)
+        #expect(report.attempts == 0)
+        #expect(report.lastError == nil)
+        #expect(reads == 0)
+    }
+
+    @Test("a large page that blocks each read still publishes within the capture budget")
+    func slowPublicationFitsInteractiveBudget() {
+        // Measured on macOS 27: a 24,000-element WKWebView answered each read after about
+        // 20 ms and published focus about 160 ms after the first one.
+        var now = ContinuousClock().now
+        let start = now
+        let budget = AXMessagingBudget(now: { now })
+        let report = LazyAccessibilityFocus.wait(hasFocusedWindow: { true }, pause: {
+            budget.pause(for: $0) { now = now.advanced(by: .microseconds(Int64(($0 * 1_000_000).rounded(.up)))) }
+        }) {
+            now = now.advanced(by: .milliseconds(20))
+            return start.duration(to: now) >= .milliseconds(180) ? .focused("field") : .unpublished
+        }
+        #expect(report.element == "field")
+        #expect(budget.canContinue)
+    }
+
     @Test("Secure Paste retains native password whole-value replacement")
     func securePastePrefersWholeSecureValue() {
         #expect(SecurePasteDeliveryPolicy.strategy(

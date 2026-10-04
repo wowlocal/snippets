@@ -216,6 +216,9 @@ logging. Each boundary records one outcome: `capture`, explicit field `selection
 The required fields are `stage`, `outcome`, `target`, `transport`, `reason`, `attempts`
 (0–16), and `duration_ms` (0–600,000). Optional `ax_error_code` is a signed 32-bit
 numeric AX result; authentication errors include only `error_family` and `error_code`.
+For `capture`, `attempts` counts focused-element reads, including the bounded wait for
+a web view that has not yet published its accessibility tree. When no focused element
+was found, `ax_error_code` is the last unsuccessful answer (for example -25212, no value).
 Target categories are `unresolved`, `focused`, `descendant`, and `explicit`. Transport
 is `none`, `secure_value`, `secure_unicode`, `secure_click_unicode`, `web_range`, or
 `unicode`. `secure_unicode` identifies a browser password with concrete keyboard
