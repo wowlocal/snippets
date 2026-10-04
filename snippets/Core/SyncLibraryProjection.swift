@@ -185,6 +185,61 @@ nonisolated enum SyncLibraryProjection {
         return out
     }
 
+    /// How many deleted plain conflict copies the sidecar remembers. A restoration is
+    /// normally an immediate ⌘Z; the bound only keeps a long deletion history finite.
+    static let maximumRetainedCopyIdentities = 256
+
+    /// The derived sidecar to persist after `current` replaced `previous`.
+    ///
+    /// It is `current` plus one fact the frozen local model cannot hold: the identity of
+    /// a plain conflict copy that left primary storage. `conflictCopy.v1` lives only in
+    /// this sidecar and in base, and an ordinary tombstone deliberately carries no `x`.
+    /// So once a deletion was confirmed nothing remembered it, and restoring the copy —
+    /// ⌘Z, an undo toast, a restored file — re-encoded it on its UUIDv5 id without
+    /// provenance. Every peer still holding the valid copy then saw an unrelated occupant
+    /// of a reserved id and halted (2026-10-04, Mac → iPhone).
+    ///
+    /// The memory is a body-free tombstone carrying only the verified provenance. It
+    /// never leaves this device: `currentEnvelopes` merges it in as weaker knowledge, so
+    /// a restored copy is projected above its tombstone with the provenance it had.
+    static func projectionSidecar(
+        for current: [UUID: SyncEnvelope],
+        replacing previous: SyncBase
+    ) -> SyncBase {
+        var next = SyncBase()
+        for envelope in current.values { next.record(envelope) }
+        let retained = previous.envelopes.values
+            .filter { current[$0.id] == nil }
+            .compactMap(retainedCopyIdentity)
+            .sorted { lhs, rhs in
+                lhs.hlc != rhs.hlc ? lhs.hlc > rhs.hlc : lhs.id.uuidString < rhs.id.uuidString
+            }
+        for identity in retained.prefix(maximumRetainedCopyIdentities) {
+            next.record(identity)
+        }
+        return next
+    }
+
+    /// The identity-only tombstone that remembers a plain conflict copy, or `nil`.
+    ///
+    /// A live copy retires into exactly this shape and an earlier memory carries forward
+    /// only while it still has it. Secure copies are excluded: their provenance is kept
+    /// in the vault record, which is primary storage of its own.
+    private static func retainedCopyIdentity(_ envelope: SyncEnvelope) -> SyncEnvelope? {
+        guard !envelope.secure,
+              SyncMerge.hasValidConflictCopyIdentity(envelope),
+              let provenance = envelope.x[SyncMerge.plainConflictCopyExtensionKey]
+        else { return nil }
+        let identity = SyncEnvelope.tombstone(
+            id: envelope.id,
+            secure: false,
+            hlc: envelope.hlc,
+            origin: envelope.origin,
+            x: [SyncMerge.plainConflictCopyExtensionKey: provenance])
+        if envelope.deleted, envelope != identity { return nil }
+        return identity
+    }
+
     /// Converts an incoming secure envelope without confusing its unkeyed wire digest
     /// with the vault's keyed plaintext hash.
     static func vaultRecord(

@@ -200,7 +200,15 @@ them did not.
    that copy.
 3. **Extensions belong to the record.** Re-encoding an edited plain record keeps its `x` bag
    (minus vault keys); in particular a renamed or re-enabled copy keeps `conflictCopy.v1`, which
-   every peer uses to verify the deterministic id before accepting the record.
+   every peer uses to verify the deterministic id before accepting the record. This includes a
+   copy that is deleted and then restored (⌘Z, an undo toast, a restored file). A tombstone
+   still carries no `x`, so the deleting client keeps the identity locally and re-attaches it
+   when the id reappears. Apple keeps a body-free, identity-only tombstone in the projection
+   sidecar (`SyncLibraryProjection.projectionSidecar`, bounded to the 256 newest). A restored
+   copy published without its provenance is an unrelated occupant of a reserved id: every peer
+   that still holds the copy stops with a sticky `localLibraryQuarantined` halt
+   (`deletedCompletedCopyStillReservesItsIDUntilTombstoneACK`). That happened on 2026-10-04
+   when a Mac restored a deleted copy minted by an iPhone (`SyncRestoredConflictCopyTests`).
 4. **A CAS version is only ever attached to bytes merged with that version.** After an
    authoritative CAS conflict a client merges the returned value into its intent and offers the
    merge. It never re-offers older bytes — a frozen post-copy source release, a rejected offer —
@@ -727,7 +735,10 @@ cannot hold an HLC, origin, or forward-compatible wire extensions, so the bridge
 there and reuses the exact envelope while all persisted fields still match. It is derived state:
 if it is missing or unreadable, `base.json` is the fallback and the cost is at most a conservative
 re-push, not lost user data. This is what makes apply → export a fixed point instead of relabelling
-every remote record as a new local edit on the next round.
+every remote record as a new local edit on the next round. When a plain conflict copy leaves
+primary storage, the sidecar keeps one body-free tombstone carrying only its `conflictCopy.v1`.
+That tombstone is never sent; it lets a restored copy be re-published with the identity peers
+verify (wire rule 3 above). Losing the sidecar loses only that memory.
 
 Secure envelopes carry the originating vault's `kid` in that encrypted extension bag. The sealed
 body is AEAD-bound to the same value but does not reveal it, so the stamp lets a receiver reject a
