@@ -251,7 +251,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Approved secure CLI | App-owned `reveal`, `secure-status` and `add --secure`; native default-deny consent, fresh vault credentials, private bounded input, same-user pidfd/executable proof, source-bound disclosure and quit cancellation | Isolated stream/owner/CLI, hidden-input PTY and native SO_PEERCRED/SO_PEERPIDFD checks pass; actual installed Release app/CLI consent, fresh passphrase/recovery disclosure, secure creation and independent OpenSSL verification pass; Deny/Cancel, wrong credentials, focus/disconnect, unchanged deadlines/rate limit, image mismatch, duplicates and changed vault sources refuse delivery; the actual native editor is also unlocked before each request, observed through the installed CLI, then locked without borrowing its key; only new consent and fresh credentials allow reveal/create |
 | Omarchy theme | Active XDG state palette, periodic refresh, validated colors | Parser and CSS injection tests pass |
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Live ordinary paste reaches the expected field in an independent C/GTK application and restores the clipboard; fresh vault-authenticated secure insertion also reaches that independent receiver |
-| Local suggestion learning | Frozen picker snapshots; relevance/keyword/pin priority before bounded prefix memory and 14-day frecency; successful copy/paste/inline/secure insertion recording; native toggles and independent resets; separate private debounced persistence | Isolated math/schema/concurrency/privacy tests and compiled native controls; live picker/settings/input behavior remains unverified |
+| Local suggestion learning | Frozen picker snapshots; relevance/keyword/pin priority before bounded prefix memory and 14-day frecency; successful copy/paste/inline/secure insertion recording; native toggles and independent resets; separate private debounced persistence | Isolated math/schema/concurrency/privacy tests pass; mapped Release picker/settings, independent resets, option persistence and fresh-worker reopen now pass with public learning notifications. Physical input and recording in intended applications remain part of the normal Omarchy input gate. |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; native ordinary saved-history restoration passes mapped review, Cancel/denied PAM/focus revocation, stale-primary refusal, current-version/unrelated preservation, actual current-scope CAS/feed retention, new-worker reconnect and encrypted dependency ordering; native same-vault ordinary/protected restoration also passes fresh vault passphrase/recovery verification, separate PAM, stale ciphertext refusal, both disabled current versions, exact unrelated records/wraps and fresh-worker authenticated encrypted copy-before-source sync; retained foreign, external JSON/backup and mixed-source fallback restoration passed the earlier checkpoint; the current mixed fallback cancellation regression is reproducibly failing on GTK 4.22.4; all five file-source variants also have host-portal acceptance with a private keyring and exact returned-file binding; interrupted restoration passes simulated durable cuts; actual process termination and legacy missing-header GTK restoration remain pending |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor with bounded encrypted Undo/Redo and explicit Paste, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; current native secure lifecycle, retained-draft recovery and legacy-repair lifecycle checks pass; actual installed Release keyboard input/Save, metadata, encrypted Undo/Redo, Escape/single-click reveal, passphrase cancellation/change, explicit lock and old/new password admission pass with independent OpenSSL verification and no accessible body text interface; actual installed Release recovery-key unlock/change, cancellation, wrong/mismatched credentials, pending-dialog Ctrl+L and focus revocation before submission and during observed authentication/rewrap pass; new-vault setup/recovery-sheet, rendered-key authentication, Escape/Tab focus, Close/Continue and first encrypted save pass; authenticated logind sleep events and system-bus loss revoke native keys, dialogs, workers and CLI requests; actual compositor locks revoke keys, dialogs, authentication/passphrase/setup workers and CLI requests with acknowledged unlock in Safe Mode; hardware suspend and normal Omarchy configuration remain separate |
@@ -5435,3 +5435,48 @@ The finite remaining board narrows its preferences/diagnostics row; it does not
 add new acceptance variants. This harness cycle is not a full installed-app or
 host system-log test. The independent GTK fallback cancellation blocker remains
 open. Stay Awake and its 2026-10-05 09:00 Minsk restoration timer are preserved.
+
+
+### Native learning picker and independent resets (2026-10-04)
+
+The existing ignored learning smoke is extended, in place, to the already listed
+picker/settings acceptance. The Release harness still lists 1,099 tests; this
+checkpoint adds no acceptance variants or runtime feature. All usage UI changes
+are inside its existing cfg(test) module. `tests/learning-live.sh` owns a private
+D-Bus with no activatable services, temporary config/data/cache and a short private
+runtime. GTK uses the real compositor; session checks are read-only. No account,
+keyring, PAM, clipboard, network, logger or desktop configuration is used.
+
+Four public ordinary entries and App::learn notifications exercise the real
+usage worker and mapped picker/settings windows. Expected row orders independently
+verify exact-match and pin priority, an immutable open-picker snapshot and a
+corrected prefix choice in a new picker. The test checks the actual search_changed
+query value before inspecting rows, rather than a count of intermediate signals.
+These public notifications do not prove physical copy/paste/inline delivery or
+recording in a user's application; those remain in the normal Omarchy input gate.
+
+The real mapped default-Cancel reset dialog preserves usage bytes and the old
+picker. Each confirmed independent reset clears only the selected counts/prefixes,
+and Reset All clears both. Preference changes and confirmed resets close the
+picker with its earlier snapshot. Ranking off continues collecting counts; memory
+off erases choices. Both disabled options and cleared data survive a fresh worker
+and real window reopen. Owned usage threads are observed terminal through the
+current process before reopening and cleanup. Primary library bytes are unchanged;
+private `0700`/`0600` usage permissions hold, and no vault, sync or diagnostics
+directory is created. Temporary windows and roots are removed.
+
+The final serial format/shell, all-target desktop Clippy, Release harness,
+full native cycle under fatal warnings and Release binaries pass on 313 frozen
+native inputs. The native cycle has no GTK criticals. Sixteen focused usage tests
+also pass; their core source inputs are unchanged after test-runner/readiness
+adjustments, and they are recorded as inherited rather than falsely counted as a
+rerun. The first runner failed before GTK because its Hyprland IPC pathname was
+129 bytes; a read-only reduction confirmed the short 96-byte runtime works. A
+second fixture stopped at premature search-signal observation. Both failed
+attempts remain separately source-bound and are excluded from successful evidence.
+
+All Release artifact hashes match checkpoint 1c68e0de. The installed user build
+and prepared archive keep their exact hashes. The preferences row in the finite
+seven-group board is narrowed without adding a matrix. Physical input, the other
+existing gates and the independently reproduced GTK chooser cancellation blocker
+remain open. Stay Awake and its scheduled restoration are preserved.

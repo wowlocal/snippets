@@ -1059,15 +1059,17 @@ fit within eight graphemes; longer queries are rejected rather than truncated.
 Successful copies contribute 0.25; accepted paste and completed inline expansion
 contribute 1.0. Usage decays with a 14-day half-life. A single copy has no frequency
 ranking effect. Native secure insertion records only its saved snippet identifier
-after successful delivery, using the same fresh authentication as before. This
-does not prove a receiving application consumed input; live delivery remains
-unverified.
+after successful delivery, using the same fresh authentication as before.
+Physical input and delivery to the intended receiving applications are tracked
+separately in the bounded acceptance list below.
 
 Open **Suggestion Learning…** in the main menu to control frequency ranking and
 prefix memory separately, reset either history, or reset both. Both controls
 default to on. Disabling frequency ranking keeps counting use. Disabling prefix
-memory erases saved choices and stops collecting them. Storage failures are shown
-in that window; protected or unsupported files are preserved.
+memory erases saved choices and stops collecting them. Changing either option or
+confirming a reset closes a picker that retains an earlier learning snapshot.
+Cancel preserves that picker and the history. Storage failures are shown in that
+window; protected or unsupported files are preserved.
 
 `Usage/usage.json` stores UUIDs, bounded weights, counts, times and short search
 prefixes. It contains no snippet bodies, display names, tags, clipboard contents
@@ -1081,6 +1083,10 @@ The desktop attempts a final flush on quit; optional learning cannot prevent qui
 The ordinary CLI never starts the learning worker or creates `Usage/`.
 `SNIPPETS_USAGE_DISABLED=1` prevents usage reading, writing and all access to its
 files, including settings and reset operations.
+
+The complete mapped picker/settings cycle now passes with public learning
+notifications, independent resets and a fresh worker. See
+[native learning acceptance](#live-learning-picker-and-resets-2026-10-04).
 
 ## Desktop picker and appearance
 
@@ -1830,7 +1836,7 @@ specific defect.
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
 | Durable recovery | Actual process termination during restoration; legacy missing-header GUI restoration; interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts and several native restoration cuts already pass. |
 | Remaining conflict and history decisions | Unknown pending raw-child intent, local-absence source review and unrelated ambiguous packets; native history retirement and unused-file cleanup. Existing current/nested/prior-confirmed combinations pass. |
-| Remaining preferences and diagnostics | Learning/picker behavior and resets; remaining physical/accessibility clipboard-history interaction. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror. |
+| Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 | Installed full restoration | All five source combinations pass in native harnesses using the actual host portal. This checkpoint checks only production chooser cancellation in the installed app, not complete restoration there. |
 
@@ -1870,3 +1876,36 @@ run has no GTK criticals. This is mapped native-control evidence in a test proce
 not a new full installed-app or host authentication claim. The seven remaining
 groups above stay bounded; no feature or variant matrix is added. The GTK chooser
 cancellation blocker remains open and the user test binaries are unchanged.
+
+## Live learning picker and resets (2026-10-04)
+
+The existing native learning smoke fixture now completes the previously listed
+picker/settings gate in the unlocked Release session. Four public entries prove
+that exact matches and pins retain priority, the open picker keeps a frozen
+learning snapshot, and a new picker reflects the corrected prefix choice.
+No selection is delivered to a clipboard or receiving application in this fixture.
+
+The actual mapped reset notices default to Cancel. Cancel leaves learning bytes
+and the earlier picker intact. Confirming **Reset Usage Counts…** preserves prefix
+choices; **Forget Prefix Choices…** preserves counts; **Reset All Learning…**
+clears both. Each confirmed change closes the old picker. Disabling ranking keeps
+collecting counts, while disabling prefix memory erases choices. Both options and
+the reset state survive stopping the owned worker and reopening the real controls.
+The original library bytes are unchanged and local usage permissions stay private.
+
+```sh
+bash snippets-linux/tests/learning-live.sh /path/to/library-test-binary
+```
+
+The runner owns a private D-Bus with no activatable services, temporary config,
+data/cache and a short private runtime. It accesses the real compositor only for
+GTK windows and read-only session checks. There is no account, keyring, PAM,
+clipboard, network, global logging or compositor-configuration operation.
+Fatal GTK warnings are enabled; the completed run contains no criticals.
+
+This extends the existing native learning fixture rather than adding acceptance
+variants. The input history consists of public notifications through App::learn;
+it does not establish physical delivery or recording from a user's application.
+Those checks remain in the normal Omarchy input group. The seven-group board is
+narrowed, the independent GTK chooser blocker stays open, and the installed user
+test build and archive are unchanged.
