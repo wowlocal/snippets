@@ -3960,3 +3960,59 @@ case and remain a separate native scenario. Source local absence, unrelated
 ambiguous source packets, pairing/signed mutations, reviewed switching, fuller
 secure editing/recovery/accessibility, Apple-app backup round trips, full new
 sign-in and broader physical receiving-application compatibility remain open.
+
+### Actual desktop-portal encrypted backup workflow (2026-10-04)
+
+Omarchy's normal GTK file portal returns its successful selection before the
+parent receives compositor activation. The live native export reproduced the
+resulting early exit before its credential request. Export and restore now wait
+up to one second for the parent's actual activation before obtaining fresh
+backup authorization. The wait does not force focus, retain earlier authority,
+or bypass generation, visibility or observable desktop state checks. Background
+credential prompts and workers still revoke on focus loss.
+
+Repeated live acceptance also exposed a cancellation-reply race: cancelling the
+authenticated import confirmation could report a worker cancellation as an error.
+That normal UI outcome now revokes the controller generation as well as its
+authorization. It still waits for the worker to drop its recovered key before
+releasing the quit barrier, and suppresses the obsolete cancellation reply.
+
+`tests/backup-live.sh` drives the complete native controller and worker workflow
+using real desktop-portal Save/Open windows and native credential/confirmation
+controls. It verifies the portal implementation's actual D-Bus owner PID, exact
+window address/PID, active state and unlocked compositor before each key. Only
+public fixture paths are typed; passwords enter the actual PasswordEntry widgets
+inside the GTK process. A test-only assertion checks the real returned path
+before credentials or publication. No returned file, authorization or desktop
+witness is injected. The public library and app XDG directories are private;
+the host keyring, PAM policy and clipboard are not used.
+
+The fixture cancels actual Save/Open choosers and credential prompts, moves focus
+to its own mapped companion, refuses a wrong vault recovery key and a wrong
+backup password, and cancels authenticated import confirmation. Refusals keep
+both primary files and omit new exports. Fields clear, worker quit barriers
+finish, and an unrelated active companion is never focused away by the return
+wait. The actual native export has mode 0600, leaves both source files unchanged,
+and passes the independent OpenSSL decoder's backup, vault-key, record-body and
+hash authentication. Device-local receipts are excluded.
+
+Matching-vault restore replaces changed ordinary content and secure metadata,
+keeps an unrelated ordinary entry, preserves current passphrase/recovery wraps
+and retains the original secure seal. Empty-library restore requires matching
+new local passphrases, preserves the original recovery key and secure seal, and
+carries no local sync receipt. Both native restores finish their encrypted redo
+without creating Sync state. Actual Mac/iOS-app exchange remains a separate
+acceptance requirement; independent vectors do not establish that result.
+
+All 33 distinct backup/native tests pass across 12 serial gates on one frozen
+281-file native input fingerprint. The complete portal workflow passes in both
+Debug and optimized Release with fatal GTK warnings enabled. The gates also
+cover 28 portable backup/owner tests, two import-worker tests, both native
+credential-field checks, desktop/headless all-target Clippy, formatting, shell
+syntax, three Release binaries and the actual Release library-test artifact.
+
+After both native processes exit, GTK/libadwaita, actual Wayland peer credentials,
+unlocked state, D-Bus portal/tray ownership, DNS and certificate-verified external
+HTTPS are rechecked. Private fixture roots and owned windows are gone. Stay Awake
+and the 2026-10-05 09:00 Minsk lock-restoration timer remain intact. The checkpoint
+receipt records test names, source and artifact hashes, gates and this preflight.

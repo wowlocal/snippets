@@ -717,8 +717,13 @@ match by ID and require a compatible vault and matching key. Authenticate the
 current vault again when importing into it. For a new vault, choose a local
 passphrase of at least 12 characters; its original recovery key stays valid.
 Other entries, existing vault unlock methods
-and unsaved secure drafts are preserved. Live cross-platform application tests
-have not run.
+and unsaved secure drafts are preserved. The live Omarchy acceptance uses the real
+desktop file portal, fresh credential dialogs, independent OpenSSL verification,
+matching-vault restoration and new-vault restoration. Chooser/password cancellation,
+focus loss, wrong vault authentication, wrong backup passwords and cancelled import
+confirmation leave the saved files unchanged. Portal completion waits briefly for
+the parent activation event before requesting credentials; it does not force focus.
+Live cross-platform application tests have not run.
 
 An interrupted import hides the library until **Resume Backup Import** finishes
 the saved changes using the same backup password. Both primary files have an
@@ -1139,9 +1144,11 @@ D-Bus tray registration/restart, private Wayland clipboard/input protocols, PAM,
 verified HTTPS and an isolated Secret Service fixture. A real release primary also
 registers with the Omarchy tray host, accepts activation and mirrors its exact
 sanitized diagnostics to the system journal. Native library/recovery and Settings
-checks pass after fixing GTK markup handling. Eight current native window tests
-pass, including account cancellation, backup credentials and ordinary paste into
-an independent GTK receiving process with clipboard restoration. The installed
+checks pass after fixing GTK markup handling. Native window tests pass, including account cancellation, backup credentials
+and ordinary paste into an independent GTK receiving process with clipboard
+restoration. The complete encrypted-backup portal cycle passes in Debug and
+Release, including cancellation, fresh authentication, independent OpenSSL
+verification and both matching-vault and new-vault restoration. The installed
 primary registers three real global actions and exits on one Quit request; its
 installed CLI also verifies that primary. Freshly authenticated secure insertion
 now reaches the independent receiving process too, with cancellation and incorrect
@@ -1239,7 +1246,13 @@ G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib account_ui::tests::native_account -- --ignored --test-threads=1
 G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
-  --lib backup_ui:: -- --ignored --test-threads=1
+  --lib backup_ui::tests:: -- --ignored --test-threads=1
+G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.toml \
+  --lib backup_ui::importing::tests::native_restore_passwords_clear_on_cancel_and_confirm -- --exact --ignored --test-threads=1
+# Actual Omarchy file portal and complete encrypted backup/restore cycle.
+# Obtain the library-test executable with cargo test --lib --no-run first.
+# The host portal/compositor is shared; library and app XDG roots are private.
+bash snippets-linux/tests/backup-live.sh /absolute/path/to/library-test-binary
 # Optional independent reader check; requires zbarimg (Arch package: zbar).
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib recovery_qr::tests::independent_reader -- --ignored --test-threads=1

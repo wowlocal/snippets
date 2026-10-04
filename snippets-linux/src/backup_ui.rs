@@ -17,6 +17,9 @@ use std::{
 use zeroize::Zeroizing;
 #[path = "backup_import_ui.rs"]
 mod importing;
+#[cfg(test)]
+#[path = "backup_live_tests.rs"]
+mod live_tests;
 
 async fn worker<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T> + Send + 'static,
@@ -137,6 +140,30 @@ impl Export {
             }
         });
     }
+    // A portal returns its selected file before the compositor delivers the
+    // parent's activation event. Wait for that event before requesting fresh
+    // credentials; never focus the window ourselves or retain authorization.
+    async fn file_dialog_returned(&self, generation: u64) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            if generation != self.generation.get()
+                || !self.parent.is_visible()
+                || self
+                    .monitor
+                    .as_ref()
+                    .is_some_and(|monitor| monitor.snapshot().0 != SessionState::Unlocked)
+            {
+                return false;
+            }
+            if self.parent.is_active() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            glib::timeout_future(Duration::from_millis(10)).await;
+        }
+    }
     async fn run(&self, generation: u64) -> Option<Result<(usize, usize)>> {
         let dialog = gtk::FileDialog::builder()
             .title("Export Encrypted Backup")
@@ -161,12 +188,14 @@ impl Export {
             }
         };
         self.file.borrow_mut().take();
-        if generation != self.generation.get() || !self.parent.is_active() {
+        if !self.file_dialog_returned(generation).await {
             return None;
         }
         let Some(destination) = file.path() else {
             return Some(Err(Error("Choose a local backup destination.")));
         };
+        #[cfg(test)]
+        live_tests::assert_selection(&destination);
         let root = self.root.clone();
         let (library, snapshot) = match worker(move || {
             let library = Library::open(root)?;

@@ -141,6 +141,11 @@ impl Export {
             let Some(path) = file.path() else {
                 return Some(Err(Error("Choose a local encrypted backup file.")));
             };
+            #[cfg(test)]
+            super::live_tests::assert_selection(&path);
+            if !self.file_dialog_returned(generation).await {
+                return None;
+            }
             Some(path)
         };
         if generation != self.generation.get() || !self.parent.is_active() {
@@ -192,7 +197,10 @@ impl Export {
         {
             let _ = choose.send(apply);
         } else {
-            authorization.cancel();
+            // Cancel is a normal UI outcome. Revoke this generation too, so
+            // the worker's cancellation reply cannot become an error toast.
+            // Keep waiting below until it has released the recovered key.
+            self.cancel();
         }
         drop(choose);
         // Keep the quit barrier until the worker has relinquished all secrets.
