@@ -1072,6 +1072,9 @@ impl Workspace {
             .show_peek_icon(false)
             .placeholder_text("Confirm passphrase")
             .build();
+        confirmation.update_property(&[gtk::accessible::Property::Label(
+            "Confirm vault setup passphrase",
+        )]);
         let fields = gtk::Box::new(gtk::Orientation::Vertical, 8);
         fields.append(&entry);
         if creating {
@@ -1153,6 +1156,14 @@ impl Workspace {
     async fn show_recovery(&self, material: Zeroizing<String>) -> Result<()> {
         let editor = ProtectedEditor::new(self.vault.clone());
         editor.ephemeral(material.as_bytes())?;
+        editor.area.update_property(&[
+            gtk::accessible::Property::Label(
+                "Vault recovery key. Reveal to record offline. Copy and text extraction are disabled.",
+            ),
+            gtk::accessible::Property::Description(
+                "This field is read-only. Escape hides the recovery key. Tab and Shift+Tab leave the field.",
+            ),
+        ]);
         drop(material);
         let dialog = adw::AlertDialog::builder().heading("Record Your Recovery Key").body("Write this key down and keep it offline. It can unlock the vault if you forget the passphrase. This key is shown only during setup.").build();
         let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -1162,16 +1173,34 @@ impl Workspace {
         let recorded = gtk::CheckButton::with_label("I recorded this key offline");
         content.append(&recorded);
         let protected = editor.clone();
+        let vault = self.vault.clone();
         let weak = self.window.downgrade();
         let monitor = self.desktop.clone();
         reveal.connect_toggled(move |button| {
-            let allowed = weak.upgrade().is_some_and(|w| w.is_active())
+            let allowed = vault.borrow_mut().is_unlocked()
+                && weak.upgrade().is_some_and(|w| w.is_active())
                 && monitor
                     .as_ref()
                     .is_some_and(|monitor| monitor.snapshot().0 == SessionState::Unlocked);
             protected.allow(allowed);
             protected.reveal(button.is_active());
         });
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let protected = editor.clone();
+        let weak = reveal.downgrade();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape {
+                if let Some(reveal) = weak.upgrade() {
+                    reveal.set_active(false);
+                }
+                protected.reveal(false);
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        editor.area.add_controller(keys);
         let weak = dialog.downgrade();
         recorded.connect_toggled(move |check| {
             if let Some(dialog) = weak.upgrade() {
@@ -1189,16 +1218,19 @@ impl Workspace {
             }
         });
         let weak = Rc::downgrade(&editor);
+        let button = reveal.downgrade();
         let vault = Rc::downgrade(&self.vault);
         let monitor = self.desktop.clone();
         let tick = glib::timeout_add_local(Duration::from_millis(500), move || {
             if let (Some(editor), Some(vault)) = (weak.upgrade(), vault.upgrade()) {
-                editor.allow(
-                    vault.borrow_mut().is_unlocked()
-                        && monitor
-                            .as_ref()
-                            .is_some_and(|monitor| monitor.snapshot().0 == SessionState::Unlocked),
-                );
+                let allowed = vault.borrow_mut().is_unlocked()
+                    && monitor
+                        .as_ref()
+                        .is_some_and(|monitor| monitor.snapshot().0 == SessionState::Unlocked);
+                editor.allow(allowed);
+                if !allowed && let Some(button) = button.upgrade() {
+                    button.set_active(false);
+                }
                 glib::ControlFlow::Continue
             } else {
                 glib::ControlFlow::Break

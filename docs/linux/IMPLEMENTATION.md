@@ -254,7 +254,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Local suggestion learning | Frozen picker snapshots; relevance/keyword/pin priority before bounded prefix memory and 14-day frecency; successful copy/paste/inline/secure insertion recording; native toggles and independent resets; separate private debounced persistence | Isolated math/schema/concurrency/privacy tests and compiled native controls; live picker/settings/input behavior remains unverified |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
 | Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; combined native restoration GTK/keyring/PAM acceptance remains pending |
-| Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor with bounded encrypted Undo/Redo and explicit Paste, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; current native secure lifecycle, retained-draft recovery and legacy-repair lifecycle checks pass; actual installed Release keyboard input/Save, metadata, encrypted Undo/Redo, Escape/single-click reveal, passphrase cancellation/change, explicit lock and old/new password admission pass with independent OpenSSL verification and no accessible body text interface; actual installed Release recovery-key unlock/change, cancellation, wrong/mismatched credentials, pending-dialog Ctrl+L and focus revocation before submission and during observed authentication/rewrap pass; new-vault setup/recovery-sheet and remaining desktop/sleep lock interaction remain separate |
+| Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor with bounded encrypted Undo/Redo and explicit Paste, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; current native secure lifecycle, retained-draft recovery and legacy-repair lifecycle checks pass; actual installed Release keyboard input/Save, metadata, encrypted Undo/Redo, Escape/single-click reveal, passphrase cancellation/change, explicit lock and old/new password admission pass with independent OpenSSL verification and no accessible body text interface; actual installed Release recovery-key unlock/change, cancellation, wrong/mismatched credentials, pending-dialog Ctrl+L and focus revocation before submission and during observed authentication/rewrap pass; new-vault setup/recovery-sheet, rendered-key authentication, Escape/Tab focus, Close/Continue and first encrypted save pass; remaining desktop/sleep lock interaction remains separate |
 | Secure delivery and transfers | Native portable encrypted-backup export/import, fresh-authenticated direct virtual-keyboard insertion and one-cycle vault authentication for receiving/sending | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private native Wayland input fixture and live fresh vault-authenticated insertion into an independent GTK receiving field pass; the mapped fresh passphrase/recovery-key sync workflow also passes with a real private keyring and verified HTTPS; retained strict-CAS protected-conflict preservation and fresh protected-copy restore also pass; flat current secure v1 source Keep/Delete and acknowledged-copy repair with retained source rejection pass; independent raw child decisions, local-absence source review, unrelated ambiguous packets and fuller editing/accessibility remain under live review; all four nested physical/journal-only secure C1 cloud-source Keep/Delete cases now pass with unchanged child seals, separate immutable C0/D0 and actual CAS ordering; prior-confirmed cloud-child Keep/Delete before either raw parent choice passes all four native combinations; Unknown pending raw-child intent remains separate |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, current v1 conflict-owned deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; fresh verified loopback HTTPS onboarding/recipient checks and combined native onboarding/reconnect/sign-out pass in the unrestricted session; combined native ordinary automatic exchange passes with a real private keyring and verified HTTPS; manual Receive/Send/Sync Now and fresh vault passphrase/recovery-key exchange pass; strict-CAS protected conflicts and basic cloud deletion Cancel/Keep/Delete pass; native cursor-invalid missing-snapshot review also passes Cancel/focus/stale-primary refusal and explicit resumption with acknowledged ordinary/protected records; flat current secure v1 cloud deletion and acknowledged-copy repair pass with independent mixed choices; pairing, switching, raw child decisions, local-absence source review and unrelated ambiguous packets remain pending; CloudKit is Apple-only; all four nested physical/journal-only secure C1 cloud-source Keep/Delete cases now pass with unchanged child seals, separate immutable C0/D0 and actual CAS ordering; prior-confirmed cloud-child Keep/Delete before either raw parent choice passes all four native combinations; Unknown pending raw-child intent remains separate |
 | Conflict absence and deletion review | Ordinary source/copy decisions, vault-authenticated protected-copy restoration, missing original recovery, authenticated current v1 carrier groups including nested journal-only C1, disabled preservation of held source versions, explicit original counts, remote prerequisite deletion repair, exact originals/offers, ordered later intent, encrypted redo and a native passphrase/recovery prompt | Strict CAS, five WAL interruption phases, lost replies, frozen nonces, retained receipt ordering, C1 preservation, corruption, generic deletion guards, reserved collisions, vault identity and expired-session checks pass; independent pending child deletions are selected for their own decision before the parent; unknown versions remain a separate boundary; mapped private-keyring/verified-HTTPS protected-copy restore passes with fresh credentials, unchanged nonce and cancel/wrong-credential refusal; ordinary cloud deletion Cancel/Keep/Delete and actual focus revocation pass; flat current secure v1 cloud-source Keep/Delete and acknowledged-C0 repair with retained source rejection pass, including mixed source/copy choices and exact permissions/CAS; independent raw child deletion, local-absence source review and unrelated ambiguous packets remain open; all four nested physical/journal-only secure C1 cloud-source Keep/Delete cases now pass with unchanged child seals, separate immutable C0/D0 and actual CAS ordering; prior-confirmed cloud-child Keep/Delete before either raw parent choice passes all four native combinations; Unknown pending raw-child intent remains separate |
@@ -306,7 +306,7 @@ and process credentials. Later milestones close native Settings/startup recovery
 separate ordinary/inline/secure receiving fields, global-action assignment and
 visible tray/menu interaction. The remaining full acceptance checks are:
 
-- New-vault setup/recovery-sheet interaction and actual desktop/sleep locks
+- Actual desktop/sleep locks
   while credentials or authenticated work are outstanding; compatibility with additional receiving
   applications and physical keyboard input beyond the tested native event path.
 - Full new-sign-in startup beyond the verified generated-service activation.
@@ -4264,3 +4264,60 @@ setup/recovery-sheet and actual desktop/sleep lock interaction, pairing,
 reviewed switching, pending raw-child/source-absence review, Apple-app encrypted
 backup exchange, full new sign-in and broader physical receiving applications
 remain separate acceptance work.
+
+
+### Native empty-vault setup and recovery-sheet controls (2026-10-04)
+
+The `secure-setup` variant installs the actual Release GUI/CLI/helper into private
+prefixes and uses real GTK dialogs in two independent empty libraries on a private
+D-Bus/accessibility session. Native Cancel, a short password, mismatched confirmation,
+correct fields revoked by real focus loss or Ctrl+L, and focus revocation during an
+observed Authenticating worker leave the vault absent and both primary images exact.
+A fresh successful setup publishes an empty encrypted vault and opens its recovery sheet.
+
+Continue remains insensitive until the actual recording checkbox is selected with
+Tab/Space. The first sheet is dismissed with native Escape outside the protected
+field; the second uses the affirmative Continue response. An exactly 12-character
+passphrase creates the second vault and unlocks it again after explicit Lock.
+The driver checks empty password fields by character count only, without reading text.
+
+The displayed key is verified through pixels rather than an internal key getter.
+A static uniquely named protected field exposes bounds and focus, with no AT-SPI
+Text/EditableText interface. Exact owned active-window/process and unlocked-session
+checks constrain grim to a bounded region within that field, before and after capture.
+PPM pixels and Tesseract transcription remain in zeroizing memory: no image, clipboard
+value or key transcript is saved or printed. The key must pass its Crockford checksum.
+An independent OpenSSL reader unwraps the new root separately with the passphrase and
+the actual displayed recovery key and requires equality. After Lock, the same displayed
+key must unlock through the real recovery dialog. A first protected record authored with
+native keyboard events is saved and independently authenticated, including exact body
+and content hash. The ordinary file remains unchanged.
+
+Live acceptance reproduced a recovery-sheet defect: Escape hid the drawing while its
+Reveal toggle stayed active, Shift+Tab was trapped in the hidden field, and the next
+single click therefore did not show the key. The sheet now captures its own Escape
+and clears both drawing and toggle. Protected focus navigation precedes hidden-content
+refusal and recognizes ISO_Left_Tab; read-only fields also allow forward Tab, while
+revealed editable bodies retain literal Tab. Read-only fields draw no insertion cursor.
+The existing 500 ms revocation monitor also clears the recovery toggle when vault or
+desktop authorization expires. Reveal checks the actual vault session as well as focus
+and desktop state. Native Escape/Shift+Tab/single-click, actual cross-window focus loss
+and native Ctrl+L pass against the installed application. This does not claim a host
+compositor lock, sleep cycle, physical keyboard event or screenshot prevention.
+
+All eight distinct tests pass across 19 serial gates on one frozen 286-file native
+fingerprint. The setup workflow and earlier recovery, protected-editor and both secure
+CLI workflows pass with Debug and optimized Release harnesses against the installed
+Release executables. Recovery-generation/passphrase-preservation core tests, native
+secure lifecycle, both all-target Clippy configurations, formatting, shell syntax and
+all three Release binaries also pass. Retained JSONL contains no fixture credential,
+key transcript, body, display name, caller path or record UUID; private file/directory
+permissions, absent Sync state and graceful quit are checked. Production control,
+peer, vault-control, hidden-input and CLI protocol implementations are unchanged.
+
+After cleanup, GTK/libadwaita, actual Wayland peer credentials, unlocked state,
+D-Bus portal/tray ownership, DNS and certificate-verified HTTPS pass again. All owned
+test roots and windows are removed. Stay Awake and the 2026-10-05 09:00 Minsk
+lock-restoration timer remain intact. Actual desktop/sleep lock interactions, pairing,
+reviewed switching, pending raw-child/source-absence review, Apple-app encrypted-backup
+exchange, full new sign-in and broader physical receiving applications remain separate.

@@ -180,7 +180,7 @@ impl ProtectedEditor {
             );
             cr.move_to(16.0, 16.0 - offset);
             pangocairo::functions::show_layout(cr, &layout);
-            if body.is_some() && area.has_focus() {
+            if body.is_some() && area.has_focus() && this.editable.get() {
                 cr.rectangle(
                     16.0 + f64::from(caret.x()) / f64::from(gtk::pango::SCALE),
                     16.0 - offset + f64::from(caret.y()) / f64::from(gtk::pango::SCALE),
@@ -197,6 +197,14 @@ impl ProtectedEditor {
             let Some(this) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            // Focus navigation must remain available when a protected field is
+            // hidden or read-only. Editable revealed bodies retain literal Tab.
+            if key == gdk::Key::ISO_Left_Tab
+                || key == gdk::Key::Tab
+                    && (mods.contains(gdk::ModifierType::SHIFT_MASK) || !this.editable.get())
+            {
+                return glib::Propagation::Proceed;
+            }
             if !this.authorized() || !this.revealed.get() {
                 return glib::Propagation::Stop;
             }
@@ -204,9 +212,6 @@ impl ProtectedEditor {
             if key == gdk::Key::Escape {
                 this.reveal(false);
                 return glib::Propagation::Stop;
-            }
-            if key == gdk::Key::Tab && mods.contains(gdk::ModifierType::SHIFT_MASK) {
-                return glib::Propagation::Proceed;
             }
             let control = mods.contains(gdk::ModifierType::CONTROL_MASK);
             let extend = mods.contains(gdk::ModifierType::SHIFT_MASK);

@@ -1281,6 +1281,10 @@ bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary 
 # Native recovery-key unlock/change, credential cancellation and focus/Lock revocation.
 bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
   /absolute/path/to/cargo-target/release secure-recovery
+# Empty-vault setup, displayed recovery key, native keyboard gates and first save.
+# Requires grim and Tesseract with its English language data; capture stays in memory.
+bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
+  /absolute/path/to/cargo-target/release secure-setup
 # Optional independent reader check; requires zbarimg (Arch package: zbar).
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib recovery_qr::tests::independent_reader -- --ignored --test-threads=1
@@ -1355,6 +1359,29 @@ locked/unlocked state. OpenSSL independently authenticates the original body/has
 and new password wrap, and the fixture requires unchanged records, recovery wrap
 and ordinary file. New-password and continued recovery unlock must both succeed;
 the old password must refuse. All credentials stay in stdin-backed private input.
+
+The `secure-setup` variant starts with no vault in two independent private roots.
+Cancel, short/mismatched confirmation and focus/Lock revocation before submission
+or during observed native setup work must leave the vault absent. It creates a
+new vault through the installed Release dialogs, requires Continue to remain
+disabled until the recording checkbox is selected, and tests native dismissal
+with Escape outside the protected field. Tab/Space selects the affirmative gate
+in the second root; a passphrase of exactly 12 characters must also create and
+subsequently unlock that vault.
+
+For the first root, narrowly scoped AT-SPI bounds and exact active-window/process
+checks constrain grim to the owned recovery field. PPM pixels and Tesseract
+transcription stay in zeroizing memory; neither an image nor the key is saved or
+printed. The actual displayed key must pass its checksum, independently unwrap
+the same root as the passphrase through OpenSSL, and unlock through the native
+recovery dialog after Lock. Escape in the field must hide the key and clear
+Reveal; hidden Shift+Tab must leave it; one click reveals the same key again.
+Actual focus loss and native vault Lock must hide it. The protected field has
+no AT-SPI Text or EditableText interface. A first native keyboard-authored record
+must then authenticate with OpenSSL, retain its exact body/hash, and preserve
+the ordinary file. Private permissions, sanitized diagnostics, absent Sync state
+and graceful quit are checked. This verifies native vault Lock; compositor
+lock/sleep and broader physical keyboard/application compatibility remain separate.
 
 Local-owner tests exercise libpam against a disposable private policy and a
 public fictional password module. They cover incorrect passwords, account

@@ -99,6 +99,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::build(true)
+    }
+    fn empty() -> Self {
+        Self::build(false)
+    }
+    fn build(seeded: bool) -> Self {
         let directory = tempfile::Builder::new()
             .prefix("snippets-control-live.")
             .tempdir()
@@ -107,15 +113,17 @@ impl Fixture {
         let library = model::Library::open(root.clone()).unwrap();
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../tests/fixtures/crypto-v1.json")).unwrap();
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(root.join("Vault"))
+        if seeded {
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(root.join("Vault"))
+                .unwrap();
+            model::atomic_write(
+                &root.join("Vault/vault.json"),
+                &serde_json::to_vec(&fixture["document"]).unwrap(),
+            )
             .unwrap();
-        model::atomic_write(
-            &root.join("Vault/vault.json"),
-            &serde_json::to_vec(&fixture["document"]).unwrap(),
-        )
-        .unwrap();
+        }
         let source = Path::new(env!("CARGO_MANIFEST_DIR"));
         let release = PathBuf::from(std::env::var_os("SNIPPETS_CONTROL_TEST_RELEASE").unwrap());
         assert!(release.is_absolute() && release.file_name().unwrap() == "release");
@@ -366,6 +374,7 @@ impl Fixture {
                 mode,
                 "editor-change-start"
                     | "editor-authenticate-start"
+                    | "setup-submit-start"
                     | "pw-busy"
                     | "auth-busy"
                     | "editor-idle"
@@ -375,6 +384,13 @@ impl Fixture {
                     | "pw-confirm-empty"
                     | "pw-recovery"
                     | "pw-recovery-selected"
+                    | "setup-idle"
+                    | "setup-passphrase-empty"
+                    | "setup-confirm-empty"
+                    | "recovery-focused"
+                    | "sheet-hidden"
+                    | "sheet-recorded"
+                    | "sheet-recorded-selected"
             ) {
                 settle(Duration::from_millis(350));
             }
@@ -407,7 +423,7 @@ impl Fixture {
     }
     fn key_in(&self, app: &Process, title: &str, mods: &str, key: &str) {
         assert!(matches!(title, "Snippets CLI Request" | "Secure Snippets"));
-        assert!(matches!(mods, "" | "CTRL" | "CTRL SHIFT"));
+        assert!(matches!(mods, "" | "SHIFT" | "CTRL" | "CTRL SHIFT"));
         assert!(
             matches!(key, "tab" | "space" | "return" | "backspace" | "escape")
                 || key.len() == 1 && key.bytes().all(|v| v.is_ascii_alphanumeric())
@@ -459,6 +475,125 @@ impl Fixture {
             output.status.success() && output.stderr.is_empty(),
             "OpenSSL must authenticate the actual editor-created seal, hash and passphrase wrap; static result={}",
             String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    fn displayed_recovery(&self, app: &Process) -> Option<Zeroizing<String>> {
+        assert!(desktop::session_state() == SessionState::Unlocked);
+        let before = query("activewindow");
+        assert!(active_window(app.id(), "Secure Snippets"));
+        let region = ProcessCommand::new(&self.actor)
+            .arg("recovery-region")
+            .env("SNIPPETS_CONTROL_TEST_PID", app.id().to_string())
+            .env("SNIPPETS_CONTROL_TEST_WINDOW", "Secure Snippets")
+            .output()
+            .unwrap();
+        assert!(region.status.success() && region.stderr.is_empty());
+        let line = std::str::from_utf8(&region.stdout)
+            .unwrap()
+            .lines()
+            .find_map(|v| v.strip_prefix("recovery_bounds="))
+            .unwrap();
+        let rect: Vec<i64> = line.split(',').map(|v| v.parse().unwrap()).collect();
+        assert!(rect.len() == 4);
+        assert!(rect[3] >= 104);
+        let x = before["at"][0].as_i64().unwrap();
+        let y = before["at"][1].as_i64().unwrap();
+        let width = before["size"][0].as_i64().unwrap();
+        let height = before["size"][1].as_i64().unwrap();
+        assert!(rect[0] + rect[2] <= width && rect[1] + rect[3] <= height);
+        // Only the owned protected field, inset past its border; no desktop,
+        // clipboard, image file or OCR output is retained or printed.
+        let geometry = format!(
+            "{},{} {}x{}",
+            x + rect[0] + 4,
+            y + rect[1] + 32,
+            rect[2] - 8,
+            72
+        );
+        let capture = ProcessCommand::new("grim")
+            .args(["-g", &geometry, "-s", "3", "-t", "ppm", "-"])
+            .output()
+            .unwrap();
+        assert!(capture.status.success() && capture.stderr.is_empty());
+        let pixels = Zeroizing::new(capture.stdout);
+        assert!(pixels.len() < 16 * 1024 * 1024);
+        let after = query("activewindow");
+        assert!(
+            before["address"] == after["address"]
+                && before["at"] == after["at"]
+                && before["size"] == after["size"]
+                && active_window(app.id(), "Secure Snippets")
+                && desktop::session_state() == SessionState::Unlocked
+        );
+        for segmentation in ["6", "11"] {
+            let mut reader = ProcessCommand::new("tesseract")
+                .args(["stdin", "stdout", "--psm", segmentation])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            reader.stdin.take().unwrap().write_all(&pixels).unwrap();
+            let output = reader.wait_with_output().unwrap();
+            assert!(output.status.success());
+            let bytes = Zeroizing::new(output.stdout);
+            let text = Zeroizing::new(std::str::from_utf8(&bytes).unwrap().trim().to_owned());
+            // Read the key's leading wrapped lines. Composited pixels below
+            // them may include ordinary background labels on a translucent theme.
+            // No guessed/corrected symbols: checksum and independent unwrap follow.
+            for count in 1..=3 {
+                let leading = Zeroizing::new(
+                    text.lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .take(count)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+                if crypto::decode_recovery(&leading).is_ok() {
+                    return Some(leading);
+                }
+            }
+            if crypto::decode_recovery(&text).is_ok() {
+                return Some(text);
+            } else {
+                println!(
+                    "Bounded recovery OCR did not yield a valid key: characters={}, lines={}, field={}x{}, raster_bytes={}, placeholder={}, reveal_label={}, recorded_label={}, origin={},{}.",
+                    text.chars().count(),
+                    text.lines().count(),
+                    rect[2],
+                    rect[3],
+                    pixels.len(),
+                    text.contains("Content hidden"),
+                    text.contains("Reveal Recovery"),
+                    text.contains("recorded"),
+                    rect[0],
+                    rect[1]
+                );
+            }
+        }
+        None
+    }
+    fn reference_setup(&self, recovery: &str, expected: Option<&str>) {
+        let request = Zeroizing::new(
+            serde_json::to_vec(&serde_json::json!({
+                "passphrase": &*self.password, "recovery": recovery, "body": expected
+            }))
+            .unwrap(),
+        );
+        let mut child = ProcessCommand::new("python3")
+            .arg("-B")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/setup-vault.py"))
+            .arg(self.root.join("Vault/vault.json"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(&request).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success() && output.stderr.is_empty(),
+            "OpenSSL must independently authenticate setup's displayed recovery key, passphrase root and first record."
         );
     }
     fn finish(&self, app: &Process, cli: &mut Process, code: i32, body: Option<&[u8]>) {
@@ -557,6 +692,265 @@ impl Fixture {
         }
         assert!(retained_events > 0);
     }
+}
+
+#[test]
+#[ignore = "unlocked Omarchy; actual installed Release setup, bounded owned-field OCR, public private-root fixture only"]
+fn live_installed_secure_setup_and_recovery_sheet() {
+    assert!(
+        std::env::var_os("SNIPPETS_CONTROL_LIVE").as_deref()
+            == Some(std::ffi::OsStr::new("public-private-roots"))
+    );
+    assert!(
+        std::env::var_os("DBUS_SESSION_BUS_ADDRESS")
+            != std::env::var_os("SNIPPETS_CONTROL_HOST_BUS")
+    );
+    assert!(desktop::session_state() == SessionState::Unlocked);
+    adw::init().unwrap();
+    let fixture = Fixture::empty();
+    let mut app = fixture.start(0);
+    let original = fixture.images();
+    assert!(original.1.is_none());
+    fixture.open_editor(&app);
+    let action = |mode, value: Option<&str>| {
+        assert!(
+            fixture.action_in(&app, "Secure Snippets", mode, value) == 0,
+            "Native setup action {mode} must succeed."
+        );
+    };
+    let focus_application = adw::Application::builder()
+        .application_id("com.khm.snippets.linux.ControlFocusFixture")
+        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        .build();
+    focus_application
+        .register(None::<&gio::Cancellable>)
+        .unwrap();
+    let focus_cycle = || {
+        let companion = adw::ApplicationWindow::builder()
+            .application(&focus_application)
+            .title("Public CLI Focus Receiver")
+            .build();
+        companion.present();
+        until("independent setup focus receiver", 5, || {
+            companion.is_active() && !active_window(app.id(), "Secure Snippets")
+        });
+        settle(Duration::from_millis(200));
+        companion.destroy();
+        until("owned setup regained actual focus", 5, || {
+            active_window(app.id(), "Secure Snippets")
+        });
+    };
+    let setup = |password: &str, confirmation: &str| {
+        action("setup-open", None);
+        action("setup-passphrase-empty", None);
+        action("setup-confirm-empty", None);
+        action("setup-passphrase", Some(password));
+        action("setup-confirm", Some(confirmation));
+    };
+    let unpublished = || {
+        until("setup work completed without publication", 30, || {
+            fixture.action_in(&app, "Secure Snippets", "setup-idle", None) == 0
+        });
+        fixture.status(0);
+        assert!(fixture.images() == original);
+    };
+    for variant in 0..5 {
+        setup(
+            if variant == 1 {
+                "short"
+            } else {
+                &fixture.password
+            },
+            if variant == 1 {
+                "short"
+            } else if variant == 2 {
+                "Public mismatched setup passphrase"
+            } else {
+                &fixture.password
+            },
+        );
+        if variant == 3 {
+            focus_cycle();
+        }
+        if variant == 4 {
+            fixture.key_in(&app, "Secure Snippets", "CTRL", "l");
+        }
+        action(
+            if variant == 0 {
+                "cancel"
+            } else {
+                "setup-submit"
+            },
+            None,
+        );
+        unpublished();
+    }
+    setup(&fixture.password, &fixture.password);
+    action("setup-submit-start", None);
+    action("auth-busy", None);
+    focus_cycle();
+    unpublished();
+    println!(
+        "Actual setup Cancel, short/mismatched credentials, pending focus/Lock and observed worker focus revocation left vault absent."
+    );
+    setup(&fixture.password, &fixture.password);
+    action("setup-submit", None);
+    until("setup published the empty encrypted vault", 30, || {
+        fixture.state(0)
+    });
+    assert!(fixture.action_in(&app, "Secure Snippets", "sheet-continue", None) == 6);
+    action("sheet-hidden", None);
+    assert!(fixture.displayed_recovery(&app).is_none());
+    action("sheet-reveal", None);
+    if fixture.action_in(&app, "Secure Snippets", "recovery-focused", None) == 0 {
+        fixture.key_in(&app, "Secure Snippets", "SHIFT", "tab");
+        println!("Moved native focus off the read-only recovery field before transcription.");
+    }
+    let recovery = fixture
+        .displayed_recovery(&app)
+        .expect("The actual displayed setup key must be readable and have a valid checksum.");
+    fixture.reference_setup(&recovery, None);
+    println!(
+        "Actual rendered setup key passed its checksum and independent OpenSSL passphrase/recovery-root equality."
+    );
+    for _ in 0..16 {
+        if fixture.action_in(&app, "Secure Snippets", "recovery-focused", None) == 0 {
+            break;
+        }
+        fixture.key_in(&app, "Secure Snippets", "", "tab");
+    }
+    action("recovery-focused", None);
+    fixture.key_in(&app, "Secure Snippets", "", "escape");
+    let escape_hidden = fixture.action_in(&app, "Secure Snippets", "sheet-hidden", None);
+    assert!(fixture.displayed_recovery(&app).is_none());
+    fixture.key_in(&app, "Secure Snippets", "SHIFT", "tab");
+    let focus_left = fixture.action_in(&app, "Secure Snippets", "recovery-focused", None);
+    action("sheet-reveal", None);
+    let first_click_shown = fixture.displayed_recovery(&app).is_some();
+    println!(
+        "Native recovery-sheet observation: escape_toggle_hidden={}, hidden_shift_tab_left={}, first_reveal_click_visible={}.",
+        escape_hidden == 0,
+        focus_left == 11,
+        first_click_shown
+    );
+    assert!(
+        escape_hidden == 0 && focus_left == 11 && first_click_shown,
+        "Escape must clear the native recovery toggle; Shift+Tab must leave the hidden field; one click must reveal again."
+    );
+    let shown = fixture
+        .displayed_recovery(&app)
+        .expect("A single native click after Escape must show the same valid recovery key.");
+    assert!(
+        *crypto::decode_recovery(&shown).unwrap() == *crypto::decode_recovery(&recovery).unwrap()
+    );
+    drop(shown);
+    focus_cycle();
+    action("sheet-hidden", None);
+    assert!(fixture.displayed_recovery(&app).is_none());
+    action("sheet-reveal", None);
+    fixture.key_in(&app, "Secure Snippets", "CTRL", "l");
+    settle(Duration::from_millis(600));
+    fixture.status(0);
+    action("sheet-hidden", None);
+    assert!(fixture.displayed_recovery(&app).is_none());
+    if fixture.action_in(&app, "Secure Snippets", "recovery-focused", None) == 0 {
+        fixture.key_in(&app, "Secure Snippets", "SHIFT", "tab");
+    }
+    // Outside the protected field, Escape invokes the dialog's native close
+    // response. Inside the field the same key only hides its content.
+    fixture.key_in(&app, "Secure Snippets", "", "escape");
+    action("editor-recovery", None);
+    action("input", Some(&recovery));
+    action("editor-authenticate", None);
+    until("actual displayed setup recovery key unlocks", 30, || {
+        fixture.state(0)
+    });
+    fixture.key_in(&app, "Secure Snippets", "CTRL", "n");
+    for (mode, value) in [
+        ("editor-name", "Public setup created entry"),
+        ("editor-keyword", "public-setup-created"),
+        ("editor-tags", "Public, Setup"),
+    ] {
+        action(mode, Some(value));
+    }
+    action("editor-reveal", None);
+    action("editor-body", None);
+    let body = "publicsetupbody";
+    for c in body.chars() {
+        fixture.key_in(&app, "Secure Snippets", "", &c.to_string());
+    }
+    fixture.key_in(&app, "Secure Snippets", "CTRL", "s");
+    fixture.status_state(1, true);
+    fixture.reference_setup(&recovery, Some(body));
+    let document = Document::decode(fixture.images().1.as_ref().unwrap()).unwrap();
+    let record = &document.records[0];
+    assert!(record.metadata.keyword == "public-setup-created");
+    assert!(fixture.images().0 == original.0);
+    assert!(
+        fs::metadata(fixture.root.join("Vault/vault.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+            == 0o600
+    );
+    fixture.assert_diagnostics_extra(
+        record.metadata.id,
+        &[&recovery, body, "Public setup created entry"],
+    );
+    assert!(!fixture.root.join("Sync").exists());
+    fixture.stop(&mut app);
+    // A separate truly empty installation also exercises the affirmative
+    // recording gate and the exact minimum-length passphrase through real fields.
+    let mut minimum = Fixture::empty();
+    minimum.password = Zeroizing::new("publicvault1".to_owned());
+    assert!(minimum.password.chars().count() == 12);
+    let mut app = minimum.start(0);
+    minimum.open_editor(&app);
+    let action = |mode, value: Option<&str>| {
+        assert!(
+            minimum.action_in(&app, "Secure Snippets", mode, value) == 0,
+            "Native minimum-length setup action {mode} must succeed."
+        );
+    };
+    action("setup-open", None);
+    action("setup-passphrase", Some(&minimum.password));
+    action("setup-confirm", Some(&minimum.password));
+    action("setup-submit", None);
+    until("minimum-length native setup unlocked", 30, || {
+        minimum.state(0)
+    });
+    assert!(minimum.action_in(&app, "Secure Snippets", "sheet-continue", None) == 6);
+    for _ in 0..16 {
+        if minimum.action_in(&app, "Secure Snippets", "sheet-recorded", None) == 0 {
+            break;
+        }
+        minimum.key_in(&app, "Secure Snippets", "", "tab");
+    }
+    action("sheet-recorded", None);
+    minimum.key_in(&app, "Secure Snippets", "", "space");
+    action("sheet-recorded-selected", None);
+    action("sheet-continue", None);
+    minimum.status_state(0, true);
+    let published = minimum.images();
+    action("editor-lock", None);
+    minimum.status(0);
+    minimum.unlock_editor_with(&app, 0, &minimum.password);
+    assert!(minimum.images() == published);
+    assert!(
+        fs::metadata(minimum.root.join("Vault"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+            == 0o700
+    );
+    minimum.assert_diagnostics_extra(uuid::Uuid::nil(), &[]);
+    assert!(!minimum.root.join("Sync").exists());
+    minimum.stop(&mut app);
+    println!(
+        "Actual new-vault setup, recovery pixels/checksum, native Close and affirmative Continue, exact minimum passphrase, Escape/focus/Lock hiding, fresh recovery unlock and first encrypted save passed with independent OpenSSL and privacy checks."
+    );
 }
 
 #[test]

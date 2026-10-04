@@ -41,7 +41,7 @@ fi
 if [[ $# -lt 2 || $# -gt 3 || ! -x $1 || ! -d $2 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${DBUS_SESSION_BUS_ADDRESS:-} || -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ||
       -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: control-live.sh /path/to/library-test-binary /absolute/path/to/release-directory [unlocked-editor|secure-editor|secure-recovery] (unlocked Omarchy)' >&2
+  printf '%s\n' 'Usage: control-live.sh /path/to/library-test-binary /absolute/path/to/release-directory [unlocked-editor|secure-editor|secure-recovery|secure-setup] (unlocked Omarchy)' >&2
   exit 2
 fi
 case ${3:-} in
@@ -49,8 +49,13 @@ case ${3:-} in
   unlocked-editor) fixture_test=control_ui::live_tests::live_installed_cli_does_not_borrow_unlocked_editor ;;
   secure-editor) fixture_test=control_ui::live_tests::live_installed_secure_editor_edit_and_passphrase ;;
   secure-recovery) fixture_test=control_ui::live_tests::live_installed_secure_recovery_and_revocation ;;
+  secure-setup) fixture_test=control_ui::live_tests::live_installed_secure_setup_and_recovery_sheet ;;
   *) exit 2 ;;
 esac
+if [[ ${3:-} == secure-setup ]]; then
+  command -v grim >/dev/null
+  command -v tesseract >/dev/null
+fi
 for binary in snippets snippets-cli snippets-owner-auth; do
   [[ -x $2/$binary ]]
 done

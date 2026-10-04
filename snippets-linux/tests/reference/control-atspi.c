@@ -33,6 +33,15 @@ static void visit(AtspiAccessible *item, guint depth, gboolean scoped) {
     (!strcmp(mode,"editor-authenticate") || !strcmp(mode,"editor-authenticate-start")) ? "Unlock" :
     strcmp(mode,"editor-recovery") == 0 ? "Recovery Key…" :
     strcmp(mode,"editor-idle") == 0 ? "Unlock…" :
+    (!strcmp(mode,"setup-open") || !strcmp(mode,"setup-idle")) ? "Set Up…" :
+    (!strcmp(mode,"setup-submit") || !strcmp(mode,"setup-submit-start")) ? "Set Up" :
+    g_str_has_prefix(mode,"setup-passphrase") ? "Passphrase" :
+    g_str_has_prefix(mode,"setup-confirm") ? "Confirm vault setup passphrase" :
+    (!strcmp(mode,"recovery-region") || !strcmp(mode,"recovery-focused")) ? "Vault recovery key. Reveal to record offline. Copy and text extraction are disabled." :
+    (!strcmp(mode,"sheet-reveal") || !strcmp(mode,"sheet-hidden")) ? "Reveal Recovery Key" :
+    (!strcmp(mode,"sheet-recorded") || !strcmp(mode,"sheet-recorded-selected")) ? "I recorded this key offline" :
+    strcmp(mode,"sheet-continue") == 0 ? "Continue" :
+    strcmp(mode,"sheet-close") == 0 ? "Close" :
     strcmp(mode,"editor-name") == 0 ? "Secure snippet name" :
     strcmp(mode,"editor-keyword") == 0 ? "Secure snippet keyword" :
     strcmp(mode,"editor-tags") == 0 ? "Secure snippet tags" :
@@ -55,11 +64,13 @@ static void visit(AtspiAccessible *item, guint depth, gboolean scoped) {
   if (scoped && showing(item) && wanted && name && !strcmp(wanted,name) &&
       (!strcmp(mode,"editor-name") || !strcmp(mode,"editor-keyword") ||
        !strcmp(mode,"editor-tags") || g_str_has_prefix(mode,"pw-current") ||
-       g_str_has_prefix(mode,"pw-new") || g_str_has_prefix(mode,"pw-confirm"))) {
+       g_str_has_prefix(mode,"pw-new") || g_str_has_prefix(mode,"pw-confirm") ||
+       g_str_has_prefix(mode,"setup-passphrase") || g_str_has_prefix(mode,"setup-confirm"))) {
     AtspiEditableText *text=atspi_accessible_get_editable_text_iface(item);
     match=text!=NULL;g_clear_object(&text);
   }
   if (scoped && showing(item) && !strcmp(mode,"editor-body") && wanted && name && !strcmp(wanted,name)) match=TRUE;
+  if (scoped && showing(item) && (!strcmp(mode,"recovery-region") || !strcmp(mode,"recovery-focused")) && wanted && name && !strcmp(wanted,name)) match=TRUE;
   if (scoped && showing(item) && (!strcmp(mode,"pw-busy") || !strcmp(mode,"auth-busy")) && wanted && name && !strcmp(wanted,name) && role == ATSPI_ROLE_LABEL) match=TRUE;
   if (scoped && showing(item) && (!strcmp(mode,"input") || !strcmp(mode,"input-empty")) && role == ATSPI_ROLE_PASSWORD_TEXT) {
     AtspiEditableText *text = atspi_accessible_get_editable_text_iface(item);
@@ -92,7 +103,15 @@ int main(int argc,char **argv) {
       strcmp(mode,"input-empty") && strcmp(mode,"editor-recovery") && strcmp(mode,"editor-idle") &&
       strcmp(mode,"pw-recovery") && strcmp(mode,"pw-recovery-selected") &&
       strcmp(mode,"pw-busy") && strcmp(mode,"auth-busy") &&
-      strcmp(mode,"editor-change-start") && strcmp(mode,"editor-authenticate-start")) return 2;
+      strcmp(mode,"editor-change-start") && strcmp(mode,"editor-authenticate-start") &&
+      strcmp(mode,"setup-open") && strcmp(mode,"setup-idle") &&
+      strcmp(mode,"setup-submit") && strcmp(mode,"setup-submit-start") &&
+      strcmp(mode,"setup-passphrase") && strcmp(mode,"setup-passphrase-empty") &&
+      strcmp(mode,"setup-confirm") && strcmp(mode,"setup-confirm-empty") &&
+      strcmp(mode,"recovery-region") && strcmp(mode,"recovery-focused") &&
+      strcmp(mode,"sheet-reveal") && strcmp(mode,"sheet-hidden") &&
+      strcmp(mode,"sheet-recorded") && strcmp(mode,"sheet-recorded-selected") &&
+      strcmp(mode,"sheet-continue") && strcmp(mode,"sheet-close")) return 2;
   const char *value = g_getenv("SNIPPETS_CONTROL_TEST_PID");
   if (!value || !*value) return 2;
   char *end = NULL; unsigned long parsed = strtoul(value,&end,10);
@@ -117,7 +136,24 @@ int main(int argc,char **argv) {
       atspi_state_set_contains(states,ATSPI_STATE_SENSITIVE);
     g_clear_object(&states);
     if (!ready) result = 6;
-    else if (!strcmp(mode,"editor-body")) {
+    else if (!strcmp(mode,"recovery-region") || !strcmp(mode,"recovery-focused")) {
+      AtspiText *text=atspi_accessible_get_text_iface(target);
+      AtspiEditableText *editable=atspi_accessible_get_editable_text_iface(target);
+      if (text || editable) result=12;
+      else if (!strcmp(mode,"recovery-focused")) {
+        states=atspi_accessible_get_state_set(target);
+        if (!states || !atspi_state_set_contains(states,ATSPI_STATE_FOCUSED)) result=11;
+        g_clear_object(&states);
+      } else {
+        AtspiComponent *component=atspi_accessible_get_component_iface(target);
+        AtspiRect *rect=component ? atspi_component_get_extents(component,ATSPI_COORD_TYPE_WINDOW,&error) : NULL;
+        if (!rect || error || rect->x<0 || rect->y<0 || rect->width<64 || rect->height<64 || rect->width>4096 || rect->height>2048) result=13;
+        else printf("recovery_bounds=%d,%d,%d,%d\n",rect->x,rect->y,rect->width,rect->height);
+        if (rect) g_boxed_free(ATSPI_TYPE_RECT,rect);
+        g_clear_error(&error);g_clear_object(&component);
+      }
+      g_clear_object(&text);g_clear_object(&editable);
+    } else if (!strcmp(mode,"editor-body")) {
       AtspiText *text=atspi_accessible_get_text_iface(target);
       AtspiEditableText *editable=atspi_accessible_get_editable_text_iface(target);
       if (text || editable) result=12;
@@ -136,19 +172,25 @@ int main(int argc,char **argv) {
       gint characters=text ? atspi_text_get_character_count(text,&error) : -1;
       if (characters != 0 || error) result=11;
       g_clear_error(&error);g_clear_object(&text);
-    } else if (!strcmp(mode,"editor-idle") || !strcmp(mode,"pw-busy") || !strcmp(mode,"auth-busy")) {
+    } else if (!strcmp(mode,"editor-idle") || !strcmp(mode,"setup-idle") || !strcmp(mode,"pw-busy") || !strcmp(mode,"auth-busy")) {
       /* Observation only. A matching static native label/control is required. */
+    } else if (!strcmp(mode,"sheet-hidden")) {
+      states=atspi_accessible_get_state_set(target);
+      if (!states || atspi_state_set_contains(states,ATSPI_STATE_PRESSED)) result=11;
+      g_clear_object(&states);
     } else if (!strcmp(mode,"recovery") || !strcmp(mode,"recovery-selected") ||
+               !strcmp(mode,"sheet-recorded") || !strcmp(mode,"sheet-recorded-selected") ||
                !strcmp(mode,"pw-recovery") || !strcmp(mode,"pw-recovery-selected")) {
       /* GTK 4 provides neither an action nor component focus for this control.
        * Observe native focus/check state; the fixture navigates with real keys. */
       states=atspi_accessible_get_state_set(target);
-      AtspiStateType state=(!strcmp(mode,"recovery") || !strcmp(mode,"pw-recovery")) ? ATSPI_STATE_FOCUSED : ATSPI_STATE_CHECKED;
+      AtspiStateType state=(!strcmp(mode,"recovery") || !strcmp(mode,"pw-recovery") || !strcmp(mode,"sheet-recorded")) ? ATSPI_STATE_FOCUSED : ATSPI_STATE_CHECKED;
       if (!states || !atspi_state_set_contains(states,state)) result=11;
       g_clear_object(&states);
     } else if (!strcmp(mode,"input") || !strcmp(mode,"editor-name") ||
                !strcmp(mode,"editor-keyword") || !strcmp(mode,"editor-tags") ||
-               !strcmp(mode,"pw-current") || !strcmp(mode,"pw-new") || !strcmp(mode,"pw-confirm")) {
+               !strcmp(mode,"pw-current") || !strcmp(mode,"pw-new") || !strcmp(mode,"pw-confirm") ||
+               !strcmp(mode,"setup-passphrase") || !strcmp(mode,"setup-confirm")) {
       char buffer[4097] = {0}; size_t size = fread(buffer,1,sizeof(buffer),stdin);
       if (!size || size>4096 || memchr(buffer,0,size)) result = 7;
       else {
