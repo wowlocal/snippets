@@ -72,6 +72,7 @@ pub(super) enum Followup {
     Switch,
     Restoration,
     SecureRestoration,
+    ForeignRestoration,
     SecureRestorationInterrupted(crate::account_worker::RestorationInterruption),
 }
 pub(super) fn run(followup: Followup) {
@@ -230,6 +231,7 @@ pub(super) fn run(followup: Followup) {
         Followup::Switch
             | Followup::Restoration
             | Followup::SecureRestoration
+            | Followup::ForeignRestoration
             | Followup::SecureRestorationInterrupted(_)
     ) {
         super::switching::run(&window, &app, &parent, &root, &fixture, &pam, &local);
@@ -252,6 +254,18 @@ pub(super) fn run(followup: Followup) {
         until("final secure restoration worker did not drain", || {
             restored.prepare_quit()
         });
+        drop(restored_stop);
+    }
+    if matches!(followup, Followup::ForeignRestoration) {
+        let restored = make_window(&app, &parent, &root, &fixture, &pam);
+        let restored_stop = Stop(restored.clone());
+        super::secure_restoration_live::run_foreign(
+            &restored, &app, &parent, &root, &fixture, &pam, &local,
+        );
+        until(
+            "final foreign-vault restoration worker did not drain",
+            || restored.prepare_quit(),
+        );
         drop(restored_stop);
     }
     if let Followup::SecureRestorationInterrupted(boundary) = followup {

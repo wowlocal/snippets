@@ -1,0 +1,40 @@
+{
+  "comment": "Public fictional independent OpenSSL EVP fixture. Fixed keys/nonces are never used by the application.",
+  "rootKeyHex": "4444444444444444444444444444444444444444444444444444444444444444",
+  "recoveryMaterialHex": "99999999999999999999999999999999",
+  "passphrase": "Café public current vault fixture",
+  "plaintext": "Public independently protected current vault seed",
+  "document": {
+    "schemaVersion": 1,
+    "kid": "public-independent-current-vault",
+    "vaultSalt": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU",
+    "kdf": {
+      "alg": "pbkdf2-hmac-sha512",
+      "iterations": 600000,
+      "saltP": "iIiIiIiIiIiIiIiIiIiIiA"
+    },
+    "wrapPass": "v1.qqqqqqqqqqqqqqqq.Y4sfz6oYZFsexIagtp3ZGh6MJCpUuGmPRXyEr7olMYfCXgJ8mcc5-qdHmucBAfv5EwxyzKDOtZxSZ7ItMtkUQPrhLWRwu52QiEgi01F0HsbC-qI-aO9atBMQmnBZRSk58bmFF-7s84BDlhE4BJU2UHeSWvMfSaNtFGmveVkwz3pu-GAW0XOZ26rmSpg33Jecb-_QK_QI_OKPSppMPWIle_laI-081eHxqQMZolzWh7eOFlVIC3WFOv52QVwra6ad8UQOZJhZizplg-bnajlY6DKMJUI204tvKU2xPPQWDz16iIdilaYzeN4Sxb2oV3VaA1LvggLCbo3j_p6AtnP1X7fKrb0WRHGem8rA8AGAshI",
+    "wrapRecovery": "v1.u7u7u7u7u7u7u7u7.t-bxIsaynJVDKpVjR7tRKW53awGHfTPwc-TxdrpOrI8oDQ0zsz6747kTXkeYNUPPzaB73ThI3Fw2xL3uoGkYQpf5FPG8-hS-S4ztIqvh-DXP29POUFkxERSCa34-gBW5hd2hKAItNlbtUdVg5u5NeXCDb8R6zSsNKpXtUDXGhyqbEgS7LYBoDZRGWEhFIroj1ZWLQhHQStYlWyY7YoO81QI2lQE390ogOrBUoHzwIy7zomlsYzSbBO7Wmhr_BtYG-vmLY7m40-5P5yySYL7TA-8KlAjmP2yo7S_599hzQe4gbpJac9FLPso6Afmf-mChtZHPpshSS-YfzDmzE-qRrZwQnYHRjFMpo8sLltM1E68",
+    "wrapCLI": null,
+    "records": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "name": "Public independently protected current seed",
+        "keyword": "public-current-seed",
+        "tags": [
+          "public-current-seed-tag"
+        ],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": "2026-09-30T10:00:00.000Z",
+        "updatedAt": "2026-09-30T10:01:00.000Z",
+        "hlc": "019f1a3d4880-0000-1234abcd",
+        "contentHash": "ebde54873db0cbc9d04c37fd941ef76f",
+        "sealed": "v1.zMzMzMzMzMzMzMzM.ki6YGEgkgSOdHuEOJQo3HuKc0CgpesB40P9mr33W222vfjSaHmZkWkBg87SJFF8WavXCECbqU3CifmjNEuzJOgfI6-tjDXAFRHo8L-B_zNCCiqzS3iW-TMyw4Yyy3GDrBqnBrttO2U2Axj0gGtOa_kgof72YeD0FM8HYC94wKh10s7jluLXXncCFFgQzpWHwFS4V1I_4wjYWSY6GCLkOKLEMgF14O-mbZ2lCX0-aRhTtHRlL6yxbYkQhFlTkqWzP-lx2JcpcUYorSHLt3tM3NQ1kNEVrKhM3780pQsBqCJAhGnssA1xFiQXSz3PD55JP0BGrwJgi-ohXrdDL-pXwfWcPX-5kCwGqZVx0H9Yv9Kg"
+      }
+    ],
+    "futurePublicCurrentVaultField": {
+      "enabled": true
+    }
+  }
+}

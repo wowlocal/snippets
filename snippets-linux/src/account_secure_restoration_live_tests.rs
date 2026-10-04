@@ -71,7 +71,10 @@ fn toggles(dialog: &adw::AlertDialog, label: &str) -> Vec<gtk::CheckButton> {
     }
     found
 }
-fn credentials(window: &Rc<AccountWindow>) -> (adw::AlertDialog, Vec<gtk::PasswordEntry>) {
+fn credentials(
+    window: &Rc<AccountWindow>,
+    foreign: bool,
+) -> (adw::AlertDialog, Vec<gtk::PasswordEntry>) {
     press(window.window.upcast_ref(), "Library Recovery History…");
     until("native secure restoration history did not map", || {
         window
@@ -100,7 +103,7 @@ fn credentials(window: &Rc<AccountWindow>) -> (adw::AlertDialog, Vec<gtk::Passwo
     );
     assert!(!dialog.is_response_enabled("unlock") && entries.iter().all(|e| !e.shows_peek_icon()));
     let previous = toggles(&dialog, "Saved changes use a previous vault");
-    assert!(previous.len() == 1 && !previous[0].is_active());
+    assert!(previous.len() == 1 && previous[0].is_active() == foreign);
     let modes = toggles(&dialog, "Use recovery key");
     assert!(
         modes.len() == 2
@@ -110,23 +113,42 @@ fn credentials(window: &Rc<AccountWindow>) -> (adw::AlertDialog, Vec<gtk::Passwo
     );
     (dialog, entries)
 }
-fn reviewed(window: &Rc<AccountWindow>, value: &str, recovery: bool) -> adw::AlertDialog {
-    let (dialog, entries) = credentials(window);
+fn reviewed(
+    window: &Rc<AccountWindow>,
+    value: &str,
+    recovery: bool,
+    previous: Option<(&str, &str)>,
+) -> adw::AlertDialog {
+    let (dialog, entries) = credentials(window, previous.is_some());
     toggles(&dialog, "Use recovery key")[0].set_active(recovery);
     entries[0].set_text(value);
+    if let Some((passphrase, key)) = previous {
+        toggles(&dialog, "Use recovery key")[1].set_active(!recovery);
+        entries[1].set_text(if recovery { passphrase } else { key });
+    }
     press(dialog.upcast_ref(), "Verify Saved Changes");
-    until("native secure restoration review did not map", || {
-        window
-            .snapshot_dialog
-            .borrow()
-            .as_ref()
-            .is_some_and(|d| d.is_mapped())
-    });
+    until_for(
+        "native secure restoration review did not map",
+        Duration::from_secs(45),
+        || {
+            window
+                .snapshot_dialog
+                .borrow()
+                .as_ref()
+                .is_some_and(|d| d.is_mapped())
+        },
+    );
     assert!(
         window.restoration_dialog.borrow().is_none() && entries.iter().all(|e| e.text().is_empty())
     );
     let review = window.snapshot_dialog.borrow().clone().unwrap();
     assert!(review.heading().as_deref() == Some("Restore the Saved Changes?"));
+    assert!(
+        review
+            .body()
+            .contains("Saved secure changes will use the current vault's encryption.")
+            == previous.is_some()
+    );
     assert!(
         review.default_response().as_deref() == Some("back") && review.close_response() == "back"
     );
@@ -148,8 +170,9 @@ fn password(
     window: &Rc<AccountWindow>,
     value: &str,
     recovery: bool,
+    previous: Option<(&str, &str)>,
 ) -> (adw::AlertDialog, gtk::PasswordEntry) {
-    let review = reviewed(window, value, recovery);
+    let review = reviewed(window, value, recovery, previous);
     press(review.upcast_ref(), "Restore Changes");
     until(
         "native secure restoration computer password did not map",
@@ -268,6 +291,25 @@ fn ordinary_preserved(
 fn live_secure_saved_history_restoration() {
     creation::run(creation::Followup::SecureRestoration);
 }
+#[test]
+#[ignore = "explicit native retained foreign-vault history GTK/HTTPS/private-keyring/private-PAM acceptance; invoke tests/account-live.sh with --foreign-restoration"]
+fn live_retained_foreign_vault_history_restoration() {
+    creation::run(creation::Followup::ForeignRestoration);
+}
+struct RestorationContext<'a> {
+    window: &'a Rc<AccountWindow>,
+    app: &'a adw::Application,
+    parent: &'a adw::ApplicationWindow,
+    root: &'a Path,
+    fixture: &'a server::Fixture,
+    pam: &'a Pam,
+    ordinary: &'a model::Snippet,
+}
+enum Scenario {
+    SameVault,
+    Interrupted(RestorationInterruption),
+    ForeignVault,
+}
 pub(super) fn run(
     window: &Rc<AccountWindow>,
     app: &adw::Application,
@@ -290,6 +332,57 @@ pub(super) fn run_interrupted(
     ordinary: &model::Snippet,
     boundary: Option<RestorationInterruption>,
 ) {
+    run_case(
+        RestorationContext {
+            window,
+            app,
+            parent,
+            root,
+            fixture,
+            pam,
+            ordinary,
+        },
+        boundary.map_or(Scenario::SameVault, Scenario::Interrupted),
+    );
+}
+pub(super) fn run_foreign(
+    window: &Rc<AccountWindow>,
+    app: &adw::Application,
+    parent: &adw::ApplicationWindow,
+    root: &Path,
+    fixture: &server::Fixture,
+    pam: &Pam,
+    ordinary: &model::Snippet,
+) {
+    run_case(
+        RestorationContext {
+            window,
+            app,
+            parent,
+            root,
+            fixture,
+            pam,
+            ordinary,
+        },
+        Scenario::ForeignVault,
+    );
+}
+fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
+    let RestorationContext {
+        window,
+        app,
+        parent,
+        root,
+        fixture,
+        pam,
+        ordinary,
+    } = context;
+    let foreign = matches!(scenario, Scenario::ForeignVault);
+    let boundary = if let Scenario::Interrupted(boundary) = scenario {
+        Some(boundary)
+    } else {
+        None
+    };
     reconnect(window, 1);
     let fixture_data: serde_json::Value =
         serde_json::from_str(include_str!("../tests/fixtures/crypto-v1.json")).unwrap();
@@ -312,6 +405,11 @@ pub(super) fn run_interrupted(
         .lock()
         .unwrap()
         .record_in(uuid::Uuid::from_u128(200), secure_id)
+        .unwrap();
+    let source_archived = document(root)
+        .records
+        .into_iter()
+        .find(|r| r.metadata.id == secure_id)
         .unwrap();
     window.libraries.set_selected(2);
     wait_work(window);
@@ -345,6 +443,26 @@ pub(super) fn run_interrupted(
     wait_work(window);
     assert!(entry.text().is_empty() && window.sync.is_sensitive());
     assert!(slot(root, Slot::LibraryKey).is_some_and(|bytes| bytes != source_key));
+    // The source history retains vault A. Install independent public vault B
+    // before the target's first protected sync, preserving real current CAS/feed.
+    let current_fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/restoration-current-vault-v1.json"
+    ))
+    .unwrap();
+    let (key, passphrase, recovery, initial) = if foreign {
+        let current =
+            Document::decode(&serde_json::to_vec(&current_fixture["document"]).unwrap()).unwrap();
+        assert!(!current.same_identity(&initial));
+        write(root, &current);
+        (
+            RootKey::from_bytes(&[0x44; 32]).unwrap(),
+            current_fixture["passphrase"].as_str().unwrap(),
+            crypto::format_recovery(&[0x99; 16]),
+            current,
+        )
+    } else {
+        (key, passphrase, recovery, initial)
+    };
     sync(window, passphrase, false);
     let (checkpoint, catalog) = switching::checkpoint_and_history(root);
     assert!(catalog.switches.len() == 3 && catalog.restorations.is_empty());
@@ -352,11 +470,34 @@ pub(super) fn run_interrupted(
         checkpoint.journal.confirmed(secure_id).is_some()
             && checkpoint.journal.inbox.cursor().is_some()
     );
-    let archived = document(root)
+    let current_record = document(root)
         .records
         .into_iter()
         .find(|r| r.metadata.id == secure_id)
         .unwrap();
+    let archived = if foreign {
+        source_archived
+    } else {
+        current_record
+    };
+    let old_recovery = crypto::format_recovery(&[0x66; 16]);
+    let previous = foreign.then_some((
+        fixture_data["passphrase"].as_str().unwrap(),
+        old_recovery.as_str(),
+    ));
+    let credentials = |window: &Rc<AccountWindow>| {
+        let (dialog, entries) = credentials(window, foreign);
+        if let Some((old_passphrase, _)) = previous {
+            entries[1].set_text(old_passphrase);
+        }
+        (dialog, entries)
+    };
+    let reviewed = |window: &Rc<AccountWindow>, value: &str, recovery: bool| {
+        reviewed(window, value, recovery, previous)
+    };
+    let password = |window: &Rc<AccountWindow>, value: &str, recovery: bool| {
+        password(window, value, recovery, previous)
+    };
     let mut edited = document(root);
     vault::edit(&mut edited, secure_id, LATER, &key);
     let metadata = &mut edited
@@ -452,11 +593,64 @@ pub(super) fn run_interrupted(
         drop(s);
         vault::no_session_key(root, secure_id);
     };
+    if foreign {
+        let file = root.join("Vault/vault.json");
+        let saved = Zeroizing::new(fs::read(&file).unwrap());
+        fs::remove_file(&file).unwrap();
+        let missing = creation::images(root);
+        press(window.window.upcast_ref(), "Library Recovery History…");
+        until("missing-current-vault history did not map", || {
+            window
+                .history_dialog
+                .borrow()
+                .as_ref()
+                .is_some_and(|d| d.is_mapped())
+        });
+        let history = window.history_dialog.borrow().clone().unwrap();
+        let selected = restoration_live::selected_review(&history, "Switch 3 · finished locally");
+        until("missing-current-vault restoration row did not map", || {
+            selected.is_mapped() && selected.is_sensitive()
+        });
+        selected.emit_clicked();
+        finished(window, &[]);
+        assert!(
+            creation::images(root) == missing && restoration_live::protected(root) == protected
+        );
+        assert!(slot(root, Slot::HistoryRestore).is_none() && !file.exists());
+        let state = fixture.state.lock().unwrap();
+        assert!((state.fetches, state.batches, state.accepted) == counts);
+        drop(state);
+        model::atomic_write(&file, &saved).unwrap();
+        unchanged();
+        println!(
+            "Native missing-current-vault metadata refused before credentials, review or receipt; primary images, checkpoint, protected keys and data plane remained exact."
+        );
+    }
     let (dialog, entries) = credentials(window);
     entries[0].set_text(passphrase);
     press(dialog.upcast_ref(), "Cancel");
     finished(window, &entries);
     unchanged();
+    if let Some((old_passphrase, _)) = previous {
+        for (current, old) in [(old_passphrase, passphrase), (passphrase, passphrase)] {
+            let (dialog, entries) = credentials(window);
+            entries[0].set_text(current);
+            entries[1].set_text(old);
+            press(dialog.upcast_ref(), "Verify Saved Changes");
+            finished(window, &entries);
+            unchanged();
+        }
+        let (dialog, entries) = credentials(window);
+        entries[0].set_text(passphrase);
+        toggles(&dialog, "Saved changes use a previous vault")[0].set_active(false);
+        assert!(entries[1].text().is_empty());
+        press(dialog.upcast_ref(), "Verify Saved Changes");
+        finished(window, &entries);
+        unchanged();
+        println!(
+            "Native foreign-vault restoration: source/current credential swaps, wrong previous password and current-only verification refused the whole ordinary/protected selection without receipt, files, keys or data-plane changes."
+        );
+    }
     let (dialog, entries) = credentials(window);
     entries[0].set_text("Public incorrect vault password");
     press(dialog.upcast_ref(), "Verify Saved Changes");
@@ -587,6 +781,40 @@ pub(super) fn run_interrupted(
     let mut original_header = initial;
     original_header.records.clear();
     assert!(header == original_header);
+    if foreign {
+        let current = document(root);
+        let restored = current
+            .records
+            .iter()
+            .find(|r| r.metadata.id == secure_id)
+            .unwrap();
+        assert!(
+            crypto::open_record(
+                &restored.sealed,
+                &RootKey::from_bytes(&[0x11; 32]).unwrap(),
+                &crypto::unb64(fixture_data["document"]["vaultSalt"].as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+                fixture_data["document"]["kid"].as_str().unwrap(),
+                secure_id,
+                false
+            )
+            .is_err()
+        );
+        assert!(restored.sealed != archived.sealed);
+        let reference =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/restoration-vault.py");
+        assert!(
+            Process::new("python3")
+                .arg(reference)
+                .arg("--verify")
+                .arg(root.join("Vault/vault.json"))
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
     let (restored, catalog) = switching::checkpoint_and_history(root);
     assert!(
         checkpoint
@@ -627,6 +855,9 @@ pub(super) fn run_interrupted(
     assert!(preserved(root, &archived, &newer, &extra, &key, original_body) == copy);
     assert!(ordinary_preserved(root, ordinary, &current_plain, &unrelated) == plain_copy);
     let (wire_key, wire_salt) = wire_material(root);
+    let mut final_header = document(root);
+    final_header.records.clear();
+    assert!(final_header == original_header);
     let doc = document(root);
     let s = fixture.state.lock().unwrap();
     for record in &doc.records {
@@ -641,6 +872,7 @@ pub(super) fn run_interrupted(
                     == record.sealed.text().as_bytes()
         );
         assert!(decoded.extensions["vaultContentHash"].as_text().unwrap() == record.content_hash);
+        assert!(decoded.extensions["vaultKID"].as_text().unwrap() == doc.kid);
     }
     let sent = s.submitted[submissions..]
         .iter()
@@ -673,6 +905,19 @@ pub(super) fn run_interrupted(
     );
     assert!(s.creation_counts() == (3, 2) && s.bootstrap_posts == 2);
     drop(s);
+    if foreign {
+        let reference =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/restoration-vault.py");
+        assert!(
+            Process::new("python3")
+                .arg(reference)
+                .arg("--verify")
+                .arg(root.join("Vault/vault.json"))
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
     vault::no_session_key(root, secure_id);
     assert!(
         !root.join("automatic-sync.json").exists()
@@ -683,7 +928,12 @@ pub(super) fn run_interrupted(
     });
     drop(stop);
     println!(
-        "Native secure history restoration: independently wrapped same-vault credentials, whole ordinary/secure review, stale ciphertext refusal, fresh PAM, disabled sealed current-version preservation, unrelated ordinary/secure retention, exact current CAS/feed, completed history, new-worker reconnect and authenticated encrypted copy-before-source synchronization passed."
+        "Native {} history restoration: independent current/retained wraps, whole ordinary/secure review, stale ciphertext refusal, fresh PAM, disabled sealed current-version preservation, unrelated ordinary/secure retention, exact current CAS/feed, completed history, new-worker reconnect and authenticated encrypted copy-before-source synchronization passed.",
+        if foreign {
+            "foreign-vault"
+        } else {
+            "same-vault"
+        }
     );
 }
 

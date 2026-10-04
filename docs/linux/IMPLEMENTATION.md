@@ -4946,3 +4946,91 @@ review, physical suspend, normal Omarchy configuration and Apple-app exchange
 remain separate acceptance work. Final preflight rechecks authenticated actual
 Wayland, GTK/D-Bus, unlocked state, DNS/verified HTTPS and fixture cleanup. Stay
 Awake and the existing 2026-10-05 09:00 Minsk lock-restoration timer are preserved.
+
+
+### Native restoration from a retained previous vault (2026-10-04)
+
+The --foreign-restoration process runs actual mapped GTK account windows,
+serialized workers, private Secret Service, certificate-verified loopback HTTPS
+and private-policy PAM. It completes native creation/switch/return first, installs
+the independent public source vault A, and synchronizes its protected record in
+the source library. Another reviewed native switch retains that vault's history.
+Before the target's first protected sync, the fixture supplies independent public
+current vault B with a different root, KID, salt and passphrase, both passphrase
+and recovery wraps at 600,000 KDF iterations, and future metadata. Actual target
+sync establishes current protected-record CAS acceptance and a feed cursor.
+The source library's accepted A ciphertext is retained independently by the peer.
+
+Both ordinary and protected current records are edited; unrelated ordinary and
+protected records are added. The unrelated protected record reserves a real local
+clock, as a native Vault save does. The selected third completed switch retains
+A's archived body/metadata and authentication header. Current/source credentials
+are independent. The native dialog suggests the previous-vault option and exposes
+both non-peek password fields and separate passphrase/recovery choices. Wrong or
+swapped source/current credentials and current-only verification refuse the whole
+two-record selection, including its ordinary half. Cancel and filled-dialog focus
+loss clear both fields, revoke preparation and retain exact primary/checkpoint
+images, nine protected key/capability frames, no restoration receipt and no record
+exchange. Removing only the owned fixture's current vault.json also refuses before
+credentials, review or consent; it does not recreate metadata or apply an ordinary
+subset. Restoring its exact fixture bytes permits fresh explicit review.
+
+Fresh current recovery plus source passphrase, and current passphrase plus source
+recovery, both reach the actual whole-selection review: two saved records, two
+preserved current versions and one secure record. The review explicitly says saved
+secure changes will use the current vault's encryption. Keep Current State, review
+focus loss and the separate computer-password dialog's Cancel, denial and focus
+revocation preserve every input. A changed current protected ciphertext after
+review refuses correct PAM before a receipt or write, requiring explicit reconnect
+and fresh vault review. Neither vault verification authorizes the write.
+
+Fresh dual-vault verification and fresh purpose-bound PAM restore the whole
+selection under B. Saved ordinary fields/body and A's archived protected body are
+restored; the protected body has a new B seal and keyed hash. The old A key/scope
+cannot open it. Both current versions survive as disabled, unpinned, keyword-free
+copies; unrelated ordinary/protected records remain exact, including protected
+clock, metadata, seal, hash and extensions. B's current KDF/salt/passphrase/recovery
+wraps and future fields remain exact. Current library keys, scope/CAS/feed/offers
+and prior switch history remain unchanged. One completed protected receipt has
+the expected 2/2/1 summary. Sync/Receive/Send require explicit reconnect and selection.
+
+The current fixture and reference checks use stdlib and OpenSSL EVP independently
+of Rust's serializer or cryptographic helpers. The public second-vault JSON is
+checked in; normal Cargo and both apps need no Python/OpenSSL reference runtime.
+--check verifies deterministic fixture generation. Explicit live acceptance calls
+--verify against the actual private-fixture native vault after restoration and
+again after synchronization, opening both current wraps and all protected bodies,
+checking hashes, disabled current-copy flags, exact header/future fields and old
+vault-scope refusal. No keys, bodies, ciphertext or reflected exceptions are printed.
+Reference bytecode writing is disabled; incidental bytecode is excluded from the
+final native-source fingerprint.
+
+A second new worker reopens exact completed images and copies, reconnects/selects
+explicitly, and obtains fresh current-vault verification before encrypted sync.
+Independent peer packets contain exact current seals/hashes and vaultKID B. Both
+preserved copies are submitted before their restored source records. The source
+library's earlier protected packet remains exact; no new bootstrap, creation,
+automatic-sync consent or editor-unlock operation occurs. All owned windows,
+workers, processes, buses, keyrings and roots drain. Normal transport still rejects
+the fixture CA outside the scoped native worker.
+
+Debug and optimized Release pass the full retained-previous-vault workflow,
+including missing-current-metadata refusal. Ordinary/same-vault restoration and
+interrupted baseline cancellation/vault-image completion pass as separate Release
+regressions. Forty-five restoration-owner checks, both all-target Clippy modes,
+formatting, shell syntax, the independent fixture check and fresh Release binaries
+pass. Fourteen serial gates cover five distinct live tests on the same frozen
+301 native inputs. Only cfg(test) helpers, the runner, public fixture/reference
+and documentation change. All three rebuilt Release artifacts retain the preceding
+checkpoint hashes; installed GUI/CLI evidence is inherited from that exact parent
+artifact, rather than counted as a new run. Separately installed-app library
+restoration remains unverified. Preliminary successful runs before the final
+metadata/wire assertions remain attached to their earlier input fingerprints and
+are excluded from final passing evidence.
+
+Mixed-vault/external-file chooser restoration, actual process termination or power
+loss, interrupted switching, candidate pairing, raw-child/source-absence reviews,
+hardware suspend, normal Omarchy configuration and Apple-app backup exchange remain
+separate acceptance work. Final GTK/Wayland/D-Bus, unlocked state, DNS/verified HTTPS
+and fixture-cleanup preflight preserves Stay Awake and the existing 2026-10-05
+09:00 Minsk lock-restoration timer.

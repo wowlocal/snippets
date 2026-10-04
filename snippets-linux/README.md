@@ -562,8 +562,17 @@ preserve pending state. Each final action needs fresh purpose-bound PAM; local
 completion makes no HTTP request while the fixture server refuses requests.
 Fresh reconnect and vault verification remain required before encrypted sync.
 These cases simulate I/O errors at durable write boundaries; actual process
-termination and power-loss acceptance remain separate. Mixed/foreign-vault
-restoration and interrupted switching also remain separate checks.
+termination and power-loss acceptance remain separate.
+Restoration from a retained previous vault also passes native acceptance. The
+saved and current vaults have independently wrapped, different roots. Separate
+current/source passphrase or recovery-key verification precedes fresh PAM consent;
+current-only verification refuses the whole ordinary/protected selection. Missing
+current vault metadata also refuses before credential review or a receipt. The
+saved body is re-encrypted under the current root, current versions and unrelated
+records survive, and current wraps/future metadata and keys remain exact. OpenSSL
+checks actual output before and after fresh-worker reconnect and encrypted sync;
+protected packets carry the current vaultKID. Multiple-source/external-file vault
+restoration and interrupted switching remain separate checks.
 
 **Library Creation Receipts** in Library Recovery History shows the retained
 requests and completed receipts without reading account credentials. Use
@@ -713,8 +722,8 @@ separate originals. Prior-confirmed cloud-child Keep/Delete before parent
 Keep/Delete also passes all four native combinations with actual saved CAS.
 Unknown pending raw-child decisions, local-absence source review, unrelated
 ambiguous packets, switch-candidate pairing, interrupted switching and mixed-vault,
-foreign-vault restoration and actual process termination during restoration
-remain under live acceptance. Native recipient pairing and signed approval/recovery
+external-file/multiple-source vault restoration and actual process termination
+during restoration remain under live acceptance. Native recipient pairing and signed approval/recovery
 replacement now pass, including retained-request restart. The native
 interrupted-startup recovery fixture passes with temporary
 data; full file-dialog
@@ -747,8 +756,10 @@ Same-vault protected restoration also passes vault passphrase/recovery review,
 separate fresh PAM, both current-version copies and unrelated-record retention.
 Simulated interrupted same-vault restoration also passes fresh-worker offline
 cancellation/completion and exact frozen-image checks. Candidate pairing for
-switching, interrupted switching, mixed/foreign-vault restoration and actual
-process termination during restoration remain under acceptance.
+switching, interrupted switching, external-file/multiple-source vault restoration
+and actual process termination during restoration remain under acceptance.
+Retained foreign-vault restoration now passes separate source/current verification,
+fresh PAM, exact current wraps and independent OpenSSL checks across encrypted sync.
 
 ## Secure Snippets
 
@@ -1241,8 +1252,10 @@ Same-vault protected restoration also passes fresh vault and separate PAM
 authorization, exact unrelated records and encrypted preservation ordering.
 Simulated interrupted same-vault restoration also passes offline cancellation
 and completion after a fresh worker, with separate fresh PAM and exact approved
-images. Candidate pairing for switching, interrupted switching, mixed/foreign-vault
-restoration and actual process termination during restoration remain under review.
+images. Retained foreign-vault restoration also passes independent current/source
+verification and current-root re-encryption, with OpenSSL checks across native sync.
+Candidate pairing for switching, interrupted switching, external-file/multiple-source
+vault restoration and actual process termination during restoration remain under review.
 All three globally assigned actions, visible tray-menu selection/focus and re-registration
 with a restarted Omarchy host pass; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
@@ -1298,6 +1311,9 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 # Whole ordinary/protected saved history, fresh vault passphrase/recovery and PAM,
 # stale ciphertext refusal, both current versions and unrelated records retained.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --secure-restoration
+# Different independent current/source vault roots retained in history: separate
+# credentials, whole-selection refusal, current-root re-encryption and OpenSSL.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --foreign-restoration
 # Simulated durable write interruptions; each case restarts the actual native
 # worker, refuses all server requests, and requires fresh local-purpose PAM.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --restore-cancel-consent
