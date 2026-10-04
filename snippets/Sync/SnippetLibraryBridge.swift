@@ -151,7 +151,7 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                 detail: "local secure conflict state is malformed or belongs to another vault; "
                     + "sync stopped before offering it")
         }
-        persistMetadata(envelopes)
+        persistMetadata(envelopes, replacing: metadata)
         var primaryStates: [UUID: SyncPrimaryState] = [:]
         for snippet in snippets {
             primaryStates[snippet.id] = .plain(snippet)
@@ -1328,17 +1328,15 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                     .sorted { $0.uuidString < $1.uuidString })
         }
 
-        var metadata = try loadMetadata(fallingBackTo: SyncBase())
-        for envelope in outcome.value.appliedEnvelopes {
-            if envelope.deleted {
-                metadata.envelopes[SyncBase.key(envelope.id)] = nil
-            } else {
-                metadata.record(envelope)
-            }
+        let metadata = try loadMetadata(fallingBackTo: SyncBase())
+        var projected: [UUID: SyncEnvelope] = [:]
+        for envelope in metadata.envelopes.values where !envelope.deleted {
+            projected[envelope.id] = envelope
         }
-        persistMetadata(metadata.envelopes.values.reduce(into: [:]) { result, envelope in
-            result[envelope.id] = envelope
-        })
+        for envelope in outcome.value.appliedEnvelopes {
+            projected[envelope.id] = envelope.deleted ? nil : envelope
+        }
+        persistMetadata(projected, replacing: metadata)
 
         // Both stores re-read from disk, because the transaction wrote underneath them.
         // Suppress their independent callbacks and publish one explicitly remote change:
@@ -1770,9 +1768,15 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         }
     }
 
-    private func persistMetadata(_ envelopes: [UUID: SyncEnvelope]) {
-        var next = SyncBase()
-        for envelope in envelopes.values { next.record(envelope) }
+    /// Replaces the sidecar with the projection `envelopes`, keeping the identity of any
+    /// plain conflict copy that left primary storage so a restoration can re-publish it.
+    private func persistMetadata(
+        _ envelopes: [UUID: SyncEnvelope],
+        replacing previous: SyncBase
+    ) {
+        let next = SyncLibraryProjection.projectionSidecar(
+            for: envelopes,
+            replacing: previous)
         guard metadataCache != next else { return }
         do {
             try persistMetadataStrict(next)
