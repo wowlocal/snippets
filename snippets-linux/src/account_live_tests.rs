@@ -307,6 +307,33 @@ fn sign_in_with_key(window: &Rc<AccountWindow>, fixture: &server::Fixture) {
     );
     assert!(fixture.state.lock().unwrap().grants == grants + 1);
 }
+/// Another installation signs in to the fixture's existing account with its
+/// saved key, submitted from the focused key field.
+fn sign_in_saved_key(window: &Rc<AccountWindow>, fixture: &server::Fixture) {
+    window.server.set_text(fixture.server.for_secure_storage());
+    press(window.window.upcast_ref(), "Sign In with Account Key");
+    assert!(window.pages.visible_child_name().as_deref() == Some("account-key"));
+    let grants = fixture.state.lock().unwrap().grants;
+    let display = AccountKey::from_canonical(server::ACCOUNT_KEY)
+        .unwrap()
+        .display();
+    window.account_key_input.set_text(&display);
+    assert!(window.account_key_input.grab_focus());
+    until("native account-key delegate did not acquire focus", || {
+        gtk::prelude::GtkWindowExt::focus(&window.window)
+            .is_some_and(|focus| focus.is_ancestor(&window.account_key_input))
+    });
+    press(window.window.upcast_ref(), "Sign In");
+    assert!(window.busy.get() && gtk::prelude::GtkWindowExt::focus(&window.window).is_none());
+    wait_work(window);
+    assert!(
+        window.account_key_input.text().is_empty()
+            && window.pages.visible_child_name().as_deref() == Some("libraries"),
+        "Native sign-in outcome: {}",
+        window.status.label()
+    );
+    assert!(fixture.state.lock().unwrap().grants == grants + 1);
+}
 /// Sign Out asks first; the confirmation names the account key.
 fn sign_out(window: &Rc<AccountWindow>) {
     window.sign_out.emit_clicked();

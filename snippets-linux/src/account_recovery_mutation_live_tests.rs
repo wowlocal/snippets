@@ -257,13 +257,7 @@ fn run(reconcile: bool) {
     window.window.set_visible(false);
     let other = make_window(&app, &parent, &other_root, &fixture, &pam);
     let other_stop = Stop(other.clone());
-    other.server.set_text(fixture.server.for_secure_storage());
-    other.email.set_text("fixture@example.invalid");
-    press(other.window.upcast_ref(), "Send Sign-in Code");
-    wait_work(&other);
-    other.code.set_text("123456");
-    press(other.window.upcast_ref(), "Sign In");
-    wait_work(&other);
+    sign_in_saved_key(&other, &fixture);
     assert!(other.libraries.selected() == 0);
     other.libraries.set_selected(1);
     wait_work(&other);
