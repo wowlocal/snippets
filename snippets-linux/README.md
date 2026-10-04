@@ -1834,7 +1834,7 @@ specific defect.
 | --- | --- |
 | Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
-| Durable recovery | Actual process termination during restoration; legacy missing-header GUI restoration; interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts and several native restoration cuts already pass. |
+| Durable recovery | Legacy missing-header GUI restoration; interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts, several native restoration cuts and an actual SIGKILL followed by fresh-process offline completion after the ordinary write already pass. |
 | Remaining conflict and history decisions | Unknown pending raw-child intent, local-absence source review and unrelated ambiguous packets; native history retirement and unused-file cleanup. Existing current/nested/prior-confirmed combinations pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
@@ -1909,3 +1909,33 @@ it does not establish physical delivery or recording from a user's application.
 Those checks remain in the normal Omarchy input group. The seven-group board is
 narrowed, the independent GTK chooser blocker stays open, and the installed user
 test build and archive are unchanged.
+
+## Native process termination and offline restoration (2026-10-04)
+
+The already listed actual process-death gate passes at the mixed-image boundary.
+An exclusive native child maps the production history, unlocks the two fictional
+vaults, reviews the restoration and authorizes it through private PAM. A cfg(test)
+hook stops all its threads after the durable ordinary-library write, before the
+vault write or injected-failure unwind. The parent observes the stop, sends
+SIGKILL and reaps that child before starting another process.
+
+The encrypted WAL retains the approved before/after images. The parent verifies
+the actual ordinary file is already the after-image, the vault is still the
+before-image, the durable marker exists and library readers are fenced. A fresh
+native process completes the saved restoration offline with a new private PAM
+authorization, without vault credentials or a borrowed editor/session key.
+Both files exactly match the WAL after-images; the marker is removed, readers
+reopen, transport state and protected capabilities remain unchanged, and retained
+ciphertext history is preserved. A third native process maps the terminal history
+without a completion action or further file/receipt changes.
+
+```sh
+bash snippets-linux/tests/account-live.sh /path/to/library-test-binary --restore-process-ordinary
+```
+
+The fixture uses only public fictional data, a private native keyring and PAM,
+and zero HTTP requests. Child scratch files remain under the surviving parent's
+owned temporary directory, including after SIGKILL. Fatal GTK warnings are enabled
+and the passing run has no criticals. This is native harness evidence at one
+existing recovery boundary, not full installed-app restoration or a new crash-cut
+matrix. The other recovery gaps and the GTK chooser blocker remain open.

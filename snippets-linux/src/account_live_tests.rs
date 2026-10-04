@@ -19,6 +19,8 @@ mod creation;
 mod pairing;
 #[path = "account_portal_live_tests.rs"]
 mod portal;
+#[path = "account_restoration_process_live_tests.rs"]
+pub(crate) mod process_death;
 #[path = "account_recovery_mutation_live_tests.rs"]
 mod recovery_mutation;
 #[path = "account_restoration_live_tests.rs"]

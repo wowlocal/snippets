@@ -1147,6 +1147,8 @@ fn finish_checked_locked(
         model::atomic_write(&library.root.join("snippets.json"), bytes)?;
     }
     if fault == Some(2) {
+        #[cfg(all(test, feature = "desktop"))]
+        crate::account_ui::live_tests::process_death::stop_at_ordinary_write(&library.root);
         return Err(Failure::RecoveryRequired);
     }
     validate()?;

@@ -57,7 +57,7 @@ fn finished(window: &AccountWindow, entries: &[gtk::PasswordEntry]) {
     );
     assert!(entries.iter().all(|entry| entry.text().is_empty()));
 }
-fn toggles(dialog: &adw::AlertDialog, label: &str) -> Vec<gtk::CheckButton> {
+pub(super) fn toggles(dialog: &adw::AlertDialog, label: &str) -> Vec<gtk::CheckButton> {
     let mut stack = vec![dialog.extra_child().unwrap()];
     let mut found = Vec::new();
     while let Some(widget) = stack.pop() {

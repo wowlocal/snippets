@@ -3269,7 +3269,7 @@ impl AccountWindow {
 
 #[cfg(test)]
 #[path = "account_live_tests.rs"]
-mod live_tests;
+pub(crate) mod live_tests;
 
 #[cfg(test)]
 mod tests {

@@ -10,8 +10,15 @@ use crate::{
 #[test]
 #[ignore = "defect-only installed chooser fixture; invoke tests/chooser-cancel.sh"]
 fn prepare_installed_chooser_cancel_fixture() {
-    use std::os::unix::fs::PermissionsExt;
     let root = std::path::PathBuf::from(std::env::var_os("SNIPPETS_SECRET_TEST_ROOT").unwrap());
+    let _saved = prepare_private_native_history(&root);
+    println!(
+        "Public installed chooser fixture: one authentic encrypted saved switch, current foreign vault, private native keyring; no network or restoration authorization."
+    );
+}
+
+fn prepare_private_native_history(root: &std::path::Path) -> Saved {
+    use std::os::unix::fs::PermissionsExt;
     assert_eq!(root, crate::model::default_root().unwrap());
     assert!(std::env::var_os("SNIPPETS_SUPPORT_DIR").is_none());
     assert_ne!(
@@ -36,8 +43,8 @@ fn prepare_installed_chooser_cancel_fixture() {
             }
         }
     }
-    copy_public(saved.setup.temp.path(), &root);
-    let mut native = Store::load(&root, crate::secret_store::Native::new().unwrap()).unwrap();
+    copy_public(saved.setup.temp.path(), root);
+    let mut native = Store::load(root, crate::secret_store::Native::new().unwrap()).unwrap();
     for slot in [
         Slot::Credentials,
         Slot::LibraryKey,
@@ -61,11 +68,12 @@ fn prepare_installed_chooser_cancel_fixture() {
     }
     let catalogue = crate::key_store::history::inspect(&mut native).unwrap();
     assert_eq!(catalogue.switches.len(), 1);
-    assert!(crate::primary::require_ready(&root).is_ok());
-    println!(
-        "Public installed chooser fixture: one authentic encrypted saved switch, current foreign vault, private native keyring; no network or restoration authorization."
-    );
+    assert!(crate::primary::require_ready(root).is_ok());
+    saved
 }
+
+#[path = "account_restoration_process_tests.rs"]
+mod process_death;
 
 fn lease() -> task::Preparation {
     task::Preparation::new(SessionWitness::test(SessionState::Unlocked, 1)).unwrap()

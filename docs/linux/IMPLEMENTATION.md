@@ -5480,3 +5480,36 @@ and prepared archive keep their exact hashes. The preferences row in the finite
 seven-group board is narrowed without adding a matrix. Physical input, the other
 existing gates and the independently reproduced GTK chooser cancellation blocker
 remain open. Stay Awake and its scheduled restoration are preserved.
+
+
+### Actual native restoration process death (2026-10-04)
+
+The finite recovery board's actual process-termination gate now passes at the
+ordinary-written/vault-not-written boundary. One ignored parent controller seeds
+an authentic public encrypted switch history into a private native keyring. Its
+exclusive child maps production history/credential/review/PAM controls. The
+cfg(test, desktop) primary hook stops the entire process immediately after the
+durable ordinary write, before returning an injected failure or unwinding any
+worker/write locks. The parent observes the stopped child, SIGKILLs and reaps it.
+The fresh continuation never overlaps the old worker or borrows its memory.
+
+After death, an independent parent oracle decrypts the actual WAL and proves the
+mixed files, marker, pending receipt and reader fence. Another native process
+shows Complete Saved Restoration and uses a new private PAM authorization to
+finish offline, without vault credentials or HTTP. The exact approved WAL
+ordinary/vault after-images, preserved transport/outbound state, immutable
+protected capabilities and retained ciphertext history, current vault identity,
+selected/current fictional secure bodies and durable terminal receipt all hold.
+A third process maps completed history without Finish or further file mutations.
+SIGKILL scratch cleanup belongs to the surviving parent, not child destructors.
+
+Format, runner syntax, all-target desktop Clippy, Release harness, this native
+cycle under fatal warnings and Release binaries pass on 315 frozen native inputs.
+The initial missing test-only gio import compile failure is retained separately
+and excluded from successful evidence. No production runtime behavior changes;
+the hook/modules exist only in desktop tests. No installed user data, host
+keyring/PAM, clipboard or desktop configuration is used. This completes an already
+listed gate at one boundary rather than adding a crash/source permutation matrix.
+Full installed restoration, legacy GUI and the other frozen recovery checks
+remain open, as does the separately reproduced GTK cancellation defect. Stay
+Awake and its scheduled restoration are preserved.
