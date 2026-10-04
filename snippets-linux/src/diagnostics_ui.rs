@@ -3,6 +3,10 @@ use super::*;
 use crate::diagnostics_service::{Error as LogError, Service};
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "diagnostics_live_tests.rs"]
+mod live_tests;
+
 pub(super) struct Controls {
     pub page: adw::PreferencesPage,
     window: glib::WeakRef<adw::PreferencesWindow>,
@@ -192,6 +196,8 @@ impl Controls {
                 this.done();
                 return;
             };
+            #[cfg(test)]
+            live_tests::assert_selection(&path);
             let service = this.service.clone().unwrap();
             this.status
                 .set_subtitle("Validating and exporting retained logs…");

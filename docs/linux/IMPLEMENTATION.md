@@ -5284,3 +5284,46 @@ source receipt and installation checks accompany the checkpoint. The finite list
 of remaining stable-port acceptance gates and launch/test instructions is in
 [the native README](../../snippets-linux/README.md#user-test-build-and-bounded-remaining-acceptance-2026-10-04).
 This checkpoint does not declare the port complete or introduce new functionality.
+
+
+### Complete native diagnostics interaction (2026-10-04)
+
+The already listed export/delete acceptance now passes in the Release harness
+through mapped production diagnostic controls and the real host SaveFile portal.
+`src/diagnostics_live_tests.rs` and `tests/diagnostics-live.sh` add only an ignored
+public private-root fixture. A cfg(test) assertion checks the actual selected
+destination before the production export worker writes. No chooser result is
+fabricated and no production runtime behavior changes.
+
+The actual privacy and destructive notices retain default/close Cancel, disclose
+plaintext and excluded fields, and have unique mapped sensitive response buttons.
+Cancel at either notice or the actual portal preserves the original log bytes.
+Confirmation exports one manifest and exactly two typed records; an independent
+fixture assertion checks the closed top-level/field sets, event values, counts,
+newline and `0600` permissions. Focus returns and the buttons become available.
+The destructive confirmation removes retained logs while preserving the exported
+file and public primary/vault/checkpoint/history sentinels byte-for-byte. New
+recording resumes and refresh reports one log. The sentinels establish deletion
+scope only; they are not authenticated vault/history or sync fixtures.
+
+The runner retains host D-Bus for the authenticated actual portal, with guarded
+input only to its unlocked active window and an owned public destination.
+Config/data/cache are temporary. Service::start(root, false) does not register a
+global logger or mirror records to OS logging. No account, keyring, PAM, clipboard,
+network or user-library access is constructed. All operations ran serially with
+312 frozen native inputs. Format, shell syntax, desktop all-target Clippy, Release
+harness compilation, 20 focused diagnostics tests and the full native portal cycle
+pass; the latter uses fatal warnings and contains no GTK criticals. The initial
+test-only missing import/API return-type compile attempt is retained separately
+and excluded from successful evidence. Temporary fixture roots/windows are removed.
+
+The installed Release binaries and existing user test archive retain their hashes.
+The newly compiled GUI differs only in its build ID and 14 bytes representing
+panic source-line numbers after the cfg(test) additions. ELF relocation-aware
+comparison verifies each changed source line and identical executable instructions
+and all remaining sections. CLI and helper hashes are unchanged. No replacement
+of the installed build or user archive is needed for this test-only checkpoint.
+The finite remaining board narrows its preferences/diagnostics row; it does not
+add new acceptance variants. This harness cycle is not a full installed-app or
+host system-log test. The independent GTK fallback cancellation blocker remains
+open. Stay Awake and its 2026-10-05 09:00 Minsk restoration timer are preserved.

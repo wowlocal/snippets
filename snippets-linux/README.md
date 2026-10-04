@@ -119,8 +119,11 @@ destinations are refused. Review the plaintext file before sharing it.
 Deletion removes retained app-owned logs, including corrupt regular logs;
 new operations can create new logs. It preserves library and recovery data,
 unrelated files and unsafe linked inputs. Storage, schema, privacy, rotation
-and export checks use temporary roots; the native controls and actual system-log
-mirror still need a live desktop check.
+and export checks use temporary roots. The complete native export/delete cycle,
+including privacy confirmation, cancellation, the actual host SaveFile portal,
+private output permissions and subsequent recording, passes in a public isolated
+fixture. That fixture neither installs a global sink nor exercises the system-log
+mirror. See [live diagnostics acceptance](#live-diagnostics-export-and-delete-2026-10-04).
 
 ## Library
 
@@ -1796,10 +1799,43 @@ specific defect.
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
 | Durable recovery | Actual process termination during restoration; legacy missing-header GUI restoration; interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts and several native restoration cuts already pass. |
 | Remaining conflict and history decisions | Unknown pending raw-child intent, local-absence source review and unrelated ambiguous packets; native history retirement and unused-file cleanup. Existing current/nested/prior-confirmed combinations pass. |
-| Remaining preferences and diagnostics | Learning/picker behavior and resets; complete diagnostic export/delete interaction, including the privacy notice; remaining physical/accessibility clipboard-history interaction. Core privacy and persistence plus native lifecycle controls pass. |
+| Remaining preferences and diagnostics | Learning/picker behavior and resets; remaining physical/accessibility clipboard-history interaction. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 | Installed full restoration | All five source combinations pass in native harnesses using the actual host portal. This checkpoint checks only production chooser cancellation in the installed app, not complete restoration there. |
 
 The build is ready for user testing. Stable-port acceptance remains open on the
 GTK blocker and the checks above. Stay Awake and its 2026-10-05 09:00 Minsk
 restoration timer were preserved.
+
+## Live diagnostics export and delete (2026-10-04)
+
+The previously listed complete diagnostic interaction passes in the Release
+native harness on the unlocked Omarchy session. It maps the production controls,
+checks the plaintext privacy notice and default Cancel response, and activates
+their actual buttons. Cancel at the privacy notice, delete notice and actual
+SaveFile portal leaves the logs intact. The successful SaveFile response must
+equal the owned public destination before the export worker can write anything.
+
+The actual exported JSONL has one manifest plus exactly the two typed fixture
+events, the exact closed top-level and event field sets, the reported counts and
+`0600` permissions. The real destructive confirmation deletes retained logs only.
+The exported file and primary/vault/checkpoint/history preservation sentinels
+remain byte-for-byte unchanged; a subsequent event creates a new log and refreshes
+the controls. Focus returns and both buttons become available after completion.
+The preservation sentinels do not claim authenticated recovery or sync acceptance.
+
+Run the existing acceptance group with a Release library-test executable:
+
+```sh
+bash snippets-linux/tests/diagnostics-live.sh /path/to/library-test-binary
+```
+
+The runner retains the real host D-Bus solely for the desktop portal. Only the
+authenticated active portal window receives public fixture-path input. Data,
+config and cache are temporary; no account, keyring, PAM, clipboard or network
+operation is constructed. The isolated diagnostics service has no global facade
+registration or OS-log mirror. `G_DEBUG=fatal-warnings` is enabled and the passing
+run has no GTK criticals. This is mapped native-control evidence in a test process,
+not a new full installed-app or host authentication claim. The seven remaining
+groups above stay bounded; no feature or variant matrix is added. The GTK chooser
+cancellation blocker remains open and the user test binaries are unchanged.
