@@ -5228,3 +5228,59 @@ separately installed-app restoration, interrupted switching, hardware suspend,
 normal Omarchy configuration and Apple-app exchange remain separate acceptance.
 Final GTK/Wayland/D-Bus/unlocked/DNS/HTTPS and cleanup checks retain Stay Awake and
 the 2026-10-05 09:00 Minsk restoration timer.
+
+
+### GTK cancellation reduction and installed user test build (2026-10-04)
+
+Checkpoint 0be86d83 records the successful host-portal workflows separately from
+the reproducible mixed fallback critical. This continuation adds only diagnostics
+for that concrete defect and prepares the existing Release build for user testing.
+
+`tests/reference/gtk-chooser-cancel.c` is independent of Snippets: a parent window,
+GtkFileDialog.open_multiple, the real mapped Cancel button and subsequent main-loop
+completion. Its basic control passes. Suggesting an exclusive public directory
+with 128 nested components makes path construction overlap cancellation and
+reproduces `gtk_box_remove: GTK_IS_BOX` twice under fatal warnings. Under the normal
+warning policy the criticals still occur, followed by the actual dismissed callback
+and exit 0. An exit 0 alone therefore does not establish successful GTK acceptance.
+There is no sleep before the Cancel button. Two seconds after Cancel observe queued
+callbacks; they are not a fix. The earlier failed 500 ms wait remains reverted.
+
+The original core's mapped GTK base plus frame offset 0x386385 identifies the
+return from gtk_box_remove inside a failure cleanup loop. Its disassembly matches
+[GTK 4.22.4 path-bar failure cleanup](https://raw.githubusercontent.com/GNOME/gtk/4.22.4/gtk/gtkpathbar.c).
+That source cancels in-flight directory queries during disposal, while the failed
+query callback cleans partially built path buttons. A stale/disposed buttons box
+is the mechanism suggested by this evidence; GTK private frames still have no
+installed debug symbols, so this is an inference from the matched instruction and
+source, not a fully symbolized proof of all object lifetimes. The unsuccessful
+GDB attempt without the original executable is excluded; the subsequent matched
+executable stack/disassembly is retained. Extracted core copies were removed.
+No system package, desktop configuration or production runtime code was changed.
+
+The installed `~/.local/share/snippets-linux/snippets` binary, with the checkpoint's
+exact Release SHA-256, uses its production account/history/restoration flow.
+One public authentic encrypted switch and foreign current vault are copied into a
+private root and native keyring by an ignored fixture. A separate native AT-SPI
+actor clicks the real History, Review, Choose Several and Cancel controls, scoped
+to the installed process. It reads no body or credentials. The mapped chooser is
+verified before Cancel. Both fatal and normal policies pass, and navigating to the
+same public deep directory before Cancel passes under the fatal policy. Focus
+returns; primary, vault and encrypted history/checkpoint bytes remain unchanged;
+the application quits normally. This checks the actual installed multiple chooser,
+not full mixed-source restoration or the host login keyring/PAM policy.
+
+The installed navigation/AT-SPI sequence gives pending work time to progress;
+its passing result cannot exclude the path-bar race demonstrated by the minimal
+program. The known GTK defect remains a stable-port acceptance blocker. Failed
+linking/readiness assertions of the diagnostic actor are retained separately and
+are not product failures. No wait is credited as a fix and no failed run is counted
+as passing. New acceptance cases here address only this observed defect.
+
+Release GUI, CLI, helper, desktop actions, icon and AppStream metadata are installed
+under `~/.local` for user testing. Installation preserves data and has not opted in
+to startup, sync, clipboard history or inline expansion. The exact artifact hashes,
+source receipt and installation checks accompany the checkpoint. The finite list
+of remaining stable-port acceptance gates and launch/test instructions is in
+[the native README](../../snippets-linux/README.md#user-test-build-and-bounded-remaining-acceptance-2026-10-04).
+This checkpoint does not declare the port complete or introduce new functionality.

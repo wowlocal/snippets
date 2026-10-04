@@ -1740,3 +1740,66 @@ relayed unchanged and must contain no files. The smoke fixture checks cancel,
 single/multiple selection and parent focus; the full restoration fixtures retain
 the whole-selection refusal, stale-file/PAM, OpenSSL and fresh-worker sync checks.
 No compositor configuration is changed.
+
+
+## User test build and bounded remaining acceptance (2026-10-04)
+
+The Release GUI, CLI and unprivileged PAM helper are installed under `~/.local`.
+Start the application with `~/.local/bin/snippets` or its desktop entry. Quit with
+Ctrl+Q or `~/.local/bin/snippets --quit`. The installer has not enabled login
+startup, sync, clipboard history or inline expansion. Installation preserves
+library data and the desktop configuration. The binary hashes equal checkpoint
+0be86d83; the subsequent chooser diagnostic changes are test-only.
+
+For this user test, create a disposable ordinary snippet, edit and search it,
+close/reopen the library, and verify persistence. Exercise Copy and the picker in
+your usual receiving application. Try a sharing JSON import/export and an encrypted
+backup with disposable content. If testing Secure Snippets, enter the real local
+password in its native prompt yourself; automated acceptance used private PAM and
+keyring fixtures. Keep any diagnostic report to the action, observed result and
+whether focus returned; snippet contents and passwords are unnecessary.
+
+The known acceptance blocker is GTK 4.22.4 fallback cancellation during an
+unfinished path-bar update. A minimal C program, independent of Snippets, reproduces
+`gtk_box_remove: GTK_IS_BOX` twice with a public 128-level folder. Fatal warnings
+abort; the ordinary policy emits criticals and returns the dismissed callback.
+The simple GTK cancellation control passes. The installed Release app's actual
+**Choose Several Vault Files…** Cancel passes with both fatal and ordinary warning
+policies, and after navigation to that public folder: focus returns and the primary,
+vault and encrypted history/checkpoint files are unchanged. These passes do not
+close the GTK race. No wait, error suppression, production code or system GTK patch
+has been presented as a fix. The real host-portal workflows remain passing.
+
+Reproduce only this concrete defect in an unlocked Wayland session:
+
+```sh
+bash snippets-linux/tests/chooser-cancel.sh minimal --inflight-folder
+bash snippets-linux/tests/chooser-cancel.sh minimal --inflight-folder --nonfatal
+# Release library-test executable from cargo test --release --lib --no-run:
+bash snippets-linux/tests/chooser-cancel.sh installed /path/to/test-harness   "$HOME/.local/share/snippets-linux/snippets"
+```
+
+The runner owns temporary data/config/cache, a private D-Bus, private native
+keyring and private accessibility registry. It selects only public owned controls
+in the installed process. Navigation keys require the exact owned active chooser
+and unlocked session. It forwards no host secrets and changes no compositor rules.
+Its only observation delay is after Cancel; it is not a cancellation workaround.
+
+The finite remaining acceptance list for the first stable port is below. These
+are evidence gaps, separately from the confirmed GTK defect; this list does not
+introduce more features or a permutation matrix. New cases are added only for a
+specific defect.
+
+| Remaining check | Current limit |
+| --- | --- |
+| Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
+| Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
+| Durable recovery | Actual process termination during restoration; legacy missing-header GUI restoration; interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts and several native restoration cuts already pass. |
+| Remaining conflict and history decisions | Unknown pending raw-child intent, local-absence source review and unrelated ambiguous packets; native history retirement and unused-file cleanup. Existing current/nested/prior-confirmed combinations pass. |
+| Remaining preferences and diagnostics | Learning/picker behavior and resets; complete diagnostic export/delete interaction, including the privacy notice; remaining physical/accessibility clipboard-history interaction. Core privacy and persistence plus native lifecycle controls pass. |
+| Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
+| Installed full restoration | All five source combinations pass in native harnesses using the actual host portal. This checkpoint checks only production chooser cancellation in the installed app, not complete restoration there. |
+
+The build is ready for user testing. Stable-port acceptance remains open on the
+GTK blocker and the checks above. Stay Awake and its 2026-10-05 09:00 Minsk
+restoration timer were preserved.

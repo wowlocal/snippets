@@ -7,6 +7,66 @@ use crate::{
     local_auth::Purpose,
 };
 
+#[test]
+#[ignore = "defect-only installed chooser fixture; invoke tests/chooser-cancel.sh"]
+fn prepare_installed_chooser_cancel_fixture() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::path::PathBuf::from(std::env::var_os("SNIPPETS_SECRET_TEST_ROOT").unwrap());
+    assert_eq!(root, crate::model::default_root().unwrap());
+    assert!(std::env::var_os("SNIPPETS_SUPPORT_DIR").is_none());
+    assert_ne!(
+        std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap(),
+        std::env::var("SNIPPETS_SECRET_HOST_BUS").unwrap()
+    );
+    assert!(!root.exists());
+    let saved = saved(false);
+    fn copy_public(source: &std::path::Path, destination: &std::path::Path) {
+        std::fs::create_dir(destination).unwrap();
+        std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for item in std::fs::read_dir(source).unwrap() {
+            let item = item.unwrap();
+            let kind = item.file_type().unwrap();
+            assert!(!kind.is_symlink());
+            let to = destination.join(item.file_name());
+            if kind.is_dir() {
+                copy_public(&item.path(), &to);
+            } else {
+                assert!(kind.is_file());
+                crate::model::atomic_write(&to, &std::fs::read(item.path()).unwrap()).unwrap();
+            }
+        }
+    }
+    copy_public(saved.setup.temp.path(), &root);
+    let mut native = Store::load(&root, crate::secret_store::Native::new().unwrap()).unwrap();
+    for slot in [
+        Slot::Credentials,
+        Slot::LibraryKey,
+        Slot::CheckpointKey,
+        Slot::Bootstrap,
+        Slot::PairingRecipient,
+        Slot::SpaceCreation,
+        Slot::KeyMutation,
+        Slot::AccountReview,
+        Slot::PairingCandidate,
+        Slot::BootstrapCandidate,
+        Slot::HistoryRestore,
+        Slot::HistoryMaintenance,
+        Slot::AutomaticSync,
+        Slot::ClipboardHistory,
+    ] {
+        let value = saved.setup.backend.memory.slot(slot);
+        native
+            .transaction(|owner| owner.replace(slot, None, value.as_deref().map(Vec::as_slice)))
+            .unwrap();
+    }
+    let catalogue = crate::key_store::history::inspect(&mut native).unwrap();
+    assert_eq!(catalogue.switches.len(), 1);
+    assert!(crate::primary::require_ready(&root).is_ok());
+    println!(
+        "Public installed chooser fixture: one authentic encrypted saved switch, current foreign vault, private native keyring; no network or restoration authorization."
+    );
+}
+
 fn lease() -> task::Preparation {
     task::Preparation::new(SessionWitness::test(SessionState::Unlocked, 1)).unwrap()
 }
