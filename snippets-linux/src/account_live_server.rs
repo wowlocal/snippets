@@ -13,6 +13,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "account_pairing_live_server.rs"]
+mod pairing;
+
 #[derive(Default)]
 pub(super) struct State {
     pub requests: usize,
@@ -37,6 +40,7 @@ pub(super) struct State {
     generation: usize,
     hold_changes: Option<Arc<Hold>>,
     creation: Option<Creation>,
+    pub pairing: Option<pairing::State>,
 }
 #[derive(Default)]
 struct Creation {
@@ -64,6 +68,10 @@ impl RemoteLibrary {
     }
 }
 impl State {
+    pub fn enable_pairing(&mut self) {
+        assert!(self.requests == 0 && self.creation.is_none() && self.pairing.is_none());
+        self.pairing = Some(pairing::State::default());
+    }
     pub fn record_in(&self, library: uuid::Uuid, id: uuid::Uuid) -> Option<WireRecord> {
         let creation = self.creation.as_ref().unwrap();
         let first = &creation.spaces.first().unwrap().1;
@@ -164,6 +172,9 @@ fn discovery(server: &ServerURL) -> Value {
 }
 fn grant(state: &mut State) -> Value {
     state.grants += 1;
+    if let Some(pairing) = state.pairing.as_mut() {
+        pairing.grant(state.grants);
+    }
     json!({"access_token":format!("public-native-access-{}",state.grants),
         "refresh_token":format!("public-native-refresh-{}",state.grants),"expires_in":300,
         "token_type":"Bearer","account":{"id":"public-native-account","email":"fixture@example.invalid"}})
@@ -243,10 +254,14 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
                 }
             }
             "/v2/auth/refresh" => {
-                assert!(
-                    request.body["refreshToken"]
-                        == format!("public-native-refresh-{}", state.grants)
-                );
+                if let Some(pairing) = state.pairing.as_mut() {
+                    pairing.refresh(request.body["refreshToken"].as_str().unwrap());
+                } else {
+                    assert!(
+                        request.body["refreshToken"]
+                            == format!("public-native-refresh-{}", state.grants)
+                    );
+                }
                 (200, grant(state))
             }
             "/v2/auth/revoke" => {
@@ -256,17 +271,25 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
                         || token.starts_with("public-native-refresh-")
                 );
                 state.revokes += 1;
+                if let Some(pairing) = state.pairing.as_mut() {
+                    pairing.revoke(token);
+                }
                 (204, Value::Null)
             }
             _ => panic!("unexpected native fixture authentication route"),
         };
     }
-    assert!(
-        request
-            .headers
-            .get("authorization")
-            .is_some_and(|value| *value == format!("Bearer public-native-access-{}", state.grants))
-    );
+    let token = request.headers.get("authorization").unwrap();
+    if let Some(pairing) = state.pairing.as_ref() {
+        assert!(pairing.authorized(token));
+    } else {
+        assert!(*token == format!("Bearer public-native-access-{}", state.grants));
+    }
+    if state.pairing.is_some()
+        && (request.path.contains("/pairings") || request.path.ends_with("/key-challenges"))
+    {
+        return pairing::respond(request, server, state);
+    }
     if request.path == "/v2/spaces" {
         if let Some(creation) = state.creation.as_mut() {
             if request.method == "POST" {
@@ -547,6 +570,11 @@ impl Fixture {
                         .then(|| state.hold_changes.take())
                         .flatten();
                     let (status, response) = respond(request, &thread_server, &mut state);
+                    let lose_reply = lose_reply
+                        || state
+                            .pairing
+                            .as_mut()
+                            .is_some_and(|pairing| pairing.take_lost_reply());
                     (status, response, hold, lose_reply)
                 };
                 // The server committed its receipt, but the client receives no

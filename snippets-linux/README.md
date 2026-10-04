@@ -711,7 +711,10 @@ revocation and fresh reauthorization followed by recovery-code confirmation.
 Reconnect through a new worker and sign-out preserve the same library key in the
 private native keyring. Ordinary manual/automatic synchronization, fresh vault
 synchronization and reviewed two-library switching also pass combined live checks.
-Pairing, interrupted switching and library restoration remain under acceptance.
+Two native installations now pass pairing and trusted-device approval, including
+a lost HTTPS reply and exact signed-request replay after restart. Recovery-code
+replacement, candidate pairing for switching and library restoration remain under
+acceptance.
 
 ## Secure Snippets
 
@@ -1194,8 +1197,9 @@ confirmation, worker restart/reconnect and sign-out pass using a private native
 keyring, certificate-verified loopback HTTPS and private-policy PAM. Automatic
 sync also passes live bidirectional/read-only, background, retry, restart, scope
 halt and in-flight-disable checks. Reviewed switching to a separately keyed
-library and back passes too. Pairing, interrupted switching, library restoration
-and remaining native interactions are still under review.
+library and back passes too. Two-installation pairing and signed device approval
+pass with retained-request restart. Recovery replacement, candidate pairing for
+switching, interrupted switching and restoration remain under review.
 All three globally assigned actions, visible tray-menu selection/focus and re-registration
 with a restarted Omarchy host pass; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
@@ -1245,6 +1249,9 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 # Complete reviewed switch, independent target key setup, protected history,
 # explicit encrypted sync, new-worker reconnect and return using the saved key.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --switch
+# Two private native installations: retained public invitation, compare-code gate,
+# fresh PAM approval, original signed-request replay and claimed-key encrypted sync.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --pairing
 # Each variant has its own native GTK process, bus, keyring and data root.
 # The hidden-window checks wait for the unmodified 30-second scheduler.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --automatic-sync
@@ -1487,6 +1494,22 @@ learned usage payload. All owned services, units and windows are removed.
 The account lifecycle's current unlocked run passes after waiting for the parent
 window to map before presenting its child and applying the selected-library
 state before testing pairing controls.
+The pairing variant uses two private library roots with independent random
+Secret Service namespaces and saved account credentials. Public invitation/QR
+and comparison code are retained across recipient restart; cancelling clears the
+view and removes the server request. Trusted-device approval requires matching
+codes and fresh computer-password authorization. Cancel, incorrect password and
+focus loss make no challenge or approval request. The peer independently checks
+the exact ciphertext/recipient request hash and Ed25519 challenge signature.
+After committing approval it closes TLS without a reply; read-only result checking
+keeps the original signed intent, and a new trusted worker authorizes replay of
+that same proof. One server receipt is accepted despite two sends. The recipient
+claims the encrypted packet, installs the original library key, synchronizes and
+reconnects without another pairing or bootstrap. Both primary libraries remain
+exact through the approval workflow. No invitation is copied to the host clipboard
+by this fixture. Candidate pairing for switching and recovery replacement remain
+separate live checks.
+
 The separate combined account fixture uses the real serial account owner and
 native Secret Service backend on its own bus and data root. It exercises mapped
 GTK response buttons against a certificate-verified loopback server, with exact
