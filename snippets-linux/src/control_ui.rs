@@ -410,6 +410,10 @@ fn take_secret(input: &gtk::PasswordEntry) -> Result<Zeroizing<String>> {
 }
 
 #[cfg(test)]
+#[path = "control_live_tests.rs"]
+mod live_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

@@ -1134,8 +1134,13 @@ only local metadata is read and `unlocked` is `null`. Exit codes are 0 for succe
 unsupported protocol, and 1 for other refusals or uncertain completion.
 
 The isolated IPC, vault and private-input tests pass, including hidden input on a
-private PTY. Native approval and real kernel peer verification remain unverified
-in the restricted tool environment; see the implementation evidence.
+private PTY. The actual installed Release app and CLI also pass native consent,
+fresh passphrase/recovery-key reveal and secure creation in unlocked Omarchy.
+An independent OpenSSL decoder authenticates the created record and its content
+hash. Deny, Cancel, wrong credentials, focus loss, disconnect, both unchanged
+deadlines, the request limit, executable mismatch, duplicates and changed vault
+sources refuse delivery. The fixture uses public fictional content on private
+D-Bus/AT-SPI buses and data roots; the desktop editor remains locked.
 
 ## Verification
 
@@ -1150,8 +1155,9 @@ restoration. The complete encrypted-backup portal cycle passes in Debug and
 Release, including cancellation, fresh authentication, independent OpenSSL
 verification and both matching-vault and new-vault restoration. The installed
 primary registers three real global actions and exits on one Quit request; its
-installed CLI also verifies that primary. Freshly authenticated secure insertion
-now reaches the independent receiving process too, with cancellation and incorrect
+installed CLI also verifies that primary and completes approved secure creation
+and disclosure through real native credential dialogs. Freshly authenticated
+secure insertion now reaches the independent receiving process too, with cancellation and incorrect
 password refusal. Exact inline expansion, suggestion selection with Return and
 replacement-echo isolation pass in that independent GTK receiver too. Combined
 native sign-in, explicit library selection, key setup, recovery disclosure and
@@ -1253,6 +1259,12 @@ G_DEBUG=fatal-warnings cargo test --locked --manifest-path snippets-linux/Cargo.
 # Obtain the library-test executable with cargo test --lib --no-run first.
 # The host portal/compositor is shared; library and app XDG roots are private.
 bash snippets-linux/tests/backup-live.sh /absolute/path/to/library-test-binary
+# Actual installed Release GUI/CLI with native consent and fresh vault credentials.
+# Build all three Release binaries first; this installs them under a private prefix.
+cargo build --locked --manifest-path snippets-linux/Cargo.toml --release \
+  --bin snippets --bin snippets-cli --bin snippets-owner-auth
+bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
+  /absolute/path/to/cargo-target/release
 # Optional independent reader check; requires zbarimg (Arch package: zbar).
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib recovery_qr::tests::independent_reader -- --ignored --test-threads=1
@@ -1289,6 +1301,19 @@ text. The current live run passes. The primary-process Quit regression copies
 Cargo executables into a temporary installation, enables global shortcuts only
 in its private library, verifies ownership on D-Bus, and observes release of all
 three registrations and exit after exactly one Quit request.
+
+The installed secure-CLI fixture uses the real Release executables, installer,
+socket server, peer checks, session monitor, consent and credential windows.
+Its private D-Bus session activates only its own accessibility broker; it starts
+an isolated AT-SPI registry directly. The C actor selects controls only under the
+exact owned application PID and mapped CLI request window. Public credentials
+enter the PasswordEntry through stdin-backed AT-SPI editing; recovery selection
+uses native Tab/Space with observed focus/check state. No password or snippet body
+is passed as a command argument or printed. It requires `atspi-2` development
+files, `dbus-run-session`, `gdbus`, the distro AT-SPI broker/registry and OpenSSL.
+All private app, input and bus roots are removed after exit. Host services,
+keyring, PAM and clipboard are untouched. The fixture lasts about two minutes
+because it preserves the real 30/60-second deadlines.
 
 Local-owner tests exercise libpam against a disposable private policy and a
 public fictional password module. They cover incorrect passwords, account
