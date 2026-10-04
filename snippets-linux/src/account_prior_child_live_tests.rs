@@ -1,5 +1,7 @@
 //! A real cloud copy tombstone received before its raw owner appears locally.
 use super::*;
+#[path = "account_raw_child_live_tests.rs"]
+mod raw_child;
 
 fn run(child_delete: bool, parent_delete: bool) {
     let root = isolated_root();
@@ -387,6 +389,10 @@ fn run(child_delete: bool, parent_delete: bool) {
 #[test]
 #[ignore = "explicit native prior cloud-child Keep/parent Keep acceptance"]
 fn live_prior_child_keep_parent_keep() {
+    if raw_child::entrypoint(false) {
+        return;
+    }
+    raw_child::process(false);
     run(false, false);
 }
 #[test]
@@ -397,6 +403,10 @@ fn live_prior_child_keep_parent_delete() {
 #[test]
 #[ignore = "explicit native prior cloud-child Delete/parent Keep acceptance"]
 fn live_prior_child_delete_parent_keep() {
+    if raw_child::entrypoint(true) {
+        return;
+    }
+    raw_child::process(true);
     run(true, false);
 }
 #[test]

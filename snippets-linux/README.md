@@ -362,8 +362,9 @@ retained source rejection packets. Nested physical/journal-only C1 source
 Keep/Delete also pass: original copies are acknowledged before later intent,
 and C1 retains its sealed body. A cloud-deleted copy received before its raw
 owner arrives now receives its own Keep/Delete choice before either parent
-choice. Unknown pending raw-child decisions, local-absence source review and
-unrelated ambiguous packets remain separate checks.
+choice. Unknown pending raw-child Keep/Delete decisions now pass before parent
+Keep, with separate fresh credentials and exact copy-before-source CAS. Local-absence
+source review and unrelated ambiguous packets remain separate checks.
 
 After reconnecting, selecting a library and verifying its keys, choose **Enable
 Automatic Sync for This Library**. Snippets resumes that exact saved account and
@@ -751,8 +752,9 @@ credentials, cancellation refusal and exact CAS ordering. Nested physical and
 journal-only C1 source Keep/Delete also pass with retained child seals and
 separate originals. Prior-confirmed cloud-child Keep/Delete before parent
 Keep/Delete also passes all four native combinations with actual saved CAS.
-Unknown pending raw-child decisions, local-absence source review, unrelated
-ambiguous packets, switch-candidate pairing, interrupted switching and mixed-vault,
+Unknown pending raw-child Keep/Delete before parent Keep now passes as well.
+Local-absence source review, unrelated ambiguous packets, switch-candidate pairing,
+interrupted switching and mixed-vault,
 external-file/multiple-source vault restoration and actual process termination
 during restoration remain under live acceptance. Native recipient pairing and signed approval/recovery
 replacement now pass, including retained-request restart. The native
@@ -1837,7 +1839,7 @@ specific defect.
 | Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
 | Durable recovery | Interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts, several native restoration cuts and an actual SIGKILL followed by fresh-process offline completion after the ordinary write already pass. The same gate now includes a historical missing-header archive and native old-JSON selection, with that source file removed before completion. |
-| Remaining conflict decisions | Unknown pending raw-child intent, local-absence source review and unrelated ambiguous packets. Existing current/nested/prior-confirmed combinations and native history retirement/unused-file cleanup pass. |
+| Remaining conflict decisions | Local-absence source review and unrelated ambiguous packets. Native Unknown pending raw-child Keep/Delete before parent Keep, existing current/nested/prior-confirmed combinations and native history retirement/unused-file cleanup pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 | Installed full restoration | All five source combinations pass in native harnesses using the actual host portal. This checkpoint checks only production chooser cancellation in the installed app, not complete restoration there. |
@@ -2025,3 +2027,50 @@ fixture through the real switch owner resolves the test failure without altering
 product safeguards or adding a wait. The independent GTK chooser cancellation
 blocker remains open. The finite board is narrowed, and the installed app and
 prepared rebased user test archive are unchanged.
+
+
+## Native Unknown pending raw-child decisions (2026-10-04)
+
+The previously listed Unknown pending raw-child gate now passes Keep and Delete
+before the separate parent Keep decision. Two existing ignored prior-child tests
+run this public fixture in an exclusive child process, then retain their existing
+prior-confirmed scenarios. The native count remains 1,140 and runner options stay
+the same; no source/choice permutation matrix is added.
+
+The production native owner captures the unresolved secure parent graph. The
+fixture seeds only a retained unreviewed child tombstone through Journal::desire
+and the actual encrypted checkpoint CAS under the private library lock. Its
+ReviewAncestor is explicitly Unknown; no child offer, confirmed version, original,
+receipt or deletion approval is fabricated. The parent tombstone arrives through
+verified HTTPS, and the mapped review selects the pending child first.
+
+The actual review and fresh vault credential dialog keep default/close Cancel.
+Cancel, a filled credential Cancel, focus revocation and a wrong recovery key
+preserve exact primary/vault/checkpoint bytes and network counts/packets. A fresh
+recovery key authenticates the child's immutable original before its decision.
+The retained inbound page and outbound packet remain exact, the raw parent's
+sealed body is unchanged and no parent deletion approval is granted. The separate
+parent review cancels and refuses wrong credentials before fresh authorization.
+
+Real HTTPS CAS then acknowledges the exact child original with create CAS before
+the parent update using the retained parent version. Delete subsequently uses the
+child's actual acknowledged version; Keep preserves the original sealed body.
+The unrelated ordinary record and current library key remain unchanged. Final
+native synchronization completes with no preservation work, approvals or WAL.
+The owned worker is observed live and then terminal before the fixture process
+exits; it is reaped before the original prior-child scenario starts.
+
+Use the existing commands with a Release library-test executable:
+
+```sh
+bash snippets-linux/tests/account-live.sh /path/to/library-test-binary --prior-child-keep-parent-keep
+bash snippets-linux/tests/account-live.sh /path/to/library-test-binary --prior-child-delete-parent-keep
+```
+
+Both cycles pass with fatal GTK warnings and no criticals. Twenty-six existing
+current-recovery owner tests also pass, including their raw-child, independent
+choice, stale review and durable-cut coverage. No production runtime behavior
+changes. This proves native harness decisions for retained pending state, not
+physical editing or an additional native parent-choice matrix. Local-absence
+source review, unrelated ambiguous packets and the independent GTK cancellation
+blocker remain open. Installed executables and the prepared user archive are unchanged.
