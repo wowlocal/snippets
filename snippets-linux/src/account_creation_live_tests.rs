@@ -71,6 +71,7 @@ pub(super) enum Followup {
     Creation,
     Switch,
     Restoration,
+    SecureRestoration,
 }
 pub(super) fn run(followup: Followup) {
     let root = isolated_root();
@@ -223,7 +224,10 @@ pub(super) fn run(followup: Followup) {
     assert!(fs::metadata(&root).unwrap().permissions().mode() & 0o777 == 0o700);
     assert!(!root.join("automatic-sync.json").exists());
     assert!(CloudClient::discover(fixture.server.clone()).is_err());
-    if matches!(followup, Followup::Switch | Followup::Restoration) {
+    if matches!(
+        followup,
+        Followup::Switch | Followup::Restoration | Followup::SecureRestoration
+    ) {
         super::switching::run(&window, &app, &parent, &root, &fixture, &pam, &local);
     }
     if matches!(followup, Followup::Restoration) {
@@ -231,6 +235,17 @@ pub(super) fn run(followup: Followup) {
         let restored_stop = Stop(restored.clone());
         super::restoration_live::run(&restored, &app, &parent, &root, &fixture, &pam, &local);
         until("final restoration worker did not drain", || {
+            restored.prepare_quit()
+        });
+        drop(restored_stop);
+    }
+    if matches!(followup, Followup::SecureRestoration) {
+        let restored = make_window(&app, &parent, &root, &fixture, &pam);
+        let restored_stop = Stop(restored.clone());
+        super::secure_restoration_live::run(
+            &restored, &app, &parent, &root, &fixture, &pam, &local,
+        );
+        until("final secure restoration worker did not drain", || {
             restored.prepare_quit()
         });
         drop(restored_stop);

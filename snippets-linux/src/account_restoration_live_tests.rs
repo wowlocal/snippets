@@ -2,7 +2,7 @@
 use super::*;
 use crate::key_store::history::SwitchPhase;
 
-fn protected(root: &Path) -> Vec<Option<Zeroizing<Vec<u8>>>> {
+pub(super) fn protected(root: &Path) -> Vec<Option<Zeroizing<Vec<u8>>>> {
     [
         Slot::LibraryKey,
         Slot::Bootstrap,
@@ -26,13 +26,13 @@ fn reconnect(window: &Rc<AccountWindow>) {
     wait_work(window);
     assert!(window.sync.is_sensitive());
 }
-fn selected_review(history: &adw::Dialog) -> gtk::Button {
+pub(super) fn selected_review(history: &adw::Dialog, title: &str) -> gtk::Button {
     let mut widgets = vec![history.clone().upcast::<gtk::Widget>()];
     let mut selected = false;
     while let Some(widget) = widgets.pop() {
         if let Some(row) = widget.downcast_ref::<adw::ActionRow>() {
             if row.title().starts_with("Switch ") {
-                selected = row.title() == "Switch 1 · finished locally";
+                selected = row.title() == title;
             } else if selected && row.title() == "Restore Saved Local Changes" {
                 return button(row.upcast_ref(), "Review…");
             }
@@ -58,7 +58,7 @@ fn review(window: &Rc<AccountWindow>) -> adw::AlertDialog {
     });
     let history = window.history_dialog.borrow().clone().unwrap();
     assert!(history.title() == "Library Recovery History");
-    let selected = selected_review(&history);
+    let selected = selected_review(&history, "Switch 1 · finished locally");
     until("selected native saved-switch review did not map", || {
         selected.is_mapped() && selected.is_sensitive()
     });

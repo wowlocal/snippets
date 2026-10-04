@@ -548,9 +548,14 @@ computer-password authorization and a stale local edit preserve current files
 and keys. Fresh authorization restores the selected fields, keeps the current
 version as a disabled copy and retains unrelated records. Current cloud CAS/feed
 facts stay intact. A new worker reconnects explicitly before encrypted sync;
-the preserved copy is sent before the restored source. Protected, mixed-vault,
-foreign-vault and interrupted restoration, plus interrupted switching, remain
-separate checks.
+the preserved copy is sent before the restored source. Same-vault protected
+restoration also passes fresh vault passphrase/recovery verification followed by
+separate computer-password authorization. The whole ordinary/protected selection
+is restored; both current versions survive as disabled copies, while unrelated
+ordinary/protected records, vault wraps and active keys stay exact. A new worker
+requires explicit reconnect and fresh vault verification before encrypted sync.
+Mixed-vault, foreign-vault and interrupted restoration, plus interrupted switching,
+remain separate checks.
 
 **Library Creation Receipts** in Library Recovery History shows the retained
 requests and completed receipts without reading account credentials. Use
@@ -699,8 +704,8 @@ journal-only C1 source Keep/Delete also pass with retained child seals and
 separate originals. Prior-confirmed cloud-child Keep/Delete before parent
 Keep/Delete also passes all four native combinations with actual saved CAS.
 Unknown pending raw-child decisions, local-absence source review, unrelated
-ambiguous packets, switch-candidate pairing, interrupted switching and protected,
-mixed-vault, foreign-vault or interrupted restoration
+ambiguous packets, switch-candidate pairing, interrupted switching and mixed-vault,
+foreign-vault or interrupted restoration
 remain under live acceptance. Native recipient pairing and signed approval/recovery
 replacement now pass, including retained-request restart. The native
 interrupted-startup recovery fixture passes with temporary
@@ -730,7 +735,9 @@ the exact retained envelope or obtains fresh authorization to resend the origina
 proof. The old code cannot open the new envelope; the new code restores the same
 library key and synchronized record. Ordinary saved-history restoration now also
 passes, including current-version preservation and explicit reconnect/sync.
-Candidate pairing for switching, interrupted switching and protected, mixed-vault,
+Same-vault protected restoration also passes vault passphrase/recovery review,
+separate fresh PAM, both current-version copies and unrelated-record retention.
+Candidate pairing for switching, interrupted switching and mixed-vault,
 foreign-vault or interrupted library restoration remain under acceptance.
 
 ## Secure Snippets
@@ -1220,7 +1227,9 @@ reconciliation and freshly authorized original-proof replay after restart, follo
 by same-key recovery and encrypted synchronization. Ordinary saved-history
 restoration also passes current-version/unrelated-record preservation, current
 CAS/feed retention, new-worker reconnect and encrypted dependency ordering.
-Candidate pairing for switching, interrupted switching and protected, mixed-vault,
+Same-vault protected restoration also passes fresh vault and separate PAM
+authorization, exact unrelated records and encrypted preservation ordering.
+Candidate pairing for switching, interrupted switching and mixed-vault,
 foreign-vault or interrupted restoration remain under review.
 All three globally assigned actions, visible tray-menu selection/focus and re-registration
 with a restarted Omarchy host pass; see the latest implementation milestone.
@@ -1274,6 +1283,9 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 # Selected ordinary saved-history restoration: safe-default review, fresh PAM,
 # stale-primary refusal, current-version preservation and explicit encrypted sync.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --restoration
+# Whole ordinary/protected saved history, fresh vault passphrase/recovery and PAM,
+# stale ciphertext refusal, both current versions and unrelated records retained.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --secure-restoration
 # Two private native installations: retained public invitation, compare-code gate,
 # fresh PAM approval, original signed-request replay and claimed-key encrypted sync.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --pairing

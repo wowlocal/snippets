@@ -19,7 +19,7 @@ fn action(window: &Rc<AccountWindow>, label: &str) {
     press(window.window.upcast_ref(), label);
     wait_work(window);
 }
-fn vault_dialog(window: &Rc<AccountWindow>) -> (adw::AlertDialog, gtk::PasswordEntry) {
+pub(super) fn vault_dialog(window: &Rc<AccountWindow>) -> (adw::AlertDialog, gtk::PasswordEntry) {
     press(window.window.upcast_ref(), "Verify Vault and Sync…");
     until("native vault synchronization dialog did not map", || {
         window
@@ -46,7 +46,7 @@ fn finished(window: &Rc<AccountWindow>, entry: &gtk::PasswordEntry) {
     );
     assert!(window.worker.can_quit());
 }
-fn mode(dialog: &adw::AlertDialog) -> gtk::CheckButton {
+pub(super) fn mode(dialog: &adw::AlertDialog) -> gtk::CheckButton {
     let mut widgets = vec![dialog.extra_child().unwrap()];
     while let Some(widget) = widgets.pop() {
         if let Some(button) = widget.downcast_ref::<gtk::CheckButton>()
@@ -83,7 +83,7 @@ fn projected(document: &Document, id: uuid::Uuid) -> Envelope {
     .remove(&id)
     .unwrap()
 }
-fn body(document: &Document, id: uuid::Uuid, key: &RootKey) -> Zeroizing<Vec<u8>> {
+pub(super) fn body(document: &Document, id: uuid::Uuid, key: &RootKey) -> Zeroizing<Vec<u8>> {
     let record = document
         .records
         .iter()
@@ -113,12 +113,12 @@ fn data_counts(fixture: &server::Fixture) -> (usize, usize) {
     let state = fixture.state.lock().unwrap();
     (state.fetches, state.batches)
 }
-fn no_session_key(root: &Path, id: uuid::Uuid) {
+pub(super) fn no_session_key(root: &Path, id: uuid::Uuid) {
     let library = model::Library::open(root.into()).unwrap();
     let mut vault = Vault::open(&library).unwrap();
     assert!(!vault.is_unlocked() && vault.body(id).is_err());
 }
-fn edit(document: &mut Document, id: uuid::Uuid, body: &[u8], key: &RootKey) {
+pub(super) fn edit(document: &mut Document, id: uuid::Uuid, body: &[u8], key: &RootKey) {
     let salt = document.salt().unwrap();
     let record = document
         .records
