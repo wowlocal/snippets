@@ -246,6 +246,9 @@ impl Fixture {
         Some(value["unlocked"].as_bool().unwrap())
     }
     fn unlock_editor(&self, app: &Process, count: usize) {
+        self.unlock_editor_with(app, count, &self.password);
+    }
+    fn open_editor(&self, app: &Process) {
         let activated = ProcessCommand::new("gdbus")
             .args([
                 "call",
@@ -266,9 +269,12 @@ impl Fixture {
         until("actual secure editor activation", 10, || {
             active_window(app.id(), "Secure Snippets")
         });
+    }
+    fn unlock_editor_with(&self, app: &Process, count: usize, password: &str) {
+        self.open_editor(app);
         self.status(count);
         assert!(self.action_in(app, "Secure Snippets", "editor-unlock", None) == 0);
-        assert!(self.action_in(app, "Secure Snippets", "input", Some(&self.password)) == 0);
+        assert!(self.action_in(app, "Secure Snippets", "input", Some(password)) == 0);
         assert!(self.action_in(app, "Secure Snippets", "editor-authenticate", None) == 0);
         println!("The actual native editor credential was submitted; awaiting unlocked status.");
         until("actual editor session unlocked", 30, || self.state(count));
@@ -348,7 +354,15 @@ impl Fixture {
                 "The native owned control must be unique and available; action={mode}, status={code}, flags={}.",
                 String::from_utf8_lossy(&output.stdout)
             );
-            settle(Duration::from_millis(150));
+            if mode == "editor-body" && code != 0 {
+                println!(
+                    "Protected body state: status={code}, {}",
+                    String::from_utf8_lossy(&output.stdout)
+                );
+            }
+            // GtkButton::activate animates for 250 ms before emitting clicked.
+            // Do not inspect focus, issue keys or assert cancellation before it runs.
+            settle(Duration::from_millis(350));
             return code;
         }
     }
@@ -374,11 +388,22 @@ impl Fixture {
     }
     fn press(&self, app: &Process, key: &str) {
         assert!(matches!(key, "tab" | "space"));
+        self.key_in(app, "Snippets CLI Request", "", key);
+    }
+    fn key_in(&self, app: &Process, title: &str, mods: &str, key: &str) {
+        assert!(matches!(title, "Snippets CLI Request" | "Secure Snippets"));
+        assert!(matches!(mods, "" | "CTRL" | "CTRL SHIFT"));
+        assert!(
+            matches!(key, "tab" | "space" | "return" | "backspace" | "escape")
+                || key.len() == 1 && key.bytes().all(|v| v.is_ascii_alphanumeric())
+        );
         let window = query("activewindow");
-        assert!(active(app.id()) && desktop::session_state() == SessionState::Unlocked);
+        assert!(
+            active_window(app.id(), title) && desktop::session_state() == SessionState::Unlocked
+        );
         let address = window["address"].as_str().unwrap();
         assert!(address.starts_with("0x") && address[2..].bytes().all(|c| c.is_ascii_hexdigit()));
-        let fields = format!("mods = \"\", key = \"{key}\", window = \"address:{address}\"");
+        let fields = format!("mods = \"{mods}\", key = \"{key}\", window = \"address:{address}\"");
         let expression = format!(
             "assert(hl.dispatch(hl.dsp.send_key_state({{ {fields}, state = \"down\" }})).ok) hl.timer(function() hl.dispatch(hl.dsp.send_key_state({{ {fields}, state = \"up\" }})) end, {{ timeout = 50, type = \"oneshot\" }})"
         );
@@ -388,6 +413,33 @@ impl Fixture {
             .unwrap();
         assert!(sent.status.success() && sent.stdout.trim_ascii() == b"ok");
         settle(Duration::from_millis(150));
+    }
+    #[track_caller]
+    fn reference_editor(&self, expected: &str, password: &str) {
+        model::atomic_write(&self.input, expected.as_bytes()).unwrap();
+        let mut child = ProcessCommand::new("python3")
+            .arg("-B")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/control-vault.py"))
+            .arg(self.root.join("Vault/vault.json"))
+            .arg(&self.input)
+            .arg("editor")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(password.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success() && output.stderr.is_empty(),
+            "OpenSSL must authenticate the actual editor-created seal, hash and passphrase wrap; static result={}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
     fn finish(&self, app: &Process, cli: &mut Process, code: i32, body: Option<&[u8]>) {
         self.finish_within(app, cli, code, body, 30);
@@ -434,6 +486,9 @@ impl Fixture {
         )
     }
     fn assert_diagnostics(&self, id: uuid::Uuid) {
+        self.assert_diagnostics_extra(id, &[]);
+    }
+    fn assert_diagnostics_extra(&self, id: uuid::Uuid, extra: &[&str]) {
         let mut retained_events = 0;
         for path in self.root.join("Diagnostics/Logs").read_dir().unwrap() {
             let path = path.unwrap().path();
@@ -477,10 +532,156 @@ impl Fixture {
                         self.root.to_str().unwrap(),
                     ],
                 );
+                check(&event, extra);
             }
         }
         assert!(retained_events > 0);
     }
+}
+
+#[test]
+#[ignore = "unlocked Omarchy; actual installed Release secure editor, public private-root fixture only"]
+fn live_installed_secure_editor_edit_and_passphrase() {
+    assert!(
+        std::env::var_os("SNIPPETS_CONTROL_LIVE").as_deref()
+            == Some(std::ffi::OsStr::new("public-private-roots"))
+    );
+    assert!(
+        std::env::var_os("DBUS_SESSION_BUS_ADDRESS")
+            != std::env::var_os("SNIPPETS_CONTROL_HOST_BUS")
+    );
+    assert!(desktop::session_state() == SessionState::Unlocked);
+    adw::init().unwrap();
+    let fixture = Fixture::new();
+    let mut app = fixture.start(1);
+    let original = fixture.images();
+    fixture.unlock_editor(&app, 1);
+    fixture.key_in(&app, "Secure Snippets", "CTRL", "n");
+    for (mode, value) in [
+        ("editor-name", "Public editor created entry"),
+        ("editor-keyword", "public-editor-created"),
+        ("editor-tags", "Public, Editor"),
+    ] {
+        assert!(fixture.action_in(&app, "Secure Snippets", mode, Some(value)) == 0);
+    }
+    assert!(
+        fixture.images() == original,
+        "An unsaved encrypted draft must not publish a record."
+    );
+    assert!(fixture.action_in(&app, "Secure Snippets", "editor-reveal", None) == 0);
+    assert!(fixture.action_in(&app, "Secure Snippets", "editor-body", None) == 0);
+    let expected = "public\tbody\ntext";
+    for character in expected.chars() {
+        let key = match character {
+            '\t' => "tab".into(),
+            '\n' => "return".into(),
+            value => value.to_string(),
+        };
+        fixture.key_in(&app, "Secure Snippets", "", &key);
+    }
+    fixture.key_in(&app, "Secure Snippets", "CTRL", "s");
+    fixture.status_state(2, true);
+    fixture.reference_editor(expected, &fixture.password);
+    let document = Document::decode(fixture.images().1.as_ref().unwrap()).unwrap();
+    let record = document
+        .records
+        .iter()
+        .find(|r| r.metadata.keyword == "public-editor-created")
+        .unwrap();
+    let id = record.metadata.id;
+    assert!(
+        record.metadata.name == "Public editor created entry"
+            && record.metadata.tags == ["Public", "Editor"]
+    );
+    assert!(fixture.images().0 == original.0);
+
+    fixture.key_in(&app, "Secure Snippets", "", "backspace");
+    fixture.key_in(&app, "Secure Snippets", "CTRL", "s");
+    fixture.reference_editor("public\tbody\ntex", &fixture.password);
+    for (mode, body) in [
+        ("editor-undo", expected),
+        ("editor-redo", "public\tbody\ntex"),
+        ("editor-undo", expected),
+    ] {
+        assert!(fixture.action_in(&app, "Secure Snippets", mode, None) == 0);
+        fixture.key_in(&app, "Secure Snippets", "CTRL", "s");
+        fixture.reference_editor(body, &fixture.password);
+    }
+    assert!(fixture.action_in(&app, "Secure Snippets", "editor-body", None) == 0);
+    fixture.key_in(&app, "Secure Snippets", "", "escape");
+    fixture.key_in(&app, "Secure Snippets", "", "z");
+    fixture.key_in(&app, "Secure Snippets", "CTRL", "s");
+    fixture.reference_editor(expected, &fixture.password);
+    // One click must reveal again after Escape; typing then proves actual body input.
+    assert!(fixture.action_in(&app, "Secure Snippets", "editor-reveal", None) == 0);
+    fixture.key_in(&app, "Secure Snippets", "", "z");
+    fixture.key_in(&app, "Secure Snippets", "CTRL", "s");
+    fixture.reference_editor("public\tbody\ntextz", &fixture.password);
+    assert!(fixture.action_in(&app, "Secure Snippets", "editor-undo", None) == 0);
+    fixture.key_in(&app, "Secure Snippets", "CTRL", "s");
+    fixture.reference_editor(expected, &fixture.password);
+    println!(
+        "Actual protected native keyboard input, saved metadata, OpenSSL-authenticated body/hash, Undo/Redo and Escape/reveal passed without an accessible text interface."
+    );
+
+    let before_change = fixture.images();
+    let new_password = Zeroizing::new("Public changed vault passphrase".to_owned());
+    for confirm in [false, true] {
+        assert!(fixture.action_in(&app, "Secure Snippets", "editor-passphrase", None) == 0);
+        for (mode, value) in [
+            ("pw-current", &*fixture.password),
+            ("pw-new", &*new_password),
+            ("pw-confirm", &*new_password),
+        ] {
+            assert!(fixture.action_in(&app, "Secure Snippets", mode, Some(value)) == 0);
+        }
+        assert!(
+            fixture.action_in(
+                &app,
+                "Secure Snippets",
+                if confirm { "editor-change" } else { "cancel" },
+                None
+            ) == 0
+        );
+        if confirm {
+            until("actual native passphrase publication", 30, || {
+                fixture.images().1 != before_change.1
+            });
+        } else {
+            assert!(fixture.images() == before_change);
+        }
+    }
+    fixture.reference_editor(expected, &new_password);
+    let after_change = fixture.images();
+    let before_doc = Document::decode(before_change.1.as_ref().unwrap()).unwrap();
+    let after_doc = Document::decode(after_change.1.as_ref().unwrap()).unwrap();
+    assert!(
+        before_doc.records == after_doc.records
+            && before_doc.wrap_recovery == after_doc.wrap_recovery
+            && before_doc.vault_salt == after_doc.vault_salt
+            && before_doc.wrap_pass != after_doc.wrap_pass
+            && before_doc.kdf != after_doc.kdf
+            && after_change.0 == original.0
+    );
+    assert!(fixture.action_in(&app, "Secure Snippets", "editor-lock", None) == 0);
+    fixture.status(2);
+    assert!(fixture.action_in(&app, "Secure Snippets", "editor-unlock", None) == 0);
+    assert!(fixture.action_in(&app, "Secure Snippets", "input", Some(&fixture.password)) == 0);
+    assert!(fixture.action_in(&app, "Secure Snippets", "editor-authenticate", None) == 0);
+    settle(Duration::from_secs(2));
+    fixture.status(2);
+    assert!(fixture.images() == after_change);
+    fixture.unlock_editor_with(&app, 2, &new_password);
+    fixture.reference_editor(expected, &new_password);
+    fixture.stop(&mut app);
+    fixture.assert_diagnostics_extra(
+        id,
+        &[expected, &new_password, "Public editor created entry"],
+    );
+    assert!(!fixture.root.join("Sync").exists());
+    println!(
+        "Actual native passphrase cancellation/change, preserved secure seals/recovery door, explicit lock, old-password refusal and new-password unlock passed with independent OpenSSL verification."
+    );
 }
 
 #[test]

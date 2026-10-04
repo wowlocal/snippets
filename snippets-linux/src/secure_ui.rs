@@ -460,6 +460,16 @@ impl Workspace {
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak = Rc::downgrade(&this);
         keys.connect_key_pressed(move |_, key, _, mods| {
+            if key == gtk::gdk::Key::Escape
+                && let Some(this) = weak.upgrade()
+                && this.editor.area.has_focus()
+            {
+                // Keep the toggle and protected renderer in the same state.
+                // Otherwise the next Reveal click only clears a stale toggle.
+                this.reveal.set_active(false);
+                this.editor.reveal(false);
+                return glib::Propagation::Stop;
+            }
             if mods.contains(gtk::gdk::ModifierType::CONTROL_MASK)
                 && let Some(this) = weak.upgrade()
             {
@@ -957,16 +967,21 @@ impl Workspace {
             .placeholder_text("Current passphrase or recovery key")
             .show_peek_icon(false)
             .build();
+        credential.update_property(&[gtk::accessible::Property::Label("Current vault credential")]);
         fields.append(&credential);
         let passphrase = gtk::PasswordEntry::builder()
             .placeholder_text("New passphrase")
             .show_peek_icon(false)
             .build();
+        passphrase.update_property(&[gtk::accessible::Property::Label("New vault passphrase")]);
         fields.append(&passphrase);
         let confirmation = gtk::PasswordEntry::builder()
             .placeholder_text("Confirm new passphrase")
             .show_peek_icon(false)
             .build();
+        confirmation.update_property(&[gtk::accessible::Property::Label(
+            "Confirm new vault passphrase",
+        )]);
         fields.append(&confirmation);
         dialog.set_extra_child(Some(&fields));
         dialog.add_responses(&[("cancel", "Cancel"), ("change", "Change")]);

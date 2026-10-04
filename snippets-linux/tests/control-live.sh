@@ -41,12 +41,13 @@ fi
 if [[ $# -lt 2 || $# -gt 3 || ! -x $1 || ! -d $2 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${DBUS_SESSION_BUS_ADDRESS:-} || -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ||
       -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: control-live.sh /path/to/library-test-binary /absolute/path/to/release-directory [unlocked-editor] (unlocked Omarchy)' >&2
+  printf '%s\n' 'Usage: control-live.sh /path/to/library-test-binary /absolute/path/to/release-directory [unlocked-editor|secure-editor] (unlocked Omarchy)' >&2
   exit 2
 fi
 case ${3:-} in
   '') fixture_test=control_ui::live_tests::live_installed_cli_secure_create_and_reveal ;;
   unlocked-editor) fixture_test=control_ui::live_tests::live_installed_cli_does_not_borrow_unlocked_editor ;;
+  secure-editor) fixture_test=control_ui::live_tests::live_installed_secure_editor_edit_and_passphrase ;;
   *) exit 2 ;;
 esac
 for binary in snippets snippets-cli snippets-owner-auth; do

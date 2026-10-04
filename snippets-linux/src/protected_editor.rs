@@ -106,6 +106,7 @@ pub struct ProtectedEditor {
 impl ProtectedEditor {
     pub fn new(vault: Rc<RefCell<Vault>>) -> Rc<Self> {
         let area = gtk::DrawingArea::builder()
+            .accessible_role(gtk::AccessibleRole::Group)
             .focusable(true)
             .hexpand(true)
             .vexpand(true)

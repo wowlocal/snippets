@@ -1273,6 +1273,9 @@ bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary 
 # Start each secure CLI request with an actually unlocked native editor.
 bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
   /absolute/path/to/cargo-target/release unlocked-editor
+# Native protected keyboard editing, Undo/Redo, Escape/reveal and passphrase change.
+bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
+  /absolute/path/to/cargo-target/release secure-editor
 # Optional independent reader check; requires zbarimg (Arch package: zbar).
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib recovery_qr::tests::independent_reader -- --ignored --test-threads=1
@@ -1326,6 +1329,17 @@ minutes because it preserves the real 30/60-second deadlines. The
 GApplication action and unlocks it through its real password dialog before each
 request. Its bounded read-only status probes can repeat a failed admission while
 the nonblocking common file lock is occupied. Secure requests are never retried.
+The `secure-editor` variant enters a public fictional body using real native
+keyboard events, saves it through Ctrl+S and independently authenticates the
+saved seal, content hash and passphrase wrap with OpenSSL. It checks metadata,
+Undo/Redo, hidden-input refusal after Escape, single-click reveal afterward,
+passphrase cancellation/change, explicit lock, old-password refusal and
+new-password unlock. The protected drawing surface exposes only a static
+accessible label and keyboard instructions; the actor requires actual focus
+and refuses any AT-SPI Text or EditableText interface on that surface. It never
+reads the body through accessibility. Button actions allow GTK's 250 ms native
+activation animation to finish before sending subsequent input. The events
+exercise the compositor path; physical keyboard and other IME input are separate.
 
 Local-owner tests exercise libpam against a disposable private policy and a
 public fictional password module. They cover incorrect passwords, account

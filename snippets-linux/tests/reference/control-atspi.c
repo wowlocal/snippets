@@ -31,9 +31,30 @@ static void visit(AtspiAccessible *item, guint depth, gboolean scoped) {
     strcmp(mode,"cancel") == 0 ? "Cancel" :
     strcmp(mode,"editor-unlock") == 0 ? "Unlock…" :
     strcmp(mode,"editor-authenticate") == 0 ? "Unlock" :
+    strcmp(mode,"editor-name") == 0 ? "Secure snippet name" :
+    strcmp(mode,"editor-keyword") == 0 ? "Secure snippet keyword" :
+    strcmp(mode,"editor-tags") == 0 ? "Secure snippet tags" :
+    strcmp(mode,"editor-reveal") == 0 ? "Reveal to Edit" :
+    strcmp(mode,"editor-undo") == 0 ? "Undo protected body edit" :
+    strcmp(mode,"editor-redo") == 0 ? "Redo protected body edit" :
+    strcmp(mode,"editor-lock") == 0 ? "Lock" :
+    strcmp(mode,"editor-passphrase") == 0 ? "Change Passphrase…" :
+    strcmp(mode,"editor-change") == 0 ? "Change" :
+    strcmp(mode,"pw-current") == 0 ? "Current vault credential" :
+    strcmp(mode,"pw-new") == 0 ? "New vault passphrase" :
+    strcmp(mode,"pw-confirm") == 0 ? "Confirm new vault passphrase" :
+    strcmp(mode,"editor-body") == 0 ? "Protected content. Reveal to edit. Copy and text extraction are disabled." :
     (!strcmp(mode,"recovery") || !strcmp(mode,"recovery-selected")) ? "Use recovery key" : NULL;
   gboolean match = scoped && showing(item) && wanted && name && strcmp(wanted,name) == 0 &&
-    (role == ATSPI_ROLE_PUSH_BUTTON || role == ATSPI_ROLE_CHECK_BOX);
+    (role == ATSPI_ROLE_PUSH_BUTTON || role == ATSPI_ROLE_CHECK_BOX || role == ATSPI_ROLE_TOGGLE_BUTTON);
+  if (scoped && showing(item) && wanted && name && !strcmp(wanted,name) &&
+      (!strcmp(mode,"editor-name") || !strcmp(mode,"editor-keyword") ||
+       !strcmp(mode,"editor-tags") || !strcmp(mode,"pw-current") ||
+       !strcmp(mode,"pw-new") || !strcmp(mode,"pw-confirm"))) {
+    AtspiEditableText *text=atspi_accessible_get_editable_text_iface(item);
+    match=text!=NULL;g_clear_object(&text);
+  }
+  if (scoped && showing(item) && !strcmp(mode,"editor-body") && wanted && name && !strcmp(wanted,name)) match=TRUE;
   if (scoped && showing(item) && strcmp(mode,"input") == 0 && role == ATSPI_ROLE_PASSWORD_TEXT) {
     AtspiEditableText *text = atspi_accessible_get_editable_text_iface(item);
     match = text != NULL; g_clear_object(&text);
@@ -55,7 +76,12 @@ int main(int argc,char **argv) {
   if (strcmp(mode,"approve") && strcmp(mode,"deny") && strcmp(mode,"authenticate") &&
       strcmp(mode,"cancel") && strcmp(mode,"recovery") &&
       strcmp(mode,"recovery-selected") && strcmp(mode,"input") &&
-      strcmp(mode,"editor-unlock") && strcmp(mode,"editor-authenticate")) return 2;
+      strcmp(mode,"editor-unlock") && strcmp(mode,"editor-authenticate") &&
+      strcmp(mode,"editor-name") && strcmp(mode,"editor-keyword") && strcmp(mode,"editor-tags") &&
+      strcmp(mode,"editor-reveal") && strcmp(mode,"editor-body") &&
+      strcmp(mode,"editor-undo") && strcmp(mode,"editor-redo") && strcmp(mode,"editor-lock") &&
+      strcmp(mode,"editor-passphrase") && strcmp(mode,"editor-change") &&
+      strcmp(mode,"pw-current") && strcmp(mode,"pw-new") && strcmp(mode,"pw-confirm")) return 2;
   const char *value = g_getenv("SNIPPETS_CONTROL_TEST_PID");
   if (!value || !*value) return 2;
   char *end = NULL; unsigned long parsed = strtoul(value,&end,10);
@@ -80,14 +106,29 @@ int main(int argc,char **argv) {
       atspi_state_set_contains(states,ATSPI_STATE_SENSITIVE);
     g_clear_object(&states);
     if (!ready) result = 6;
-    else if (!strcmp(mode,"recovery") || !strcmp(mode,"recovery-selected")) {
+    else if (!strcmp(mode,"editor-body")) {
+      AtspiText *text=atspi_accessible_get_text_iface(target);
+      AtspiEditableText *editable=atspi_accessible_get_editable_text_iface(target);
+      if (text || editable) result=12;
+      else {
+        states=atspi_accessible_get_state_set(target);
+        printf("protected_body_focusable=%d,protected_body_focused=%d\n",
+          states && atspi_state_set_contains(states,ATSPI_STATE_FOCUSABLE),
+          states && atspi_state_set_contains(states,ATSPI_STATE_FOCUSED));
+        if (!states || !atspi_state_set_contains(states,ATSPI_STATE_FOCUSED)) result=11;
+        g_clear_object(&states);
+      }
+      g_clear_object(&text);g_clear_object(&editable);
+    } else if (!strcmp(mode,"recovery") || !strcmp(mode,"recovery-selected")) {
       /* GTK 4 provides neither an action nor component focus for this control.
        * Observe native focus/check state; the fixture navigates with real keys. */
       states=atspi_accessible_get_state_set(target);
       AtspiStateType state=!strcmp(mode,"recovery") ? ATSPI_STATE_FOCUSED : ATSPI_STATE_CHECKED;
       if (!states || !atspi_state_set_contains(states,state)) result=11;
       g_clear_object(&states);
-    } else if (strcmp(mode,"input") == 0) {
+    } else if (!strcmp(mode,"input") || !strcmp(mode,"editor-name") ||
+               !strcmp(mode,"editor-keyword") || !strcmp(mode,"editor-tags") ||
+               !strcmp(mode,"pw-current") || !strcmp(mode,"pw-new") || !strcmp(mode,"pw-confirm")) {
       char buffer[4097] = {0}; size_t size = fread(buffer,1,sizeof(buffer),stdin);
       if (!size || size>4096 || memchr(buffer,0,size)) result = 7;
       else {
