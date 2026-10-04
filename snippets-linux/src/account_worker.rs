@@ -745,7 +745,7 @@ pub(crate) struct Handle {
     automatic: Arc<Mutex<Automatic>>,
     wake: Arc<AtomicU8>,
     #[cfg(test)]
-    interrupt_handover: Arc<AtomicBool>,
+    interrupt_handover: Arc<AtomicU8>,
 }
 enum Event {
     Command(Box<Command>),
@@ -954,7 +954,7 @@ impl Handle {
         let waking = wake.clone();
         let cancellation = control.clone();
         #[cfg(test)]
-        let interrupt_handover = Arc::new(AtomicBool::new(false));
+        let interrupt_handover = Arc::new(AtomicU8::new(0));
         #[cfg(test)]
         let interruption = interrupt_handover.clone();
         std::thread::Builder::new()
@@ -987,11 +987,20 @@ impl Handle {
                     let (reply, retained, automatic) = match task {
                         Some(task) => {
                             #[cfg(test)]
-                            let interrupt = matches!(&task.command, Command::CommitHandover { .. })
-                                && interruption.swap(false, Ordering::SeqCst);
+                            let interrupt =
+                                if matches!(&task.command, Command::CommitHandover { .. }) {
+                                    match interruption.swap(0, Ordering::SeqCst) {
+                                        0 => None,
+                                        1 => Some(handover::Interruption::BeforePublication),
+                                        2 => Some(handover::Interruption::BeforeActivation),
+                                        _ => unreachable!("invalid native handover interruption"),
+                                    }
+                                } else {
+                                    None
+                                };
                             #[cfg(test)]
-                            let (reply, retained, automatic) = if interrupt {
-                                handover::with_activation_interruption(|| {
+                            let (reply, retained, automatic) = if let Some(point) = interrupt {
+                                handover::with_interruption(point, || {
                                     operate(Event::Command(Box::new(task.command)))
                                 })
                             } else {
@@ -1031,8 +1040,11 @@ impl Handle {
         })
     }
     #[cfg(test)]
-    pub(crate) fn interrupt_next_handover_activation(&self) {
-        assert!(!self.interrupt_handover.swap(true, Ordering::SeqCst));
+    pub(crate) fn interrupt_next_handover(&self, point: handover::Interruption) {
+        assert_eq!(
+            self.interrupt_handover.swap(point as u8, Ordering::SeqCst),
+            0
+        );
     }
     pub(crate) fn request(&self, command: Command) -> Result<mpsc::Receiver<Result<Reply>>> {
         let (response, receiver) = mpsc::sync_channel(1);

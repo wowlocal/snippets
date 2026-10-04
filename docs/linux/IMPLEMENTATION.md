@@ -5802,3 +5802,32 @@ fresh worker, not process death or every interruption boundary. Unpublished
 cancellation and the other finite gates remain open, alongside the independent
 GTK chooser cancellation defect. The user archive is refreshed from the clean
 rebased checkpoint; the existing installation and Stay Awake timer are preserved.
+
+### Native unpublished-switch cancellation (2026-10-05)
+
+The existing `--switch` cycle now also checks its already listed offline
+cancellation gate. After the original published-switch finish, encrypted sync
+and reverse switch, a fresh native review uses the exact saved target key.
+Actual private PAM authorizes the commit. Its test-only interruption occurs
+immediately after the real pending Secret Service review is saved, before target
+checkpoint publication. Active slots and primary/vault/checkpoint bytes stay exact;
+no pending review, receipt, candidate, key or journal is fabricated.
+
+The old account worker is observed live and terminal before a fresh offline
+worker maps Cancel Saved Library Switch. Default Keep Saved Switch, filled
+password Cancel, private PAM denial and actual credential focus loss preserve
+the exact pending review, slots and file bytes without HTTP. Fresh cancellation
+PAM changes only the saved entry's phase to cancelled; all earlier entries,
+source/target capabilities and receipt remain exact. The source key and checkpoint
+are unchanged. The native history shows the cancelled entry and active source;
+explicit reconnect/selection admits that same source key for sync afterward.
+
+Seventeen existing core cancellation/interruption/offline tests, both complete
+native switch and ordinary restoration cycles, format, shell syntax, all-target
+Clippy and Release harness/binaries pass on 324 frozen inputs under fatal warnings.
+Count remains 1,141, with no new test, runner option, acceptance variant, production
+policy or observation wait. The finite durable row removes unpublished-switch
+cancellation; other interruption/candidate-pairing gates remain. The independent
+GTK chooser cancellation defect and other six groups retain their status.
+The user archive is refreshed from the clean rebased checkpoint; the existing
+installation, user data and scheduled Stay Awake restoration remain untouched.

@@ -1839,7 +1839,7 @@ specific defect.
 | --- | --- |
 | Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
-| Durable recovery | Other interrupted switching/first-key setup, switch-candidate pairing and unpublished-switch cancellation remain. Native published-switch interruption before active-key replacement now terminates the old worker and finishes through a fresh offline worker with fresh PAM, exact saved target keys and no HTTP; reconnect/selection is required before sync. Native first-key setup also resumes an accepted-but-lost TLS reply with the original capability and no repeat POST. Core crash cuts, native restoration cuts and actual SIGKILL/offline restoration already pass, including a historical missing-header archive and native old-JSON selection with the source file removed before completion. |
+| Durable recovery | Other interrupted switching/first-key setup and switch-candidate pairing remain. Fresh native workers finish the exact published switch or cancel the exact unpublished switch offline with fresh PAM and no HTTP. The current primary/vault/checkpoint bytes and saved capabilities stay intact; reconnect/selection is required before sync. Native first-key setup also resumes an accepted-but-lost TLS reply with the original capability and no repeat POST. Core crash cuts, native restoration cuts and actual SIGKILL/offline restoration already pass, including a historical missing-header archive and native old-JSON selection with the source file removed before completion. |
 | Remaining conflict decisions | Unrelated ambiguous packets. Native local-absence secure source Keep/Delete, Unknown pending raw-child Keep/Delete before parent Keep, existing current/nested/prior-confirmed combinations and native history retirement/unused-file cleanup pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
@@ -2215,3 +2215,32 @@ fresh worker, not process death or every interruption boundary. Unpublished
 cancellation and the other finite gates remain open, alongside the independent
 GTK chooser cancellation defect. The user archive is refreshed from the clean
 rebased checkpoint; the existing installation and Stay Awake timer are preserved.
+
+## Native unpublished-switch cancellation (2026-10-05)
+
+The existing `--switch` cycle now also checks its already listed offline
+cancellation gate. After the original published-switch finish, encrypted sync
+and reverse switch, a fresh native review uses the exact saved target key.
+Actual private PAM authorizes the commit. Its test-only interruption occurs
+immediately after the real pending Secret Service review is saved, before target
+checkpoint publication. Active slots and primary/vault/checkpoint bytes stay exact;
+no pending review, receipt, candidate, key or journal is fabricated.
+
+The old account worker is observed live and terminal before a fresh offline
+worker maps Cancel Saved Library Switch. Default Keep Saved Switch, filled
+password Cancel, private PAM denial and actual credential focus loss preserve
+the exact pending review, slots and file bytes without HTTP. Fresh cancellation
+PAM changes only the saved entry's phase to cancelled; all earlier entries,
+source/target capabilities and receipt remain exact. The source key and checkpoint
+are unchanged. The native history shows the cancelled entry and active source;
+explicit reconnect/selection admits that same source key for sync afterward.
+
+Seventeen existing core cancellation/interruption/offline tests, both complete
+native switch and ordinary restoration cycles, format, shell syntax, all-target
+Clippy and Release harness/binaries pass on 324 frozen inputs under fatal warnings.
+Count remains 1,141, with no new test, runner option, acceptance variant, production
+policy or observation wait. The finite durable row removes unpublished-switch
+cancellation; other interruption/candidate-pairing gates remain. The independent
+GTK chooser cancellation defect and other six groups retain their status.
+The user archive is refreshed from the clean rebased checkpoint; the existing
+installation, user data and scheduled Stay Awake restoration remain untouched.

@@ -22,22 +22,37 @@ const SLOTS: [(Slot, &str); 5] = [
 const CANDIDATE_SLOTS: [Slot; 2] = [Slot::BootstrapCandidate, Slot::PairingCandidate];
 
 #[cfg(test)]
-thread_local! {
-    static INTERRUPT_ACTIVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum Interruption {
+    BeforePublication = 1,
+    BeforeActivation = 2,
 }
-/// Inject the existing before-key-write failure boundary only for a native
-/// fixture's real reviewed commit. Journal publication and PAM stay unchanged.
 #[cfg(test)]
-pub(crate) fn with_activation_interruption<T>(operation: impl FnOnce() -> T) -> T {
+thread_local! {
+    static INTERRUPTION: std::cell::Cell<Option<Interruption>> = const { std::cell::Cell::new(None) };
+}
+/// Interpose an existing durable boundary in a native fixture's real reviewed
+/// commit. Review staging, Secret Service and PAM consent stay unchanged.
+#[cfg(test)]
+pub(crate) fn with_interruption<T>(point: Interruption, operation: impl FnOnce() -> T) -> T {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
-            INTERRUPT_ACTIVATION.set(false);
+            INTERRUPTION.set(None);
         }
     }
-    assert!(!INTERRUPT_ACTIVATION.replace(true));
+    assert!(INTERRUPTION.replace(Some(point)).is_none());
     let _reset = Reset;
     operation()
+}
+#[cfg(test)]
+fn interrupt_at(point: Interruption) -> Result<()> {
+    if INTERRUPTION.get() == Some(point) {
+        INTERRUPTION.set(None);
+        return Err(secret_store::Failure::Unavailable.into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1249,6 +1264,8 @@ fn commit_locked<B: Backend, R: super::Remote + receiver::Remote>(
     review.entry.check_slots(owner, false)?;
     archive.entries.push(review.entry);
     archive.save(owner)?;
+    #[cfg(test)]
+    interrupt_at(Interruption::BeforePublication)?;
     resume_archive(owner, remote, archive, validate_session)
 }
 pub fn resume<B: Backend>(
@@ -1345,8 +1362,8 @@ fn resume_archive<B: Backend, R: super::Remote + receiver::Remote>(
         let current = owner.read(*slot)?;
         if current.as_deref().map(Vec::as_slice) != entry.target(index) {
             #[cfg(test)]
-            if *slot == Slot::LibraryKey && INTERRUPT_ACTIVATION.replace(false) {
-                return Err(secret_store::Failure::Unavailable.into());
+            if *slot == Slot::LibraryKey {
+                interrupt_at(Interruption::BeforeActivation)?;
             }
             owner.replace(
                 *slot,

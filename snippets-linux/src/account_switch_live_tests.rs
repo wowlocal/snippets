@@ -79,15 +79,39 @@ fn finished(window: &Rc<AccountWindow>, entry: Option<&gtk::PasswordEntry>) {
     }
     assert!(window.worker.can_quit());
 }
-fn local_password(window: &Rc<AccountWindow>) -> (adw::AlertDialog, gtk::PasswordEntry) {
-    let dialog = review(
-        window,
-        "Finish Saved Switch Offline…",
-        "Finish the Saved Switch Offline?",
-        "back",
-    );
-    assert!(dialog.body().contains("No server is contacted"));
-    press(dialog.upcast_ref(), "Finish Locally");
+enum SavedAction {
+    Finish,
+    Cancel,
+}
+fn saved_password(
+    window: &Rc<AccountWindow>,
+    action: SavedAction,
+) -> (adw::AlertDialog, gtk::PasswordEntry) {
+    let (label, heading, response, password_heading) = match action {
+        SavedAction::Finish => (
+            "Finish Saved Switch Offline…",
+            "Finish the Saved Switch Offline?",
+            "Finish Locally",
+            "Authorize Local Switch Completion",
+        ),
+        SavedAction::Cancel => (
+            "Cancel Saved Library Switch…",
+            "Cancel the Saved Library Switch?",
+            "Cancel Switch",
+            "Authorize Switch Cancellation",
+        ),
+    };
+    let dialog = review(window, label, heading, "back");
+    if matches!(action, SavedAction::Finish) {
+        assert!(dialog.body().contains("No server is contacted"));
+    } else {
+        assert!(
+            dialog
+                .body()
+                .contains("candidate key stays in recovery history")
+        );
+    }
+    press(dialog.upcast_ref(), response);
     until("native offline completion password did not map", || {
         window
             .password_dialog
@@ -96,7 +120,7 @@ fn local_password(window: &Rc<AccountWindow>) -> (adw::AlertDialog, gtk::Passwor
             .is_some_and(|(dialog, entry)| dialog.is_mapped() && entry.is_mapped())
     });
     let (dialog, entry) = window.password_dialog.borrow().clone().unwrap();
-    assert!(dialog.heading().as_deref() == Some("Authorize Local Switch Completion"));
+    assert!(dialog.heading().as_deref() == Some(password_heading));
     assert!(
         dialog.default_response().as_deref() == Some("cancel")
             && dialog.close_response() == "cancel"
@@ -168,13 +192,13 @@ fn finish_offline(
         ("Public fictional password", "Cancel"),
         ("Public incorrect password", "Authorize"),
     ] {
-        let (dialog, entry) = local_password(&window);
+        let (dialog, entry) = saved_password(&window, SavedAction::Finish);
         entry.set_text(value);
         press(dialog.upcast_ref(), response);
         finished(&window, Some(&entry));
         unchanged();
     }
-    let (_dialog, entry) = local_password(&window);
+    let (_dialog, entry) = saved_password(&window, SavedAction::Finish);
     entry.set_text("Public fictional password");
     parent.present();
     until(
@@ -187,7 +211,7 @@ fn finish_offline(
     until("native offline completion did not regain focus", || {
         window.window.is_active()
     });
-    let (dialog, entry) = local_password(&window);
+    let (dialog, entry) = saved_password(&window, SavedAction::Finish);
     entry.set_text("Public fictional password");
     press(dialog.upcast_ref(), "Authorize");
     finished(&window, Some(&entry));
@@ -211,6 +235,129 @@ fn finish_offline(
     assert!(slot(root, Slot::LibraryKey).is_some_and(|key| key == target));
     println!(
         "Native published switch: before-key activation interruption, old worker termination, fresh offline worker, Cancel/PAM denial/focus refusal preserve exact intent; fresh PAM completes the saved target without HTTP, then explicit reconnect/selection admits sync."
+    );
+    (window, stop)
+}
+fn cancel_unpublished(
+    owned: (Rc<AccountWindow>, Stop),
+    app: &adw::Application,
+    parent: &adw::ApplicationWindow,
+    root: &Path,
+    fixture: &server::Fixture,
+    pam: &Pam,
+) -> (Rc<AccountWindow>, Stop) {
+    let (window, stop) = owned;
+    let saved = creation::images(root);
+    let slots = active(root);
+    let prior: serde_json::Value =
+        serde_json::from_slice(&slot(root, Slot::AccountReview).unwrap()).unwrap();
+    assert_eq!(prior["entries"].as_array().unwrap().len(), 2);
+    window.libraries.set_selected(2);
+    wait_work(&window);
+    assert!(window.switch_candidate.get() && !window.sync.is_sensitive());
+    window
+        .worker
+        .interrupt_next_handover(crate::key_store::handover::Interruption::BeforePublication);
+    let (dialog, entry) = password(&window);
+    entry.set_text("Public fictional password");
+    press(dialog.upcast_ref(), "Authorize");
+    finished(&window, Some(&entry));
+    assert!(window.switch_state.get().pending && !window.sync.is_sensitive());
+    assert!(active(root) == slots && creation::images(root) == saved);
+    let pending = slot(root, Slot::AccountReview).unwrap();
+    let document: serde_json::Value = serde_json::from_slice(&pending).unwrap();
+    let entries = document["entries"].as_array().unwrap();
+    assert!(entries.len() == 3 && entries[2]["phase"] == "pending");
+    assert!(entries[..2] == *prior["entries"].as_array().unwrap());
+    assert!(entries[2]["targetKey"] == entries[1]["source"]["libraryKey"]);
+    let requests = {
+        let mut state = fixture.state.lock().unwrap();
+        state.offline = true;
+        state.requests
+    };
+    assert_eq!(creation::account_workers(), 1);
+    until("unpublished switch worker did not drain", || {
+        window.prepare_quit()
+    });
+    drop(stop);
+    drop(window);
+    until("unpublished switch worker did not terminate", || {
+        creation::account_workers() == 0
+    });
+    let window = make_window(app, parent, root, fixture, pam);
+    let stop = Stop(window.clone());
+    assert_eq!(creation::account_workers(), 1);
+    assert!(window.switch_state.get().pending && !window.sync.is_sensitive());
+    let unchanged = || {
+        assert!(active(root) == slots && creation::images(root) == saved);
+        assert!(slot(root, Slot::AccountReview).is_some_and(|value| value == pending));
+        assert!(window.switch_state.get().pending && !window.sync.is_sensitive());
+        assert_eq!(fixture.state.lock().unwrap().requests, requests);
+    };
+    let dialog = review(
+        &window,
+        "Cancel Saved Library Switch…",
+        "Cancel the Saved Library Switch?",
+        "back",
+    );
+    press(dialog.upcast_ref(), "Keep Saved Switch");
+    finished(&window, None);
+    unchanged();
+    for (value, response) in [
+        ("Public fictional password", "Cancel"),
+        ("Public incorrect password", "Authorize"),
+    ] {
+        let (dialog, entry) = saved_password(&window, SavedAction::Cancel);
+        entry.set_text(value);
+        press(dialog.upcast_ref(), response);
+        finished(&window, Some(&entry));
+        unchanged();
+    }
+    let (_dialog, entry) = saved_password(&window, SavedAction::Cancel);
+    entry.set_text("Public fictional password");
+    parent.present();
+    until(
+        "native switch cancellation focus loss did not cancel",
+        || parent.is_active() && window.password_dialog.borrow().is_none() && !window.busy.get(),
+    );
+    finished(&window, Some(&entry));
+    unchanged();
+    window.window.present();
+    until("native switch cancellation did not regain focus", || {
+        window.window.is_active()
+    });
+    let (dialog, entry) = saved_password(&window, SavedAction::Cancel);
+    entry.set_text("Public fictional password");
+    press(dialog.upcast_ref(), "Authorize");
+    finished(&window, Some(&entry));
+    assert!(!window.switch_state.get().pending && !window.sync.is_sensitive());
+    assert!(active(root) == slots && creation::images(root) == saved);
+    assert_eq!(fixture.state.lock().unwrap().requests, requests);
+    let cancelled: serde_json::Value =
+        serde_json::from_slice(&slot(root, Slot::AccountReview).unwrap()).unwrap();
+    let mut expected = document["entries"].clone();
+    expected[2]["phase"] = serde_json::Value::String("cancelled".into());
+    assert!(cancelled["entries"] == expected);
+    let (_, catalog) = checkpoint_and_history(root);
+    assert!(
+        catalog.switches.len() == 3 && catalog.switches[2].phase == history::SwitchPhase::Cancelled
+    );
+    assert!(
+        catalog
+            .active
+            .as_ref()
+            .is_some_and(|library| library.id() == uuid::Uuid::from_u128(200))
+    );
+    fixture.state.lock().unwrap().offline = false;
+    press(window.window.upcast_ref(), "Reconnect Saved Account");
+    wait_work(&window);
+    assert!(window.libraries.selected() == 0 && !window.sync.is_sensitive());
+    window.libraries.set_selected(1);
+    wait_work(&window);
+    assert!(window.sync.is_sensitive() && !window.switch_candidate.get());
+    assert!(active(root) == slots && creation::images(root) == saved);
+    println!(
+        "Native unpublished switch: real pending intent before checkpoint publication, terminal old worker, fresh offline worker; Cancel/denied PAM/focus preserve exact state; fresh PAM cancels without HTTP and keeps source slots/checkpoint plus all candidate history, then reconnect selects the same source key."
     );
     (window, stop)
 }
@@ -259,7 +406,9 @@ pub(super) fn run(
 ) -> (Rc<AccountWindow>, Stop) {
     let (mut window, mut stop, interrupt) = owned;
     if interrupt {
-        window.worker.interrupt_next_handover_activation();
+        window
+            .worker
+            .interrupt_next_handover(crate::key_store::handover::Interruption::BeforeActivation);
     }
     let source_id = uuid::Uuid::from_u128(200);
     let target_id = uuid::Uuid::from_u128(201);
@@ -561,6 +710,14 @@ pub(super) fn run(
     assert!(state.creation_counts() == (3, 2) && state.bootstrap_posts == 2);
     drop(state);
     assert!(local_has(root, local));
+    if interrupt {
+        drop(stop);
+        drop(window);
+        until("previous switch worker did not terminate", || {
+            creation::account_workers() == 1
+        });
+        return cancel_unpublished((reopened, reopened_stop), app, parent, root, fixture, pam);
+    }
     until("reopened native switch worker did not drain", || {
         reopened.prepare_quit()
     });
