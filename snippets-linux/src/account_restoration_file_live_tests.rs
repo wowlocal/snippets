@@ -64,7 +64,10 @@ impl Drop for Input {
 // FileDialog really falls back to GTK on this private bus. We operate its
 // mapped widgets, never manufacture a callback result or a SourceFile ticket.
 #[allow(deprecated)]
-pub(super) fn chooser(window: &AccountWindow, multiple: bool) -> gtk::FileChooserDialog {
+pub(in crate::account_ui::live_tests) fn chooser(
+    window: &AccountWindow,
+    multiple: bool,
+) -> gtk::FileChooserDialog {
     let found = RefCell::new(None);
     until("native previous-vault file chooser did not map", || {
         let matching = gtk::Window::list_toplevels()
@@ -92,7 +95,10 @@ pub(super) fn chooser(window: &AccountWindow, multiple: bool) -> gtk::FileChoose
     dialog
 }
 #[allow(deprecated)]
-pub(super) fn respond(chooser: &gtk::FileChooserDialog, response: gtk::ResponseType) {
+pub(in crate::account_ui::live_tests) fn respond(
+    chooser: &gtk::FileChooserDialog,
+    response: gtk::ResponseType,
+) {
     let button = chooser
         .widget_for_response(response)
         .unwrap()

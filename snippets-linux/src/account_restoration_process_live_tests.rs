@@ -2,6 +2,9 @@
 use super::*;
 use gtk::gio;
 
+static REQUESTS: std::sync::OnceLock<std::sync::Weak<std::sync::Mutex<server::State>>> =
+    std::sync::OnceLock::new();
+
 pub(crate) fn stop_at_ordinary_write(root: &Path) {
     let Some(control) = std::env::var_os("SNIPPETS_RESTORATION_KILL_CONTROL") else {
         return;
@@ -24,6 +27,8 @@ pub(crate) fn stop_at_ordinary_write(root: &Path) {
             && control.is_dir()
     );
     assert!(root.join("Sync/primary.pending").is_file());
+    let fixture = REQUESTS.get().unwrap().upgrade().unwrap();
+    assert_eq!(fixture.lock().unwrap().requests, 0);
     model::atomic_write(
         &control.join("ready"),
         b"ordinary-written-before-vault-or-unwind\n",
@@ -100,12 +105,56 @@ fn pending_row(history: &adw::Dialog) -> Option<adw::ActionRow> {
     }
     found
 }
+
+#[allow(deprecated)]
+fn choose_missing_header(
+    window: &Rc<AccountWindow>,
+    root: &Path,
+    credentials: &adw::AlertDialog,
+    entries: &[gtk::PasswordEntry],
+) -> (adw::AlertDialog, Vec<gtk::PasswordEntry>) {
+    let previous =
+        secure_restoration_live::toggles(credentials, "Saved changes use a previous vault");
+    assert_eq!(previous.len(), 1);
+    assert!(!previous[0].is_active() && !previous[0].is_sensitive());
+    assert!(!credentials.is_response_enabled("unlock"));
+    entries[0].set_text("Public current vault passphrase");
+    press(credentials.upcast_ref(), "Choose Previous Vault File…");
+    let chooser = secure_restoration_live::files::chooser(window, false);
+    assert!(entries.iter().all(|entry| entry.text().is_empty()));
+    let source = root.join("public prior vault.json");
+    assert!(source.is_file());
+    chooser.set_file(&gio::File::for_path(&source)).unwrap();
+    until(
+        "native missing-header chooser did not select its owned source",
+        || chooser.file().and_then(|file| file.path()).as_ref() == Some(&source),
+    );
+    secure_restoration_live::files::respond(&chooser, gtk::ResponseType::Accept);
+    let (credentials, entries) = dialog(window, true);
+    assert!(!chooser.is_mapped() && window.restoration_file_choice.borrow().is_none());
+    assert!(window.window.is_active() && entries.iter().all(|entry| entry.text().is_empty()));
+    assert_eq!(credentials.default_response().as_deref(), Some("back"));
+    assert_eq!(credentials.close_response(), "back");
+    let previous =
+        secure_restoration_live::toggles(&credentials, "Saved changes use a previous vault");
+    assert!(previous[0].is_active() && previous[0].is_sensitive());
+    (credentials, entries)
+}
 pub(crate) fn child(root: &Path, stage: &str) {
     assert!(matches!(stage, "start" | "resume" | "inspect"));
     assert!(crate::desktop::session_state() == SessionState::Unlocked);
     let fixture = server::Fixture::new();
     fixture.state.lock().unwrap().offline = true;
+    assert!(
+        REQUESTS
+            .set(std::sync::Arc::downgrade(&fixture.state))
+            .is_ok()
+    );
     let pam = Pam::new();
+    // Test children register an application without calling Application::run,
+    // which normally supplies this identity to GTK's private Recent Files list.
+    glib::set_prgname(Some("snippets-public-restoration-process"));
+    glib::set_application_name("Snippets Public Restoration Process");
     adw::init().unwrap();
     let app = adw::Application::builder()
         .application_id("com.khm.snippets.linux.ProcessRestoration")
@@ -156,6 +205,8 @@ pub(crate) fn child(root: &Path, stage: &str) {
             );
             assert_eq!(credentials.default_response().as_deref(), Some("back"));
             assert!(!entries.iter().any(|entry| entry.shows_peek_icon()));
+            let (credentials, entries) =
+                choose_missing_header(&window, root, &credentials, &entries);
             entries[0].set_text("Public current vault passphrase");
             let modes = secure_restoration_live::toggles(&credentials, "Use recovery key");
             assert_eq!(modes.len(), 2);

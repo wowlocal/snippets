@@ -18,6 +18,10 @@ fn prepare_installed_chooser_cancel_fixture() {
 }
 
 fn prepare_private_native_history(root: &std::path::Path) -> Saved {
+    copy_private_native_history(root, saved(false))
+}
+
+fn copy_private_native_history(root: &std::path::Path, saved: Saved) -> Saved {
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(root, crate::model::default_root().unwrap());
     assert!(std::env::var_os("SNIPPETS_SUPPORT_DIR").is_none());
@@ -26,7 +30,6 @@ fn prepare_private_native_history(root: &std::path::Path) -> Saved {
         std::env::var("SNIPPETS_SECRET_HOST_BUS").unwrap()
     );
     assert!(!root.exists());
-    let saved = saved(false);
     fn copy_public(source: &std::path::Path, destination: &std::path::Path) {
         std::fs::create_dir(destination).unwrap();
         std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o700)).unwrap();

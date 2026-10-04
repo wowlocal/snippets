@@ -1756,8 +1756,10 @@ OpenSSL verifies both independent source scopes and actual current output before
 and after sync. The mixed Debug fixture waits up to 150 seconds for completion,
 with closed numeric peer progress; the real 120-second authorization and bounded
 sync limits are unchanged. The portal variants exercise the host route as well.
-The legacy missing-header GUI path remains separate acceptance work; see the
-implementation evidence for scope.
+The missing-header GUI path now passes with an explicit historical schema-2
+archive and real old-JSON chooser, followed by process death and file-free offline
+completion; see the bounded evidence below. Legacy own-record metadata recovery
+is a distinct core check.
 
 The portal variants export a test-only OpenFile relay on the private bus before
 GTK initializes. Its version comes from the authenticated host portal; replies
@@ -1834,7 +1836,7 @@ specific defect.
 | --- | --- |
 | Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
-| Durable recovery | Legacy missing-header GUI restoration; interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts, several native restoration cuts and an actual SIGKILL followed by fresh-process offline completion after the ordinary write already pass. |
+| Durable recovery | Interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts, several native restoration cuts and an actual SIGKILL followed by fresh-process offline completion after the ordinary write already pass. The same gate now includes a historical missing-header archive and native old-JSON selection, with that source file removed before completion. |
 | Remaining conflict and history decisions | Unknown pending raw-child intent, local-absence source review and unrelated ambiguous packets; native history retirement and unused-file cleanup. Existing current/nested/prior-confirmed combinations pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
@@ -1939,3 +1941,44 @@ owned temporary directory, including after SIGKILL. Fatal GTK warnings are enabl
 and the passing run has no criticals. This is native harness evidence at one
 existing recovery boundary, not full installed-app restoration or a new crash-cut
 matrix. The other recovery gaps and the GTK chooser blocker remain open.
+
+## Native legacy missing-header restoration (2026-10-04)
+
+The existing process-death acceptance now also covers the already listed
+missing-header GUI path, without another test, runner option or source/cut matrix.
+A fictional schema-2 archive omits its saved vault header while retaining the
+authentic encrypted checkpoint images, receipts, record stamps and sealed bodies.
+The private native keyring confirms the header is absent before the window opens.
+This is distinct from missing own-record stamps/hashes.
+
+The mapped credential window cannot select the unavailable retained vault. Its
+real **Choose Previous Vault File…** GTK chooser accepts only the owned public old
+JSON; opening the chooser clears entered fields. Returned credentials are fresh,
+Cancel remains the default and focus returns. Fresh current passphrase and old
+recovery-key verification produces the real whole-restoration review and private
+PAM authorization. The existing SIGKILL boundary then holds/reaps the process.
+
+Before starting a fresh continuation process, the parent deletes the selected
+JSON. Completion needs only the approved encrypted WAL and new private PAM:
+there is no old file, vault password or borrowed editor key. Exact after-images,
+reader-fence removal, protected slots, transport state, retained ciphertext history,
+current vault identity and terminal history survive the subsequent process reopen.
+The existing core test separately passes its established schema-1/schema-2,
+JSON/backup and durable-cut coverage. No additional native permutations are claimed.
+
+Use the same existing command:
+
+```sh
+bash snippets-linux/tests/account-live.sh /path/to/library-test-binary --restore-process-ordinary
+```
+
+The first attempt stopped at GTK Recent Files registration because the test child
+registered an application without Application::run and had no program/application
+name. Its owned core places the fatal warning in gtk_recent_manager_add_full;
+the extracted core was removed. Giving this test child its public identity resolves
+that fixture startup failure. Fatal warnings remain enabled. The successful full
+cycle contains no GTK criticals. Its actual HTTP counter is zero at the held write
+before SIGKILL, and again after each fresh native stage; it counts even refused
+offline requests. The independent GTK
+path-bar cancellation blocker remains unresolved; no wait or suppression is a fix.
+The installed app and prepared user test archive remain unchanged.

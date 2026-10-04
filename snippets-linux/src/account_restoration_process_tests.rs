@@ -79,9 +79,11 @@ impl OwnedChild {
         }
     }
     fn kill_and_reap(&mut self) {
-        let mut child = self.0.take().unwrap();
+        let child = self.0.as_mut().unwrap();
         child.kill().unwrap();
-        assert_eq!(child.wait().unwrap().signal(), Some(libc::SIGKILL));
+        let status = child.wait().unwrap();
+        self.0.take();
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
     }
     fn finish(&mut self) -> ExitStatus {
         let started = Instant::now();
@@ -170,7 +172,27 @@ fn native_restoration_process_kill_and_offline_resume() {
         crate::account_ui::live_tests::process_death::child(&root, &stage);
         return;
     }
-    let saved = prepare_private_native_history(&root);
+    // Historical schema 2 intentionally lacks its saved vault header. Its real
+    // encrypted image pair and record metadata remain untouched. This extends
+    // the existing native process gate, without adding a source/cut matrix.
+    let mut saved = saved(false);
+    external_source::legacy(&mut saved, 2);
+    let source_file = external_source::file(&saved, false);
+    let source_file = root.join(source_file.file_name().unwrap());
+    let saved = copy_private_native_history(&root, saved);
+    let mut native = Store::load(&root, crate::secret_store::Native::new().unwrap()).unwrap();
+    let selection = crate::key_store::history::inspect(&mut native)
+        .unwrap()
+        .switches[0]
+        .selection
+        .clone();
+    assert!(
+        crate::key_store::restoration::saved_vault_header(&mut native, &selection)
+            .unwrap()
+            .is_none()
+    );
+    drop(native);
+    assert!(source_file.is_file());
     let initial = protected(&root);
     let before_plain = image(&root, "snippets.json");
     let before_vault = image(&root, "Vault/vault.json");
@@ -201,6 +223,10 @@ fn native_restoration_process_kill_and_offline_resume() {
     assert!(Library::prepare(root.clone()).unwrap().read().is_err());
     assert!(protected(&root) == initial && receipt(&root).is_some());
     let history = retained(&root);
+
+    // Completion must use only its durable approved WAL. The previously chosen
+    // old header and the killed child's vault/session authority are unavailable.
+    fs::remove_file(&source_file).unwrap();
 
     let mut resume = OwnedChild::spawn("resume", control.path());
     assert!(
@@ -271,6 +297,6 @@ fn native_restoration_process_kill_and_offline_resume() {
     );
     assert!(crate::primary::require_ready(&root).is_ok());
     println!(
-        "Three exclusive process lifetimes: authentic mixed-vault history, actual SIGKILL, fresh PAM-only offline completion, exact WAL after-images, immutable capabilities/ciphertext history, durable terminal receipt and reader fence; no production data or host authentication."
+        "Three exclusive process lifetimes: authentic missing-header legacy history, actual native old-JSON selection, SIGKILL, fresh PAM-only offline completion without that file, exact WAL after-images, immutable capabilities/ciphertext history, durable terminal receipt and reader fence; no production data or host authentication."
     );
 }
