@@ -394,7 +394,10 @@ fn native_account_owner_keeps_a_lost_ui_claim_and_retries_locked_retention_befor
                         Command::CheckPairing => match check(&mut store, &mut server) {
                             Ok(PairingOutcome::Ready { kit }) => {
                                 assert!(server.claims == 1 && server.polls == 1);
-                                Ok(Reply::Library(Ok(Outcome::Ready { kit })))
+                                Ok(Reply::Library {
+                                    outcome: Ok(Outcome::Ready { kit }),
+                                    can_create_new: Ok(false),
+                                })
                             }
                             Ok(_) => panic!("expected a retained claim or completed activation"),
                             Err(error) => {
@@ -483,7 +486,10 @@ fn native_account_owner_keeps_a_lost_ui_claim_and_retries_locked_retention_befor
                 .unwrap()
                 .recv_timeout(Duration::from_secs(3))
                 .unwrap(),
-            Ok(Reply::Library(Ok(Outcome::Ready { .. })))
+            Ok(Reply::Library {
+                outcome: Ok(Outcome::Ready { .. }),
+                ..
+            })
         ));
         assert!(memory.slot(Slot::LibraryKey).is_some());
     }

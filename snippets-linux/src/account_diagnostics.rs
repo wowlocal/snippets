@@ -115,7 +115,10 @@ pub(super) fn event(
     use diagnostics::{Count, Family, Milliseconds, Outcome};
     let failure = match result {
         Err(failure) => Some(*failure),
-        Ok(Reply::Library(Err(failure)))
+        Ok(Reply::Library {
+            outcome: Err(failure),
+            ..
+        })
         | Ok(Reply::Selected {
             keys: Err(failure), ..
         }) => Some(Failure::Key(*failure)),
@@ -423,7 +426,10 @@ mod tests {
         assert_eq!(value["fields"]["state"], "deletion_review");
         assert_eq!(value["fields"]["outcome"], "attention");
         assert_eq!(value["fields"]["received_count"], 1_000_000);
-        let result = Ok(Reply::Library(Err(key_store::Failure::KeyConflict)));
+        let result = Ok(Reply::Library {
+            outcome: Err(key_store::Failure::KeyConflict),
+            can_create_new: Ok(false),
+        });
         let value = serde_json::to_value(event(
             (Op::KeySetup, Stage::Perform),
             std::time::Instant::now(),

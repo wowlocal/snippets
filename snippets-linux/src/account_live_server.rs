@@ -28,6 +28,8 @@ pub(super) struct State {
     pub accounts: usize,
     pub rejected_keys: usize,
     pub bootstrap_posts: usize,
+    pub lose_next_bootstrap_reply: bool,
+    pub lost_bootstrap_replies: usize,
     pub revokes: usize,
     pub fetches: usize,
     pub batches: usize,
@@ -605,8 +607,16 @@ impl Fixture {
                         .contains("/changes?")
                         .then(|| state.hold_changes.take())
                         .flatten();
+                    let lose_bootstrap = request.method == "POST"
+                        && request.path.ends_with("/key-bootstrap")
+                        && std::mem::take(&mut state.lose_next_bootstrap_reply);
                     let (status, response) = respond(request, &thread_server, &mut state);
+                    if lose_bootstrap {
+                        assert_eq!(status, 200);
+                        state.lost_bootstrap_replies += 1;
+                    }
                     let lose_reply = lose_reply
+                        || lose_bootstrap
                         || state
                             .pairing
                             .as_mut()

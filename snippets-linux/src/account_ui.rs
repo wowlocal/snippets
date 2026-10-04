@@ -1730,7 +1730,10 @@ impl AccountWindow {
                 }
                 self.set_switching(switching, false, false);
             }
-            Reply::Library(outcome)=>self.apply_library(outcome),
+            Reply::Library {outcome,can_create_new}=>{
+                self.apply_library(outcome);
+                self.set_new_creation(can_create_new);
+            },
             Reply::Synchronized(progress)=>{
                 use crate::sync::Status;
                 self.review_snapshot.set_visible(matches!(progress.status,

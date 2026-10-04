@@ -616,7 +616,10 @@ pub(crate) enum Reply {
         created: Option<uuid::Uuid>,
         switching: handover::Status,
     },
-    Library(std::result::Result<key_store::Outcome, key_store::Failure>),
+    Library {
+        outcome: key_store::Result<key_store::Outcome>,
+        can_create_new: creation::Result<bool>,
+    },
     Received(receiver::Progress),
     Sent(sender::Progress),
     Synchronized(data_sync::Progress),
@@ -2434,8 +2437,7 @@ impl Owner {
             Command::Setup => {
                 let (store, transport) = self.parts()?;
                 let outcome = key_store::initialize(store, transport)?;
-                self.check_owner()?;
-                Ok(Reply::Library(Ok(outcome)))
+                self.library_ready(outcome)
             }
             Command::Receive => self.data_action(DataAction::Receive),
             Command::Send => self.data_action(DataAction::Send),
@@ -2499,8 +2501,7 @@ impl Owner {
                 .map_err(|_| Failure::Key(key_store::Failure::RecoveryUnavailable))?;
                 let (store, transport) = self.parts()?;
                 let outcome = key_store::recover(store, transport, kit)?;
-                self.check_owner()?;
-                Ok(Reply::Library(Ok(outcome)))
+                self.library_ready(outcome)
             }
             Command::PrepareDisclosure => {
                 let (store, transport) = self.parts()?;
@@ -2792,6 +2793,18 @@ impl Owner {
             pending_matches,
         })
     }
+    fn library_ready(&mut self, outcome: key_store::Outcome) -> Result<Reply> {
+        self.check_owner()?;
+        let can_create_new = creation::can_begin_new(
+            self.store.as_mut().ok_or(Failure::InvalidState)?,
+            self.client.as_ref().ok_or(Failure::InvalidState)?,
+            self.live.as_ref().ok_or(Failure::InvalidState)?,
+        );
+        Ok(Reply::Library {
+            outcome: Ok(outcome),
+            can_create_new,
+        })
+    }
     fn pairing_operation(&mut self, operation: PairingAction) -> Result<Reply> {
         let (store, transport) = self.parts()?;
         let result = match operation {
@@ -2801,8 +2814,7 @@ impl Owner {
         };
         match result {
             Ok(recipient::Outcome::Ready { kit }) => {
-                self.check_owner()?;
-                Ok(Reply::Library(Ok(key_store::Outcome::Ready { kit })))
+                self.library_ready(key_store::Outcome::Ready { kit })
             }
             Ok(_) => {
                 self.check_owner()?;

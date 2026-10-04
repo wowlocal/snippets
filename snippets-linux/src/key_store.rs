@@ -820,6 +820,44 @@ pub(crate) fn installed_binding_locked<B: Backend>(
         .transpose()
         .map(|installed| installed.map(|installed| installed.binding))
 }
+
+/// Opening an already-created library is read-only control-plane work. An
+/// initial key draft may resume through that exact target, without making it
+/// usable or allowing creation of another library beside unfinished setup.
+pub(crate) fn creation_open_source_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    target: &KeyBinding,
+) -> Result<Option<KeyBinding>> {
+    match creation_source_locked(owner) {
+        Ok(source) => return Ok(source),
+        Err(Failure::ReviewRequired) => (),
+        Err(error) => return Err(error),
+    }
+    handover::require_idle(owner)?;
+    crate::primary::require_ready(owner.root())?;
+    crate::backup::import::require_clear(owner.root()).map_err(|_| Failure::ReviewRequired)?;
+    if owner.read(Slot::LibraryKey)?.is_some() {
+        return Err(Failure::ReviewRequired);
+    }
+    let archive = Archive::load(owner)?;
+    archive.check_binding(target)?;
+    let pending = archive.pending.as_ref().ok_or(Failure::ReviewRequired)?;
+    if pending.kind != Kind::Initial || pending.binding != *target || archive.presentation.is_some()
+    {
+        return Err(Failure::ReviewRequired);
+    }
+    for slot in [
+        Slot::PairingRecipient,
+        Slot::CheckpointKey,
+        Slot::KeyMutation,
+    ] {
+        if owner.read(slot)?.is_some() {
+            return Err(Failure::ReviewRequired);
+        }
+    }
+    owner.require_checkpoint_absent()?;
+    Ok(None)
+}
 /// Control-plane admission checks only. A different account/library cannot use
 /// retained key or pairing state; checkpoint review does not prevent recovery
 /// presentation. No primary records, cursors or checkpoint material are read.

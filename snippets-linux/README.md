@@ -1839,7 +1839,7 @@ specific defect.
 | --- | --- |
 | Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
-| Durable recovery | Interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts, several native restoration cuts and an actual SIGKILL followed by fresh-process offline completion after the ordinary write already pass. The same gate now includes a historical missing-header archive and native old-JSON selection, with that source file removed before completion. |
+| Durable recovery | Other interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Native first-key setup now resumes after an accepted-but-lost TLS reply through a terminal old worker and fresh worker with the exact original key/recovery capability and no repeat POST. Core crash cuts, several native restoration cuts and an actual SIGKILL followed by fresh-process offline completion after the ordinary write already pass. The same gate includes a historical missing-header archive and native old-JSON selection, with that source file removed before completion. |
 | Remaining conflict decisions | Unrelated ambiguous packets. Native local-absence secure source Keep/Delete, Unknown pending raw-child Keep/Delete before parent Keep, existing current/nested/prior-confirmed combinations and native history retirement/unused-file cleanup pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
@@ -1849,12 +1849,11 @@ The build is ready for user testing. Stable-port acceptance remains open on the
 GTK blocker and the checks above. Stay Awake and its 2026-10-05 09:00 Minsk
 restoration timer were preserved.
 
-The latest user archive is
-`target/user-testing/snippets-omarchy-0.1.0-x86_64-4bd8969.tar.gz`, bound to clean
-source `4bd89695` after rebase on `main` `e232c886`. Its Release binaries are
-byte-identical to the previously checked build. The archive includes source and
-binary receipts and has passed installation into an owned temporary prefix;
-the existing installed app has not been replaced.
+The latest verified user archive and its clean source commit are recorded in
+`target/user-testing/latest.json`. Builds retain the rebase on `main` `e232c886`
+and include source and binary receipts. The archive is checked by installation
+into an owned temporary prefix; the existing installed app is not replaced.
+The earlier `4bd8969` archive predates the first-key fixes below.
 
 ## Live diagnostics export and delete (2026-10-04)
 
@@ -2155,3 +2154,37 @@ clean rebased source receipt. Offline installation and GUI/CLI version checks pa
 in an owned temporary prefix, which is removed afterward. The host installation
 is unchanged. The finite seven-group board and independent GTK cancellation
 blocker remain open; Stay Awake and its restoration timer are preserved.
+
+## First-key interruption and created-library opening (2026-10-05)
+
+The existing native creation cycle now loses the real TLS response after the
+server accepts the first keys. Actual Secret Service retains the initial draft;
+no installed key, checkpoint key or primary/checkpoint write is admitted. The
+old account worker is observed live and then terminal before a fresh worker
+reconnects. Opening the same created library leaves the exact draft and disabled
+sync intact. Explicit Set Up / Resume completes with the original bundle,
+recovery code, ciphertext and version, no repeat bootstrap POST and no data-plane
+mutation. The original creation, encrypted sync and second-library cycle follows.
+
+This found and fixed two concrete defects. Open Created Library used the
+new-creation admission rule and refused the retained first-key draft. Completed
+receipt opening now permits only the exact initial target with no installed key,
+competing recipient/mutation/checkpoint state or primary/import transaction. It
+retains account, receipt, scope and protected-state checks around HTTP; new
+creation and data admission remain refused while setup is pending. After key
+setup, recovery or pairing completes, the worker also returns fresh permission
+for creating another library, so the corresponding button is not left disabled.
+
+All three existing native creation/switch/pairing cycles pass under fatal warnings.
+Thirty-eight targeted core tests pass, including one new scope/refusal regression
+for the reproduced opening defect. Test count is 1,141; no runner option or
+acceptance matrix is added. Both failed live runs and an intermediate unused-reply
+compile error remain separately source-bound under ignored acceptance artifacts;
+successful components of failed cycles are not overall passes. No warning
+suppression or added wait fixes either defect.
+
+Release is rebuilt for user testing. This is lost-response/fresh-worker evidence,
+not an additional process-death or installed-restoration claim. The other named
+durable gates, unrelated ambiguous packets, normal input/host lifecycle/Apple
+exchange checks and the independent GTK cancellation blocker remain open. The
+seven-group board is preserved; Stay Awake and its scheduled restoration remain.

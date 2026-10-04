@@ -5604,6 +5604,46 @@ other named gaps and the independent GTK chooser cancellation defect remain open
 Installed executables and the prepared rebased user test archive are unchanged.
 Stay Awake and its scheduled restoration are preserved.
 
+### First-key interruption: opening and post-setup creation permission (2026-10-05)
+
+The finite durable gate now has native accepted-but-lost first-key response
+evidence. The existing creation test closes TLS after actual server commitment,
+retains the real initial draft in private native Secret Service, observes its
+own account worker live and terminal, and reconnects through a fresh worker.
+Only explicit Set Up / Resume installs the same bundle and preserves exact
+recovery capability/ciphertext/version. There is one bootstrap POST, no data-plane
+mutation during continuation and no primary/checkpoint write before later Sync.
+The earlier creation, second-library and encrypted sync scenario then continues.
+
+That cycle exposed two concrete runtime defects: Open Created Library refused
+the draft because it recaptured new-creation source admission, and Create Another
+Cloud Library kept the permission calculated before key setup completed.
+Completed receipt opening now uses a narrowly scoped read-only capture. Only an
+initial draft for that exact target, without installed/competing key state or
+primary/import transaction, gets this exception. Existing complete account,
+receipt, protected-state and remote-binding checks still surround HTTP. New
+creation and data-plane key admission are unchanged. Setup/recovery/pairing
+completion now returns freshly calculated creation permission with the library
+outcome; diagnostics retain their existing sanitized error vocabulary.
+
+All-target Clippy, format, shell syntax and Release harness compilation pass on
+324 frozen native inputs. Three existing native creation/switch/pairing cycles
+pass under fatal warnings. Thirty-eight targeted core tests pass: initial-key
+write/lost-response guards, exact-target-only opening, all creation/history
+regressions and existing diagnostic failure sanitization. There is one new unit
+regression for the reproduced defect, count 1,141, and no new runner option or
+acceptance matrix. Both earlier failed live cycles and the intermediate unused
+reply compile failure are retained with their source manifests and excluded from
+successful evidence. No wait or warning-policy change is used.
+
+Release binaries and the user archive are refreshed from the clean checkpoint;
+installed binaries and user data are untouched. The finite seven-group board
+retains its other interruption/candidate-pairing/offline finish/cancel limits.
+This proves a fresh worker after a lost response, not another native process-death
+or full installed-restoration case. The independently reproduced GTK chooser
+cancellation defect remains open, as do the other named acceptance gates.
+Stay Awake and its scheduled restoration are preserved.
+
 
 ### Native Unknown pending raw-child before parent decisions (2026-10-04)
 

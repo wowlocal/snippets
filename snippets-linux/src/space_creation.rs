@@ -350,12 +350,24 @@ const PRESERVED: [Slot; 5] = [
 ];
 struct Captured {
     binding: Option<KeyBinding>,
+    opening: Option<KeyBinding>,
     values: Vec<Option<Zeroizing<Vec<u8>>>>,
     credentials: Option<Zeroizing<Vec<u8>>>,
 }
 impl Captured {
     fn new<B: Backend>(owner: &mut Locked<'_, B>) -> Result<Self> {
         let binding = source(owner)?;
+        Self::capture(owner, binding, None)
+    }
+    fn for_open<B: Backend>(owner: &mut Locked<'_, B>, target: &KeyBinding) -> Result<Self> {
+        let binding = key_store::creation_open_source_locked(owner, target)?;
+        Self::capture(owner, binding, Some(target.clone()))
+    }
+    fn capture<B: Backend>(
+        owner: &mut Locked<'_, B>,
+        binding: Option<KeyBinding>,
+        opening: Option<KeyBinding>,
+    ) -> Result<Self> {
         let values = PRESERVED
             .iter()
             .map(|slot| owner.read(*slot))
@@ -363,6 +375,7 @@ impl Captured {
         let credentials = owner.read(Slot::Credentials)?;
         Ok(Self {
             binding,
+            opening,
             values,
             credentials,
         })
@@ -376,7 +389,12 @@ impl Captured {
                 return Err(Failure::ReviewRequired);
             }
         }
-        if source(owner)? != self.binding {
+        let binding = if let Some(target) = &self.opening {
+            key_store::creation_open_source_locked(owner, target)?
+        } else {
+            source(owner)?
+        };
+        if binding != self.binding {
             return Err(Failure::ReviewRequired);
         }
         Ok(())
@@ -791,7 +809,15 @@ fn create_mode<B: Backend>(
     let deployment = remote.deployment();
     let current = account(owner, &deployment, Some(live))?;
     let mut history = History::load(owner)?;
-    let captured = Captured::new(owner)?;
+    let captured = if intent.is_none()
+        && let Some(binding) = history
+            .matching(&current)
+            .and_then(|index| history.entries[index].created.as_ref())
+    {
+        Captured::for_open(owner, binding)?
+    } else {
+        Captured::new(owner)?
+    };
     let index = if let Some(intent) = intent.as_ref() {
         intent.fresh()?;
         if intent.account != current

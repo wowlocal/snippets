@@ -61,6 +61,120 @@ fn creation_entries(root: &Path) -> usize {
     value["entries"].as_array().unwrap().len()
 }
 
+fn account_workers() -> usize {
+    fs::read_dir("/proc/self/task")
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            fs::read_to_string(entry.path().join("comm"))
+                .is_ok_and(|name| name.trim() == "snippets-accoun")
+        })
+        .count()
+}
+
+fn resume_initial_keys(
+    window: Rc<AccountWindow>,
+    stop: Stop,
+    app: &adw::Application,
+    parent: &adw::ApplicationWindow,
+    root: &Path,
+    fixture: &server::Fixture,
+    pam: &Pam,
+) -> (Rc<AccountWindow>, Stop) {
+    assert!(!window.sync.is_sensitive());
+    let before = images(root);
+    let pending = slot(root, Slot::Bootstrap).unwrap();
+    let parsed = crate::canonical::parse(&pending).unwrap();
+    let draft = parsed.as_object().unwrap()["pending"].as_object().unwrap();
+    assert_eq!(draft["kind"].as_text().unwrap(), "initial");
+    let bundle = crate::bootstrap::Bundle::decode(&draft["bundle"].encode().unwrap()).unwrap();
+    let kit =
+        crate::bootstrap::RecoveryKit::decode_secret_qr(&draft["kit"].encode().unwrap()).unwrap();
+    let (version, ciphertext) = fixture.state.lock().unwrap().recovery_evidence();
+    assert_eq!(version, 1);
+    assert!(
+        crate::bootstrap::open_recovery(&ciphertext, &kit)
+            .unwrap()
+            .for_secure_storage()
+            == bundle.for_secure_storage()
+    );
+    for name in [
+        Slot::LibraryKey,
+        Slot::CheckpointKey,
+        Slot::PairingRecipient,
+        Slot::KeyMutation,
+        Slot::AccountReview,
+        Slot::PairingCandidate,
+        Slot::BootstrapCandidate,
+    ] {
+        assert!(slot(root, name).is_none());
+    }
+    let counts = {
+        let state = fixture.state.lock().unwrap();
+        assert!(state.bootstrap_posts == 1 && state.lost_bootstrap_replies == 1);
+        (state.fetches, state.batches)
+    };
+    assert_eq!(account_workers(), 1);
+    until("interrupted first-key worker did not drain", || {
+        window.prepare_quit()
+    });
+    drop(stop);
+    drop(window);
+    until("interrupted first-key worker did not terminate", || {
+        account_workers() == 0
+    });
+    let window = make_window(app, parent, root, fixture, pam);
+    let stop = Stop(window.clone());
+    assert_eq!(account_workers(), 1);
+    press(window.window.upcast_ref(), "Reconnect Saved Account");
+    wait_work(&window);
+    press(window.window.upcast_ref(), "Open Created Library");
+    finish(&window);
+    assert!(window.libraries.selected() == 1 && !window.sync.is_sensitive());
+    assert!(slot(root, Slot::Bootstrap).is_some_and(|saved| saved == pending));
+    assert!(slot(root, Slot::LibraryKey).is_none() && slot(root, Slot::CheckpointKey).is_none());
+    assert!(images(root) == before);
+    {
+        let state = fixture.state.lock().unwrap();
+        assert!(state.bootstrap_posts == 1 && state.lost_bootstrap_replies == 1);
+        assert!((state.fetches, state.batches) == counts);
+        assert!(state.recovery_evidence() == (version, ciphertext.clone()));
+    }
+    press(window.window.upcast_ref(), "Set Up / Resume Library Keys");
+    wait_work(&window);
+    assert!(window.sync.is_sensitive() && images(root) == before);
+    let installed = slot(root, Slot::LibraryKey).unwrap();
+    let installed = crate::canonical::parse(&installed).unwrap();
+    let installed_bundle = crate::bootstrap::Bundle::decode(
+        &installed.as_object().unwrap()["bundle"].encode().unwrap(),
+    )
+    .unwrap();
+    assert!(installed_bundle.for_secure_storage() == bundle.for_secure_storage());
+    let saved = slot(root, Slot::Bootstrap).unwrap();
+    let saved = crate::canonical::parse(&saved).unwrap();
+    let saved = saved.as_object().unwrap();
+    assert!(matches!(saved["pending"], crate::canonical::Value::Null));
+    let presentation = saved["presentation"].as_object().unwrap();
+    assert!(presentation["kit"] == draft["kit"]);
+    assert!(presentation["ciphertext"] == draft["ciphertext"]);
+    assert!(presentation["version"] == draft["version"]);
+    assert_eq!(
+        presentation["status"].as_text().unwrap(),
+        "awaiting_presentation"
+    );
+    {
+        let state = fixture.state.lock().unwrap();
+        assert!(state.bootstrap_posts == 1 && state.lost_bootstrap_replies == 1);
+        assert!((state.fetches, state.batches) == counts);
+        assert!(state.recovery_evidence() == (version, ciphertext));
+    }
+    assert!(slot(root, Slot::CheckpointKey).is_none());
+    println!(
+        "Native first-key lost TLS response: real server acceptance, exact private pending key/recovery capability, terminal old worker, fresh reconnect gate and explicit same-key continuation without another POST or data-plane mutation passed; public fixtures only."
+    );
+    (window, stop)
+}
+
 #[test]
 #[ignore = "explicit native creation GTK/HTTPS/keyring acceptance; invoke tests/account-live.sh with --creation"]
 fn live_library_creation_retains_receipts_and_current_library() {
@@ -161,8 +275,17 @@ pub(super) fn run(followup: Followup) {
     press(window.window.upcast_ref(), "Open Created Library");
     finish(&window);
     assert!(fixture.state.lock().unwrap().creation_counts() == (2, 1));
+    if matches!(followup, Followup::Creation) {
+        fixture.state.lock().unwrap().lose_next_bootstrap_reply = true;
+    }
     press(window.window.upcast_ref(), "Set Up / Resume Library Keys");
     wait_work(&window);
+    let (window, stop) = if matches!(followup, Followup::Creation) {
+        assert!(images(&root) == before);
+        resume_initial_keys(window, stop, &app, &parent, &root, &fixture, &pam)
+    } else {
+        (window, stop)
+    };
     assert!(window.sync.is_sensitive() && fixture.state.lock().unwrap().bootstrap_posts == 1);
     press(window.window.upcast_ref(), "Sync Now");
     wait_work(&window);

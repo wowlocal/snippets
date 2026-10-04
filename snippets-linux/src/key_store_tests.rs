@@ -408,6 +408,64 @@ fn lost_post_response_resumes_the_same_bundle_kit_and_cipher_without_another_pos
     assert!(archive.presentation.as_ref().unwrap().retained().unwrap().1 == pending.ciphertext);
 }
 #[test]
+fn pending_first_keys_allow_only_read_only_open_of_the_exact_created_target() {
+    let memory = Memory::default();
+    let (_temp, mut store, mut remote) = setup(memory.clone());
+    remote.lose_post = true;
+    assert!(initialize(&mut store, &mut remote).is_err());
+    let before = memory.0.lock().unwrap().values.clone();
+    let writes = memory.0.lock().unwrap().writes;
+    let calls = remote.calls;
+    assert!(
+        store
+            .transaction_with(|owner| creation_open_source_locked(owner, &remote.pin))
+            .unwrap()
+            .is_none()
+    );
+    assert!(store.transaction_with(creation_source_locked).err() == Some(Failure::ReviewRequired));
+    assert!(load(&mut store, &mut remote).err() == Some(Failure::Busy));
+    // Read-only metadata admission does not grant usable key material or alter
+    // the draft. Every complete target-identity component remains required.
+    for changed in 0..6 {
+        let mut target = remote.pin.clone();
+        match changed {
+            0 => target.server = ServerURL::parse("https://other.example").unwrap(),
+            1 => target.instance = Uuid::from_u128(9),
+            2 => target.space = Uuid::from_u128(10),
+            3 => target.membership = Binding::from_checkpoint([9; 32]),
+            4 => target.dataset = Binding::from_checkpoint([10; 32]),
+            _ => target.epoch += 1,
+        }
+        assert!(
+            store
+                .transaction_with(|owner| creation_open_source_locked(owner, &target))
+                .is_err()
+        );
+    }
+    assert!(memory.0.lock().unwrap().values == before);
+    assert_eq!(memory.0.lock().unwrap().writes, writes);
+    assert_eq!(remote.posts, 1);
+    // Only load() performed its normal preflight; the metadata checks made no
+    // HTTP request and did not expose the unfinished bundle to the data plane.
+    assert_eq!(remote.calls, calls + 1);
+    store
+        .transaction_with::<_, Failure>(|owner| {
+            let mut archive = Archive::load(owner)?;
+            archive.pending.as_mut().unwrap().kind = Kind::Recovery;
+            archive.save(owner)
+        })
+        .unwrap();
+    let recovery = memory.0.lock().unwrap().values.clone();
+    assert!(
+        store
+            .transaction_with(|owner| creation_open_source_locked(owner, &remote.pin))
+            .err()
+            == Some(Failure::ReviewRequired)
+    );
+    assert!(memory.0.lock().unwrap().values == recovery);
+}
+
+#[test]
 fn every_ambiguous_or_failed_secret_write_preserves_a_restart_path_without_key_rotation() {
     for nth in 1..=4 {
         for after in [false, true] {
