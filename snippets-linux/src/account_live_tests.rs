@@ -16,6 +16,8 @@ use std::{
 mod creation;
 #[path = "account_live_server.rs"]
 mod server;
+#[path = "account_switch_live_tests.rs"]
+mod switching;
 #[path = "account_vault_sync_live_tests.rs"]
 mod vault;
 

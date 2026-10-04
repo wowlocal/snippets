@@ -4,7 +4,7 @@ use super::*;
 use crate::auth_store::creation::State as CreationState;
 use std::os::unix::fs::PermissionsExt;
 
-fn images(root: &Path) -> Vec<Option<Zeroizing<Vec<u8>>>> {
+pub(super) fn images(root: &Path) -> Vec<Option<Zeroizing<Vec<u8>>>> {
     ["snippets.json", "Vault/vault.json", "Sync/journal.bin"]
         .into_iter()
         .map(|name| match fs::read(root.join(name)) {
@@ -64,6 +64,9 @@ fn creation_entries(root: &Path) -> usize {
 #[test]
 #[ignore = "explicit native creation GTK/HTTPS/keyring acceptance; invoke tests/account-live.sh with --creation"]
 fn live_library_creation_retains_receipts_and_current_library() {
+    run(false);
+}
+pub(super) fn run(complete_switch: bool) {
     let root = isolated_root();
     let fixture = server::Fixture::new();
     fixture.state.lock().unwrap().enable_creation();
@@ -214,6 +217,9 @@ fn live_library_creation_retains_receipts_and_current_library() {
     assert!(fs::metadata(&root).unwrap().permissions().mode() & 0o777 == 0o700);
     assert!(!root.join("automatic-sync.json").exists());
     assert!(CloudClient::discover(fixture.server.clone()).is_err());
+    if complete_switch {
+        super::switching::run(&window, &app, &parent, &root, &fixture, &pam, &local);
+    }
     until("final creation worker did not drain", || {
         window.prepare_quit()
     });

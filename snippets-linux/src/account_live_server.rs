@@ -43,9 +43,41 @@ struct Creation {
     requests: Vec<uuid::Uuid>,
     // Server-owned idempotency receipts, distinct from the client's journal.
     spaces: Vec<(uuid::Uuid, Value)>,
+    remote: BTreeMap<uuid::Uuid, RemoteLibrary>,
     lose_reply: bool,
 }
+#[derive(Default)]
+struct RemoteLibrary {
+    public: Option<Value>,
+    ciphertext: Option<Value>,
+    records: BTreeMap<uuid::Uuid, (WireRecord, String)>,
+    positions: BTreeMap<String, BTreeMap<uuid::Uuid, String>>,
+    generation: usize,
+}
+impl RemoteLibrary {
+    fn exchange(&mut self, state: &mut State) {
+        std::mem::swap(&mut self.public, &mut state.public);
+        std::mem::swap(&mut self.ciphertext, &mut state.ciphertext);
+        std::mem::swap(&mut self.records, &mut state.records);
+        std::mem::swap(&mut self.positions, &mut state.positions);
+        std::mem::swap(&mut self.generation, &mut state.generation);
+    }
+}
 impl State {
+    pub fn record_in(&self, library: uuid::Uuid, id: uuid::Uuid) -> Option<WireRecord> {
+        let creation = self.creation.as_ref().unwrap();
+        let first = &creation.spaces.first().unwrap().1;
+        if first["scope"]["spaceId"] == library.to_string() {
+            self.record(id)
+        } else {
+            creation
+                .remote
+                .get(&library)?
+                .records
+                .get(&id)
+                .map(|(record, _)| record.clone())
+        }
+    }
     pub fn enable_creation(&mut self) {
         assert!(self.requests == 0 && self.creation.is_none());
         self.creation = Some(Creation::default());
@@ -284,23 +316,42 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
             descriptor["scope"]["spaceId"].as_str().unwrap()
         );
         response_scope = descriptor["scope"].clone();
-        // Only the first created library is initialized in this fixture. Later
-        // libraries are independent empty targets; they cannot inherit its key.
+        // Each later library owns separate verifier/envelope, encrypted records,
+        // CAS generations and cursor history. The mutex covers the whole exchange;
+        // aggregate counters remain common while default fixtures stay unchanged.
         if index > 0 {
-            assert!(request.method == "GET");
-            return (
-                200,
-                if request.path == base {
-                    descriptor.clone()
-                } else if request.path == format!("{base}/key-authority") {
-                    json!({"scope":response_scope,"keyEpoch":1,"publicKey":null})
-                } else {
-                    assert!(request.path == format!("{base}/recovery-envelope"));
-                    json!({"scope":response_scope,"keyEpoch":1,"recovery":null})
-                },
+            let library =
+                uuid::Uuid::parse_str(response_scope["spaceId"].as_str().unwrap()).unwrap();
+            let mut remote = state
+                .creation
+                .as_mut()
+                .unwrap()
+                .remote
+                .remove(&library)
+                .unwrap_or_default();
+            remote.exchange(state);
+            let result = respond_library(request, state, &base, &response_scope);
+            remote.exchange(state);
+            assert!(
+                state
+                    .creation
+                    .as_mut()
+                    .unwrap()
+                    .remote
+                    .insert(library, remote)
+                    .is_none()
             );
+            return result;
         }
     }
+    respond_library(request, state, &base, &response_scope)
+}
+fn respond_library(
+    request: Request,
+    state: &mut State,
+    base: &str,
+    response_scope: &Value,
+) -> (u16, Value) {
     if request.path == base {
         assert!(request.method == "GET");
         let mut value = space(state);
@@ -314,18 +365,18 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
         )
     } else if request.path == format!("{base}/recovery-envelope") {
         assert!(request.method == "GET");
-        (200, recovery(state, &response_scope))
+        (200, recovery(state, response_scope))
     } else if request.path == format!("{base}/key-bootstrap") {
         assert!(request.method == "POST" && state.public.is_none());
         assert!(
-            request.body["expectedScope"] == response_scope
+            request.body["expectedScope"] == *response_scope
                 && request.body["recovery"]["expectedVersion"].is_null()
         );
         assert!(request.body.get("bundle").is_none() && request.body.get("key").is_none());
         state.bootstrap_posts += 1;
         state.public = Some(request.body["publicKey"].clone());
         state.ciphertext = Some(request.body["recovery"]["ciphertext"].clone());
-        (200, recovery(state, &response_scope))
+        (200, recovery(state, response_scope))
     } else if request.path.starts_with(&format!("{base}/changes?")) {
         assert!(request.method == "GET");
         state.fetches += 1;
@@ -374,7 +425,7 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
         )
     } else if request.path == format!("{base}/records/batch") {
         assert!(request.method == "POST" && !state.reader);
-        assert!(request.body["expectedScope"] == response_scope);
+        assert!(request.body["expectedScope"] == *response_scope);
         let items = request.body["items"].as_array().unwrap();
         assert!(!items.is_empty() && items.len() <= 50);
         // Retain only encrypted offers and their positional CAS for explicit

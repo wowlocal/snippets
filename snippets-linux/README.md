@@ -535,6 +535,15 @@ The worker now refreshes **Create Another Cloud Library…** availability when
 a library is selected; interrupted requests and pending key transitions still
 prevent new creation.
 
+The separate **Review Library Switch…** workflow also passes native acceptance.
+First keys for an empty target stay separate until review and fresh computer-password
+authorization. Cancel, focus loss and an incorrect password preserve the active
+library. A completed switch keeps local records, resets the target sync checkpoint
+and retains the original library in protected recovery history. Only explicit
+**Sync Now** uploads records under the target key. Reopening reconnects to the
+selected library; switching back uses its saved original key without new key setup.
+Interrupted-switch completion/cancellation and restoration remain separate checks.
+
 **Library Creation Receipts** in Library Recovery History shows the retained
 requests and completed receipts without reading account credentials. Use
 **Review Removal…** to discard a completed receipt for a separate library with
@@ -700,8 +709,9 @@ resolved from durable state. The live native check now verifies cancellation, an
 incorrect password, fresh private-policy PAM authorization, actual focus-loss
 revocation and fresh reauthorization followed by recovery-code confirmation.
 Reconnect through a new worker and sign-out preserve the same library key in the
-private native keyring. Pairing, library switching and complete sync still need
-combined live acceptance.
+private native keyring. Ordinary manual/automatic synchronization, fresh vault
+synchronization and reviewed two-library switching also pass combined live checks.
+Pairing, interrupted switching and library restoration remain under acceptance.
 
 ## Secure Snippets
 
@@ -1183,8 +1193,9 @@ native sign-in, explicit library selection, key setup, recovery disclosure and
 confirmation, worker restart/reconnect and sign-out pass using a private native
 keyring, certificate-verified loopback HTTPS and private-policy PAM. Automatic
 sync also passes live bidirectional/read-only, background, retry, restart, scope
-halt and in-flight-disable checks. Pairing, switching and remaining native
-interactions are still under review.
+halt and in-flight-disable checks. Reviewed switching to a separately keyed
+library and back passes too. Pairing, interrupted switching, library restoration
+and remaining native interactions are still under review.
 All three globally assigned actions, visible tray-menu selection/focus and re-registration
 with a restarted Omarchy host pass; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
@@ -1231,6 +1242,9 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary
 # Native creation confirmation, lost HTTPS reply/restart, then a separate library
 # beside actual keyring-owned keys and an encrypted sync checkpoint.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --creation
+# Complete reviewed switch, independent target key setup, protected history,
+# explicit encrypted sync, new-worker reconnect and return using the saved key.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --switch
 # Each variant has its own native GTK process, bus, keyring and data root.
 # The hidden-window checks wait for the unmodified 30-second scheduler.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --automatic-sync
