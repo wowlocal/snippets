@@ -1849,6 +1849,13 @@ The build is ready for user testing. Stable-port acceptance remains open on the
 GTK blocker and the checks above. Stay Awake and its 2026-10-05 09:00 Minsk
 restoration timer were preserved.
 
+The latest user archive is
+`target/user-testing/snippets-omarchy-0.1.0-x86_64-4bd8969.tar.gz`, bound to clean
+source `4bd89695` after rebase on `main` `e232c886`. Its Release binaries are
+byte-identical to the previously checked build. The archive includes source and
+binary receipts and has passed installation into an owned temporary prefix;
+the existing installed app has not been replaced.
+
 ## Live diagnostics export and delete (2026-10-04)
 
 The previously listed complete diagnostic interaction passes in the Release
@@ -2122,3 +2129,29 @@ ambiguous packets. This is native retained-state/file
 absence evidence, not physical editing or a new crash/source permutation matrix.
 The independent GTK chooser cancellation defect remains open. Installed executables
 and the prepared user archive are unchanged.
+
+## Rebase on current main and acceptance audit (2026-10-05)
+
+The development branch is rebased on `main` `e232c886`. All six prior commits
+retain their patches in range-diff, the native tree is unchanged, and all nineteen
+upstream-changed paths retain the exact upstream bytes. The upstream diagnostics
+documentation addition is preserved in the working source overlay as well.
+
+An unfinished extension of the existing current-carrier native test tried to
+receive a new cloud-deletion page after an actual lost TLS batch response.
+Receive correctly reported that the retained send must finish first. The outer
+test failed on its expected status; its successful child is not counted as a
+passing overall cycle. The source-bound failed log and test extension are retained
+under ignored `target/live-omarchy-acceptance/ambiguous-send-first-failed/`.
+The incomplete extension is removed. Production admission rules, warning policy
+and waits are unchanged. Unrelated ambiguous packets remain an open acceptance
+gate; no new case or defect claim is added.
+
+Format, shell syntax, all-target Clippy, Release harness compilation, all eight
+existing preservation-owner tests and Release binaries pass on 324 native inputs.
+Those inputs exactly match the previous successful live checkpoint `b33d41a6`.
+The new user archive has twelve allowlisted files, matching binary hashes and a
+clean rebased source receipt. Offline installation and GUI/CLI version checks pass
+in an owned temporary prefix, which is removed afterward. The host installation
+is unchanged. The finite seven-group board and independent GTK cancellation
+blocker remain open; Stay Awake and its restoration timer are preserved.

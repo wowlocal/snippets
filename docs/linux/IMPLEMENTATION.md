@@ -5701,3 +5701,37 @@ public file-absence/retained-state evidence, not physical editing or another
 crash/source matrix. Other named gates and the independently reproduced GTK
 chooser cancellation blocker remain open. Installed executables and the prepared
 rebased user archive are unchanged; Stay Awake and its timer are preserved.
+
+### Rebase on current main and retained acceptance audit (2026-10-05)
+
+The authorized development branch is rebased on `main` `e232c886`, which added
+nineteen upstream paths since the previous base `32e5beef`. Rebase is conflict-free.
+Range-diff preserves all six development commits; the native tree is unchanged
+and all nineteen upstream-changed files retain their exact upstream bytes.
+The curated root overlay also preserves the upstream diagnostics documentation
+addition, so the checkpoint copier cannot overwrite it with the older root base.
+
+A proposed extension of the existing current-carrier test produced a real mixed
+batch and lost the TLS reply after server acceptance, then incorrectly expected
+Receive to admit another cloud page. Production correctly returned SendFirst
+before that page could enter. The outer native test failed; its earlier successful
+local-absence child is excluded from passing evidence for this overall cycle.
+Its source-bound log, gate receipt, input manifest and changed fixture files are
+retained in ignored `target/live-omarchy-acceptance/ambiguous-send-first-failed/`.
+The incomplete extension is removed without changing production admission,
+warning policy or observation waits. The named unrelated-ambiguous-packet gate
+remains pending. This fixture error adds no acceptance variant or runtime defect.
+
+Serial format, shell syntax, all-target Clippy, Release harness compilation,
+eight existing preservation-owner tests and Release binaries pass. The 324 frozen
+native inputs exactly match the successful live checkpoint `b33d41a6`; production
+and installed binary hashes are unchanged. The user archive is refreshed with a
+clean `4bd89695` source receipt on `e232c886`, twelve exact allowlisted files and
+matching binary hashes. Its offline installation into an owned temporary prefix
+and both GUI/CLI version checks pass; that prefix is removed and the existing
+installation is untouched. Audit documentation follows as a separate commit.
+
+The finite seven-group board remains unchanged. Successful portal evidence and
+the independent reproducible GTK cancellation defect retain their existing
+status. No stable-port completion or installed full-restoration claim is made.
+Stay Awake and its scheduled restoration are preserved.
