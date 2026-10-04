@@ -61,7 +61,7 @@ fn creation_entries(root: &Path) -> usize {
     value["entries"].as_array().unwrap().len()
 }
 
-fn account_workers() -> usize {
+pub(super) fn account_workers() -> usize {
     fs::read_dir("/proc/self/task")
         .unwrap()
         .filter_map(|entry| entry.ok())
@@ -360,7 +360,26 @@ pub(super) fn run(followup: Followup) {
             | Followup::MixedRestoration(_)
             | Followup::SecureRestorationInterrupted(_)
     ) {
-        super::switching::run(&window, &app, &parent, &root, &fixture, &pam, &local);
+        let (window, stop) = super::switching::run(
+            (window, stop, matches!(followup, Followup::Switch)),
+            &app,
+            &parent,
+            &root,
+            &fixture,
+            &pam,
+            &local,
+        );
+        until("completed switch worker did not drain", || {
+            window.prepare_quit()
+        });
+        drop(stop);
+        drop(window);
+    } else {
+        until("final creation worker did not drain", || {
+            window.prepare_quit()
+        });
+        drop(stop);
+        drop(window);
     }
     if matches!(followup, Followup::Restoration) {
         let restored = make_window(&app, &parent, &root, &fixture, &pam);
@@ -435,10 +454,6 @@ pub(super) fn run(followup: Followup) {
         });
         drop(restored_stop);
     }
-    until("final creation worker did not drain", || {
-        window.prepare_quit()
-    });
-    drop(stop);
     parent.destroy();
     println!(
         "Native library creation: Cancel/focus refusal, lost TLS reply, same-request restart, explicit key setup and encrypted sync, separate second library, exact active keys/checkpoint, retained receipts and fresh-worker review gate passed."

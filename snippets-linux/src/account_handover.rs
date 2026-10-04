@@ -21,6 +21,25 @@ const SLOTS: [(Slot, &str); 5] = [
 ];
 const CANDIDATE_SLOTS: [Slot; 2] = [Slot::BootstrapCandidate, Slot::PairingCandidate];
 
+#[cfg(test)]
+thread_local! {
+    static INTERRUPT_ACTIVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Inject the existing before-key-write failure boundary only for a native
+/// fixture's real reviewed commit. Journal publication and PAM stay unchanged.
+#[cfg(test)]
+pub(crate) fn with_activation_interruption<T>(operation: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            INTERRUPT_ACTIVATION.set(false);
+        }
+    }
+    assert!(!INTERRUPT_ACTIVATION.replace(true));
+    let _reset = Reset;
+    operation()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
     Key(super::Failure),
@@ -1325,6 +1344,10 @@ fn resume_archive<B: Backend, R: super::Remote + receiver::Remote>(
         }
         let current = owner.read(*slot)?;
         if current.as_deref().map(Vec::as_slice) != entry.target(index) {
+            #[cfg(test)]
+            if *slot == Slot::LibraryKey && INTERRUPT_ACTIVATION.replace(false) {
+                return Err(secret_store::Failure::Unavailable.into());
+            }
             owner.replace(
                 *slot,
                 current.as_deref().map(Vec::as_slice),

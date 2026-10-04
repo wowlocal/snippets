@@ -744,6 +744,8 @@ pub(crate) struct Handle {
     control: Arc<Control>,
     automatic: Arc<Mutex<Automatic>>,
     wake: Arc<AtomicU8>,
+    #[cfg(test)]
+    interrupt_handover: Arc<AtomicBool>,
 }
 enum Event {
     Command(Box<Command>),
@@ -951,6 +953,10 @@ impl Handle {
         let state = automatic.clone();
         let waking = wake.clone();
         let cancellation = control.clone();
+        #[cfg(test)]
+        let interrupt_handover = Arc::new(AtomicBool::new(false));
+        #[cfg(test)]
+        let interruption = interrupt_handover.clone();
         std::thread::Builder::new()
             .name("snippets-account".into())
             .spawn(move || {
@@ -980,6 +986,18 @@ impl Handle {
                     }
                     let (reply, retained, automatic) = match task {
                         Some(task) => {
+                            #[cfg(test)]
+                            let interrupt = matches!(&task.command, Command::CommitHandover { .. })
+                                && interruption.swap(false, Ordering::SeqCst);
+                            #[cfg(test)]
+                            let (reply, retained, automatic) = if interrupt {
+                                handover::with_activation_interruption(|| {
+                                    operate(Event::Command(Box::new(task.command)))
+                                })
+                            } else {
+                                operate(Event::Command(Box::new(task.command)))
+                            };
+                            #[cfg(not(test))]
                             let (reply, retained, automatic) =
                                 operate(Event::Command(Box::new(task.command)));
                             p.store(retained, Ordering::Release);
@@ -1008,7 +1026,13 @@ impl Handle {
             control,
             automatic,
             wake,
+            #[cfg(test)]
+            interrupt_handover,
         })
+    }
+    #[cfg(test)]
+    pub(crate) fn interrupt_next_handover_activation(&self) {
+        assert!(!self.interrupt_handover.swap(true, Ordering::SeqCst));
     }
     pub(crate) fn request(&self, command: Command) -> Result<mpsc::Receiver<Result<Reply>>> {
         let (response, receiver) = mpsc::sync_channel(1);

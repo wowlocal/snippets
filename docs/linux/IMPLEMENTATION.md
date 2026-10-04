@@ -5775,3 +5775,30 @@ The finite seven-group board remains unchanged. Successful portal evidence and
 the independent reproducible GTK cancellation defect retain their existing
 status. No stable-port completion or installed full-restoration claim is made.
 Stay Awake and its scheduled restoration are preserved.
+
+### Native published switch and offline completion (2026-10-05)
+
+The existing `--switch` cycle now interrupts its real reviewed commit after the
+exact target checkpoint is published, before the first active-key replacement.
+Real private Secret Service keeps the pending review and original active slots;
+primary and vault bytes remain exact. The interruption is a test-only key-write
+failure after actual private PAM consent, not a fabricated journal or approval.
+
+The old account worker is observed live and terminal before a fresh worker maps
+Finish Saved Switch Offline. Default Cancel, filled-password Cancel, private PAM
+denial and actual credential focus loss preserve the exact pending review,
+checkpoint and slots. Fresh local authorization installs the exact saved target
+key and bootstrap, leaves primary/vault/checkpoint bytes unchanged and completes
+the protected history without HTTP. Sync remains unavailable until explicit
+reconnect and library selection. The original encrypted sync, reconnect and
+reverse-switch assertions still follow; ordinary saved-history restoration also
+passes with no injected interruption.
+
+Format, shell syntax, all-target Clippy, Release harness/binaries, twelve existing
+core interruption/offline tests and both native cycles pass under fatal warnings.
+The test count remains 1,141. No production policy, runner option, observation wait
+or acceptance matrix is added. This proves one published-switch boundary with a
+fresh worker, not process death or every interruption boundary. Unpublished
+cancellation and the other finite gates remain open, alongside the independent
+GTK chooser cancellation defect. The user archive is refreshed from the clean
+rebased checkpoint; the existing installation and Stay Awake timer are preserved.

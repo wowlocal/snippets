@@ -79,6 +79,141 @@ fn finished(window: &Rc<AccountWindow>, entry: Option<&gtk::PasswordEntry>) {
     }
     assert!(window.worker.can_quit());
 }
+fn local_password(window: &Rc<AccountWindow>) -> (adw::AlertDialog, gtk::PasswordEntry) {
+    let dialog = review(
+        window,
+        "Finish Saved Switch Offline…",
+        "Finish the Saved Switch Offline?",
+        "back",
+    );
+    assert!(dialog.body().contains("No server is contacted"));
+    press(dialog.upcast_ref(), "Finish Locally");
+    until("native offline completion password did not map", || {
+        window
+            .password_dialog
+            .borrow()
+            .as_ref()
+            .is_some_and(|(dialog, entry)| dialog.is_mapped() && entry.is_mapped())
+    });
+    let (dialog, entry) = window.password_dialog.borrow().clone().unwrap();
+    assert!(dialog.heading().as_deref() == Some("Authorize Local Switch Completion"));
+    assert!(
+        dialog.default_response().as_deref() == Some("cancel")
+            && dialog.close_response() == "cancel"
+    );
+    assert!(!entry.shows_peek_icon());
+    (dialog, entry)
+}
+fn finish_offline(
+    owned: (Rc<AccountWindow>, Stop),
+    app: &adw::Application,
+    parent: &adw::ApplicationWindow,
+    root: &Path,
+    fixture: &server::Fixture,
+    pam: &Pam,
+) -> (Rc<AccountWindow>, Stop) {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let (window, stop) = owned;
+    let pending = slot(root, Slot::AccountReview).unwrap();
+    let document: serde_json::Value = serde_json::from_slice(&pending).unwrap();
+    let entry = &document["entries"][0];
+    assert!(document["entries"].as_array().unwrap().len() == 1 && entry["phase"] == "pending");
+    let target = Zeroizing::new(
+        STANDARD
+            .decode(entry["targetKey"].as_str().unwrap())
+            .unwrap(),
+    );
+    let bootstrap = Zeroizing::new(
+        STANDARD
+            .decode(entry["targetBootstrap"].as_str().unwrap())
+            .unwrap(),
+    );
+    let saved = creation::images(root);
+    let slots = active(root);
+    assert!(slots[0].as_ref().is_some_and(|key| *key != target));
+    let requests = {
+        let mut state = fixture.state.lock().unwrap();
+        state.offline = true;
+        state.requests
+    };
+    assert_eq!(creation::account_workers(), 1);
+    until("interrupted switch worker did not drain", || {
+        window.prepare_quit()
+    });
+    drop(stop);
+    drop(window);
+    until("interrupted switch worker did not terminate", || {
+        creation::account_workers() == 0
+    });
+    let window = make_window(app, parent, root, fixture, pam);
+    let stop = Stop(window.clone());
+    assert_eq!(creation::account_workers(), 1);
+    assert!(window.switch_state.get().pending && !window.sync.is_sensitive());
+    let unchanged = || {
+        assert!(active(root) == slots && creation::images(root) == saved);
+        assert!(slot(root, Slot::AccountReview).is_some_and(|value| value == pending));
+        assert!(window.switch_state.get().pending && !window.sync.is_sensitive());
+        assert_eq!(fixture.state.lock().unwrap().requests, requests);
+    };
+    let dialog = review(
+        &window,
+        "Finish Saved Switch Offline…",
+        "Finish the Saved Switch Offline?",
+        "back",
+    );
+    press(dialog.upcast_ref(), "Keep Saved Switch");
+    finished(&window, None);
+    unchanged();
+    for (value, response) in [
+        ("Public fictional password", "Cancel"),
+        ("Public incorrect password", "Authorize"),
+    ] {
+        let (dialog, entry) = local_password(&window);
+        entry.set_text(value);
+        press(dialog.upcast_ref(), response);
+        finished(&window, Some(&entry));
+        unchanged();
+    }
+    let (_dialog, entry) = local_password(&window);
+    entry.set_text("Public fictional password");
+    parent.present();
+    until(
+        "native offline credential focus loss did not cancel",
+        || parent.is_active() && window.password_dialog.borrow().is_none() && !window.busy.get(),
+    );
+    finished(&window, Some(&entry));
+    unchanged();
+    window.window.present();
+    until("native offline completion did not regain focus", || {
+        window.window.is_active()
+    });
+    let (dialog, entry) = local_password(&window);
+    entry.set_text("Public fictional password");
+    press(dialog.upcast_ref(), "Authorize");
+    finished(&window, Some(&entry));
+    assert!(!window.switch_state.get().pending && !window.sync.is_sensitive());
+    assert!(slot(root, Slot::LibraryKey).is_some_and(|key| key == target));
+    assert!(slot(root, Slot::Bootstrap).is_some_and(|value| value == bootstrap));
+    assert!(creation::images(root) == saved);
+    assert_eq!(fixture.state.lock().unwrap().requests, requests);
+    let (_, catalog) = checkpoint_and_history(root);
+    assert!(
+        catalog.switches.len() == 1 && catalog.switches[0].phase == history::SwitchPhase::Completed
+    );
+    fixture.state.lock().unwrap().offline = false;
+    press(window.window.upcast_ref(), "Reconnect Saved Account");
+    wait_work(&window);
+    assert!(window.libraries.selected() == 0 && !window.sync.is_sensitive());
+    window.libraries.set_selected(2);
+    wait_work(&window);
+    assert!(window.sync.is_sensitive() && !window.switch_candidate.get());
+    assert!(creation::images(root) == saved);
+    assert!(slot(root, Slot::LibraryKey).is_some_and(|key| key == target));
+    println!(
+        "Native published switch: before-key activation interruption, old worker termination, fresh offline worker, Cancel/PAM denial/focus refusal preserve exact intent; fresh PAM completes the saved target without HTTP, then explicit reconnect/selection admits sync."
+    );
+    (window, stop)
+}
 pub(super) fn checkpoint_and_history(root: &Path) -> (Checkpoint, history::Catalog) {
     let root = root.to_owned();
     let (sender, receiver) = mpsc::channel();
@@ -114,14 +249,18 @@ fn live_reviewed_library_switch_keeps_source_history_and_reconnects() {
     creation::run(creation::Followup::Switch);
 }
 pub(super) fn run(
-    window: &Rc<AccountWindow>,
+    owned: (Rc<AccountWindow>, Stop, bool),
     app: &adw::Application,
     parent: &adw::ApplicationWindow,
     root: &Path,
     fixture: &server::Fixture,
     pam: &Pam,
     local: &model::Snippet,
-) {
+) -> (Rc<AccountWindow>, Stop) {
+    let (mut window, mut stop, interrupt) = owned;
+    if interrupt {
+        window.worker.interrupt_next_handover_activation();
+    }
     let source_id = uuid::Uuid::from_u128(200);
     let target_id = uuid::Uuid::from_u128(201);
     let source = creation::images(root);
@@ -144,24 +283,24 @@ pub(super) fn run(
     assert!(window.switch_candidate.get() && !window.sync.is_sensitive());
     assert!(slot(root, Slot::BootstrapCandidate).is_none());
     let dialog = review(
-        window,
+        &window,
         "Create First Keys for Empty Library…",
         "Create First Keys for the Selected Library?",
         "cancel",
     );
     press(dialog.upcast_ref(), "Cancel");
-    finished(window, None);
+    finished(&window, None);
     assert!(fixture.state.lock().unwrap().bootstrap_posts == 1);
     assert!(active(root) == source_active && creation::images(root) == source);
     assert!(slot(root, Slot::BootstrapCandidate).is_none());
     let dialog = review(
-        window,
+        &window,
         "Create First Keys for Empty Library…",
         "Create First Keys for the Selected Library?",
         "cancel",
     );
     press(dialog.upcast_ref(), "Create Keys");
-    finished(window, None);
+    finished(&window, None);
     assert!(fixture.state.lock().unwrap().bootstrap_posts == 2);
     assert!(matches!(
         window.bootstrap_state.get(),
@@ -191,11 +330,11 @@ pub(super) fn run(
         );
         assert!(state.record_in(target_id, local.id).is_none());
     };
-    let dialog = switch_review(window);
+    let dialog = switch_review(&window);
     press(dialog.upcast_ref(), "Cancel");
-    finished(window, None);
+    finished(&window, None);
     unchanged();
-    let _dialog = switch_review(window);
+    let _dialog = switch_review(&window);
     parent.present();
     until("native switch review focus loss did not cancel", || {
         parent.is_active() && window.snapshot_dialog.borrow().is_none() && !window.busy.get()
@@ -209,28 +348,35 @@ pub(super) fn run(
         ("Public fictional password", "Cancel"),
         ("Public incorrect password", "Authorize"),
     ] {
-        let (dialog, entry) = password(window);
+        let (dialog, entry) = password(&window);
         entry.set_text(value);
         press(dialog.upcast_ref(), response);
-        finished(window, Some(&entry));
+        finished(&window, Some(&entry));
         unchanged();
     }
-    let (_dialog, entry) = password(window);
+    let (_dialog, entry) = password(&window);
     entry.set_text("Public fictional password");
     parent.present();
     until("native switch credential focus loss did not cancel", || {
         parent.is_active() && window.password_dialog.borrow().is_none() && !window.busy.get()
     });
-    finished(window, Some(&entry));
+    finished(&window, Some(&entry));
     unchanged();
     window.window.present();
     until("native switch credentials did not regain focus", || {
         window.window.is_active()
     });
-    let (dialog, entry) = password(window);
+    let (dialog, entry) = password(&window);
     entry.set_text("Public fictional password");
     press(dialog.upcast_ref(), "Authorize");
-    finished(window, Some(&entry));
+    finished(&window, Some(&entry));
+    assert_eq!(window.switch_state.get().pending, interrupt);
+    if interrupt {
+        assert!(active(root) == source_active);
+        assert!(creation::images(root)[..2] == source[..2]);
+        assert!(creation::images(root)[2] != source[2]);
+        (window, stop) = finish_offline((window, stop), app, parent, root, fixture, pam);
+    }
     assert!(
         window.sync.is_sensitive()
             && !window.switch_state.get().pending
@@ -270,7 +416,7 @@ pub(super) fn run(
     }
     let (key, salt) = wire_material(root);
     press(window.window.upcast_ref(), "Sync Now");
-    wait_work(window);
+    wait_work(&window);
     assert!(
         window.status.label()
             == "Synchronization complete. Cloud changes received and local changes confirmed."
@@ -320,7 +466,7 @@ pub(super) fn run(
     });
     window.window.destroy();
     let reopened = make_window(app, parent, root, fixture, pam);
-    let stop = Stop(reopened.clone());
+    let reopened_stop = Stop(reopened.clone());
     press(reopened.window.upcast_ref(), "Reconnect Saved Account");
     wait_work(&reopened);
     assert!(reopened.libraries.selected() == 0 && !reopened.sync.is_sensitive());
@@ -418,8 +564,9 @@ pub(super) fn run(
     until("reopened native switch worker did not drain", || {
         reopened.prepare_quit()
     });
-    drop(stop);
+    drop(reopened_stop);
     println!(
         "Native reviewed switch: separately retained first-key setup, review/password Cancel and focus refusal, real private-policy PAM denial/approval, exact old library preservation, target checkpoint reset, completed protected history, explicit new-key encrypted sync, fresh-worker reconnect and reverse switch using the exact saved source key passed."
     );
+    (window, stop)
 }
