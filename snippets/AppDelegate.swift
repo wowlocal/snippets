@@ -222,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private let quitBehaviorDefaultsKey = "quitBehaviorPreference"
     private var statusItem: NSStatusItem!
+    private var controlChordLayoutMonitor: Any?
     private weak var statusMenuOpenItem: NSMenuItem?
     private weak var statusMenuSecurePasteItem: NSMenuItem?
     private weak var statusMenuClipboardItem: NSMenuItem?
@@ -295,6 +296,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // usable but the editor will refuse to decrypt and reveal the body.
         // Do not log the body (or include it in an error) on this path.
         secureContentAccessibilityProtection.registerApplication()
+
+        // Before any window takes keys: ^A/^E/^B/^F/^N/^P on Cyrillic and other
+        // non-Latin layouts behave as they do on the user's Latin layout.
+        controlChordLayoutMonitor = ControlChordLayoutTranslation.installMonitor()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

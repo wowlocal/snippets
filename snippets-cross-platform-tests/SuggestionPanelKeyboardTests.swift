@@ -203,6 +203,31 @@ final class SuggestionPanelKeyboardTests: XCTestCase {
         XCTAssertNil(PickerQuickSelection.row(for: try key(code: 0, characters: "a", window: window)))
     }
 
+    func testSecurePickerNavigatesWithRussianLayoutControlNAndP() throws {
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = SuggestionPanelController()
+        defer { controller.dismissSecurePasteWithoutCallback() }
+        let items = (1...3).map { index in
+            SuggestionItem(snippet: Snippet(name: "Result \(index)", keyword: "item-\(index)",
+                content: "Body \(index)"), score: 0)
+        }
+        controller.showSecurePaste(items: items, anchorFocusedElement: nil, copiesToClipboard: true,
+            onSearch: { _ in items }, onSelect: { _ in XCTFail("Navigation must not select") },
+            onCancel: { _ in XCTFail("Navigation must not cancel") })
+        let window = try XCTUnwrap(NSApp.windows.first {
+            !initialWindows.contains($0.windowNumber) && $0.isVisible
+        })
+        XCTAssertTrue(window.firstResponder is NSTextView, "The search field must be editing")
+        XCTAssertEqual(controller.selectedSnippet(), items[0].snippet)
+
+        window.sendEvent(try RussianControlChord.translated(code: 45, window: window))  // N
+        window.sendEvent(try RussianControlChord.translated(code: 45, window: window))
+        XCTAssertEqual(controller.selectedSnippet(), items[2].snippet)
+        window.sendEvent(try RussianControlChord.translated(code: 35, window: window))  // P
+        XCTAssertEqual(controller.selectedSnippet(), items[1].snippet)
+        XCTAssertTrue(controller.isSecurePasteVisible)
+    }
+
     private func key(code: UInt16, characters: String, window: NSWindow,
                      flags: NSEvent.ModifierFlags = .command, repeatKey: Bool = false) throws -> NSEvent {
         try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,

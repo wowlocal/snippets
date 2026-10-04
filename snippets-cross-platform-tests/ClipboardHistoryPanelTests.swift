@@ -483,6 +483,51 @@ final class ClipboardHistoryPanelTests: XCTestCase {
         XCTAssertEqual(events, ["dismiss", "copy", "dismiss", "create"])
     }
 
+    func testRussianLayoutControlChordsReachNativeNavigationAndEditingBindings() async throws {
+        let now = Date()
+        let entries = (0..<3).map {
+            ClipboardHistoryEntry(text: "Entry \($0)", copiedAt: now.addingTimeInterval(-Double($0)))
+        }
+        let fixture = await makeFixture(entries: entries, now: now)
+        defer { fixture.cleanup() }
+        let initialWindows = Set(NSApp.windows.map(\.windowNumber))
+        let controller = ClipboardHistoryPanelController(service: fixture.service)
+        defer { controller.dismiss() }
+        controller.show(canPaste: true, onPaste: { _ in XCTFail("Navigation must not paste") },
+            onCopy: { _ in XCTFail("Navigation must not copy") },
+            onCreateSnippet: { _ in XCTFail("Navigation must not create a snippet") }, onDismiss: { _ in })
+        let window = try pickerWindow(excluding: initialWindows)
+        let table = try XCTUnwrap(descendants(of: try XCTUnwrap(window.contentView))
+            .compactMap { $0 as? NSTableView }.first)
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView, "The search field must be editing")
+        func control(_ code: UInt16) throws {
+            window.sendEvent(try RussianControlChord.translated(code: code, window: window))
+        }
+        XCTAssertEqual(table.selectedRow, 0)
+
+        try control(45)  // N
+        try control(45)
+        XCTAssertEqual(table.selectedRow, 2)
+        try control(35)  // P
+        XCTAssertEqual(table.selectedRow, 1)
+
+        editor.insertText("Entry", replacementRange: NSRange(location: NSNotFound, length: 0))
+        await waitForClipboardSearch(controller)
+        XCTAssertEqual(table.numberOfRows, 3)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 5, length: 0))
+        try control(11)  // B
+        try control(11)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 3, length: 0))
+        try control(3)   // F
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 0))
+        try control(0)   // A
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 0))
+        try control(14)  // E
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 5, length: 0))
+        XCTAssertEqual(editor.string, "Entry")
+        XCTAssertTrue(controller.isVisible)
+    }
+
     func testReturnCopiesWhenThereIsNoPasteTarget() async throws {
         let entry = ClipboardHistoryEntry(text: "A copy-only selection")
         let fixture = await makeFixture(entries: [entry])
