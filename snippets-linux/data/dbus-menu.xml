@@ -1,0 +1,32 @@
+<node>
+  <interface name="com.canonical.dbusmenu">
+    <property name="Version" type="u" access="read"/>
+    <property name="TextDirection" type="s" access="read"/>
+    <property name="Status" type="s" access="read"/>
+    <property name="IconThemePath" type="as" access="read"/>
+    <method name="GetLayout">
+      <arg type="i" direction="in"/><arg type="i" direction="in"/><arg type="as" direction="in"/>
+      <arg type="u" direction="out"/><arg type="(ia{sv}av)" direction="out"/>
+    </method>
+    <method name="GetGroupProperties">
+      <arg type="ai" direction="in"/><arg type="as" direction="in"/>
+      <arg type="a(ia{sv})" direction="out"/>
+    </method>
+    <method name="GetProperty">
+      <arg type="i" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="out"/>
+    </method>
+    <method name="Event">
+      <arg type="i" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="in"/><arg type="u" direction="in"/>
+    </method>
+    <method name="EventGroup">
+      <arg type="a(isvu)" direction="in"/><arg type="ai" direction="out"/>
+    </method>
+    <method name="AboutToShow"><arg type="i" direction="in"/><arg type="b" direction="out"/></method>
+    <method name="AboutToShowGroup">
+      <arg type="ai" direction="in"/><arg type="ai" direction="out"/><arg type="ai" direction="out"/>
+    </method>
+    <signal name="ItemsPropertiesUpdated"><arg type="a(ia{sv})"/><arg type="a(ias)"/></signal>
+    <signal name="LayoutUpdated"><arg type="u"/><arg type="i"/></signal>
+    <signal name="ItemActivationRequested"><arg type="i"/><arg type="u"/></signal>
+  </interface>
+</node>

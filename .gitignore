@@ -43,3 +43,6 @@ playground.xcworkspace
 **/build/
 local.properties
 *.iml
+
+### Linux
+/snippets-linux/target/

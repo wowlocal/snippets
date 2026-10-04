@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Minimal interoperability declarations. Signatures follow the published
+     Hyprland protocol; the compositor assigns physical key combinations.
+     https://github.com/hyprwm/hyprland-protocols/blob/main/protocols/hyprland-global-shortcuts-v1.xml -->
+<protocol name="snippets_global_shortcuts_v1">
+  <interface name="hyprland_global_shortcuts_manager_v1" version="1">
+    <request name="register_shortcut">
+      <arg name="shortcut" type="new_id" interface="hyprland_global_shortcut_v1"/>
+      <arg name="id" type="string"/>
+      <arg name="app_id" type="string"/>
+      <arg name="description" type="string"/>
+      <arg name="trigger_description" type="string"/>
+    </request>
+    <request name="destroy" type="destructor"/>
+    <enum name="error"><entry name="already_taken" value="0"/></enum>
+  </interface>
+  <interface name="hyprland_global_shortcut_v1" version="1">
+    <event name="pressed">
+      <arg name="tv_sec_hi" type="uint"/><arg name="tv_sec_lo" type="uint"/><arg name="tv_nsec" type="uint"/>
+    </event>
+    <event name="released">
+      <arg name="tv_sec_hi" type="uint"/><arg name="tv_sec_lo" type="uint"/><arg name="tv_nsec" type="uint"/>
+    </event>
+    <request name="destroy" type="destructor"/>
+  </interface>
+</protocol>

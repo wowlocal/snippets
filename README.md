@@ -16,6 +16,16 @@ Snippets works locally without an account. The native Apple apps share optional
 end-to-end encrypted iCloud sync. A native Android client and an alternative
 sync service are also implemented in this repository; see their [current status](#android-and-snippets-cloud).
 
+A native Rust + GTK desktop port for **Omarchy / Linux** is in development in
+[`snippets-linux/`](snippets-linux/README.md). Its local library, editor, search,
+tags, pins, JSON transfers, encrypted backups, optional automatic Cloud sync,
+placeholders, CLI, an encrypted vault workspace with retained-draft recovery, and
+Omarchy theme integration, editor keyword assistance and resolved previews,
+searchable native settings, explicit login startup, a native desktop tray, opt-in global shortcuts
+and bounded structured diagnostics with native export/delete controls
+are implemented. [Current verification and remaining desktop work](docs/linux/IMPLEMENTATION.md).
+Python is not required to build, install or run the Linux application.
+
 <p align="center">
   <a href="#get-started"><img src="https://img.shields.io/badge/macOS-15.5%2B-6D5EF5?style=flat-square&amp;logo=apple&amp;logoColor=white" alt="macOS 15.5 or later"></a>
   <a href="#ipad-workspace-and-iphone-companion"><img src="https://img.shields.io/badge/iPad_%26_iPhone-26.0%2B-4C77E8?style=flat-square&amp;logo=apple&amp;logoColor=white" alt="iOS and iPadOS 26.0 or later"></a>

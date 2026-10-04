@@ -1,0 +1,10 @@
+{
+  "snapshotCanonical": "{\"fields\":{\"content\":\"Fictional lost body 🦀\\n\",\"createdAt\":0.0,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"fixture\",\"name\":\"Public losing fixture\",\"tags\":[\"Work\"],\"updatedAt\":120.0},\"secure\":false,\"sourceHLC\":\"00000000000a-0000-aaaaaaa1\",\"sourceID\":\"00000000-0000-4000-8000-000000000021\",\"sourceOrigin\":\"aaaaaaa1\",\"version\":1,\"x\":{}}",
+  "fingerprint": "091c1562eb851b67b42322c1a044d208d9e061fb86609da074504ba8d9dc2989",
+  "copyID": "9741c5ee-879f-5069-a57c-037f234b0e25",
+  "deletionIDs": [
+    "abcdef01-1234-4000-8000-000000000001",
+    "00000000-0000-4000-8000-000000000021"
+  ],
+  "deletionFingerprint": "d5663c9730d9bf138ef35039333217ef260ca1c816f71a64127bd02ae0e502f2"
+}
