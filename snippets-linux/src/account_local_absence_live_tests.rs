@@ -148,7 +148,7 @@ fn run(delete: bool) {
     document.records[0].hlc = Some(Hlc::parse("100000000000-0000-11111111").unwrap());
     let source = document.records[0].metadata.id;
     let initial = projected(&document, source);
-    let unrelated = model::Snippet::new(
+    let mut unrelated = model::Snippet::new(
         "Public local-absence unrelated",
         "Public local-absence unrelated ordinary body",
     );
@@ -208,6 +208,56 @@ fn run(delete: bool) {
     )));
     assert!(uploaded_has(&fixture, &unrelated, &key, &salt));
     assert!(uploaded(&fixture, source, &key, &salt) == initial);
+    // A genuine accepted-but-unanswered unrelated update stays in the owning
+    // journal while the raw secure source is reviewed. No packet is seeded.
+    let mut library = model::Library::open(root.clone()).unwrap();
+    let original_unrelated = library
+        .snippets
+        .iter()
+        .find(|record| record.id == unrelated.id)
+        .unwrap()
+        .clone();
+    unrelated = original_unrelated.clone();
+    unrelated.content = "Public unrelated edit with a lost batch response".into();
+    library
+        .save(unrelated.clone(), Some(&original_unrelated))
+        .unwrap();
+    let old_version = captured
+        .journal
+        .confirmed(unrelated.id)
+        .unwrap()
+        .record_version
+        .clone();
+    fixture.state.lock().unwrap().lose_next_batch_reply = true;
+    action(&window, "Send Local Changes");
+    let lost = snapshot::checkpoint(&root);
+    let packet = lost.journal.outbound.as_ref().unwrap().clone();
+    assert!(packet.receipts.is_none() && packet.position == 0 && packet.offers.len() == 1);
+    let offer = &packet.offers[0];
+    assert_eq!(offer.wire.id, unrelated.id);
+    assert!(offer.offered.record_version.as_ref() == Some(&old_version));
+    assert!(!offer.deletion_authorized && !offer.offered.envelope.deleted);
+    let exact_packet = vec![(
+        offer.wire.clone(),
+        Some(old_version.for_checkpoint().to_owned()),
+    )];
+    {
+        let state = fixture.state.lock().unwrap();
+        assert_eq!(state.lost_batch_replies, 1);
+        assert!(state.submitted.last() == Some(&exact_packet));
+        assert!(state.version(unrelated.id).as_deref() != Some(old_version.for_checkpoint()));
+    }
+    assert!(uploaded_has(&fixture, &unrelated, &key, &salt));
+    let lost_primary = primary(&root);
+    let lost_counts = data_counts(&fixture);
+    action(&window, "Receive Cloud Changes");
+    assert_eq!(
+        window.status.label(),
+        "A retained send needs to finish before receiving another page. Choose Send Local Changes to resume it."
+    );
+    assert!(snapshot::checkpoint(&root).journal.outbound.as_ref() == Some(&packet));
+    assert!(snapshot::checkpoint(&root).journal.inbox == lost.journal.inbox);
+    assert!(primary(&root) == lost_primary && data_counts(&fixture) == lost_counts);
     document.records.clear();
     model::atomic_write(&root.join("Vault/vault.json"), &document.encode().unwrap()).unwrap();
     let absent = primary(&root);
@@ -266,6 +316,10 @@ fn run(delete: bool) {
             && decided.journal.outbound == held.journal.outbound
     );
     assert!(decided.journal.confirmed(source) == held.journal.confirmed(source));
+    assert!(decided.journal.outbound.as_ref() == Some(&packet));
+    assert!(decided.journal.entry(unrelated.id) == held.journal.entry(unrelated.id));
+    assert!(decided.journal.confirmed(unrelated.id) == held.journal.confirmed(unrelated.id));
+    assert!(fixture.state.lock().unwrap().submitted == packets);
     let target = decided.journal.entry(source).unwrap().desired.clone();
     assert!(
         target.deleted == delete && decided.journal.deletion_approved(&target).unwrap() == delete
@@ -318,6 +372,8 @@ fn run(delete: bool) {
     {
         let state = fixture.state.lock().unwrap();
         assert!(state.submitted[..packets.len()] == packets);
+        assert!(state.submitted[packets.len()] == exact_packet);
+        assert_eq!(state.lost_batch_replies, 1);
         let offers: Vec<_> = state.submitted.iter().flatten().collect();
         let copy_position = offers
             .iter()
@@ -350,6 +406,6 @@ fn run(delete: bool) {
     drop(app);
     until("native local-absence worker did not terminate", no_worker);
     println!(
-        "Native local-absence source decision completed: no implicit deletion, mapped cancellation/focus/credential refusal, real original preservation before exact-CAS source update, unrelated state and terminal owned worker; public fixtures only."
+        "Native local-absence source decision completed: accepted-but-unanswered unrelated packet retained through SendFirst and cancellation/focus/credential refusal, exact ciphertext/CAS retry before original preservation and source update, terminal owned worker; public fixtures only."
     );
 }

@@ -365,7 +365,8 @@ owner arrives now receives its own Keep/Delete choice before either parent
 choice. Unknown pending raw-child Keep/Delete decisions now pass before parent
 Keep, with separate fresh credentials and exact copy-before-source CAS. Local-absence
 secure source Keep/Delete also passes with its own mapped review and fresh credentials.
-Unrelated ambiguous packets remain a separate check.
+Unrelated accepted-but-unanswered packets now pass native local-absence Keep/Delete
+review with exact ciphertext/CAS retry; new pages remain blocked until that send finishes.
 
 After reconnecting, selecting a library and verifying its keys, choose **Enable
 Automatic Sync for This Library**. Snippets resumes that exact saved account and
@@ -754,8 +755,9 @@ journal-only C1 source Keep/Delete also pass with retained child seals and
 separate originals. Prior-confirmed cloud-child Keep/Delete before parent
 Keep/Delete also passes all four native combinations with actual saved CAS.
 Unknown pending raw-child Keep/Delete before parent Keep now passes as well.
-Local-absence secure source Keep/Delete now passes as well. Unrelated ambiguous
-packets, switch-candidate pairing, interrupted switching and mixed-vault,
+Local-absence secure source Keep/Delete also retains unrelated ambiguous packets
+through authenticated review and exact ciphertext/CAS retry. Switch-candidate pairing
+now passes; other interrupted switching and mixed-vault,
 external-file/multiple-source vault restoration and actual process termination
 during restoration remain under live acceptance. Native recipient pairing and signed approval/recovery
 replacement now pass, including retained-request restart. The native
@@ -1840,7 +1842,6 @@ specific defect.
 | Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
 | Durable recovery | Other interrupted switching/first-key setup remains. Native candidate pairing from an independent trusted B installation preserves active A, restarts the invitation and retains the received B key until a separate PAM-authorized switch. Published-switch offline finish, unpublished-switch offline cancellation and first-key lost-response continuation pass. Native restoration cuts, SIGKILL/offline restoration and the historical missing-header file case also pass. |
-| Remaining conflict decisions | Unrelated ambiguous packets. Native local-absence secure source Keep/Delete, Unknown pending raw-child Keep/Delete before parent Keep, existing current/nested/prior-confirmed combinations and native history retirement/unused-file cleanup pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 | Installed full restoration | All five source combinations pass in native harnesses using the actual host portal. This checkpoint checks only production chooser cancellation in the installed app, not complete restoration there. |
@@ -2286,3 +2287,40 @@ keeps the exact one-claim/key-installation assertions; there is no fixed delay. 
 other named gates and the independent GTK cancellation defect remain open.
 The user archive is refreshed from the clean rebased checkpoint; existing
 installation, user data and the Stay Awake restoration timer are preserved.
+
+## Native unrelated ambiguous packet review (2026-10-05)
+
+The existing current-carrier Keep/Delete cycles now complete the remaining
+unrelated-packet gate through their local-absence child. The native owner first
+captures the public raw secure graph and confirms an unrelated ordinary record.
+Its next actual Send edits that ordinary record; the verified HTTPS peer accepts
+its encrypted offer and changes the real record version, then closes TLS before
+sending any HTTP status/body. The retained packet has no receipt, the original
+ciphertext and original CAS. No journal, packet or approval is seeded.
+
+Actual Receive reports SendFirst and preserves the packet, inbox, primary bytes
+and fetch/batch counts. Removing only the public secure primary record maps its
+local-absence review through Send. Default Cancel, filled credential Cancel,
+actual focus loss and incorrect recovery input preserve files and perform no
+data-plane requests. Fresh vault authentication separately authorizes Keep or
+Delete, materializes the disabled original and retains the unrelated packet,
+its desired entry and confirmed version exactly. The next actual batch retries
+that packet unchanged; real CAS reconciliation and explicit Sync confirm the
+original before the secure source update. Public bodies, exact source CAS,
+active key, empty pending state and terminal owned worker are checked.
+
+Both complete native cycles pass under fatal warnings with no GTK critical.
+Sixty-one distinct existing core tests pass in sixty-four executions, alongside
+format, shell syntax, all-target Clippy and Release harness/binaries. Count stays
+1,141; no test, runner option, acceptance variant or production rule is added.
+One fixture attempt failed before the lost response because it used a stale
+ordinary editor snapshot. Its source-bound evidence is retained under ignored
+`target/live-omarchy-acceptance/ambiguous-native-stale-editor-failed/` and excluded;
+the fixture now reads the actual saved record before editing. The older incorrect
+Receive-ordering attempt remains retained separately.
+
+The finite table now has six evidence groups. The independent GTK chooser Cancel
+defect remains unresolved; no wait is added. Fresh fetch and rebase confirm the
+branch still includes current main `e232c886`. The refreshed user archive carries
+the clean commit and binary receipts; installed app, user data, desktop settings
+and the scheduled Stay Awake restoration remain unchanged.

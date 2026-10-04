@@ -33,6 +33,8 @@ pub(super) struct State {
     pub revokes: usize,
     pub fetches: usize,
     pub batches: usize,
+    pub lose_next_batch_reply: bool,
+    pub lost_batch_replies: usize,
     pub accepted: usize,
     pub reader: bool,
     pub changed_scope: bool,
@@ -621,13 +623,21 @@ impl Fixture {
                     let lose_bootstrap = request.method == "POST"
                         && request.path.ends_with("/key-bootstrap")
                         && std::mem::take(&mut state.lose_next_bootstrap_reply);
+                    let lose_batch = request.method == "POST"
+                        && request.path.ends_with("/records/batch")
+                        && std::mem::take(&mut state.lose_next_batch_reply);
                     let (status, response) = respond(request, &thread_server, &mut state);
                     if lose_bootstrap {
                         assert_eq!(status, 200);
                         state.lost_bootstrap_replies += 1;
                     }
+                    if lose_batch {
+                        assert_eq!(status, 200);
+                        state.lost_batch_replies += 1;
+                    }
                     let lose_reply = lose_reply
                         || lose_bootstrap
+                        || lose_batch
                         || state
                             .pairing
                             .as_mut()
