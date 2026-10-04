@@ -352,6 +352,150 @@ final class EditorInvalidationTests: XCTestCase {
         XCTAssertEqual(editor.title, "Selected from CloudKit")
     }
 
+    // CloudKit fetches back the record this device has just uploaded, and the sync
+    // bridge publishes it as a remote change to the snippet being edited. On device
+    // the caret jumped to the end of the body every few seconds while typing.
+    func testRemoteEchoKeepsPhoneBodyCaret() throws {
+        let environment = makeEnvironment()
+        let snippet = try! environment.store.addSnippet(name: "", content: "Hello world")
+        environment.store.flushPendingWrites()
+        let editor = try hostPhoneEditor(environment: environment, editing: snippet.id)
+        let body = try XCTUnwrap(
+            editor.view.invalidationDescendant(identifier: "snippet-content") as? UITextView
+        )
+        XCTAssertTrue(body.becomeFirstResponder())
+        body.selectedRange = NSRange(location: 5, length: 0)
+        body.insertText(",")
+        XCTAssertEqual(environment.store.snippet(id: snippet.id)?.content, "Hello, world")
+        XCTAssertEqual(body.selectedRange, NSRange(location: 6, length: 0))
+
+        environment.store.coordinatedReloadDidFinish(.remoteSync, changedIDs: [snippet.id])
+
+        XCTAssertEqual(body.text, "Hello, world")
+        XCTAssertEqual(body.selectedRange, NSRange(location: 6, length: 0))
+        XCTAssertTrue(body.isFirstResponder)
+    }
+
+    func testRemoteContentChangeKeepsPhoneBodyCaretOutsideTheMergedEdit() throws {
+        let environment = makeEnvironment()
+        let snippet = try! environment.store.addSnippet(name: "", content: "alpha beta gamma")
+        environment.store.flushPendingWrites()
+        let editor = try hostPhoneEditor(environment: environment, editing: snippet.id)
+        let body = try XCTUnwrap(
+            editor.view.invalidationDescendant(identifier: "snippet-content") as? UITextView
+        )
+        XCTAssertTrue(body.becomeFirstResponder())
+        body.selectedRange = NSRange(location: 5, length: 0)
+
+        try applyRemoteContent("alpha beta delta", to: snippet, in: environment)
+
+        XCTAssertEqual(body.text, "alpha beta delta")
+        XCTAssertEqual(
+            body.selectedRange,
+            NSRange(location: 5, length: 0),
+            "An edit after the caret must not move it"
+        )
+
+        try applyRemoteContent("new alpha beta delta", to: snippet, in: environment)
+
+        XCTAssertEqual(body.text, "new alpha beta delta")
+        XCTAssertEqual(
+            body.selectedRange,
+            NSRange(location: 9, length: 0),
+            "An edit before the caret must shift it with the text it was in"
+        )
+        XCTAssertTrue(body.isFirstResponder)
+    }
+
+    func testRemoteEchoKeepsIPadBodyCaretAndUndoGroup() throws {
+        let environment = makeEnvironment()
+        let snippet = try! environment.store.addSnippet(name: "", content: "Hello world")
+        environment.store.flushPendingWrites()
+        let hosted = try hostSplit(environment: environment, selecting: snippet.id)
+        let body = try XCTUnwrap(
+            hosted.editor.view.invalidationDescendant(identifier: "snippet-content") as? UITextView
+        )
+        XCTAssertTrue(body.becomeFirstResponder())
+        body.selectedRange = NSRange(location: 5, length: 0)
+        body.insertText(",")
+
+        environment.store.coordinatedReloadDidFinish(.remoteSync, changedIDs: [snippet.id])
+
+        XCTAssertEqual(body.text, "Hello, world")
+        XCTAssertEqual(body.selectedRange, NSRange(location: 6, length: 0))
+        XCTAssertTrue(body.isFirstResponder)
+
+        body.insertText(" ")
+        body.insertText("a")
+        XCTAssertTrue(body.resignFirstResponder())
+        XCTAssertEqual(environment.store.snippet(id: snippet.id)?.content, "Hello, a world")
+
+        XCTAssertTrue(environment.store.undo())
+        XCTAssertEqual(
+            environment.store.snippet(id: snippet.id)?.content,
+            "Hello world",
+            "An echo must not split one editing session into per-keystroke undo steps"
+        )
+    }
+
+    func testPhoneTypingReusesNavigationItemsUntilTheirStateChanges() throws {
+        let environment = makeEnvironment()
+        let snippet = try! environment.store.addSnippet(name: "", content: "Hello")
+        environment.store.flushPendingWrites()
+        let editor = try hostPhoneEditor(environment: environment, editing: snippet.id)
+        let body = try XCTUnwrap(
+            editor.view.invalidationDescendant(identifier: "snippet-content") as? UITextView
+        )
+        XCTAssertTrue(body.becomeFirstResponder())
+        let more = try XCTUnwrap(editor.navigationItem.rightBarButtonItems?.first)
+
+        body.insertText("!")
+
+        XCTAssertTrue(
+            editor.navigationItem.rightBarButtonItems?.first === more,
+            "A keystroke must not rebuild navigation bar items"
+        )
+
+        XCTAssertTrue(environment.store.togglePinned(snippetID: snippet.id))
+
+        let rebuilt = try XCTUnwrap(editor.navigationItem.rightBarButtonItems?.first)
+        XCTAssertFalse(rebuilt === more)
+        XCTAssertEqual((rebuilt.menu?.children.first as? UIAction)?.title, "Unpin")
+    }
+
+    private func hostPhoneEditor(
+        environment: AppEnvironment,
+        editing snippetID: UUID
+    ) throws -> PhoneSnippetEditorViewController {
+        let root = PhoneRootViewController(environment: environment)
+        _ = host(root, size: CGSize(width: 390, height: 844))
+        let library = try XCTUnwrap(
+            root.viewControllers.first as? PhoneLibraryViewController
+        )
+        root.phoneLibrary(library, requestedEdit: snippetID)
+        let editor = try XCTUnwrap(root.topViewController as? PhoneSnippetEditorViewController)
+        editor.loadViewIfNeeded()
+        drainMainRunLoop(for: 0.05)
+        return editor
+    }
+
+    /// Mirrors `SnippetLibraryBridge.applyRemote`: the merged library is written
+    /// underneath the store, reloaded silently, then published once as `.remoteSync`.
+    private func applyRemoteContent(
+        _ content: String,
+        to snippet: Snippet,
+        in environment: AppEnvironment
+    ) throws {
+        environment.store.flushPendingWrites()
+        var remote = try XCTUnwrap(environment.store.snippet(id: snippet.id))
+        remote.content = content
+        remote.updatedAt = remote.updatedAt.addingTimeInterval(1)
+        try SnippetLibraryCodec.encode([remote])
+            .write(to: SnippetStorageLocations.snippetsFileURL)
+        XCTAssertTrue(environment.store.reloadAfterExternalWrite(notifyChange: false))
+        environment.store.coordinatedReloadDidFinish(.remoteSync, changedIDs: [snippet.id])
+    }
+
     private func phoneRowName(
         in library: PhoneLibraryViewController,
         table: UITableView

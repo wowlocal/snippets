@@ -81,6 +81,12 @@ final class SnippetEditorViewController: UIViewController {
     private var keywordWarningMessage: String?
     private var isPublishingEditorChange = false
     private var secureRevealPolicy = SecureSnippetRevealPolicy()
+    private struct NavigationActionsState: Equatable {
+        let id: UUID
+        let isSecure: Bool
+        let isPinned: Bool
+    }
+    private var navigationActionsState: NavigationActionsState?
     private var secureAuthenticationTask: Task<Void, Never>?
     private var secureSaveWorkItem: DispatchWorkItem?
     private var secureContentIsRevealed: Bool { secureRevealPolicy.isProtectedPlaintext }
@@ -195,6 +201,43 @@ final class SnippetEditorViewController: UIViewController {
         updateSecurePresentation()
         refreshDerivedUI()
         updateNavigationActions()
+    }
+
+    /// Refreshes the selected snippet after a store change that affected it.
+    func refreshFromStore(id: UUID, source: SnippetStore.ChangeSource) {
+        if isViewLoaded, id == selectedID, refreshOrdinaryEditorInPlace() { return }
+        bind(
+            to: id,
+            preserveFirstResponder: source == .local,
+            diagnosticReason: .storeRefresh(source))
+    }
+
+    /// Applies a store refresh of the ordinary snippet already on screen field by
+    /// field. Unlike `bind`, it neither replaces unchanged text (which moved the caret
+    /// on every sync echo) nor commits the open edit transaction, which the store
+    /// already rebases across merges.
+    private func refreshOrdinaryEditorInPlace() -> Bool {
+        guard let selectedID,
+              secureRevealPolicy.state == .ordinary,
+              !environment.store.isSecure(selectedID),
+              let snippet = environment.store.snippet(id: selectedID),
+              bodyTextView.refreshOrdinaryText(snippet.content) else { return false }
+        isBinding = true
+        if nameField.text != snippet.name { nameField.text = snippet.name }
+        if keywordField.text != snippet.normalizedKeyword {
+            keywordField.text = snippet.normalizedKeyword
+        }
+        // `currentTags()` would commit a tag the user is still typing.
+        let tags = SnippetTagging.normalizedTags(snippet.tags)
+        if tagField.tags != tags { tagField.setTags(tags) }
+        if enabledSwitch.isOn != snippet.isEnabled { enabledSwitch.isOn = snippet.isEnabled }
+        isBinding = false
+        updateBodyPlaceholder()
+        updateToggleButtons()
+        updateSecurePresentation()
+        refreshDerivedUI()
+        updateNavigationActions()
+        return true
     }
 
     @discardableResult
@@ -738,6 +781,7 @@ final class SnippetEditorViewController: UIViewController {
         title = "Snippets"
         scrollView.isHidden = true
         emptyView.isHidden = false
+        navigationActionsState = nil
         navigationItem.rightBarButtonItems = nil
         enabledButton.isEnabled = false
         secureButton.isEnabled = false
@@ -745,10 +789,16 @@ final class SnippetEditorViewController: UIViewController {
 
     private func updateNavigationActions() {
         guard let id = selectedID, let snippet = environment.store.snippetForDisplay(id: id) else {
+            navigationActionsState = nil
             navigationItem.rightBarButtonItems = nil
             return
         }
         let isSecure = environment.store.isSecure(id)
+        // Replacing bar items relayouts the navigation bar. Doing it per keystroke was
+        // most of the editor's main-thread time for each typed character.
+        let state = NavigationActionsState(id: id, isSecure: isSecure, isPinned: snippet.isPinned)
+        guard state != navigationActionsState else { return }
+        navigationActionsState = state
         let copy = UIBarButtonItem(
             image: UIImage(systemName: "doc.on.doc"),
             style: .plain,

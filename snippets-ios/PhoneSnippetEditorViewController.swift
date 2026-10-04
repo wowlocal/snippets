@@ -46,6 +46,11 @@ final class PhoneSnippetEditorViewController: UIViewController {
     private var keywordWarningMessage: String?
     private var isPublishingEditorChange = false
     private var secureRevealPolicy = SecureSnippetRevealPolicy()
+    private struct NavigationActionsState: Equatable {
+        let isSecure: Bool
+        let isPinned: Bool
+    }
+    private var navigationActionsState: NavigationActionsState?
     private var secureAuthenticationTask: Task<Void, Never>?
     private var previewIsExpanded = false
     private var secureSaveWorkItem: DispatchWorkItem?
@@ -177,7 +182,32 @@ final class PhoneSnippetEditorViewController: UIViewController {
             refreshDerivedUI()
             return
         }
+        if refreshOrdinaryEditorInPlace() { return }
         bindFromStore(reason: .storeRefresh(source))
+    }
+
+    /// Applies a store refresh of the ordinary snippet already on screen field by
+    /// field. Unlike `bindFromStore`, it neither replaces unchanged text (which moved
+    /// the caret on every sync echo) nor commits the open edit transaction, which the
+    /// store already rebases across merges.
+    private func refreshOrdinaryEditorInPlace() -> Bool {
+        guard secureRevealPolicy.state == .ordinary,
+              !environment.store.isSecure(snippetID),
+              let snippet = environment.store.snippet(id: snippetID),
+              bodyTextView.refreshOrdinaryText(snippet.content) else { return false }
+        isBinding = true
+        if nameField.text != snippet.name { nameField.text = snippet.name }
+        if keywordField.text != snippet.normalizedKeyword {
+            keywordField.text = snippet.normalizedKeyword
+        }
+        // `currentTags()` would commit a tag the user is still typing.
+        let tags = SnippetTagging.normalizedTags(snippet.tags)
+        if tagField.tags != tags { tagField.setTags(tags) }
+        if enabledSwitch.isOn != snippet.isEnabled { enabledSwitch.isOn = snippet.isEnabled }
+        isBinding = false
+        updateSecurePresentation()
+        refreshDerivedUI()
+        return true
     }
 
     func focusBody() {
@@ -766,6 +796,11 @@ final class PhoneSnippetEditorViewController: UIViewController {
 
     private func updateNavigationActions(for snippet: Snippet) {
         let secure = environment.store.isSecure(snippetID)
+        // Replacing bar items relayouts the navigation bar. Doing it per keystroke was
+        // most of the editor's main-thread time for each typed character.
+        let state = NavigationActionsState(isSecure: secure, isPinned: snippet.isPinned)
+        guard state != navigationActionsState else { return }
+        navigationActionsState = state
         let copy = UIBarButtonItem(
             image: UIImage(systemName: secure ? "lock.open" : "doc.on.doc"),
             primaryAction: UIAction { [weak self] _ in self?.copySnippet() }
