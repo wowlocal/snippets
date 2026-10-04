@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Explicit native account acceptance with an isolated bus, keyring and data root.
-# This shares only the compositor, never the login keyring or library.
+# Shares the compositor and optionally real OpenFile only, never the login keyring or library.
 set -euo pipefail
 if [[ ${1:-} == --in-bus ]]; then
   test_binary=$2
@@ -37,10 +37,18 @@ if [[ ${1:-} == --in-bus ]]; then
 fi
 if [[ $# -lt 1 || $# -gt 2 || ! -x $1 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${HYPRLAND_INSTANCE_SIGNATURE:-} || -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--creation|--switch|--restoration|--secure-restoration|--foreign-restoration|--file-restoration|--backup-file-restoration|--mixed-retained-restoration|--mixed-files-restoration|--mixed-backup-restoration|--restore-cancel-consent|--restore-cancel-baseline|--restore-finish-ordinary|--restore-finish-vault|--pairing|--recovery-reconcile|--recovery-retry|--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete|--nested-review-keep|--nested-review-delete|--nested-journal-keep|--nested-journal-delete|--prior-child-keep-parent-keep|--prior-child-keep-parent-delete|--prior-child-delete-parent-keep|--prior-child-delete-parent-delete] (in the unlocked desktop session)' >&2
+  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--creation|--switch|--restoration|--secure-restoration|--foreign-restoration|--file-restoration|--backup-file-restoration|--mixed-retained-restoration|--mixed-files-restoration|--mixed-backup-restoration|--portal-chooser|--portal-file-restoration|--portal-backup-file-restoration|--portal-mixed-retained-restoration|--portal-mixed-files-restoration|--portal-mixed-backup-restoration|--restore-cancel-consent|--restore-cancel-baseline|--restore-finish-ordinary|--restore-finish-vault|--pairing|--recovery-reconcile|--recovery-retry|--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete|--nested-review-keep|--nested-review-delete|--nested-journal-keep|--nested-journal-delete|--prior-child-keep-parent-keep|--prior-child-keep-parent-delete|--prior-child-delete-parent-keep|--prior-child-delete-parent-delete] (in the unlocked desktop session)' >&2
   exit 2
 fi
+portal_mode=false
 case ${2:-} in
+  --portal-chooser|--portal-file-restoration|--portal-backup-file-restoration|--portal-mixed-retained-restoration|--portal-mixed-files-restoration|--portal-mixed-backup-restoration)
+    portal_mode=true
+    set -- "$1" "${2/--portal-/--}"
+    ;;
+esac
+case ${2:-} in
+  --chooser) test_name=account_ui::live_tests::portal::live_host_filechooser_smoke ;;
   '') test_name=account_ui::live_tests::live_account_onboarding_and_recovery ;;
   --creation) test_name=account_ui::live_tests::creation::live_library_creation_retains_receipts_and_current_library ;;
   --switch) test_name=account_ui::live_tests::switching::live_reviewed_library_switch_keeps_source_history_and_reconnects ;;
@@ -93,13 +101,25 @@ fixture_runtime=$(mktemp -d /tmp/sh.XXXXXX)
 trap 'rm -rf -- "$fixture_root" "$fixture_runtime"' EXIT
 mkdir -m 700 "$fixture_root/data" "$fixture_root/control" "$fixture_root/config" "$fixture_root/cache"
 ln -s -- "$host_runtime/hypr" "$fixture_runtime/hypr"
-# No activation directories: GTK must not start portals, document mounts or
-# accessibility services on behalf of this deliberately incomplete test session.
+# GTK 4.22 discovers portals through ListActivatableNames. Advertise only the
+# already-owned narrow relay; activation fails closed if that relay is absent.
+# No host activation directories, document mounts or accessibility services.
+portal_service_xml=""
+if [[ $portal_mode == true ]]; then
+  mkdir -m 700 "$fixture_root/portal-services"
+  cat > "$fixture_root/portal-services/org.freedesktop.portal.Desktop.service" <<SERVICE
+[D-BUS Service]
+Name=org.freedesktop.portal.Desktop
+Exec=/usr/bin/false
+SERVICE
+  portal_service_xml="<servicedir>$fixture_root/portal-services</servicedir>"
+fi
 cat > "$fixture_root/bus.conf" <<XML
 <busconfig>
   <type>session</type>
   <listen>unix:tmpdir=$fixture_runtime</listen>
   <auth>EXTERNAL</auth>
+  $portal_service_xml
   <policy context="default">
     <allow user="$UID"/>
     <allow own="*"/>
@@ -114,7 +134,13 @@ export XDG_CACHE_HOME=$fixture_root/cache
 export GSETTINGS_BACKEND=memory
 export XDG_RUNTIME_DIR=$fixture_runtime
 export GIO_USE_VFS=local
-export GDK_DEBUG=no-portals
+unset GTK_USE_PORTAL SNIPPETS_ACCOUNT_PORTAL
+if [[ $portal_mode == true ]]; then
+  unset GDK_DEBUG
+  export SNIPPETS_ACCOUNT_PORTAL=real-host-open-file
+else
+  export GDK_DEBUG=no-portals
+fi
 export GTK_A11Y=none
 export SNIPPETS_SECRET_HOST_BUS=${DBUS_SESSION_BUS_ADDRESS:-}
 dbus-run-session --config-file="$fixture_root/bus.conf" -- \

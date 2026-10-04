@@ -82,6 +82,7 @@ pub(super) fn run(followup: Followup) {
     // chooser still needs application identity for the private Recent store.
     glib::set_prgname(Some("snippets-public-account-fixture"));
     glib::set_application_name("Snippets Public Account Fixture");
+    let _portal = super::portal::Bridge::optional();
     let root = isolated_root();
     let fixture = server::Fixture::new();
     fixture.state.lock().unwrap().enable_creation();

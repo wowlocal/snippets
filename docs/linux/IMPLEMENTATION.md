@@ -253,7 +253,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Paste picker | Native picker, captured address/process, Lua focus/paste, terminal chord, text clipboard lease | Live ordinary paste reaches the expected field in an independent C/GTK application and restores the clipboard; fresh vault-authenticated secure insertion also reaches that independent receiver |
 | Local suggestion learning | Frozen picker snapshots; relevance/keyword/pin priority before bounded prefix memory and 14-day frecency; successful copy/paste/inline/secure insertion recording; native toggles and independent resets; separate private debounced persistence | Isolated math/schema/concurrency/privacy tests and compiled native controls; live picker/settings/input behavior remains unverified |
 | Installation | Rust release GUI/CLI and private PAM helper, user-prefix installer, desktop actions, icon, metadata | Build, temporary-prefix installation, metadata validation |
-| Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; native ordinary saved-history restoration passes mapped review, Cancel/denied PAM/focus revocation, stale-primary refusal, current-version/unrelated preservation, actual current-scope CAS/feed retention, new-worker reconnect and encrypted dependency ordering; native same-vault ordinary/protected restoration also passes fresh vault passphrase/recovery verification, separate PAM, stale ciphertext refusal, both disabled current versions, exact unrelated records/wraps and fresh-worker authenticated encrypted copy-before-source sync; mixed-vault, foreign-vault and interrupted restoration remain pending |
+| Library recovery history | Native catalogue and reviewed restoration of saved local changes, archived deleted/missing conflict participants and queued generations; authenticated materialization of missing secure originals, separate original C0 and selected C1, current-version preservation, bounded protected receipts, encrypted full-file redo, fresh-purpose offline completion/cancellation; foreign-vault graph re-encryption with separate native source/current authentication and previous-vault JSON/backup selection; authenticated recovery of absent own vault metadata; mixed archives with independently authenticated source owners and native multi-file credentials | Isolated owners cover strict-CAS delivery ordering, stale frames/files, old/current scopes, interrupted writes and lost replies, exact current offers/CAS/feed, tampering, vault seals, retention and generation refusal; incomplete raw v1 carriers, absent or duplicate body ownership refuse the whole graph; terminal history retirement and reviewed unused-file cleanup are wired; native ordinary saved-history restoration passes mapped review, Cancel/denied PAM/focus revocation, stale-primary refusal, current-version/unrelated preservation, actual current-scope CAS/feed retention, new-worker reconnect and encrypted dependency ordering; native same-vault ordinary/protected restoration also passes fresh vault passphrase/recovery verification, separate PAM, stale ciphertext refusal, both disabled current versions, exact unrelated records/wraps and fresh-worker authenticated encrypted copy-before-source sync; retained foreign, external JSON/backup and mixed-source fallback restoration passed the earlier checkpoint; the current mixed fallback cancellation regression is reproducibly failing on GTK 4.22.4; all five file-source variants also have host-portal acceptance with a private keyring and exact returned-file binding; interrupted restoration passes simulated durable cuts; actual process termination and legacy missing-header GTK restoration remain pending |
 | Secure snippets | Native setup/unlock/recovery/password change, encrypted draft editor with bounded encrypted Undo/Redo and explicit Paste, foreign-vault retained-draft recovery, explicit fresh-authenticated saved legacy hash repair, save/delete, idle/hard/sleep/desktop locks | OpenSSL fixture, tampering, recovery, CAS, hash, metadata-only CLI and draft tests pass; current native secure lifecycle, retained-draft recovery and legacy-repair lifecycle checks pass; actual installed Release keyboard input/Save, metadata, encrypted Undo/Redo, Escape/single-click reveal, passphrase cancellation/change, explicit lock and old/new password admission pass with independent OpenSSL verification and no accessible body text interface; actual installed Release recovery-key unlock/change, cancellation, wrong/mismatched credentials, pending-dialog Ctrl+L and focus revocation before submission and during observed authentication/rewrap pass; new-vault setup/recovery-sheet, rendered-key authentication, Escape/Tab focus, Close/Continue and first encrypted save pass; authenticated logind sleep events and system-bus loss revoke native keys, dialogs, workers and CLI requests; actual compositor locks revoke keys, dialogs, authentication/passphrase/setup workers and CLI requests with acknowledged unlock in Safe Mode; hardware suspend and normal Omarchy configuration remain separate |
 | Secure delivery and transfers | Native portable encrypted-backup export/import, fresh-authenticated direct virtual-keyboard insertion and one-cycle vault authentication for receiving/sending | Authenticated transfers, insertion core, native XKB, source revocation, repaired-record admission and bounded clipboard-placeholder stream checks pass; private native Wayland input fixture and live fresh vault-authenticated insertion into an independent GTK receiving field pass; the mapped fresh passphrase/recovery-key sync workflow also passes with a real private keyring and verified HTTPS; retained strict-CAS protected-conflict preservation and fresh protected-copy restore also pass; flat current secure v1 source Keep/Delete and acknowledged-copy repair with retained source rejection pass; independent raw child decisions, local-absence source review, unrelated ambiguous packets and fuller editing/accessibility remain under live review; all four nested physical/journal-only secure C1 cloud-source Keep/Delete cases now pass with unchanged child seals, separate immutable C0/D0 and actual CAS ordering; prior-confirmed cloud-child Keep/Delete before either raw parent choice passes all four native combinations; Unknown pending raw-child intent remains separate |
 | Cloud protocol | Rust HTTPS discovery, native email/session endpoints, scope/epoch admission, changes pages and record CAS batches; canonical encrypted wire records; explicit native Sync Now, receiving/sending, missing-snapshot review, current v1 conflict-owned deletion/restore and reviewed switching wired | Earlier real loopback HTTP tests, independent OpenSSL/Swift formatter vectors and isolated bidirectional cycle tests pass; fresh verified loopback HTTPS onboarding/recipient checks and combined native onboarding/reconnect/sign-out pass in the unrestricted session; combined native ordinary automatic exchange passes with a real private keyring and verified HTTPS; manual Receive/Send/Sync Now and fresh vault passphrase/recovery-key exchange pass; strict-CAS protected conflicts and basic cloud deletion Cancel/Keep/Delete pass; native cursor-invalid missing-snapshot review also passes Cancel/focus/stale-primary refusal and explicit resumption with acknowledged ordinary/protected records; flat current secure v1 cloud deletion and acknowledged-copy repair pass with independent mixed choices; native reviewed switching between independently keyed libraries and back and two-installation pairing/signed approval pass; native recovery replacement passes exact-envelope reconciliation and original-proof replay after restart, with same-key offline recovery; candidate pairing, interrupted switching, raw child decisions, local-absence source review and unrelated ambiguous packets remain pending; CloudKit is Apple-only; all four nested physical/journal-only secure C1 cloud-source Keep/Delete cases now pass with unchanged child seals, separate immutable C0/D0 and actual CAS ordering; prior-confirmed cloud-child Keep/Delete before either raw parent choice passes all four native combinations; Unknown pending raw-child intent remains separate |
@@ -5154,3 +5154,77 @@ termination/power loss, separately installed-app restoration, interrupted
 switching, hardware suspend, normal Omarchy configuration and Apple-app exchange
 remain separate acceptance work. Final GTK/Wayland/D-Bus/unlocked/DNS/HTTPS and
 fixture-cleanup checks preserve Stay Awake and the 2026-10-05 09:00 Minsk timer.
+
+### Actual host portal for isolated account restoration (2026-10-04)
+
+The account fixtures now use Omarchy's real GTK FileChooser portal while keeping
+the native Secret Service, account roots and PAM policy private. A test-only
+OpenFile relay pins the authenticated host owner, translates request object paths,
+and checks every actual returned URI against the exact public fixture selection
+before credentials. It forwards the original host response payload unchanged;
+it never constructs selected-file results or source tickets. The shared guarded
+input helper verifies the unlocked session and the active chooser's address/PID
+against the real host implementation before each key. No compositor config is
+changed and no host keyring calls are forwarded.
+
+GTK 4.22 checks ListActivatableNames as well as portal interface versions. The
+private runner advertises only its already-owned relay, with fail-closed activation
+and no host activation directories. GTK negotiates actual FileChooser and Settings
+versions; unavailable session-monitor/registry interfaces negotiate zero. Appearance
+and GNOME settings are read-only and run on a separate main context so synchronous
+GTK initialization can complete. The fixture does not force GDK_DEBUG=portals or
+GTK_USE_PORTAL. See the [GTK negotiation implementation](https://raw.githubusercontent.com/GNOME/gtk/main/gdk/gdk.c)
+and [FileChooser API](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.FileChooser.html).
+
+Single-file choices type the public fixture path, including spaces. Two-file
+choices receive only the API's initial-folder suggestion for an exclusive public
+directory, then use the actual chooser's Select All and Open. The returned URI
+set must match exactly before the production callback proceeds. This establishes
+real host selection and focus with that test folder hint; navigation from the host
+Recent list by directory keystrokes is not claimed. Escape can return either a
+user-cancel or other-aborted portal response; it is relayed unchanged and must
+contain no files. GTK and the production flow then clear inputs and return focus.
+
+Release passes all five full source variants: single external JSON, single
+independent encrypted backup, retained A plus C JSON, two A/C JSON files, and A
+JSON plus C's independent encrypted backup. Debug passes full single JSON and
+mixed JSON/backup restoration. The actual chooser smoke test passes in both
+profiles, checking Cancel, a file with spaces, exact multiple selection and parent
+focus. Existing whole-selection credential/review/PAM/focus refusals, per-file
+changes after review before fresh PAM, current ciphertext binding, preserved
+current versions, unrelated records, exact key frames/current wraps/CAS/feed,
+independent OpenSSL output checks and authenticated copy-before-source sync after
+a new worker remain in each full workflow.
+
+Final evidence has 20 serial gates on 307 frozen native inputs, seven distinct
+live tests, desktop/headless Clippy, format/shell checks, the single-JSON fallback
+Release regression, and the original encrypted-backup host portal cycle
+in both profiles. Fresh Release GUI/CLI/helper artifacts retain checkpoint
+45c98ca3's exact hashes. The curated manifest has 313 files. All changes are native
+tests, their runner, cfg(test) registration or documentation; no production runtime
+code changes. Installed-app and focused core evidence is inherited from unchanged
+parent source/artifacts and is not counted as a rerun.
+
+Failed test-only service-negotiation, early-field, cancellation-shape and directory
+keyboard attempts are retained under their source hashes and excluded from final
+passing evidence. Fatal-warning/FFI assertion aborts belong to the test executable,
+with core stacks confirming GTK initialization or fixture assertions; they are not
+production application or compositor crashes. Temporary cropped chooser observation
+images have been removed. The passing two-file workflow uses the declared public
+folder hint rather than the failed host-Recent navigation.
+
+Two identical mixed fallback regressions on the final frozen sources stopped on
+`gtk_box_remove: GTK_IS_BOX` under the fixture's fatal-warning policy. The core
+shows GTK reached from GIO task completion in GLib's main context; that GTK frame
+has no available symbols, so its exact cause is unconfirmed. The extracted core
+copies were deleted. Both failures are retained. A temporary 500 ms wait failed as well and was
+reverted. It is not an accepted fix. Cached harness evidence after the revert was
+excluded and the final Release harness rebuilt before repeating backup acceptance. This checkpoint does not fix or establish
+complete reliability of fast cancellation in GTK's fallback chooser; the real
+host-portal cases all pass. Keep this observed critical open for diagnosis.
+
+Actual process termination/power loss, native legacy missing-header restoration,
+separately installed-app restoration, interrupted switching, hardware suspend,
+normal Omarchy configuration and Apple-app exchange remain separate acceptance.
+Final GTK/Wayland/D-Bus/unlocked/DNS/HTTPS and cleanup checks retain Stay Awake and
+the 2026-10-05 09:00 Minsk restoration timer.

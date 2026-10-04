@@ -1323,6 +1323,14 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --mixed-retained-restoration
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --mixed-files-restoration
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --mixed-backup-restoration
+# Real host FileChooser portal with the same isolated account bus/keyring.
+# Only OpenFile and read-only GTK settings cross the narrow test relay.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --portal-chooser
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --portal-file-restoration
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --portal-backup-file-restoration
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --portal-mixed-retained-restoration
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --portal-mixed-files-restoration
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --portal-mixed-backup-restoration
 # Simulated durable write interruptions; each case restarts the actual native
 # worker, refuses all server requests, and requires fresh local-purpose PAM.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --restore-cancel-consent
@@ -1663,8 +1671,9 @@ Choose the desktop-feature library test executable containing
 `secret_store::tests::native_backend_fixture`, not the app or CLI executable.
 The harness creates a private D-Bus, runtime directory and disposable keyring;
 it tests binary values, replacement, deletion and locked-keyring refusal. It
-does not initialize GTK or touch the desktop keyring. Run native GUI fixtures
-on the normal desktop bus, separately from this keyring harness.
+does not initialize GTK or touch the desktop keyring. Use each GUI fixture's
+dedicated runner on the unlocked compositor. Account portal variants retain
+an isolated account bus/keyring and relay only the supported host portal calls.
 
 The external-history variants use a real mapped GTK FileChooserDialog, reached
 through the production FileDialog callback on the private bus. They do not
@@ -1681,9 +1690,10 @@ Changing the selected file after review, before valid fresh PAM, refuses before
 receipt or primary writes. Contents of the selected backup are not imported.
 The account runner now isolates GTK configuration/cache and uses memory GSettings,
 as well as its existing private bus/keyring/data roots. This establishes GTK's
-fallback chooser; the normal desktop portal route is a separate acceptance item.
-Mixed-source vault history and separately installed-app restoration remain
-unverified. See docs/linux/IMPLEMENTATION.md for the exact final evidence.
+fallback chooser. The portal variants below add actual host selection while
+retaining account/keyring isolation. Mixed-source history is covered; separately
+installed-app restoration remains unverified. See docs/linux/IMPLEMENTATION.md
+for the exact final evidence.
 
 The mixed-history variants first sync public source A, then install one public
 legacy sealed participant encrypted with independent C under A's metadata-only
@@ -1705,5 +1715,28 @@ worker and freshly authenticated encrypted copy-before-source synchronization.
 OpenSSL verifies both independent source scopes and actual current output before
 and after sync. The mixed Debug fixture waits up to 150 seconds for completion,
 with closed numeric peer progress; the real 120-second authorization and bounded
-sync limits are unchanged. The host portal and legacy missing-header GUI path
-remain separate acceptance work; see the implementation evidence for scope.
+sync limits are unchanged. The portal variants exercise the host route as well.
+The legacy missing-header GUI path remains separate acceptance work; see the
+implementation evidence for scope.
+
+The portal variants export a test-only OpenFile relay on the private bus before
+GTK initializes. Its version comes from the authenticated host portal; replies
+are accepted only from that pinned owner and their results are relayed unchanged.
+Only request object paths are translated between the two buses. Read-only GTK
+appearance/GNOME settings are forwarded on a separate main context; unsupported
+session-monitor/registry capabilities negotiate version zero. A local fail-closed
+service advertisement makes GTK 4.22 discover the relay without forcing portals
+or exposing host activation directories. The account's Secret Service remains
+private, and the relay never forwards keyring calls.
+
+Two-file requests receive only an initial-folder hint for the exclusive public
+fixture directory. That hint does not select files. The actual host chooser gets
+Ctrl+A and Open; every returned URI must match the exact owned set before the
+production callback can request credentials. Single-file requests use the normal
+chooser and type only the public fixture path, including spaces. Before every
+key, the harness checks the unlocked session and exact active portal address/PID
+against its host D-Bus implementation owner. Cancel/other aborted responses are
+relayed unchanged and must contain no files. The smoke fixture checks cancel,
+single/multiple selection and parent focus; the full restoration fixtures retain
+the whole-selection refusal, stale-file/PAM, OpenSSL and fresh-worker sync checks.
+No compositor configuration is changed.

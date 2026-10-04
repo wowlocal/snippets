@@ -16,6 +16,8 @@ use std::{
 mod creation;
 #[path = "account_pairing_live_tests.rs"]
 mod pairing;
+#[path = "account_portal_live_tests.rs"]
+mod portal;
 #[path = "account_recovery_mutation_live_tests.rs"]
 mod recovery_mutation;
 #[path = "account_restoration_live_tests.rs"]

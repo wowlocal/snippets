@@ -111,16 +111,31 @@ pub(super) fn select(
     old_entries: &[gtk::PasswordEntry],
     input: &Input,
 ) -> (adw::AlertDialog, Vec<gtk::PasswordEntry>) {
+    super::super::portal::expect(false, Some(std::slice::from_ref(&input.path)));
     press(dialog.upcast_ref(), "Choose Previous Vault File…");
-    let selected = chooser(window, false);
-    assert!(old_entries.iter().all(|e| e.text().is_empty()));
-    let file = gtk::gio::File::for_path(&input.path);
-    selected.set_file(&file).unwrap();
-    until(
-        "native chooser did not select the owned public source",
-        || selected.file().and_then(|file| file.path()).as_ref() == Some(&input.path),
-    );
-    respond(&selected, gtk::ResponseType::Accept);
+    let selected = if super::super::portal::enabled() {
+        let portal = crate::portal_live_tests::chooser("Choose Previous Vault File");
+        assert!(old_entries.iter().all(|e| e.text().is_empty()));
+        assert!(
+            window.restoration_file_choice.borrow().is_some()
+                && window.restoration_preparation.borrow().is_none()
+                && window.password_dialog.borrow().is_none()
+        );
+        portal.select(&input.path);
+        None
+    } else {
+        Some(chooser(window, false))
+    };
+    if let Some(selected) = &selected {
+        assert!(old_entries.iter().all(|e| e.text().is_empty()));
+        let file = gtk::gio::File::for_path(&input.path);
+        selected.set_file(&file).unwrap();
+        until(
+            "native chooser did not select the owned public source",
+            || selected.file().and_then(|file| file.path()).as_ref() == Some(&input.path),
+        );
+        respond(selected, gtk::ResponseType::Accept);
+    }
     until("native selected-file credentials did not map", || {
         window
             .restoration_dialog
@@ -129,7 +144,7 @@ pub(super) fn select(
             .is_some_and(|(d, e)| d.is_mapped() && e[0].is_mapped())
     });
     assert!(
-        !selected.is_mapped()
+        selected.as_ref().is_none_or(|d| !d.is_mapped())
             && window.restoration_file_choice.borrow().is_none()
             && window.window.is_active()
     );
@@ -150,10 +165,17 @@ pub(super) fn cancel(window: &Rc<AccountWindow>, current: &str, source: &str) {
     let (dialog, entries) = credentials(window, true, None);
     entries[0].set_text(current);
     entries[1].set_text(source);
+    super::super::portal::expect(false, None);
     press(dialog.upcast_ref(), "Choose Previous Vault File…");
-    let selected = chooser(window, false);
-    assert!(entries.iter().all(|e| e.text().is_empty()));
-    respond(&selected, gtk::ResponseType::Cancel);
+    if super::super::portal::enabled() {
+        let portal = crate::portal_live_tests::chooser("Choose Previous Vault File");
+        assert!(entries.iter().all(|e| e.text().is_empty()));
+        portal.key("", "Escape");
+    } else {
+        let selected = chooser(window, false);
+        assert!(entries.iter().all(|e| e.text().is_empty()));
+        respond(&selected, gtk::ResponseType::Cancel);
+    }
     finished(window, &entries);
     assert!(window.restoration_file_choice.borrow().is_none());
     refocus(window);

@@ -219,41 +219,53 @@ impl Inputs {
         let (first, old) = credentials(window, true, None);
         old[0].set_text("Café public current vault fixture");
         old[1].set_text("Café public fixture");
+        super::super::portal::expect(true, Some(&self.paths));
         press(first.upcast_ref(), "Choose Several Vault Files…");
-        let chooser = files::chooser(window, true);
-        assert!(old.iter().all(|e| e.text().is_empty()));
-        let expected = self
-            .paths
-            .iter()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>();
-        if self.paths.len() == 1 {
-            chooser
-                .set_file(&gtk::gio::File::for_path(&self.paths[0]))
-                .unwrap();
+        if super::super::portal::enabled() {
+            let portal = crate::portal_live_tests::chooser("Choose Previous Vault File");
+            assert!(old.iter().all(|e| e.text().is_empty()));
+            assert!(
+                window.restoration_file_choice.borrow().is_some()
+                    && window.restoration_preparation.borrow().is_none()
+                    && window.password_dialog.borrow().is_none()
+            );
+            portal.select_multiple(&self.paths);
         } else {
-            assert!(fs::read_dir(&self.directory).unwrap().count() == self.paths.len());
-            chooser
-                .set_current_folder(Some(&gtk::gio::File::for_path(&self.directory)))
-                .unwrap();
+            let chooser = files::chooser(window, true);
+            assert!(old.iter().all(|e| e.text().is_empty()));
+            let expected = self
+                .paths
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
+            if self.paths.len() == 1 {
+                chooser
+                    .set_file(&gtk::gio::File::for_path(&self.paths[0]))
+                    .unwrap();
+            } else {
+                assert!(fs::read_dir(&self.directory).unwrap().count() == self.paths.len());
+                chooser
+                    .set_current_folder(Some(&gtk::gio::File::for_path(&self.directory)))
+                    .unwrap();
+                until(
+                    "multiple chooser did not enter the owned two-file directory",
+                    || {
+                        chooser.current_folder().and_then(|f| f.path()).as_ref()
+                            == Some(&self.directory)
+                    },
+                );
+            }
             until(
-                "multiple chooser did not enter the owned two-file directory",
+                "native multiple chooser did not select exactly the public sources",
                 || {
-                    chooser.current_folder().and_then(|f| f.path()).as_ref()
-                        == Some(&self.directory)
+                    if self.paths.len() > 1 {
+                        select_all_visible(&chooser);
+                    }
+                    selected_paths(&chooser) == expected
                 },
             );
+            files::respond(&chooser, gtk::ResponseType::Accept);
         }
-        until(
-            "native multiple chooser did not select exactly the public sources",
-            || {
-                if self.paths.len() > 1 {
-                    select_all_visible(&chooser);
-                }
-                selected_paths(&chooser) == expected
-            },
-        );
-        files::respond(&chooser, gtk::ResponseType::Accept);
         until("native multiple-vault credentials did not map", || {
             window
                 .restoration_dialog
@@ -515,10 +527,17 @@ impl Inputs {
         let (first, old) = credentials(window, true, None);
         old[0].set_text("Café public current vault fixture");
         old[1].set_text("Café public fixture");
+        super::super::portal::expect(true, None);
         press(first.upcast_ref(), "Choose Several Vault Files…");
-        let chooser = files::chooser(window, true);
-        assert!(old.iter().all(|e| e.text().is_empty()));
-        files::respond(&chooser, gtk::ResponseType::Cancel);
+        if super::super::portal::enabled() {
+            let portal = crate::portal_live_tests::chooser("Choose Previous Vault File");
+            assert!(old.iter().all(|e| e.text().is_empty()));
+            portal.key("", "Escape");
+        } else {
+            let chooser = files::chooser(window, true);
+            assert!(old.iter().all(|e| e.text().is_empty()));
+            files::respond(&chooser, gtk::ResponseType::Cancel);
+        }
         finished(window, &old);
         unchanged();
         refocus(window);

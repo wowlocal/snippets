@@ -66,3 +66,6 @@ pub mod usage;
 pub mod usage_store;
 pub mod vault;
 pub mod wire;
+
+#[cfg(all(test, feature = "desktop"))]
+mod portal_live_tests;
