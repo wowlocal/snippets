@@ -12,6 +12,8 @@ use std::{
     time::Instant,
 };
 
+#[path = "account_creation_live_tests.rs"]
+mod creation;
 #[path = "account_live_server.rs"]
 mod server;
 #[path = "account_vault_sync_live_tests.rs"]
@@ -52,6 +54,7 @@ fn button(root: &gtk::Widget, label: &str) -> gtk::Button {
     }
     panic!("native account response missing");
 }
+#[track_caller]
 fn press(root: &gtk::Widget, label: &str) {
     let button = button(root, label);
     until("native account button was not ready", || {

@@ -523,6 +523,18 @@ automatic eviction. Resume an unfinished request before creating another in the
 same account. New key setup and the reviewed library switch remain separate actions;
 creation alone preserves current local records and the synchronization checkpoint.
 
+The native creation workflow passes with a real private Secret Service keyring
+and certificate-verified loopback HTTPS. Cancel and actual focus loss send no
+creation request. If the server creates the library but closes TLS before its
+response, a fresh account-window worker resumes the saved request with the same
+idempotency key. **Open Created Library** sends no additional creation request;
+key setup and synchronization still require separate actions. Creating a second
+library preserves the first library's exact keys and encrypted sync checkpoint,
+retains both receipts, and requires explicit switch review after reopening.
+The worker now refreshes **Create Another Cloud Library…** availability when
+a library is selected; interrupted requests and pending key transitions still
+prevent new creation.
+
 **Library Creation Receipts** in Library Recovery History shows the retained
 requests and completed receipts without reading account credentials. Use
 **Review Removal…** to discard a completed receipt for a separate library with
@@ -1216,6 +1228,9 @@ bash snippets-linux/tests/login-startup-live.sh /absolute/path/to/library-test-b
 # Mapped account/password dialogs, real private keyring, verified loopback HTTPS
 # and private-policy PAM; no login-keyring or host-PAM-policy access.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary
+# Native creation confirmation, lost HTTPS reply/restart, then a separate library
+# beside actual keyring-owned keys and an encrypted sync checkpoint.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --creation
 # Each variant has its own native GTK process, bus, keyring and data root.
 # The hidden-window checks wait for the unmodified 30-second scheduler.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --automatic-sync

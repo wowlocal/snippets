@@ -1502,13 +1502,14 @@ impl AccountWindow {
                     (_,Choice::Keep)=>"Retained version restored. Send Local Changes after any earlier request finishes.",
                 });
             },
-            Reply::Selected {role,keys,pairing,mutation,switching,pending_matches,candidate,bootstrap}=>{
+            Reply::Selected {role,can_create_new,keys,pairing,mutation,switching,pending_matches,candidate,bootstrap}=>{
                 self.selected_role.set(Some(role));
                 self.apply_library(keys);
                 self.set_pairing(pairing,None);
                 self.set_mutation(mutation);
                 if matches!(keys,Ok(Outcome::Ready {..})) {self.pair.set_sensitive(false);}
                 self.set_switching(switching, matches!(keys, Err(key_store::Failure::ReviewRequired | key_store::Failure::KeyConflict)), pending_matches);
+                self.set_new_creation(can_create_new);
                 self.set_candidate_pairing(candidate, None);
                 self.set_bootstrap(bootstrap, None);
             }
@@ -2720,6 +2721,7 @@ mod tests {
         assert!(window.history_dialog.borrow().is_none());
         window.apply(Reply::Selected {
             role: Role::Owner,
+            can_create_new: Ok(false),
             keys: Err(key_store::Failure::ReviewRequired),
             pairing: Ok(None),
             mutation: Ok(None),

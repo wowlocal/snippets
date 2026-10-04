@@ -582,6 +582,7 @@ pub(crate) enum Reply {
     },
     Selected {
         role: cloud::Role,
+        can_create_new: creation::Result<bool>,
         keys: key_store::Result<key_store::Outcome>,
         pairing: key_store::Result<Option<recipient::RetainedStatus>>,
         mutation: key_store::Result<Option<mutations::Retained>>,
@@ -1962,9 +1963,15 @@ impl Owner {
                 let pending_matches = handover::matches_pending(store, &binding)?;
                 let candidate = candidate::inspect(store, &binding);
                 let bootstrap = initial_candidate::inspect(store, &binding);
+                let can_create_new = creation::can_begin_new(
+                    store,
+                    self.client.as_ref().ok_or(Failure::InvalidState)?,
+                    self.live.as_ref().ok_or(Failure::InvalidState)?,
+                );
                 self.check_owner()?;
                 Ok(Reply::Selected {
                     role: self.selected.as_ref().ok_or(Failure::InvalidState)?.role,
+                    can_create_new,
                     keys: outcome,
                     pairing,
                     mutation,

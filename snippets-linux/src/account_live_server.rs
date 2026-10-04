@@ -36,8 +36,30 @@ pub(super) struct State {
     positions: BTreeMap<String, BTreeMap<uuid::Uuid, String>>,
     generation: usize,
     hold_changes: Option<Arc<Hold>>,
+    creation: Option<Creation>,
+}
+#[derive(Default)]
+struct Creation {
+    requests: Vec<uuid::Uuid>,
+    // Server-owned idempotency receipts, distinct from the client's journal.
+    spaces: Vec<(uuid::Uuid, Value)>,
+    lose_reply: bool,
 }
 impl State {
+    pub fn enable_creation(&mut self) {
+        assert!(self.requests == 0 && self.creation.is_none());
+        self.creation = Some(Creation::default());
+    }
+    pub fn lose_next_creation_reply(&mut self) {
+        self.creation.as_mut().unwrap().lose_reply = true;
+    }
+    pub fn creation_counts(&self) -> (usize, usize) {
+        let creation = self.creation.as_ref().unwrap();
+        (creation.requests.len(), creation.spaces.len())
+    }
+    pub fn creation_requests(&self) -> Vec<uuid::Uuid> {
+        self.creation.as_ref().unwrap().requests.clone()
+    }
     pub fn put(&mut self, record: WireRecord) {
         record.validate().unwrap();
         self.generation += 1;
@@ -114,8 +136,8 @@ fn grant(state: &mut State) -> Value {
         "refresh_token":format!("public-native-refresh-{}",state.grants),"expires_in":300,
         "token_type":"Bearer","account":{"id":"public-native-account","email":"fixture@example.invalid"}})
 }
-fn recovery(state: &State) -> Value {
-    json!({"scope":observed_scope(state),"keyEpoch":1,"recovery":state.ciphertext.as_ref().map(|ciphertext|
+fn recovery(state: &State, scope: &Value) -> Value {
+    json!({"scope":scope,"keyEpoch":1,"recovery":state.ciphertext.as_ref().map(|ciphertext|
         json!({"purpose":"recovery","version":1,"keyEpoch":1,"algorithm":bootstrap::RECOVERY_ALGORITHM,
             "ciphertext":ciphertext,"createdAt":"2026-09-30T12:00:00Z"}))})
 }
@@ -213,33 +235,97 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
             .get("authorization")
             .is_some_and(|value| *value == format!("Bearer public-native-access-{}", state.grants))
     );
-    let base = format!("/v2/spaces/{}", uuid::Uuid::from_u128(2));
     if request.path == "/v2/spaces" {
+        if let Some(creation) = state.creation.as_mut() {
+            if request.method == "POST" {
+                assert!(request.body.is_null());
+                let key = uuid::Uuid::parse_str(&request.headers["idempotency-key"]).unwrap();
+                assert!(!key.is_nil() && creation.requests.len() < 8);
+                creation.requests.push(key);
+                let value =
+                    if let Some((_, value)) = creation.spaces.iter().find(|(id, _)| *id == key) {
+                        value.clone()
+                    } else {
+                        let index = creation.spaces.len() as u128;
+                        let value = json!({"scope":{"serverInstanceId":uuid::Uuid::from_u128(1),
+                        "spaceId":uuid::Uuid::from_u128(200+index),
+                        "scopeBinding":format!("public-native-created-membership-{index:04}"),
+                        "datasetGeneration":uuid::Uuid::from_u128(300+index),
+                        "feedEpoch":uuid::Uuid::from_u128(400+index)},"role":"owner","keyEpoch":1});
+                        creation.spaces.push((key, value.clone()));
+                        value
+                    };
+                return (201, value);
+            }
+            assert!(request.method == "GET");
+            return (
+                200,
+                json!({"spaces":creation.spaces.iter().map(|(_, value)| value).collect::<Vec<_>>()}),
+            );
+        }
         assert!(request.method == "GET");
-        (200, json!({"spaces":[space(state)]}))
-    } else if request.path == base {
+        return (200, json!({"spaces":[space(state)]}));
+    }
+    let mut base = format!("/v2/spaces/{}", uuid::Uuid::from_u128(2));
+    let mut response_scope = observed_scope(state);
+    if let Some(creation) = state.creation.as_ref() {
+        let (index, descriptor) = creation
+            .spaces
+            .iter()
+            .enumerate()
+            .find_map(|(index, (_, value))| {
+                let prefix = format!("/v2/spaces/{}", value["scope"]["spaceId"].as_str().unwrap());
+                (request.path == prefix || request.path.starts_with(&format!("{prefix}/")))
+                    .then_some((index, value))
+            })
+            .expect("A created library route must identify a server receipt");
+        base = format!(
+            "/v2/spaces/{}",
+            descriptor["scope"]["spaceId"].as_str().unwrap()
+        );
+        response_scope = descriptor["scope"].clone();
+        // Only the first created library is initialized in this fixture. Later
+        // libraries are independent empty targets; they cannot inherit its key.
+        if index > 0 {
+            assert!(request.method == "GET");
+            return (
+                200,
+                if request.path == base {
+                    descriptor.clone()
+                } else if request.path == format!("{base}/key-authority") {
+                    json!({"scope":response_scope,"keyEpoch":1,"publicKey":null})
+                } else {
+                    assert!(request.path == format!("{base}/recovery-envelope"));
+                    json!({"scope":response_scope,"keyEpoch":1,"recovery":null})
+                },
+            );
+        }
+    }
+    if request.path == base {
         assert!(request.method == "GET");
-        (200, space(state))
+        let mut value = space(state);
+        value["scope"] = response_scope.clone();
+        (200, value)
     } else if request.path == format!("{base}/key-authority") {
         assert!(request.method == "GET");
         (
             200,
-            json!({"scope":observed_scope(state),"keyEpoch":1,"publicKey":state.public}),
+            json!({"scope":response_scope,"keyEpoch":1,"publicKey":state.public}),
         )
     } else if request.path == format!("{base}/recovery-envelope") {
         assert!(request.method == "GET");
-        (200, recovery(state))
+        (200, recovery(state, &response_scope))
     } else if request.path == format!("{base}/key-bootstrap") {
         assert!(request.method == "POST" && state.public.is_none());
         assert!(
-            request.body["expectedScope"] == observed_scope(state)
+            request.body["expectedScope"] == response_scope
                 && request.body["recovery"]["expectedVersion"].is_null()
         );
         assert!(request.body.get("bundle").is_none() && request.body.get("key").is_none());
         state.bootstrap_posts += 1;
         state.public = Some(request.body["publicKey"].clone());
         state.ciphertext = Some(request.body["recovery"]["ciphertext"].clone());
-        (200, recovery(state))
+        (200, recovery(state, &response_scope))
     } else if request.path.starts_with(&format!("{base}/changes?")) {
         assert!(request.method == "GET");
         state.fetches += 1;
@@ -283,12 +369,12 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
         state.positions.insert(next.clone(), state.known());
         (
             200,
-            json!({"scope":observed_scope(state),"records":records,"cursor":next,
+            json!({"scope":response_scope,"records":records,"cursor":next,
                 "fullSnapshot":cursor.is_none(),"hasMore":false}),
         )
     } else if request.path == format!("{base}/records/batch") {
         assert!(request.method == "POST" && !state.reader);
-        assert!(request.body["expectedScope"] == observed_scope(state));
+        assert!(request.body["expectedScope"] == response_scope);
         let items = request.body["items"].as_array().unwrap();
         assert!(!items.is_empty() && items.len() <= 50);
         // Retain only encrypted offers and their positional CAS for explicit
@@ -339,7 +425,7 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
             .collect();
         (
             200,
-            json!({"scope":observed_scope(state),"outcomes":outcomes,"partial":partial}),
+            json!({"scope":response_scope,"outcomes":outcomes,"partial":partial}),
         )
     } else {
         panic!("unexpected native fixture library route")
@@ -396,16 +482,27 @@ impl Fixture {
                 let Ok(request) = request(&mut stream) else {
                     continue;
                 };
-                let (status, response, hold) = {
+                let (status, response, hold, lose_reply) = {
                     let mut state = thread_state.lock().unwrap();
+                    let lose_reply = request.path == "/v2/spaces"
+                        && request.method == "POST"
+                        && state
+                            .creation
+                            .as_mut()
+                            .is_some_and(|creation| std::mem::take(&mut creation.lose_reply));
                     let hold = request
                         .path
                         .contains("/changes?")
                         .then(|| state.hold_changes.take())
                         .flatten();
                     let (status, response) = respond(request, &thread_server, &mut state);
-                    (status, response, hold)
+                    (status, response, hold, lose_reply)
                 };
+                // The server committed its receipt, but the client receives no
+                // HTTP status or body on this deliberately closed TLS transport.
+                if lose_reply {
+                    continue;
+                }
                 if let Some(hold) = hold {
                     hold.entered.store(true, Ordering::Release);
                     let started = std::time::Instant::now();
