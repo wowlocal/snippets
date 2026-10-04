@@ -1,4 +1,7 @@
 //! Read-only Omarchy theme adapter and short-lived Hyprland paste destinations.
+#[cfg(feature = "desktop")]
+#[path = "desktop_sleep.rs"]
+mod sleep;
 use serde_json::Value;
 #[cfg(feature = "desktop")]
 use std::time::SystemTime;
@@ -156,6 +159,8 @@ struct ObservedSession {
     state: SessionState,
     checked: Duration,
     epoch: u64,
+    #[cfg(feature = "desktop")]
+    sleep: sleep::Observation,
 }
 impl ObservedSession {
     fn observe(&mut self, state: SessionState) {
@@ -169,6 +174,7 @@ impl ObservedSession {
         (
             if crate::clock::uptime()
                 .is_none_or(|now| now.saturating_sub(self.checked) > Duration::from_millis(1250))
+                || self.sleep_blocked()
             {
                 SessionState::Unavailable
             } else {
@@ -176,6 +182,16 @@ impl ObservedSession {
             },
             self.epoch,
         )
+    }
+    fn sleep_blocked(&self) -> bool {
+        #[cfg(feature = "desktop")]
+        {
+            self.sleep.blocked()
+        }
+        #[cfg(not(feature = "desktop"))]
+        {
+            false
+        }
     }
 }
 /// Read-only polling stays off the GTK thread. A missing, poisoned or stale
@@ -185,6 +201,8 @@ pub struct SessionMonitor {
     observed: Arc<Mutex<ObservedSession>>,
     stop: Arc<AtomicBool>,
     thread: thread::JoinHandle<()>,
+    #[cfg(feature = "desktop")]
+    context: gtk::glib::MainContext,
 }
 /// Borrowed observation for owner workers; cloning creates no polling thread.
 #[derive(Clone)]
@@ -201,6 +219,8 @@ impl SessionWitness {
             state,
             epoch,
             checked: crate::clock::uptime().unwrap(),
+            #[cfg(feature = "desktop")]
+            sleep: sleep::Observation::ready(),
         })))
     }
     #[cfg(test)]
@@ -214,22 +234,59 @@ impl SessionMonitor {
             state: SessionState::Unavailable,
             checked: Duration::ZERO,
             epoch: 0,
+            #[cfg(feature = "desktop")]
+            sleep: sleep::Observation::default(),
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let value = observed.clone();
         let ending = stop.clone();
+        #[cfg(feature = "desktop")]
+        let context = gtk::glib::MainContext::new();
+        #[cfg(feature = "desktop")]
+        let worker_context = context.clone();
         let thread = thread::Builder::new()
             .name("snippets-session".into())
             .spawn(move || {
-                while !ending.load(Ordering::Acquire) {
+                let poll = || {
                     let current = session_state();
-                    if let Ok(mut value) = value.lock() {
-                        if ending.load(Ordering::Acquire) {
-                            break;
-                        }
+                    if let Ok(mut value) = value.lock()
+                        && !ending.load(Ordering::Acquire)
+                    {
                         value.observe(current);
                     }
-                    thread::park_timeout(Duration::from_millis(500));
+                };
+                #[cfg(feature = "desktop")]
+                let _ = worker_context.with_thread_default(|| {
+                    let timer = gtk::glib::timeout_source_new(
+                        Duration::from_millis(250),
+                        Some("snippets-session-poll"),
+                        gtk::glib::Priority::DEFAULT,
+                        || gtk::glib::ControlFlow::Continue,
+                    );
+                    timer.attach(Some(&worker_context));
+                    let mut sleep = sleep::Monitor::new(value.clone());
+                    let mut next_poll = Instant::now();
+                    while !ending.load(Ordering::Acquire) {
+                        while worker_context.pending() {
+                            worker_context.iteration(false);
+                        }
+                        sleep.refresh();
+                        if Instant::now() >= next_poll {
+                            poll();
+                            next_poll = Instant::now() + Duration::from_millis(250);
+                        }
+                        // Let D-Bus wake the worker immediately, between Hypr
+                        // polls. A parked thread would defer sleep revocation.
+                        if !ending.load(Ordering::Acquire) {
+                            worker_context.iteration(true);
+                        }
+                    }
+                    timer.destroy();
+                });
+                #[cfg(not(feature = "desktop"))]
+                while !ending.load(Ordering::Acquire) {
+                    poll();
+                    thread::park_timeout(Duration::from_millis(250));
                 }
             })
             .ok()?;
@@ -237,6 +294,8 @@ impl SessionMonitor {
             observed,
             stop,
             thread,
+            #[cfg(feature = "desktop")]
+            context,
         })
     }
     pub fn snapshot(&self) -> (SessionState, u64) {
@@ -253,6 +312,8 @@ impl Drop for SessionMonitor {
             observed.observe(SessionState::Unavailable);
         }
         self.thread.thread().unpark();
+        #[cfg(feature = "desktop")]
+        self.context.wakeup();
     }
 }
 
@@ -407,6 +468,8 @@ mod tests {
             state: SessionState::Unlocked,
             checked: crate::clock::uptime().unwrap(),
             epoch: 3,
+            #[cfg(feature = "desktop")]
+            sleep: sleep::Observation::ready(),
         };
         value.observe(SessionState::Locked);
         value.observe(SessionState::Unlocked);

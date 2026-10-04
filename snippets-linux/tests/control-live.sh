@@ -19,7 +19,25 @@ if [[ ${1:-} == --in-bus ]]; then
     DBUS_STARTER_ADDRESS=$fixture_a11y_address DBUS_STARTER_BUS_TYPE=accessibility \
     /usr/lib/at-spi2-registryd >"$fixture_root/registry.log" 2>&1 &
   fixture_registry=$!
-  trap 'kill "$fixture_registry" 2>/dev/null || true; wait "$fixture_registry" 2>/dev/null || true' EXIT
+  fixture_system_bus=
+  trap 'kill "$fixture_registry" ${fixture_system_bus:+"$fixture_system_bus"} 2>/dev/null || true; wait "$fixture_registry" 2>/dev/null || true; if [[ -n $fixture_system_bus ]]; then wait "$fixture_system_bus" 2>/dev/null || true; fi' EXIT
+  if [[ $fixture_test == control_ui::live_tests::sleep::live_installed_sleep_events_revoke_secure_work ]]; then
+    dbus-daemon --config-file="$fixture_root/bus.conf" --nofork --print-address=1 \
+      >"$fixture_root/system-address" 2>"$fixture_root/system.log" &
+    fixture_system_bus=$!
+    fixture_system_ready=false
+    for ((attempt=0; attempt<50; attempt++)); do
+      if [[ -s $fixture_root/system-address ]]; then
+        read -r DBUS_SYSTEM_BUS_ADDRESS <"$fixture_root/system-address"
+        export DBUS_SYSTEM_BUS_ADDRESS
+        fixture_system_ready=true
+        break
+      fi
+      sleep 0.1
+    done
+    [[ $fixture_system_ready == true ]]
+    export SNIPPETS_CONTROL_SYSTEM_BUS_PID=$fixture_system_bus
+  fi
   fixture_ready=false
   for ((attempt=0; attempt<50; attempt++)); do
     if gdbus call --address "$fixture_a11y_address" --dest org.freedesktop.DBus \
@@ -41,7 +59,7 @@ fi
 if [[ $# -lt 2 || $# -gt 3 || ! -x $1 || ! -d $2 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${DBUS_SESSION_BUS_ADDRESS:-} || -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ||
       -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: control-live.sh /path/to/library-test-binary /absolute/path/to/release-directory [unlocked-editor|secure-editor|secure-recovery|secure-setup] (unlocked Omarchy)' >&2
+  printf '%s\n' 'Usage: control-live.sh /path/to/library-test-binary /absolute/path/to/release-directory [unlocked-editor|secure-editor|secure-recovery|secure-setup|sleep-events] (unlocked Omarchy)' >&2
   exit 2
 fi
 case ${3:-} in
@@ -50,6 +68,7 @@ case ${3:-} in
   secure-editor) fixture_test=control_ui::live_tests::live_installed_secure_editor_edit_and_passphrase ;;
   secure-recovery) fixture_test=control_ui::live_tests::live_installed_secure_recovery_and_revocation ;;
   secure-setup) fixture_test=control_ui::live_tests::live_installed_secure_setup_and_recovery_sheet ;;
+  sleep-events) fixture_test=control_ui::live_tests::sleep::live_installed_sleep_events_revoke_secure_work ;;
   *) exit 2 ;;
 esac
 if [[ ${3:-} == secure-setup ]]; then

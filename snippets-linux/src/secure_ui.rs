@@ -77,6 +77,7 @@ pub struct Workspace {
     generation: Cell<u64>,
     reading_failed: Cell<bool>,
     desktop_was_allowed: Cell<bool>,
+    desktop_last_epoch: Cell<u64>,
     desktop: Option<Rc<desktop::SessionMonitor>>,
     draft_recovery: gtk::Button,
     draft_dialog: RefCell<Option<(adw::AlertDialog, Vec<gtk::PasswordEntry>)>>,
@@ -262,6 +263,7 @@ impl Workspace {
             generation: Cell::new(0),
             reading_failed: Cell::new(false),
             desktop_was_allowed: Cell::new(false),
+            desktop_last_epoch: Cell::new(0),
             desktop: desktop::SessionMonitor::new().map(Rc::new),
             draft_recovery,
             draft_dialog: RefCell::new(None),
@@ -656,18 +658,27 @@ impl Workspace {
         self.unlock.set_sensitive(!self.busy.get() && !unlocked);
         if !unlocked {
             self.reveal.set_active(false);
-            self.status.set_label(if self.is_dirty() {
-                "Locked · encrypted draft retained. Unlock to save or discard."
-            } else {
-                "Locked · unlock to edit protected content."
-            });
+            if !self.busy.get() {
+                self.status.set_label(if self.is_dirty() {
+                    "Locked · encrypted draft retained. Unlock to save or discard."
+                } else {
+                    "Locked · unlock to edit protected content."
+                });
+            }
         } else if foreign && !self.busy.get() {
             self.status.set_label("Previous vault draft retained. Choose Recover Previous Draft to keep it in the current vault, or Discard / Reload.");
         }
     }
     fn poll(&self) {
-        let allowed = self.desktop_allowed();
-        if !allowed && (self.desktop_was_allowed.get() || self.vault.borrow_mut().is_unlocked()) {
+        let (state, epoch) = self
+            .desktop
+            .as_ref()
+            .map_or((SessionState::Unavailable, 0), |monitor| monitor.snapshot());
+        let allowed = state == SessionState::Unlocked;
+        let changed = self.desktop_last_epoch.replace(epoch) != epoch;
+        if (changed || !allowed)
+            && (self.desktop_was_allowed.get() || self.vault.borrow_mut().is_unlocked())
+        {
             self.lock();
         }
         self.desktop_was_allowed.set(allowed);
@@ -1123,6 +1134,7 @@ impl Workspace {
                 self.vault
                     .borrow_mut()
                     .finish_create(&self.library, prepared, generation)?;
+            self.status.set_label("Record your recovery key offline");
             self.show_recovery(recovery).await?;
         } else {
             let document = document.expect("existing vault");

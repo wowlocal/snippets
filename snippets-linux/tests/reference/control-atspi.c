@@ -145,6 +145,11 @@ int main(int argc,char **argv) {
         if (!states || !atspi_state_set_contains(states,ATSPI_STATE_FOCUSED)) result=11;
         g_clear_object(&states);
       } else {
+        AtspiComponent *root_component=atspi_accessible_get_component_iface(window);
+        AtspiRect *root_rect=root_component ? atspi_component_get_extents(root_component,ATSPI_COORD_TYPE_WINDOW,&error) : NULL;
+        if (root_rect && !error) printf("recovery_window_bounds=%d,%d,%d,%d\n",root_rect->x,root_rect->y,root_rect->width,root_rect->height);
+        if (root_rect) g_boxed_free(ATSPI_TYPE_RECT,root_rect);
+        g_clear_error(&error);g_clear_object(&root_component);
         AtspiComponent *component=atspi_accessible_get_component_iface(target);
         AtspiRect *rect=component ? atspi_component_get_extents(component,ATSPI_COORD_TYPE_WINDOW,&error) : NULL;
         if (!rect || error || rect->x<0 || rect->y<0 || rect->width<64 || rect->height<64 || rect->width>4096 || rect->height>2048) result=13;

@@ -1285,6 +1285,9 @@ bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary 
 # Requires grim and Tesseract with its English language data; capture stays in memory.
 bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
   /absolute/path/to/cargo-target/release secure-setup
+# Authenticated logind sleep events on a separate private system bus; no host suspend.
+bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
+  /absolute/path/to/cargo-target/release sleep-events
 # Optional independent reader check; requires zbarimg (Arch package: zbar).
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib recovery_qr::tests::independent_reader -- --ignored --test-threads=1
@@ -1370,8 +1373,11 @@ in the second root; a passphrase of exactly 12 characters must also create and
 subsequently unlock that vault.
 
 For the first root, narrowly scoped AT-SPI bounds and exact active-window/process
-checks constrain grim to the owned recovery field. PPM pixels and Tesseract
-transcription stay in zeroizing memory; neither an image nor the key is saved or
+checks constrain grim to the owned recovery field. The accessible window size
+must match the compositor's owned window size. PPM pixels and Tesseract
+transcription stay in zeroizing memory; the bounded inset includes both glyph rows.
+Consecutive lines, dictionary-free OCR and optional Crockford alphabet constraints
+are checked without post-correcting symbols. Neither an image nor the key is saved or
 printed. The actual displayed key must pass its checksum, independently unwrap
 the same root as the passphrase through OpenSSL, and unlock through the native
 recovery dialog after Lock. Escape in the field must hide the key and clear
@@ -1382,6 +1388,25 @@ must then authenticate with OpenSSL, retain its exact body/hash, and preserve
 the ordinary file. Private permissions, sanitized diagnostics, absent Sync state
 and graceful quit are checked. This verifies native vault Lock; compositor
 lock/sleep and broader physical keyboard/application compatibility remain separate.
+
+The `sleep-events` variant sends real D-Bus messages on a second private bus to
+actual installed Release executables. The desktop monitor now reads logind's
+initial `PreparingForSleep` property, pins sleep signals to its current unique
+system-bus owner, and rebinds after owner loss. Missing or malformed state and
+connection loss close the gate. A queued sleep/resume pair invalidates the epoch
+and remains unavailable for at least 1.5 seconds; a later unlocked observation
+requires fresh credentials. The GTK revocation tick also compares desktop epochs,
+so a lock cycle cannot preserve a key if GTK missed its blocked interval.
+
+The fixture covers foreign-sender refusal, an unlocked key with unchanged focus,
+a pending password dialog, observed real authentication/setup workers, malformed
+owner notifications, service restart and pending CLI disclosure. It terminates
+only its own fictional system-bus daemon after the bus confirms its PID and UID,
+then requires an unlocked native vault to revoke without focus loss. Primary files
+stay exact, rejected setup leaves the vault absent, and CLI disclosure returns no
+body. Fresh credentials, private diagnostics and graceful quit are checked.
+This exercises the installed application's sleep-notification boundary. Actual
+hardware suspend/resume and a compositor lock remain separate live checks.
 
 Local-owner tests exercise libpam against a disposable private policy and a
 public fictional password module. They cover incorrect passwords, account

@@ -3,6 +3,8 @@
 use super::*;
 use crate::{crypto, desktop, model, vault::Document};
 use gtk::gio;
+#[path = "control_sleep_live_tests.rs"]
+mod sleep;
 use std::{
     fs,
     io::Write,
@@ -500,15 +502,24 @@ impl Fixture {
         let y = before["at"][1].as_i64().unwrap();
         let width = before["size"][0].as_i64().unwrap();
         let height = before["size"][1].as_i64().unwrap();
+        let root_rect: Vec<i64> = std::str::from_utf8(&region.stdout)
+            .unwrap()
+            .lines()
+            .find_map(|v| v.strip_prefix("recovery_window_bounds="))
+            .unwrap()
+            .split(',')
+            .map(|v| v.parse().unwrap())
+            .collect();
+        assert!(root_rect == [0, 0, width, height]);
         assert!(rect[0] + rect[2] <= width && rect[1] + rect[3] <= height);
         // Only the owned protected field, inset past its border; no desktop,
         // clipboard, image file or OCR output is retained or printed.
         let geometry = format!(
             "{},{} {}x{}",
             x + rect[0] + 4,
-            y + rect[1] + 32,
+            y + rect[1] + 4,
             rect[2] - 8,
-            72
+            104
         );
         let capture = ProcessCommand::new("grim")
             .args(["-g", &geometry, "-s", "3", "-t", "ppm", "-"])
@@ -525,9 +536,25 @@ impl Fixture {
                 && active_window(app.id(), "Secure Snippets")
                 && desktop::session_state() == SessionState::Unlocked
         );
-        for segmentation in ["6", "11"] {
-            let mut reader = ProcessCommand::new("tesseract")
-                .args(["stdin", "stdout", "--psm", segmentation])
+        for (segmentation, alphabet) in [("6", false), ("11", false), ("6", true), ("11", true)] {
+            let mut command = ProcessCommand::new("tesseract");
+            command.args([
+                "stdin",
+                "stdout",
+                "--psm",
+                segmentation,
+                "-c",
+                "load_system_dawg=0",
+                "-c",
+                "load_freq_dawg=0",
+            ]);
+            if alphabet {
+                command.args([
+                    "-c",
+                    "tessedit_char_whitelist=0123456789ABCDEFGHJKMNPQRSTVWXYZILO-",
+                ]);
+            }
+            let mut reader = command
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -538,19 +565,26 @@ impl Fixture {
             assert!(output.status.success());
             let bytes = Zeroizing::new(output.stdout);
             let text = Zeroizing::new(std::str::from_utf8(&bytes).unwrap().trim().to_owned());
-            // Read the key's leading wrapped lines. Composited pixels below
-            // them may include ordinary background labels on a translucent theme.
+            // Both wrapped glyph rows must fit in this bounded field crop.
             // No guessed/corrected symbols: checksum and independent unwrap follow.
-            for count in 1..=3 {
-                let leading = Zeroizing::new(
-                    text.lines()
-                        .filter(|line| !line.trim().is_empty())
-                        .take(count)
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                );
-                if crypto::decode_recovery(&leading).is_ok() {
-                    return Some(leading);
+            let lines: Vec<_> = text
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .collect();
+            for start in 0..lines.len() {
+                for count in 1..=3 {
+                    let candidate = Zeroizing::new(
+                        lines
+                            .iter()
+                            .skip(start)
+                            .take(count)
+                            .copied()
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    );
+                    if crypto::decode_recovery(&candidate).is_ok() {
+                        return Some(candidate);
+                    }
                 }
             }
             if crypto::decode_recovery(&text).is_ok() {
@@ -613,7 +647,9 @@ impl Fixture {
         let output = cli.output();
         assert!(
             output.status.code() == Some(code),
-            "Unexpected real CLI outcome."
+            "Unexpected real CLI outcome: expected={code}, actual={:?}, stdout_empty={}.",
+            output.status.code(),
+            output.stdout.is_empty()
         );
         if let Some(body) = body {
             assert!(output.stdout.as_slice() == body && output.stderr.is_empty());
@@ -706,7 +742,6 @@ fn live_installed_secure_setup_and_recovery_sheet() {
             != std::env::var_os("SNIPPETS_CONTROL_HOST_BUS")
     );
     assert!(desktop::session_state() == SessionState::Unlocked);
-    adw::init().unwrap();
     let fixture = Fixture::empty();
     let mut app = fixture.start(0);
     let original = fixture.images();
