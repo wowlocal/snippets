@@ -364,7 +364,8 @@ and C1 retains its sealed body. A cloud-deleted copy received before its raw
 owner arrives now receives its own Keep/Delete choice before either parent
 choice. Unknown pending raw-child Keep/Delete decisions now pass before parent
 Keep, with separate fresh credentials and exact copy-before-source CAS. Local-absence
-source review and unrelated ambiguous packets remain separate checks.
+secure source Keep/Delete also passes with its own mapped review and fresh credentials.
+Unrelated ambiguous packets remain a separate check.
 
 After reconnecting, selecting a library and verifying its keys, choose **Enable
 Automatic Sync for This Library**. Snippets resumes that exact saved account and
@@ -753,8 +754,8 @@ journal-only C1 source Keep/Delete also pass with retained child seals and
 separate originals. Prior-confirmed cloud-child Keep/Delete before parent
 Keep/Delete also passes all four native combinations with actual saved CAS.
 Unknown pending raw-child Keep/Delete before parent Keep now passes as well.
-Local-absence source review, unrelated ambiguous packets, switch-candidate pairing,
-interrupted switching and mixed-vault,
+Local-absence secure source Keep/Delete now passes as well. Unrelated ambiguous
+packets, switch-candidate pairing, interrupted switching and mixed-vault,
 external-file/multiple-source vault restoration and actual process termination
 during restoration remain under live acceptance. Native recipient pairing and signed approval/recovery
 replacement now pass, including retained-request restart. The native
@@ -1839,7 +1840,7 @@ specific defect.
 | Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
 | Durable recovery | Interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts, several native restoration cuts and an actual SIGKILL followed by fresh-process offline completion after the ordinary write already pass. The same gate now includes a historical missing-header archive and native old-JSON selection, with that source file removed before completion. |
-| Remaining conflict decisions | Local-absence source review and unrelated ambiguous packets. Native Unknown pending raw-child Keep/Delete before parent Keep, existing current/nested/prior-confirmed combinations and native history retirement/unused-file cleanup pass. |
+| Remaining conflict decisions | Unrelated ambiguous packets. Native local-absence secure source Keep/Delete, Unknown pending raw-child Keep/Delete before parent Keep, existing current/nested/prior-confirmed combinations and native history retirement/unused-file cleanup pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 | Installed full restoration | All five source combinations pass in native harnesses using the actual host portal. This checkpoint checks only production chooser cancellation in the installed app, not complete restoration there. |
@@ -2074,3 +2075,50 @@ changes. This proves native harness decisions for retained pending state, not
 physical editing or an additional native parent-choice matrix. Local-absence
 source review, unrelated ambiguous packets and the independent GTK cancellation
 blocker remain open. Installed executables and the prepared user archive are unchanged.
+
+
+## Native local-absence source review (2026-10-04)
+
+The already listed local-absence source review now passes Keep and Delete in the
+native Release harness. The two existing current-carrier tests first run this
+public case in an exclusive process, then retain their earlier cloud-deletion
+and acknowledged-copy repair cases. Test count stays 1,140 and no runner option
+or source/choice matrix is added.
+
+Receive records a real HTTPS acknowledgement for a fictional secure source.
+Send captures its later unresolved v1 primary graph into the actual encrypted
+journal. The fixture then removes only that source record from its owned temporary
+vault file, retaining the vault header. No journal, confirmation, permission or
+original is injected. Another Send reports local review without an implicit
+tombstone, file mutation or data-plane fetch/batch/packet change.
+
+The mapped default-Cancel notice says the snippet is missing locally and discloses
+its conflict original. It offers Restore Retained Version separately from Confirm
+Deletion. Notice Cancel, filled credential Cancel, actual focus revocation and
+wrong recovery-key authentication preserve exact ordinary/vault/checkpoint bytes,
+fetch/batch counts and submitted packets. Fresh current-vault recovery authentication
+freezes the real disabled original and applies only the selected source choice.
+The existing inbox/outbound packet and real confirmed source version remain exact.
+
+Keep restores the captured winner; Delete leaves the source absent. Both preserve
+the disabled original with its exact sealed bytes and public body. Real HTTPS CAS
+acknowledges that original with create CAS before updating the source at its
+original confirmed version. Final native synchronization has no pending intent,
+preservation work, approval or WAL. Current library key and unrelated ordinary
+record remain intact. The account worker is observed live and terminal before
+its process exits and the earlier current-carrier scenario starts.
+
+Use the existing commands with a Release library-test executable:
+
+```sh
+bash snippets-linux/tests/account-live.sh /path/to/library-test-binary --current-review-keep
+bash snippets-linux/tests/account-live.sh /path/to/library-test-binary --current-review-delete
+```
+
+Both full cycles pass with fatal GTK warnings and no criticals. Six existing
+source-recovery owner tests also pass, including their retained-version, collision,
+stale review and durable-cut coverage. The finite conflict row now leaves unrelated
+ambiguous packets. This is native retained-state/file
+absence evidence, not physical editing or a new crash/source permutation matrix.
+The independent GTK chooser cancellation defect remains open. Installed executables
+and the prepared user archive are unchanged.

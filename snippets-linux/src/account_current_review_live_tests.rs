@@ -1,5 +1,7 @@
 //! Native current v1 carrier decisions, real keyring, HTTPS receipts and vault.
 use super::*;
+#[path = "account_local_absence_live_tests.rs"]
+mod local_absence;
 #[path = "account_nested_review_live_tests.rs"]
 mod nested;
 #[path = "account_prerequisite_live_tests.rs"]
@@ -353,11 +355,19 @@ fn run(delete: bool) {
 #[test]
 #[ignore = "explicit native current-carrier Keep GTK/HTTPS/keyring acceptance; invoke tests/account-live.sh with --current-review-keep"]
 fn live_current_carrier_keep() {
+    if local_absence::entrypoint(false) {
+        return;
+    }
+    local_absence::process(false);
     run(false);
 }
 
 #[test]
 #[ignore = "explicit native current-carrier Delete GTK/HTTPS/keyring acceptance; invoke tests/account-live.sh with --current-review-delete"]
 fn live_current_carrier_delete() {
+    if local_absence::entrypoint(true) {
+        return;
+    }
+    local_absence::process(true);
     run(true);
 }
