@@ -59,7 +59,7 @@ fi
 if [[ $# -lt 2 || $# -gt 3 || ! -x $1 || ! -d $2 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${DBUS_SESSION_BUS_ADDRESS:-} || -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ||
       -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: control-live.sh /path/to/library-test-binary /absolute/path/to/release-directory [unlocked-editor|secure-editor|secure-recovery|secure-setup|sleep-events] (unlocked Omarchy)' >&2
+  printf '%s\n' 'Usage: control-live.sh /path/to/library-test-binary /absolute/path/to/release-directory [unlocked-editor|secure-editor|secure-recovery|secure-setup|sleep-events|compositor-lock] (unlocked Omarchy)' >&2
   exit 2
 fi
 case ${3:-} in
@@ -69,6 +69,7 @@ case ${3:-} in
   secure-recovery) fixture_test=control_ui::live_tests::live_installed_secure_recovery_and_revocation ;;
   secure-setup) fixture_test=control_ui::live_tests::live_installed_secure_setup_and_recovery_sheet ;;
   sleep-events) fixture_test=control_ui::live_tests::sleep::live_installed_sleep_events_revoke_secure_work ;;
+  compositor-lock) fixture_test=control_ui::live_tests::session_lock::live_installed_compositor_lock_revokes_secure_work ;;
   *) exit 2 ;;
 esac
 if [[ ${3:-} == secure-setup ]]; then

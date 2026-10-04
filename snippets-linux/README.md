@@ -1288,6 +1288,12 @@ bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary 
 # Authenticated logind sleep events on a separate private system bus; no host suspend.
 bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
   /absolute/path/to/cargo-target/release sleep-events
+# Actual temporary compositor locks; first run the private owner protocol check.
+cargo test --locked --manifest-path snippets-linux/Cargo.toml --lib \
+  control_ui::live_tests::lock_fixture::private_session_lock_owner_obeys_graceful_release_and_deadman \
+  -- --exact --test-threads=1
+bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
+  /absolute/path/to/cargo-target/release compositor-lock
 # Optional independent reader check; requires zbarimg (Arch package: zbar).
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib recovery_qr::tests::independent_reader -- --ignored --test-threads=1
@@ -1386,8 +1392,9 @@ Actual focus loss and native vault Lock must hide it. The protected field has
 no AT-SPI Text or EditableText interface. A first native keyboard-authored record
 must then authenticate with OpenSSL, retain its exact body/hash, and preserve
 the ordinary file. Private permissions, sanitized diagnostics, absent Sync state
-and graceful quit are checked. This verifies native vault Lock; compositor
-lock/sleep and broader physical keyboard/application compatibility remain separate.
+and graceful quit are checked. This variant verifies native vault Lock. The
+separate fixtures below exercise sleep notifications and actual compositor locks;
+hardware suspend and broader physical keyboard/application compatibility remain open.
 
 The `sleep-events` variant sends real D-Bus messages on a second private bus to
 actual installed Release executables. The desktop monitor now reads logind's
@@ -1406,7 +1413,32 @@ then requires an unlocked native vault to revoke without focus loss. Primary fil
 stay exact, rejected setup leaves the vault absent, and CLI disclosure returns no
 body. Fresh credentials, private diagnostics and graceful quit are checked.
 This exercises the installed application's sleep-notification boundary. Actual
-hardware suspend/resume and a compositor lock remain separate live checks.
+hardware suspend/resume remains a separate live check.
+
+The `compositor-lock` variant requests real temporary Wayland session locks from
+the selected Hyprland instance. Its standalone test owner verifies the socket's
+peer against that compositor and creates no surfaces or input/clipboard clients.
+The compositor supplies its opaque fallback. Cancellation, EOF, a signal or the
+owner's independent timer requests graceful release; a queued lock acknowledgement
+is consumed before choosing the correct destructor. The owner waits for an ordered
+Wayland sync acknowledgement after unlock before exiting. Rust unwinding also
+releases through this owner; it never kills a connected lock client.
+
+Before touching the desktop, an independent socket-pair Wayland server checks
+missing/duplicate managers, denied locks, immediate/delayed acknowledgements,
+timer expiry, EOF, signals and controller unwinding. Both helpers are compiled
+under a disposable test root using `cc`, `pkg-config`, `wayland-scanner` and the
+installed `wayland-protocols`; neither helper is installed as a normal locker.
+
+The live fixture observes actual compositor Locked state and revocation of an
+unlocked vault, a correctly filled password dialog, running authentication and
+passphrase-change workers, pending CLI disclosure and a running new-vault setup.
+After acknowledged unlock, primary files stay exact, the original passphrase still
+works, the interrupted setup leaves no vault and CLI stdout contains no body.
+Fresh credentials, diagnostic privacy and graceful quit are checked. Host PAM,
+idle configuration, Stay Awake and the lock-restoration timer are preserved.
+The current live session uses Hyprland Safe Mode; normal Omarchy configuration
+and hardware suspend remain separate acceptance work.
 
 Local-owner tests exercise libpam against a disposable private policy and a
 public fictional password module. They cover incorrect passwords, account

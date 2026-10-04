@@ -3,6 +3,10 @@
 use super::*;
 use crate::{crypto, desktop, model, vault::Document};
 use gtk::gio;
+#[path = "control_lock_fixture.rs"]
+mod lock_fixture;
+#[path = "control_lock_live_tests.rs"]
+mod session_lock;
 #[path = "control_sleep_live_tests.rs"]
 mod sleep;
 use std::{

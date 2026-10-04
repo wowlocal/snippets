@@ -4413,3 +4413,63 @@ are absent. Stay Awake and the 2026-10-05 09:00 Minsk lock-restoration timer
 remain intact. The full-core Debug run interrupted earlier is retained as an
 interrupted gate and is not counted as a success. Actual hardware suspend,
 compositor locking and the normal Omarchy configuration remain separate.
+
+### Actual compositor lock revocation (2026-10-04)
+
+The `compositor-lock` variant of `tests/control-live.sh` installs the actual
+Release GUI/CLI/helper into a private prefix and uses public fictional libraries
+on a private session/accessibility bus. It requests temporary
+`ext-session-lock-v1` locks from the selected real Hyprland compositor. The owner
+checks the Wayland socket's peer PID and UID against that instance before arming;
+the driver independently validates the same peer and observes actual Locked state.
+No host library, keyring, PAM policy or authentication database is used.
+
+The standalone C lock owner creates no surfaces and acquires no keyboard, pointer
+or clipboard. Hyprland supplies its opaque fallback. Once a lock request exists,
+the owner retains its connection until it receives Locked or Finished: cancellation
+before that event cannot select the wrong destructor. An accepted lock is released
+with `unlock_and_destroy`, followed by an ordered `wl_display.sync` acknowledgement
+before exit. EOF, SIGINT/SIGTERM and an independent monotonic timer request that
+same release. The Rust controller's Drop sends cancellation, closes the command
+channel and waits; it never kills a connected owner. Hyprland's fallback can delay
+Locked acknowledgement for five seconds, so an expired timer still waits for the
+event before releasing. Transport loss remains a protocol failure, never a pass.
+
+Before live use, an independent C libwayland-server peer connected only through
+socket pairs verifies missing and duplicate managers, denied locks, immediate
+unlock, automatic timer release, EOF, signals, delayed acknowledgement with
+cancellation/EOF/signals, cancellation before requesting a lock and Rust unwinding.
+The delayed peer checks that no destroy or unlock reaches it before Locked, and
+that exactly one unlock reaches it before successful owner exit. Helpers are built
+under an owned temporary root from the installed protocol XML with strict C
+warnings; they are test-only and are never installed as the user's locker.
+
+The real fixture covers an unlocked vault key, a correctly filled password dialog
+submitted after unlock, observed authentication and passphrase-change workers,
+pending CLI disclosure and an observed empty-vault setup worker. Each cycle observes
+Locked; existing-vault cycles also require the installed CLI to report revoked
+access before release. After sync-confirmed unlock and worker completion, both
+primary images remain byte-exact, the original passphrase still unlocks, the CLI
+request is denied with empty stdout and setup leaves the vault absent. Retained
+diagnostics reject the public fixture's secrets and identifiers; Sync state is
+absent and all native processes quit cleanly. No production source change was
+needed for these compositor-lock cases.
+
+The first minimal unlocked-vault cycle passed. The independent owner check and
+the expanded live fixture both pass with Debug and optimized Release harnesses;
+the latter operate the same actual installed Release executables. Desktop and
+headless all-target Clippy, formatting and shell syntax also pass. All eight
+final gates retain the frozen 292-file native input fingerprint in the checkpoint
+receipt. The three Release artifact hashes match the parent checkpoint, and
+every changed native source is test-only. Earlier full-core and other
+native-workflow evidence remains in its parent checkpoint with its original
+source fingerprints; it is not a rerun on this expanded test input set.
+
+After cleanup, the live preflight again confirms GTK/libadwaita, actual Wayland
+peer credentials, unlocked state, D-Bus GTK portal/tray ownership, DNS and
+certificate-verified external HTTPS. Private fixture directories and owned app
+windows are gone. Host idle/PAM configuration, Stay Awake and the 2026-10-05
+09:00 Minsk restoration timer remain intact. Hyprland remains in Safe Mode;
+normal Omarchy configuration, actual hardware suspend/resume, broader physical
+input/application compatibility, pairing/reviewed switching and Apple-app backup
+exchange remain separate acceptance work.
