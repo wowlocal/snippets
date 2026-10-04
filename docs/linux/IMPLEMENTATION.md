@@ -5085,3 +5085,72 @@ separately installed-app restoration, interrupted switching, normal Omarchy
 configuration, hardware suspend and Apple-app backup exchange remain separate
 acceptance work. Final GTK/Wayland/D-Bus/unlocked/DNS/verified-HTTPS cleanup checks
 preserve Stay Awake and the existing 2026-10-05 09:00 Minsk restoration timer.
+
+
+### Native whole restoration of mixed vault sources (2026-10-04)
+
+Three workflows pass in Debug and Release: retained A plus selected C JSON,
+selected A/C JSON files, and selected A JSON plus C's independently encrypted
+backup. C shares A's KID while its salt, root, passphrase/recovery wraps and
+backup password are independent. Both source passphrase wraps use 600000 iterations. The
+checked-in public C fixture is generated and checked by OpenSSL EVP, and contains
+source-only ordinary/protected records that must not be imported.
+
+After source A's real vault sync, the owned primary receives a public legacy
+participant sealed in C's scope. The real native third switch archives the whole
+ordinary/A/C selection through its metadata-only production journal path. No
+protected archive, header, ciphertext or saved source graph is rewritten. Current
+B has both record IDs before its first native vault sync; both consequently have
+actual current-scope CAS/feed before restoration. Current records are edited and
+unrelated ordinary/protected records added with a native local clock.
+
+The production FileDialog open_multiple callback receives the actual mapped GTK
+fallback chooser's exact public selections. Two-file cases operate the chooser's
+real multiple-selection model in a private directory containing exactly those
+files; no synthetic callback or source ticket replaces selection or inspection.
+All initial credentials clear before chooser focus, and chooser Cancel preserves
+primary images, protected frames and data plane. Separate current/A/C inputs and
+methods require every selected source. A alone, wrong/incomplete authority and
+duplicate retained/file A refuse the entire ordinary/A/C selection. Credential,
+review and PAM cancellation/focus loss preserve it; no ordinary subset is applied.
+
+Each selected file is individually replaced with a byte change after result
+review, before entered fresh PAM. Each refuses before receipt or primary write;
+exact-byte recovery plus explicit reconnect requires new authentication. A later
+change to both current protected bodies also refuses the stale plan. New whole
+review and purpose-bound private-policy PAM restore three saved records, preserve
+three disabled/unpinned/keyword-free current versions and two unrelated records,
+finish one receipt and keep nine protected frames and current transport state.
+Current wraps/KDF/salt/future metadata remain exact. Source-only IDs are absent.
+
+A fresh worker explicitly reconnects and separately authenticates current B before
+synchronizing. All five protected wires have B's KID and exact seals/hashes, all
+three ordinary wires have the expected bodies, and all three preservation copies
+are acknowledged before their respective restored sources. The original A wire
+in library 200 remains exact and C has never been submitted in that old scope.
+OpenSSL authenticates both source scopes, current wraps and all actual current
+bodies before and after sync, including both disabled protected versions and
+old-source refusal. No editor session or automatic scheduling is enabled.
+
+Final evidence comprises 21 serial gates on 305 frozen native inputs, nine
+distinct live tests, 45 focused restoration-owner tests and three preparation
+worker tests, desktop/headless Clippy, format/shell/reference checks and fresh
+Release GUI/CLI/helper builds. Single external JSON/backup, retained previous,
+same-vault, ordinary and interrupted vault-finish regressions pass. The curated
+manifest contains 311 files. All three production artifact hashes equal checkpoint
+126506ea; installed GUI/CLI evidence is inherited from that exact artifact and is
+not counted as a rerun. Production runtime code is unchanged.
+
+The initial 60-second test wait stopped after independently verified restoration
+while the larger Debug synchronization was still active. The successful mixed
+fixture uses a 150-second observation bound and numeric peer-progress records;
+real 120-second authorization, network timeouts and bounded cycles remain intact.
+A test-helper Clippy condition fix caused earlier successful runs to be retained
+under their earlier source hash and excluded from final passing evidence. The
+failed original wait and failed style check are also retained.
+
+The host desktop portal, native legacy missing-header restoration, actual process
+termination/power loss, separately installed-app restoration, interrupted
+switching, hardware suspend, normal Omarchy configuration and Apple-app exchange
+remain separate acceptance work. Final GTK/Wayland/D-Bus/unlocked/DNS/HTTPS and
+fixture-cleanup checks preserve Stay Awake and the 2026-10-05 09:00 Minsk timer.

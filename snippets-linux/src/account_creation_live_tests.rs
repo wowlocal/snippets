@@ -74,6 +74,7 @@ pub(super) enum Followup {
     SecureRestoration,
     ForeignRestoration,
     ExternalRestoration(super::secure_restoration_live::files::Kind),
+    MixedRestoration(super::secure_restoration_live::mixed::Mode),
     SecureRestorationInterrupted(crate::account_worker::RestorationInterruption),
 }
 pub(super) fn run(followup: Followup) {
@@ -238,6 +239,7 @@ pub(super) fn run(followup: Followup) {
             | Followup::SecureRestoration
             | Followup::ForeignRestoration
             | Followup::ExternalRestoration(_)
+            | Followup::MixedRestoration(_)
             | Followup::SecureRestorationInterrupted(_)
     ) {
         super::switching::run(&window, &app, &parent, &root, &fixture, &pam, &local);
@@ -302,6 +304,17 @@ pub(super) fn run(followup: Followup) {
             "final external-vault restoration worker did not drain",
             || restored.prepare_quit(),
         );
+        drop(restored_stop);
+    }
+    if let Followup::MixedRestoration(mode) = followup {
+        let restored = make_window(&app, &parent, &root, &fixture, &pam);
+        let restored_stop = Stop(restored.clone());
+        super::secure_restoration_live::run_mixed(
+            &restored, &app, &parent, &root, &fixture, &pam, &local, mode,
+        );
+        until("final mixed-vault restoration worker did not drain", || {
+            restored.prepare_quit()
+        });
         drop(restored_stop);
     }
     until("final creation worker did not drain", || {

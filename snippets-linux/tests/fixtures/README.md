@@ -105,3 +105,14 @@ Swift and Android applications, or a real account's server integration test.
 effective-deletion-set fingerprints generated with Python's standard library.
 Its simple binary64 dates have the same exact canonical spelling in Swift.
 No Rust merge, encoder, UUID or digest helper produced these expected values.
+
+`restoration-additional-vault-v1.json` is the public independent OpenSSL source C
+for mixed-vault restoration. It deliberately has source A's KID, a distinct salt
+and root, 600000-iteration passphrase and recovery wraps, and an independently
+sealed portable backup with its own password. Its selected record is archived by
+the native third switch from a public legacy mixed-scope primary; its source-only
+ordinary and protected records must not be imported. `restoration-multiple.py`
+regenerates/checks this fixture and independently authenticates actual restored
+current-vault bodies, both disabled preserved versions and unchanged current
+wraps/header before and after native synchronization. It is development tooling;
+Cargo and the app consume the checked-in fixture without Python.

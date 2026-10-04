@@ -14,6 +14,8 @@ const NEWER: &[u8] = b"Public newer secure restoration body after review";
 
 #[path = "account_restoration_file_live_tests.rs"]
 pub(super) mod files;
+#[path = "account_mixed_restoration_live_tests.rs"]
+pub(super) mod mixed;
 
 fn document(root: &Path) -> Document {
     crate::vault::read_document(root).unwrap().unwrap()
@@ -335,6 +337,7 @@ enum Scenario {
     Interrupted(RestorationInterruption),
     ForeignVault,
     ExternalVault(files::Kind),
+    MixedVault(mixed::Mode),
 }
 pub(super) fn run(
     window: &Rc<AccountWindow>,
@@ -417,6 +420,30 @@ pub(super) fn run_external(
         Scenario::ExternalVault(kind),
     );
 }
+#[allow(clippy::too_many_arguments)]
+pub(super) fn run_mixed(
+    window: &Rc<AccountWindow>,
+    app: &adw::Application,
+    parent: &adw::ApplicationWindow,
+    root: &Path,
+    fixture: &server::Fixture,
+    pam: &Pam,
+    ordinary: &model::Snippet,
+    mode: mixed::Mode,
+) {
+    run_case(
+        RestorationContext {
+            window,
+            app,
+            parent,
+            root,
+            fixture,
+            pam,
+            ordinary,
+        },
+        Scenario::MixedVault(mode),
+    );
+}
 fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
     let RestorationContext {
         window,
@@ -429,7 +456,7 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
     } = context;
     let foreign = matches!(
         scenario,
-        Scenario::ForeignVault | Scenario::ExternalVault(_)
+        Scenario::ForeignVault | Scenario::ExternalVault(_) | Scenario::MixedVault(_)
     );
     let boundary = if let Scenario::Interrupted(boundary) = scenario {
         Some(boundary)
@@ -447,6 +474,11 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
         Document::decode(&serde_json::to_vec(&fixture_data["document"]).unwrap()).unwrap();
     let file = if let Scenario::ExternalVault(kind) = scenario {
         Some(files::Input::new(root, kind, &initial))
+    } else {
+        None
+    };
+    let mixed = if let Scenario::MixedVault(mode) = scenario {
+        Some(mixed::Inputs::new(root, mode, &initial))
     } else {
         None
     };
@@ -469,6 +501,9 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
         .into_iter()
         .find(|r| r.metadata.id == secure_id)
         .unwrap();
+    if let Some(mixed) = &mixed {
+        mixed.install_legacy_source(root);
+    }
     window.libraries.set_selected(2);
     wait_work(window);
     press(window.window.upcast_ref(), "Review Library Switch…");
@@ -481,11 +516,11 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
     });
     let dialog = window.snapshot_dialog.borrow().clone().unwrap();
     assert!(dialog.heading().as_deref() == Some("Switch to the Selected Library?"));
-    assert!(
-        dialog
-            .body()
-            .contains("Keep 2 local records and 0 saved conflict copies")
-    );
+    assert!(dialog.body().contains(if mixed.is_some() {
+        "Keep 3 local records and 0 saved conflict copies"
+    } else {
+        "Keep 2 local records and 0 saved conflict copies"
+    }));
     assert!(dialog.body().contains("Use a key saved on this computer"));
     press(dialog.upcast_ref(), "Switch Library");
     until("native protected switch password did not map", || {
@@ -508,9 +543,12 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
     ))
     .unwrap();
     let (key, passphrase, recovery, initial) = if foreign {
-        let current =
+        let mut current =
             Document::decode(&serde_json::to_vec(&current_fixture["document"]).unwrap()).unwrap();
         assert!(!current.same_identity(&initial));
+        if let Some(mixed) = &mixed {
+            mixed.install_current(root, &mut current);
+        }
         write(root, &current);
         (
             RootKey::from_bytes(&[0x44; 32]).unwrap(),
@@ -522,6 +560,23 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
         (key, passphrase, recovery, initial)
     };
     sync(window, passphrase, false);
+    if let Some(mixed) = mixed {
+        mixed.run(mixed::Context {
+            native: RestorationContext {
+                window,
+                app,
+                parent,
+                root,
+                fixture,
+                pam,
+                ordinary,
+            },
+            archived: source_archived,
+            source_wire,
+            initial,
+        });
+        return;
+    }
     let (checkpoint, catalog) = switching::checkpoint_and_history(root);
     assert!(catalog.switches.len() == 3 && catalog.restorations.is_empty());
     assert!(

@@ -1318,6 +1318,11 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 # or independent encrypted backup, source-file binding through fresh PAM.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --file-restoration
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --backup-file-restoration
+# Actual third-switch archive of a public legacy mixed-scope primary: vault A
+# and independent C use the same KID with different salts/roots.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --mixed-retained-restoration
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --mixed-files-restoration
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --mixed-backup-restoration
 # Simulated durable write interruptions; each case restarts the actual native
 # worker, refuses all server requests, and requires fresh local-purpose PAM.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --restore-cancel-consent
@@ -1679,3 +1684,26 @@ as well as its existing private bus/keyring/data roots. This establishes GTK's
 fallback chooser; the normal desktop portal route is a separate acceptance item.
 Mixed-source vault history and separately installed-app restoration remain
 unverified. See docs/linux/IMPLEMENTATION.md for the exact final evidence.
+
+The mixed-history variants first sync public source A, then install one public
+legacy sealed participant encrypted with independent C under A's metadata-only
+primary. The real third reviewed switch archives all three ordinary/A/C records;
+no protected history is rewritten. A and C deliberately share a KID but have
+different salts/roots. Independent current B has both IDs before its first native
+vault sync, giving both records actual current CAS/feed state. The mapped GTK
+multiple-file chooser selects exactly one owned JSON plus retained A, two JSON
+files, or A JSON plus C's independent OpenSSL backup. Wrong, incomplete or duplicate
+source authority refuses the whole selection. Filled-field chooser cancellation,
+vault/review/PAM cancellation and focus loss clear all inputs without writes.
+Every selected file is individually replaced after whole review and before valid
+fresh PAM; each refuses before receipt or primary writes. A later current-ciphertext
+change also refuses. Fresh verification/consent restores all three saved records
+under current B, keeps three disabled current versions and two unrelated records,
+and imports no source-only content. Exact wraps/header, nine protected frames,
+current CAS/feed, the source A wire and completed history are checked across a new
+worker and freshly authenticated encrypted copy-before-source synchronization.
+OpenSSL verifies both independent source scopes and actual current output before
+and after sync. The mixed Debug fixture waits up to 150 seconds for completion,
+with closed numeric peer progress; the real 120-second authorization and bounded
+sync limits are unchanged. The host portal and legacy missing-header GUI path
+remain separate acceptance work; see the implementation evidence for scope.

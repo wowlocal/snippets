@@ -37,7 +37,7 @@ if [[ ${1:-} == --in-bus ]]; then
 fi
 if [[ $# -lt 1 || $# -gt 2 || ! -x $1 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${HYPRLAND_INSTANCE_SIGNATURE:-} || -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--creation|--switch|--restoration|--secure-restoration|--foreign-restoration|--file-restoration|--backup-file-restoration|--restore-cancel-consent|--restore-cancel-baseline|--restore-finish-ordinary|--restore-finish-vault|--pairing|--recovery-reconcile|--recovery-retry|--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete|--nested-review-keep|--nested-review-delete|--nested-journal-keep|--nested-journal-delete|--prior-child-keep-parent-keep|--prior-child-keep-parent-delete|--prior-child-delete-parent-keep|--prior-child-delete-parent-delete] (in the unlocked desktop session)' >&2
+  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--creation|--switch|--restoration|--secure-restoration|--foreign-restoration|--file-restoration|--backup-file-restoration|--mixed-retained-restoration|--mixed-files-restoration|--mixed-backup-restoration|--restore-cancel-consent|--restore-cancel-baseline|--restore-finish-ordinary|--restore-finish-vault|--pairing|--recovery-reconcile|--recovery-retry|--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete|--nested-review-keep|--nested-review-delete|--nested-journal-keep|--nested-journal-delete|--prior-child-keep-parent-keep|--prior-child-keep-parent-delete|--prior-child-delete-parent-keep|--prior-child-delete-parent-delete] (in the unlocked desktop session)' >&2
   exit 2
 fi
 case ${2:-} in
@@ -49,6 +49,9 @@ case ${2:-} in
   --foreign-restoration) test_name=account_ui::live_tests::secure_restoration_live::live_retained_foreign_vault_history_restoration ;;
   --file-restoration) test_name=account_ui::live_tests::secure_restoration_live::live_external_json_vault_history_restoration ;;
   --backup-file-restoration) test_name=account_ui::live_tests::secure_restoration_live::live_external_backup_vault_history_restoration ;;
+  --mixed-retained-restoration) test_name=account_ui::live_tests::secure_restoration_live::mixed::live_mixed_retained_json_vault_history_restoration ;;
+  --mixed-files-restoration) test_name=account_ui::live_tests::secure_restoration_live::mixed::live_mixed_json_files_vault_history_restoration ;;
+  --mixed-backup-restoration) test_name=account_ui::live_tests::secure_restoration_live::mixed::live_mixed_json_backup_vault_history_restoration ;;
   --restore-cancel-consent) test_name=account_ui::live_tests::secure_restoration_live::live_restoration_cancel_after_consent ;;
   --restore-cancel-baseline) test_name=account_ui::live_tests::secure_restoration_live::live_restoration_cancel_after_baseline ;;
   --restore-finish-ordinary) test_name=account_ui::live_tests::secure_restoration_live::live_restoration_finish_after_ordinary ;;

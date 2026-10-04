@@ -64,7 +64,7 @@ impl Drop for Input {
 // FileDialog really falls back to GTK on this private bus. We operate its
 // mapped widgets, never manufacture a callback result or a SourceFile ticket.
 #[allow(deprecated)]
-fn chooser(window: &AccountWindow) -> gtk::FileChooserDialog {
+pub(super) fn chooser(window: &AccountWindow, multiple: bool) -> gtk::FileChooserDialog {
     let found = RefCell::new(None);
     until("native previous-vault file chooser did not map", || {
         let matching = gtk::Window::list_toplevels()
@@ -81,7 +81,9 @@ fn chooser(window: &AccountWindow) -> gtk::FileChooserDialog {
     });
     let dialog = found.into_inner().unwrap();
     assert!(dialog.transient_for().as_ref() == Some(window.window.upcast_ref()));
-    assert!(dialog.action() == gtk::FileChooserAction::Open && !dialog.selects_multiple());
+    assert!(
+        dialog.action() == gtk::FileChooserAction::Open && dialog.selects_multiple() == multiple
+    );
     assert!(window.restoration_file_choice.borrow().is_some());
     assert!(
         window.restoration_preparation.borrow().is_none()
@@ -90,7 +92,7 @@ fn chooser(window: &AccountWindow) -> gtk::FileChooserDialog {
     dialog
 }
 #[allow(deprecated)]
-fn respond(chooser: &gtk::FileChooserDialog, response: gtk::ResponseType) {
+pub(super) fn respond(chooser: &gtk::FileChooserDialog, response: gtk::ResponseType) {
     let button = chooser
         .widget_for_response(response)
         .unwrap()
@@ -110,7 +112,7 @@ pub(super) fn select(
     input: &Input,
 ) -> (adw::AlertDialog, Vec<gtk::PasswordEntry>) {
     press(dialog.upcast_ref(), "Choose Previous Vault File…");
-    let selected = chooser(window);
+    let selected = chooser(window, false);
     assert!(old_entries.iter().all(|e| e.text().is_empty()));
     let file = gtk::gio::File::for_path(&input.path);
     selected.set_file(&file).unwrap();
@@ -149,7 +151,7 @@ pub(super) fn cancel(window: &Rc<AccountWindow>, current: &str, source: &str) {
     entries[0].set_text(current);
     entries[1].set_text(source);
     press(dialog.upcast_ref(), "Choose Previous Vault File…");
-    let selected = chooser(window);
+    let selected = chooser(window, false);
     assert!(entries.iter().all(|e| e.text().is_empty()));
     respond(&selected, gtk::ResponseType::Cancel);
     finished(window, &entries);
