@@ -362,7 +362,22 @@ impl Fixture {
             }
             // GtkButton::activate animates for 250 ms before emitting clicked.
             // Do not inspect focus, issue keys or assert cancellation before it runs.
-            settle(Duration::from_millis(350));
+            if !matches!(
+                mode,
+                "editor-change-start"
+                    | "editor-authenticate-start"
+                    | "pw-busy"
+                    | "auth-busy"
+                    | "editor-idle"
+                    | "input-empty"
+                    | "pw-current-empty"
+                    | "pw-new-empty"
+                    | "pw-confirm-empty"
+                    | "pw-recovery"
+                    | "pw-recovery-selected"
+            ) {
+                settle(Duration::from_millis(350));
+            }
             return code;
         }
     }
@@ -416,13 +431,18 @@ impl Fixture {
     }
     #[track_caller]
     fn reference_editor(&self, expected: &str, password: &str) {
-        model::atomic_write(&self.input, expected.as_bytes()).unwrap();
+        self.reference_vault(expected.as_bytes(), password, "editor");
+    }
+    #[track_caller]
+    fn reference_vault(&self, expected: &[u8], password: &str, mode: &str) {
+        assert!(matches!(mode, "editor" | "recovery"));
+        model::atomic_write(&self.input, expected).unwrap();
         let mut child = ProcessCommand::new("python3")
             .arg("-B")
             .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reference/control-vault.py"))
             .arg(self.root.join("Vault/vault.json"))
             .arg(&self.input)
-            .arg("editor")
+            .arg(mode)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -537,6 +557,249 @@ impl Fixture {
         }
         assert!(retained_events > 0);
     }
+}
+
+#[test]
+#[ignore = "unlocked Omarchy; actual installed Release recovery/credential dialogs, public private-root fixture only"]
+fn live_installed_secure_recovery_and_revocation() {
+    assert!(
+        std::env::var_os("SNIPPETS_CONTROL_LIVE").as_deref()
+            == Some(std::ffi::OsStr::new("public-private-roots"))
+    );
+    assert!(
+        std::env::var_os("DBUS_SESSION_BUS_ADDRESS")
+            != std::env::var_os("SNIPPETS_CONTROL_HOST_BUS")
+    );
+    assert!(desktop::session_state() == SessionState::Unlocked);
+    adw::init().unwrap();
+    let fixture = Fixture::new();
+    let mut app = fixture.start(1);
+    let original = fixture.images();
+    let recovery = crypto::format_recovery(&[0x66; 16]);
+    let wrong_recovery = crypto::format_recovery(&[0x67; 16]);
+    let new_password = Zeroizing::new("Public recovery changed passphrase".to_owned());
+    fixture.open_editor(&app);
+    let action = |mode, value: Option<&str>| {
+        assert!(fixture.action_in(&app, "Secure Snippets", mode, value) == 0);
+    };
+    let await_locked = || {
+        assert!(
+            !fixture.state(1),
+            "Native rejected/cancelled credential work must leave the editor locked."
+        );
+        until("native credential worker finished while locked", 30, || {
+            fixture.action_in(&app, "Secure Snippets", "editor-idle", None) == 0
+        });
+        fixture.status(1);
+    };
+    let focus_application = adw::Application::builder()
+        .application_id("com.khm.snippets.linux.ControlFocusFixture")
+        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        .build();
+    focus_application
+        .register(None::<&gio::Cancellable>)
+        .unwrap();
+    let focus_cycle = || {
+        let companion = adw::ApplicationWindow::builder()
+            .application(&focus_application)
+            .title("Public CLI Focus Receiver")
+            .build();
+        companion.present();
+        until(
+            "independent owned window took secure-editor focus",
+            5,
+            || companion.is_active() && !active_window(app.id(), "Secure Snippets"),
+        );
+        settle(Duration::from_millis(200));
+        companion.destroy();
+        until(
+            "owned secure dialog regained actual compositor focus",
+            5,
+            || active_window(app.id(), "Secure Snippets"),
+        );
+    };
+    // Cancellation and a structurally valid wrong recovery key must never unlock.
+    for cancelled in [true, false] {
+        println!("Native recovery refusal: cancelled={cancelled}.");
+        action("editor-recovery", None);
+        action("input-empty", None);
+        action(
+            "input",
+            Some(if cancelled {
+                &recovery
+            } else {
+                &wrong_recovery
+            }),
+        );
+        action(
+            if cancelled {
+                "cancel"
+            } else {
+                "editor-authenticate"
+            },
+            None,
+        );
+        await_locked();
+        assert!(fixture.images() == original);
+    }
+    // Actual loss of focus and an actual Lock key each revoke the pending prompt.
+    for lose_focus in [true, false] {
+        println!("Native pending recovery revocation: focus_loss={lose_focus}.");
+        action("editor-recovery", None);
+        action("input-empty", None);
+        action("input", Some(&recovery));
+        if lose_focus {
+            focus_cycle();
+        } else {
+            fixture.key_in(&app, "Secure Snippets", "CTRL", "l");
+        }
+        action("editor-authenticate", None);
+        await_locked();
+        assert!(fixture.images() == original);
+    }
+    // Observe a real passphrase derivation and revoke it with actual focus loss.
+    action("editor-unlock", None);
+    action("input-empty", None);
+    action("input", Some(&fixture.password));
+    action("editor-authenticate-start", None);
+    action("auth-busy", None);
+    focus_cycle();
+    await_locked();
+    assert!(fixture.images() == original);
+    action("editor-recovery", None);
+    action("input-empty", None);
+    action("input", Some(&recovery));
+    action("editor-authenticate", None);
+    until(
+        "fresh native recovery credential unlocked the editor",
+        30,
+        || fixture.state(1),
+    );
+    assert!(fixture.images() == original);
+    action("editor-lock", None);
+    await_locked();
+    println!(
+        "Actual native recovery Cancel/wrong-key refusal, focus/Lock revocation, observed passphrase-derivation focus revocation and fresh recovery unlock passed without primary writes."
+    );
+
+    let change_prompt = |key: &str, confirmation: &str| {
+        action("editor-passphrase", None);
+        for mode in ["pw-current-empty", "pw-new-empty", "pw-confirm-empty"] {
+            action(mode, None);
+        }
+        for _ in 0..16 {
+            if fixture.action_in(&app, "Secure Snippets", "pw-recovery", None) == 0 {
+                break;
+            }
+            fixture.key_in(&app, "Secure Snippets", "", "tab");
+        }
+        action("pw-recovery", None);
+        fixture.key_in(&app, "Secure Snippets", "", "space");
+        action("pw-recovery-selected", None);
+        for (mode, value) in [
+            ("pw-current", key),
+            ("pw-new", &*new_password),
+            ("pw-confirm", confirmation),
+        ] {
+            action(mode, Some(value));
+        }
+    };
+    // Native cancellation, wrong key and mismatched confirmation preserve the vault.
+    for refusal in 0..3 {
+        change_prompt(
+            if refusal == 1 {
+                &wrong_recovery
+            } else {
+                &recovery
+            },
+            if refusal == 2 {
+                "Public mismatched confirmation"
+            } else {
+                &new_password
+            },
+        );
+        action(
+            if refusal == 0 {
+                "cancel"
+            } else {
+                "editor-change"
+            },
+            None,
+        );
+        await_locked();
+        assert!(fixture.images() == original);
+    }
+    // A focus lapse before submission invalidates even correct native fields.
+    change_prompt(&recovery, &new_password);
+    focus_cycle();
+    action("editor-change", None);
+    await_locked();
+    assert!(fixture.images() == original);
+    // Observe the real native work label before revoking the running derivation.
+    change_prompt(&recovery, &new_password);
+    action("editor-change-start", None);
+    action("pw-busy", None);
+    assert!(fixture.images() == original);
+    focus_cycle();
+    await_locked();
+    assert!(fixture.images() == original);
+    println!(
+        "Actual recovery-based passphrase Cancel/wrong-key/mismatch refusal and focus revocation before submission and during observed native derivation passed."
+    );
+
+    change_prompt(&recovery, &new_password);
+    action("editor-change", None);
+    until("native recovery-based passphrase publication", 30, || {
+        fixture.images().1 != original.1
+    });
+    fixture.status_state(1, true);
+    fixture.reference_vault(&fixture.body, &new_password, "recovery");
+    let changed = fixture.images();
+    let before = Document::decode(original.1.as_ref().unwrap()).unwrap();
+    let after = Document::decode(changed.1.as_ref().unwrap()).unwrap();
+    assert!(
+        before.records == after.records
+            && before.wrap_recovery == after.wrap_recovery
+            && before.vault_salt == after.vault_salt
+            && before.wrap_pass != after.wrap_pass
+            && before.kdf != after.kdf
+            && changed.0 == original.0
+    );
+    action("editor-lock", None);
+    await_locked();
+    action("editor-unlock", None);
+    action("input-empty", None);
+    action("input", Some(&fixture.password));
+    action("editor-authenticate", None);
+    await_locked();
+    assert!(fixture.images() == changed);
+    fixture.unlock_editor_with(&app, 1, &new_password);
+    action("editor-lock", None);
+    await_locked();
+    action("editor-recovery", None);
+    action("input-empty", None);
+    action("input", Some(&recovery));
+    action("editor-authenticate", None);
+    until(
+        "unchanged recovery door still unlocks after passphrase change",
+        30,
+        || fixture.state(1),
+    );
+    assert!(fixture.images() == changed);
+    fixture.stop(&mut app);
+    fixture.assert_diagnostics_extra(
+        before.records[0].metadata.id,
+        &[
+            &recovery,
+            &wrong_recovery,
+            &new_password,
+            "Public mismatched confirmation",
+        ],
+    );
+    assert!(!fixture.root.join("Sync").exists());
+    println!(
+        "Actual recovery-based passphrase change, preserved records/recovery wrap, independent OpenSSL body/hash/new wrap, old/new password and continued recovery admission passed; diagnostics contain no credentials or bodies."
+    );
 }
 
 #[test]

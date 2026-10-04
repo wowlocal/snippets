@@ -456,6 +456,23 @@ impl Workspace {
             }
             glib::Propagation::Stop
         });
+        // Lock must revoke pending credentials even inside a modal dialog.
+        // Other workspace commands retain their ordinary modal boundary.
+        let lock_keys = gtk::EventControllerKey::new();
+        lock_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        lock_keys.set_propagation_limit(gtk::PropagationLimit::None);
+        let weak = Rc::downgrade(&this);
+        lock_keys.connect_key_pressed(move |_, key, _, mods| {
+            if mods.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+                && matches!(key, gtk::gdk::Key::l | gtk::gdk::Key::L)
+                && let Some(this) = weak.upgrade()
+            {
+                this.lock();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        this.window.add_controller(lock_keys);
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak = Rc::downgrade(&this);
@@ -480,10 +497,6 @@ impl Workspace {
                     }
                     Some('n') => {
                         this.new_entry();
-                        return glib::Propagation::Stop;
-                    }
-                    Some('l') => {
-                        this.lock();
                         return glib::Propagation::Stop;
                     }
                     _ => (),

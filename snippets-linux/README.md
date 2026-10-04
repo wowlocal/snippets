@@ -734,7 +734,9 @@ Unexpected external file changes stop recovery without overwriting them.
 
 Secure metadata stays searchable while locked. Unlock, choose an entry, and use
 **Reveal to Edit** for protected content. Ctrl+S saves, Ctrl+N creates a secure
-draft, and Ctrl+L locks the vault. Secure entries use explicit Save; they do not
+draft, and Ctrl+L locks the vault, including while a credential dialog is open.
+Lock revokes the pending request; submitting its old fields cannot unlock or
+change the vault. Secure entries use explicit Save; they do not
 use the ordinary editor's autosave or undo. Closing hides and locks the secure
 window, retaining the encrypted draft until it is saved or explicitly discarded.
 Quit asks you to unlock and save or discard a remaining draft before exiting.
@@ -1276,6 +1278,9 @@ bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary 
 # Native protected keyboard editing, Undo/Redo, Escape/reveal and passphrase change.
 bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
   /absolute/path/to/cargo-target/release secure-editor
+# Native recovery-key unlock/change, credential cancellation and focus/Lock revocation.
+bash snippets-linux/tests/control-live.sh /absolute/path/to/library-test-binary \
+  /absolute/path/to/cargo-target/release secure-recovery
 # Optional independent reader check; requires zbarimg (Arch package: zbar).
 cargo test --locked --manifest-path snippets-linux/Cargo.toml \
   --lib recovery_qr::tests::independent_reader -- --ignored --test-threads=1
@@ -1340,6 +1345,16 @@ and refuses any AT-SPI Text or EditableText interface on that surface. It never
 reads the body through accessibility. Button actions allow GTK's 250 ms native
 activation animation to finish before sending subsequent input. The events
 exercise the compositor path; physical keyboard and other IME input are separate.
+The `secure-recovery` variant unlocks through the real recovery-key dialog and
+changes the passphrase using native recovery selection and fresh credentials.
+It covers Cancel, wrong recovery keys, mismatched confirmation, actual focus
+loss, Ctrl+L in a pending credential dialog and focus loss during observed native
+authentication/rewrap work. Fresh password fields are checked only for a zero
+character count; the actor never reads their text. The installed CLI confirms
+locked/unlocked state. OpenSSL independently authenticates the original body/hash
+and new password wrap, and the fixture requires unchanged records, recovery wrap
+and ordinary file. New-password and continued recovery unlock must both succeed;
+the old password must refuse. All credentials stay in stdin-backed private input.
 
 Local-owner tests exercise libpam against a disposable private policy and a
 public fictional password module. They cover incorrect passwords, account

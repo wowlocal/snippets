@@ -30,7 +30,9 @@ static void visit(AtspiAccessible *item, guint depth, gboolean scoped) {
     strcmp(mode,"deny") == 0 ? "Deny" : strcmp(mode,"authenticate") == 0 ? "Authenticate" :
     strcmp(mode,"cancel") == 0 ? "Cancel" :
     strcmp(mode,"editor-unlock") == 0 ? "Unlock…" :
-    strcmp(mode,"editor-authenticate") == 0 ? "Unlock" :
+    (!strcmp(mode,"editor-authenticate") || !strcmp(mode,"editor-authenticate-start")) ? "Unlock" :
+    strcmp(mode,"editor-recovery") == 0 ? "Recovery Key…" :
+    strcmp(mode,"editor-idle") == 0 ? "Unlock…" :
     strcmp(mode,"editor-name") == 0 ? "Secure snippet name" :
     strcmp(mode,"editor-keyword") == 0 ? "Secure snippet keyword" :
     strcmp(mode,"editor-tags") == 0 ? "Secure snippet tags" :
@@ -39,23 +41,27 @@ static void visit(AtspiAccessible *item, guint depth, gboolean scoped) {
     strcmp(mode,"editor-redo") == 0 ? "Redo protected body edit" :
     strcmp(mode,"editor-lock") == 0 ? "Lock" :
     strcmp(mode,"editor-passphrase") == 0 ? "Change Passphrase…" :
-    strcmp(mode,"editor-change") == 0 ? "Change" :
-    strcmp(mode,"pw-current") == 0 ? "Current vault credential" :
-    strcmp(mode,"pw-new") == 0 ? "New vault passphrase" :
-    strcmp(mode,"pw-confirm") == 0 ? "Confirm new vault passphrase" :
+    (!strcmp(mode,"editor-change") || !strcmp(mode,"editor-change-start")) ? "Change" :
+    g_str_has_prefix(mode,"pw-current") ? "Current vault credential" :
+    g_str_has_prefix(mode,"pw-new") ? "New vault passphrase" :
+    g_str_has_prefix(mode,"pw-confirm") ? "Confirm new vault passphrase" :
+    (!strcmp(mode,"pw-recovery") || !strcmp(mode,"pw-recovery-selected")) ? "Authenticate with recovery key" :
+    strcmp(mode,"pw-busy") == 0 ? "Changing passphrase…" :
+    strcmp(mode,"auth-busy") == 0 ? "Authenticating…" :
     strcmp(mode,"editor-body") == 0 ? "Protected content. Reveal to edit. Copy and text extraction are disabled." :
     (!strcmp(mode,"recovery") || !strcmp(mode,"recovery-selected")) ? "Use recovery key" : NULL;
   gboolean match = scoped && showing(item) && wanted && name && strcmp(wanted,name) == 0 &&
     (role == ATSPI_ROLE_PUSH_BUTTON || role == ATSPI_ROLE_CHECK_BOX || role == ATSPI_ROLE_TOGGLE_BUTTON);
   if (scoped && showing(item) && wanted && name && !strcmp(wanted,name) &&
       (!strcmp(mode,"editor-name") || !strcmp(mode,"editor-keyword") ||
-       !strcmp(mode,"editor-tags") || !strcmp(mode,"pw-current") ||
-       !strcmp(mode,"pw-new") || !strcmp(mode,"pw-confirm"))) {
+       !strcmp(mode,"editor-tags") || g_str_has_prefix(mode,"pw-current") ||
+       g_str_has_prefix(mode,"pw-new") || g_str_has_prefix(mode,"pw-confirm"))) {
     AtspiEditableText *text=atspi_accessible_get_editable_text_iface(item);
     match=text!=NULL;g_clear_object(&text);
   }
   if (scoped && showing(item) && !strcmp(mode,"editor-body") && wanted && name && !strcmp(wanted,name)) match=TRUE;
-  if (scoped && showing(item) && strcmp(mode,"input") == 0 && role == ATSPI_ROLE_PASSWORD_TEXT) {
+  if (scoped && showing(item) && (!strcmp(mode,"pw-busy") || !strcmp(mode,"auth-busy")) && wanted && name && !strcmp(wanted,name) && role == ATSPI_ROLE_LABEL) match=TRUE;
+  if (scoped && showing(item) && (!strcmp(mode,"input") || !strcmp(mode,"input-empty")) && role == ATSPI_ROLE_PASSWORD_TEXT) {
     AtspiEditableText *text = atspi_accessible_get_editable_text_iface(item);
     match = text != NULL; g_clear_object(&text);
   }
@@ -81,7 +87,12 @@ int main(int argc,char **argv) {
       strcmp(mode,"editor-reveal") && strcmp(mode,"editor-body") &&
       strcmp(mode,"editor-undo") && strcmp(mode,"editor-redo") && strcmp(mode,"editor-lock") &&
       strcmp(mode,"editor-passphrase") && strcmp(mode,"editor-change") &&
-      strcmp(mode,"pw-current") && strcmp(mode,"pw-new") && strcmp(mode,"pw-confirm")) return 2;
+      strcmp(mode,"pw-current") && strcmp(mode,"pw-new") && strcmp(mode,"pw-confirm") &&
+      strcmp(mode,"pw-current-empty") && strcmp(mode,"pw-new-empty") && strcmp(mode,"pw-confirm-empty") &&
+      strcmp(mode,"input-empty") && strcmp(mode,"editor-recovery") && strcmp(mode,"editor-idle") &&
+      strcmp(mode,"pw-recovery") && strcmp(mode,"pw-recovery-selected") &&
+      strcmp(mode,"pw-busy") && strcmp(mode,"auth-busy") &&
+      strcmp(mode,"editor-change-start") && strcmp(mode,"editor-authenticate-start")) return 2;
   const char *value = g_getenv("SNIPPETS_CONTROL_TEST_PID");
   if (!value || !*value) return 2;
   char *end = NULL; unsigned long parsed = strtoul(value,&end,10);
@@ -119,11 +130,20 @@ int main(int argc,char **argv) {
         g_clear_object(&states);
       }
       g_clear_object(&text);g_clear_object(&editable);
-    } else if (!strcmp(mode,"recovery") || !strcmp(mode,"recovery-selected")) {
+    } else if (!strcmp(mode,"input-empty") || g_str_has_suffix(mode,"-empty")) {
+      /* Count only in a uniquely scoped credential field; never get its text. */
+      AtspiText *text=atspi_accessible_get_text_iface(target);
+      gint characters=text ? atspi_text_get_character_count(text,&error) : -1;
+      if (characters != 0 || error) result=11;
+      g_clear_error(&error);g_clear_object(&text);
+    } else if (!strcmp(mode,"editor-idle") || !strcmp(mode,"pw-busy") || !strcmp(mode,"auth-busy")) {
+      /* Observation only. A matching static native label/control is required. */
+    } else if (!strcmp(mode,"recovery") || !strcmp(mode,"recovery-selected") ||
+               !strcmp(mode,"pw-recovery") || !strcmp(mode,"pw-recovery-selected")) {
       /* GTK 4 provides neither an action nor component focus for this control.
        * Observe native focus/check state; the fixture navigates with real keys. */
       states=atspi_accessible_get_state_set(target);
-      AtspiStateType state=!strcmp(mode,"recovery") ? ATSPI_STATE_FOCUSED : ATSPI_STATE_CHECKED;
+      AtspiStateType state=(!strcmp(mode,"recovery") || !strcmp(mode,"pw-recovery")) ? ATSPI_STATE_FOCUSED : ATSPI_STATE_CHECKED;
       if (!states || !atspi_state_set_contains(states,state)) result=11;
       g_clear_object(&states);
     } else if (!strcmp(mode,"input") || !strcmp(mode,"editor-name") ||
