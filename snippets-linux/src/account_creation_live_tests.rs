@@ -73,9 +73,14 @@ pub(super) enum Followup {
     Restoration,
     SecureRestoration,
     ForeignRestoration,
+    ExternalRestoration(super::secure_restoration_live::files::Kind),
     SecureRestorationInterrupted(crate::account_worker::RestorationInterruption),
 }
 pub(super) fn run(followup: Followup) {
+    // Rust's test harness does not run GApplication with argv. GTK's real
+    // chooser still needs application identity for the private Recent store.
+    glib::set_prgname(Some("snippets-public-account-fixture"));
+    glib::set_application_name("Snippets Public Account Fixture");
     let root = isolated_root();
     let fixture = server::Fixture::new();
     fixture.state.lock().unwrap().enable_creation();
@@ -232,6 +237,7 @@ pub(super) fn run(followup: Followup) {
             | Followup::Restoration
             | Followup::SecureRestoration
             | Followup::ForeignRestoration
+            | Followup::ExternalRestoration(_)
             | Followup::SecureRestorationInterrupted(_)
     ) {
         super::switching::run(&window, &app, &parent, &root, &fixture, &pam, &local);
@@ -284,6 +290,18 @@ pub(super) fn run(followup: Followup) {
         until("final interrupted restoration worker did not drain", || {
             restored.prepare_quit()
         });
+        drop(restored_stop);
+    }
+    if let Followup::ExternalRestoration(kind) = followup {
+        let restored = make_window(&app, &parent, &root, &fixture, &pam);
+        let restored_stop = Stop(restored.clone());
+        super::secure_restoration_live::run_external(
+            &restored, &app, &parent, &root, &fixture, &pam, &local, kind,
+        );
+        until(
+            "final external-vault restoration worker did not drain",
+            || restored.prepare_quit(),
+        );
         drop(restored_stop);
     }
     until("final creation worker did not drain", || {

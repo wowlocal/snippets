@@ -1314,6 +1314,10 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 # Different independent current/source vault roots retained in history: separate
 # credentials, whole-selection refusal, current-root re-encryption and OpenSSL.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --foreign-restoration
+# Actual GTK fallback chooser on the private bus: selected external vault.json
+# or independent encrypted backup, source-file binding through fresh PAM.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --file-restoration
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --backup-file-restoration
 # Simulated durable write interruptions; each case restarts the actual native
 # worker, refuses all server requests, and requires fresh local-purpose PAM.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --restore-cancel-consent
@@ -1656,3 +1660,22 @@ The harness creates a private D-Bus, runtime directory and disposable keyring;
 it tests binary values, replacement, deletion and locked-keyring refusal. It
 does not initialize GTK or touch the desktop keyring. Run native GUI fixtures
 on the normal desktop bus, separately from this keyring harness.
+
+The external-history variants use a real mapped GTK FileChooserDialog, reached
+through the production FileDialog callback on the private bus. They do not
+manufacture a selected-file reply or source ticket. Only the exact public fixture
+path is selected. The chooser is allowed to take focus after the two prefilled
+vault fields have been cleared and the old preparation revoked. Cancelling it
+keeps primary files, checkpoint, nine protected key frames and record exchange
+unchanged. The JSON variant exercises independent source passphrase/recovery;
+the backup variant uses the existing independent OpenSSL container and exposes
+only a backup password for the source. Whole-selection credential, review, PAM,
+focus and stale-primary refusals are followed by actual current-root restoration,
+independent OpenSSL verification, fresh-worker reconnect and encrypted sync.
+Changing the selected file after review, before valid fresh PAM, refuses before
+receipt or primary writes. Contents of the selected backup are not imported.
+The account runner now isolates GTK configuration/cache and uses memory GSettings,
+as well as its existing private bus/keyring/data roots. This establishes GTK's
+fallback chooser; the normal desktop portal route is a separate acceptance item.
+Mixed-source vault history and separately installed-app restoration remain
+unverified. See docs/linux/IMPLEMENTATION.md for the exact final evidence.

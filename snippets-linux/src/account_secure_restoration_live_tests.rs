@@ -12,6 +12,9 @@ const CURRENT: &str =
 const LATER: &[u8] = b"Public current secure restoration body";
 const NEWER: &[u8] = b"Public newer secure restoration body after review";
 
+#[path = "account_restoration_file_live_tests.rs"]
+pub(super) mod files;
+
 fn document(root: &Path) -> Document {
     crate::vault::read_document(root).unwrap().unwrap()
 }
@@ -74,6 +77,7 @@ fn toggles(dialog: &adw::AlertDialog, label: &str) -> Vec<gtk::CheckButton> {
 fn credentials(
     window: &Rc<AccountWindow>,
     foreign: bool,
+    file: Option<&files::Input>,
 ) -> (adw::AlertDialog, Vec<gtk::PasswordEntry>) {
     press(window.window.upcast_ref(), "Library Recovery History…");
     until("native secure restoration history did not map", || {
@@ -111,20 +115,26 @@ fn credentials(
             && modes[0].is_sensitive()
             && !modes[0].is_active()
     );
-    (dialog, entries)
+    if let Some(file) = file {
+        files::select(window, &dialog, &entries, file)
+    } else {
+        (dialog, entries)
+    }
 }
 fn reviewed(
     window: &Rc<AccountWindow>,
     value: &str,
     recovery: bool,
     previous: Option<(&str, &str)>,
+    file: Option<&files::Input>,
 ) -> adw::AlertDialog {
-    let (dialog, entries) = credentials(window, previous.is_some());
+    let (dialog, entries) = credentials(window, previous.is_some(), file);
     toggles(&dialog, "Use recovery key")[0].set_active(recovery);
     entries[0].set_text(value);
     if let Some((passphrase, key)) = previous {
-        toggles(&dialog, "Use recovery key")[1].set_active(!recovery);
-        entries[1].set_text(if recovery { passphrase } else { key });
+        let old_recovery = !recovery && file.is_none_or(|f| !f.backup());
+        toggles(&dialog, "Use recovery key")[1].set_active(old_recovery);
+        entries[1].set_text(if old_recovery { key } else { passphrase });
     }
     press(dialog.upcast_ref(), "Verify Saved Changes");
     until_for(
@@ -171,8 +181,9 @@ fn password(
     value: &str,
     recovery: bool,
     previous: Option<(&str, &str)>,
+    file: Option<&files::Input>,
 ) -> (adw::AlertDialog, gtk::PasswordEntry) {
-    let review = reviewed(window, value, recovery, previous);
+    let review = reviewed(window, value, recovery, previous, file);
     press(review.upcast_ref(), "Restore Changes");
     until(
         "native secure restoration computer password did not map",
@@ -296,6 +307,20 @@ fn live_secure_saved_history_restoration() {
 fn live_retained_foreign_vault_history_restoration() {
     creation::run(creation::Followup::ForeignRestoration);
 }
+#[test]
+#[ignore = "explicit real GTK chooser and external JSON vault restoration; invoke tests/account-live.sh with --file-restoration"]
+fn live_external_json_vault_history_restoration() {
+    creation::run(creation::Followup::ExternalRestoration(
+        files::Kind::VaultJson,
+    ));
+}
+#[test]
+#[ignore = "explicit real GTK chooser and external independently encrypted backup restoration; invoke tests/account-live.sh with --backup-file-restoration"]
+fn live_external_backup_vault_history_restoration() {
+    creation::run(creation::Followup::ExternalRestoration(
+        files::Kind::EncryptedBackup,
+    ));
+}
 struct RestorationContext<'a> {
     window: &'a Rc<AccountWindow>,
     app: &'a adw::Application,
@@ -309,6 +334,7 @@ enum Scenario {
     SameVault,
     Interrupted(RestorationInterruption),
     ForeignVault,
+    ExternalVault(files::Kind),
 }
 pub(super) fn run(
     window: &Rc<AccountWindow>,
@@ -367,6 +393,30 @@ pub(super) fn run_foreign(
         Scenario::ForeignVault,
     );
 }
+#[allow(clippy::too_many_arguments)]
+pub(super) fn run_external(
+    window: &Rc<AccountWindow>,
+    app: &adw::Application,
+    parent: &adw::ApplicationWindow,
+    root: &Path,
+    fixture: &server::Fixture,
+    pam: &Pam,
+    ordinary: &model::Snippet,
+    kind: files::Kind,
+) {
+    run_case(
+        RestorationContext {
+            window,
+            app,
+            parent,
+            root,
+            fixture,
+            pam,
+            ordinary,
+        },
+        Scenario::ExternalVault(kind),
+    );
+}
 fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
     let RestorationContext {
         window,
@@ -377,7 +427,10 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
         pam,
         ordinary,
     } = context;
-    let foreign = matches!(scenario, Scenario::ForeignVault);
+    let foreign = matches!(
+        scenario,
+        Scenario::ForeignVault | Scenario::ExternalVault(_)
+    );
     let boundary = if let Scenario::Interrupted(boundary) = scenario {
         Some(boundary)
     } else {
@@ -392,6 +445,11 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
     let recovery = crypto::format_recovery(&[0x66; 16]);
     let initial =
         Document::decode(&serde_json::to_vec(&fixture_data["document"]).unwrap()).unwrap();
+    let file = if let Scenario::ExternalVault(kind) = scenario {
+        Some(files::Input::new(root, kind, &initial))
+    } else {
+        None
+    };
     fs::create_dir(root.join("Vault")).unwrap();
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(root.join("Vault"), fs::Permissions::from_mode(0o700)).unwrap();
@@ -482,21 +540,24 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
     };
     let old_recovery = crypto::format_recovery(&[0x66; 16]);
     let previous = foreign.then_some((
-        fixture_data["passphrase"].as_str().unwrap(),
+        file.as_ref()
+            .map_or(fixture_data["passphrase"].as_str().unwrap(), |f| {
+                f.passphrase(fixture_data["passphrase"].as_str().unwrap())
+            }),
         old_recovery.as_str(),
     ));
     let credentials = |window: &Rc<AccountWindow>| {
-        let (dialog, entries) = credentials(window, foreign);
+        let (dialog, entries) = credentials(window, foreign, file.as_ref());
         if let Some((old_passphrase, _)) = previous {
             entries[1].set_text(old_passphrase);
         }
         (dialog, entries)
     };
     let reviewed = |window: &Rc<AccountWindow>, value: &str, recovery: bool| {
-        reviewed(window, value, recovery, previous)
+        reviewed(window, value, recovery, previous, file.as_ref())
     };
     let password = |window: &Rc<AccountWindow>, value: &str, recovery: bool| {
-        password(window, value, recovery, previous)
+        password(window, value, recovery, previous, file.as_ref())
     };
     let mut edited = document(root);
     vault::edit(&mut edited, secure_id, LATER, &key);
@@ -626,6 +687,17 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
             "Native missing-current-vault metadata refused before credentials, review or receipt; primary images, checkpoint, protected keys and data plane remained exact."
         );
     }
+    if file.is_some() {
+        files::cancel(
+            window,
+            passphrase,
+            fixture_data["passphrase"].as_str().unwrap(),
+        );
+        unchanged();
+        println!(
+            "Actual GTK chooser cancellation cleared both prefilled vault credentials and preserved primary images, keys and data plane."
+        );
+    }
     let (dialog, entries) = credentials(window);
     entries[0].set_text(passphrase);
     press(dialog.upcast_ref(), "Cancel");
@@ -700,6 +772,20 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
     println!(
         "Native secure restoration: vault passphrase/recovery review, Cancel/wrong credential and vault/review/PAM focus revocation preserved primary images, keys and data plane."
     );
+    if let Some(file) = &file {
+        let (dialog, entry) = password(window, passphrase, false);
+        file.change();
+        entry.set_text("Public fictional password");
+        press(dialog.upcast_ref(), "Authorize");
+        finished(window, std::slice::from_ref(&entry));
+        unchanged();
+        file.restore();
+        assert!(!window.sync.is_sensitive());
+        reconnect(window, 2);
+        println!(
+            "Changed selected external file refused the whole reviewed restoration after fresh PAM, before receipt or primary writes; exact current library, protected keys and data plane remained unchanged."
+        );
+    }
     let (dialog, entry) = password(window, passphrase, false);
     let mut newer = document(root);
     vault::edit(&mut newer, secure_id, NEWER, &key);

@@ -37,7 +37,7 @@ if [[ ${1:-} == --in-bus ]]; then
 fi
 if [[ $# -lt 1 || $# -gt 2 || ! -x $1 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${HYPRLAND_INSTANCE_SIGNATURE:-} || -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--creation|--switch|--restoration|--secure-restoration|--foreign-restoration|--restore-cancel-consent|--restore-cancel-baseline|--restore-finish-ordinary|--restore-finish-vault|--pairing|--recovery-reconcile|--recovery-retry|--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete|--nested-review-keep|--nested-review-delete|--nested-journal-keep|--nested-journal-delete|--prior-child-keep-parent-keep|--prior-child-keep-parent-delete|--prior-child-delete-parent-keep|--prior-child-delete-parent-delete] (in the unlocked desktop session)' >&2
+  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--creation|--switch|--restoration|--secure-restoration|--foreign-restoration|--file-restoration|--backup-file-restoration|--restore-cancel-consent|--restore-cancel-baseline|--restore-finish-ordinary|--restore-finish-vault|--pairing|--recovery-reconcile|--recovery-retry|--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete|--nested-review-keep|--nested-review-delete|--nested-journal-keep|--nested-journal-delete|--prior-child-keep-parent-keep|--prior-child-keep-parent-delete|--prior-child-delete-parent-keep|--prior-child-delete-parent-delete] (in the unlocked desktop session)' >&2
   exit 2
 fi
 case ${2:-} in
@@ -47,6 +47,8 @@ case ${2:-} in
   --restoration) test_name=account_ui::live_tests::restoration_live::live_saved_history_restoration_preserves_current_versions ;;
   --secure-restoration) test_name=account_ui::live_tests::secure_restoration_live::live_secure_saved_history_restoration ;;
   --foreign-restoration) test_name=account_ui::live_tests::secure_restoration_live::live_retained_foreign_vault_history_restoration ;;
+  --file-restoration) test_name=account_ui::live_tests::secure_restoration_live::live_external_json_vault_history_restoration ;;
+  --backup-file-restoration) test_name=account_ui::live_tests::secure_restoration_live::live_external_backup_vault_history_restoration ;;
   --restore-cancel-consent) test_name=account_ui::live_tests::secure_restoration_live::live_restoration_cancel_after_consent ;;
   --restore-cancel-baseline) test_name=account_ui::live_tests::secure_restoration_live::live_restoration_cancel_after_baseline ;;
   --restore-finish-ordinary) test_name=account_ui::live_tests::secure_restoration_live::live_restoration_finish_after_ordinary ;;
@@ -86,7 +88,7 @@ fixture_root=$(mktemp -d /tmp/snippets-account.XXXXXXXX)
 # Short path keeps Hyprland's signature/socket pathname within sockaddr_un.
 fixture_runtime=$(mktemp -d /tmp/sh.XXXXXX)
 trap 'rm -rf -- "$fixture_root" "$fixture_runtime"' EXIT
-mkdir -m 700 "$fixture_root/data" "$fixture_root/control"
+mkdir -m 700 "$fixture_root/data" "$fixture_root/control" "$fixture_root/config" "$fixture_root/cache"
 ln -s -- "$host_runtime/hypr" "$fixture_runtime/hypr"
 # No activation directories: GTK must not start portals, document mounts or
 # accessibility services on behalf of this deliberately incomplete test session.
@@ -104,6 +106,9 @@ cat > "$fixture_root/bus.conf" <<XML
 </busconfig>
 XML
 export XDG_DATA_HOME=$fixture_root/data
+export XDG_CONFIG_HOME=$fixture_root/config
+export XDG_CACHE_HOME=$fixture_root/cache
+export GSETTINGS_BACKEND=memory
 export XDG_RUNTIME_DIR=$fixture_runtime
 export GIO_USE_VFS=local
 export GDK_DEBUG=no-portals

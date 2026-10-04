@@ -5034,3 +5034,54 @@ hardware suspend, normal Omarchy configuration and Apple-app backup exchange rem
 separate acceptance work. Final GTK/Wayland/D-Bus, unlocked state, DNS/verified HTTPS
 and fixture-cleanup preflight preserves Stay Awake and the existing 2026-10-05
 09:00 Minsk lock-restoration timer.
+
+
+### Native selected-file vault restoration (2026-10-04)
+
+The full creation/switch/history workflow now passes in Debug and Release with
+an explicitly selected external vault.json and, separately, the existing
+independent OpenSSL encrypted-backup fixture. Each run maps the real GTK
+FileChooserDialog through the production FileDialog fallback on its private
+D-Bus. Its transient parent, active state, Open mode, single-file selection and
+exact owned public path are checked before clicking the actual Accept widget.
+No synthetic callback or SourceFile ticket replaces production inspection.
+Private GTK config/cache and memory GSettings prevent chooser history from being
+written to host configuration; native Secret Service and PAM remain isolated.
+
+Choosing a file after filling both initial vault fields clears them and revokes
+the initial credential preparation before the chooser takes focus. Cancel leaves
+primary/checkpoint images, nine protected frames, no restoration receipt and data
+plane unchanged. The selected JSON uses independent source passphrase/recovery;
+the selected backup offers only its own password, and its ordinary content is
+not added to the library. Wrong/swapped credentials and current-only authority
+refuse the entire ordinary/protected history selection. Keep, cancellation,
+denial and vault/review/PAM focus loss preserve the same inputs.
+
+A selected-file byte change after result review and before valid fresh PAM
+refuses the entire restoration before any receipt or primary write. Restoring the
+owned file's exact bytes and explicitly reconnecting requires fresh verification.
+The subsequent stale-current-ciphertext refusal and successful authenticated
+restoration exercise both source-file and primary-file binding. The result keeps
+current wraps/KDF/salt/future metadata and CAS/feed, restores two saved records,
+preserves two disabled current versions and two unrelated records, completes one
+receipt, and retains the original source wire. OpenSSL authenticates actual current
+wraps/bodies before and after a new worker explicitly reconnects and synchronizes;
+current-vault protected copies are acknowledged before restored source updates.
+
+Final evidence contains 17 serial gates on 302 frozen native inputs, seven
+distinct live tests, 45 focused restoration-owner tests, desktop/headless Clippy,
+format/shell/reference-fixture checks and fresh Release GUI/CLI/helper builds.
+Retained-source, same-vault, ordinary and interrupted baseline-cancel/vault-finish
+regressions pass. All three production artifact hashes equal checkpoint c00b2022;
+installed GUI/CLI evidence is inherited from that exact artifact, not counted as
+a rerun. The curated source manifest contains 308 files. Failed initial helper
+compilation, the Gio.File identity-selection assertion and the missing test-app
+name GTK Recent abort are retained with their
+earlier source fingerprints and excluded from final passing evidence.
+
+This establishes the isolated GTK fallback chooser, not the host desktop portal
+route. Mixed-source/legacy vault history, actual process termination/power loss,
+separately installed-app restoration, interrupted switching, normal Omarchy
+configuration, hardware suspend and Apple-app backup exchange remain separate
+acceptance work. Final GTK/Wayland/D-Bus/unlocked/DNS/verified-HTTPS cleanup checks
+preserve Stay Awake and the existing 2026-10-05 09:00 Minsk restoration timer.
