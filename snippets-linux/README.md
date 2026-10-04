@@ -691,7 +691,10 @@ journal-only C1 source Keep/Delete also pass with retained child seals and
 separate originals. Prior-confirmed cloud-child Keep/Delete before parent
 Keep/Delete also passes all four native combinations with actual saved CAS.
 Unknown pending raw-child decisions, local-absence source review, unrelated
-ambiguous packets, pairing and signed operations remain under live acceptance. The native interrupted-startup recovery fixture passes with temporary
+ambiguous packets, switch-candidate pairing, interrupted switching and restoration
+remain under live acceptance. Native recipient pairing and signed approval/recovery
+replacement now pass, including retained-request restart. The native
+interrupted-startup recovery fixture passes with temporary
 data; full file-dialog
 and Apple-app backup round trips remain separate.
 
@@ -713,8 +716,11 @@ private native keyring. Ordinary manual/automatic synchronization, fresh vault
 synchronization and reviewed two-library switching also pass combined live checks.
 Two native installations now pass pairing and trusted-device approval, including
 a lost HTTPS reply and exact signed-request replay after restart. Recovery-code
-replacement, candidate pairing for switching and library restoration remain under
-acceptance.
+replacement also passes: after a lost acknowledgement, a new worker either verifies
+the exact retained envelope or obtains fresh authorization to resend the original
+proof. The old code cannot open the new envelope; the new code restores the same
+library key and synchronized record. Candidate pairing for switching, interrupted
+switching and library restoration remain under acceptance.
 
 ## Secure Snippets
 
@@ -1198,8 +1204,10 @@ keyring, certificate-verified loopback HTTPS and private-policy PAM. Automatic
 sync also passes live bidirectional/read-only, background, retry, restart, scope
 halt and in-flight-disable checks. Reviewed switching to a separately keyed
 library and back passes too. Two-installation pairing and signed device approval
-pass with retained-request restart. Recovery replacement, candidate pairing for
-switching, interrupted switching and restoration remain under review.
+pass with retained-request restart. Recovery replacement passes both exact-envelope
+reconciliation and freshly authorized original-proof replay after restart, followed
+by same-key recovery and encrypted synchronization. Candidate pairing for switching,
+interrupted switching and restoration remain under review.
 All three globally assigned actions, visible tray-menu selection/focus and re-registration
 with a restarted Omarchy host pass; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
@@ -1252,6 +1260,10 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 # Two private native installations: retained public invitation, compare-code gate,
 # fresh PAM approval, original signed-request replay and claimed-key encrypted sync.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --pairing
+# Owner recovery replacement: lost reply/restart, exact-envelope reconciliation
+# or fresh-authorized original-proof replay, new offline copy and same-key recovery.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --recovery-reconcile
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --recovery-retry
 # Each variant has its own native GTK process, bus, keyring and data root.
 # The hidden-window checks wait for the unmodified 30-second scheduler.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --automatic-sync
@@ -1507,8 +1519,23 @@ that same proof. One server receipt is accepted despite two sends. The recipient
 claims the encrypted packet, installs the original library key, synchronizes and
 reconnects without another pairing or bootstrap. Both primary libraries remain
 exact through the approval workflow. No invitation is copied to the host clipboard
-by this fixture. Candidate pairing for switching and recovery replacement remain
-separate live checks.
+by this fixture. Candidate pairing for switching remains a separate live check.
+
+The two recovery-replacement variants use the same independent signed-action peer.
+Default password Cancel, incorrect private-policy PAM and actual filled-dialog
+focus loss retain the original unsigned intent and leave the envelope, active
+keys, primary/checkpoint files and record data exact. A successful owner-authorized
+replacement increments only the envelope version, then deliberately loses its TLS
+reply. A new worker retains Signed state. One variant reconciles the exact saved
+ciphertext without another challenge or PUT; the other obtains fresh computer-password
+authorization and replays the same proof, with one accepted server receipt. The
+new recovery visual/code is freshly authorized and confirmed through its native
+offline-copy controls. Another isolated installation refuses the old code, restores
+the original library key using the new one, and receives the encrypted record.
+Confirmed recovery state survives a further reconnect. The peer keeps encrypted
+bytes and public verifier/proof material; no code, key or plaintext body is sent
+or written by the test controller. Full codes/keys exist only in zeroizing fixture
+memory for the cryptographic checks.
 
 The separate combined account fixture uses the real serial account owner and
 native Secret Service backend on its own bus and data root. It exercises mapped

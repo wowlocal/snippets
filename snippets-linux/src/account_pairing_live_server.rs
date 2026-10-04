@@ -15,7 +15,10 @@ pub(in super::super) struct State {
     claims: usize,
     approvals: usize,
     accepted: usize,
+    recovery_posts: usize,
+    recovery_accepted: usize,
     lose_approval: bool,
+    lose_recovery: bool,
     lost_reply: bool,
 }
 struct Invitation {
@@ -25,12 +28,31 @@ struct Invitation {
     ciphertext: Option<String>,
 }
 struct Challenge {
+    action: Action,
     hash: String,
     nonce: [u8; 32],
     expires: i64,
     receipt: Option<Value>,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Approval,
+    Recovery,
+}
 impl State {
+    pub fn recovery_counts(&self) -> (usize, usize, usize) {
+        (
+            self.challenges
+                .values()
+                .filter(|challenge| challenge.action == Action::Recovery)
+                .count(),
+            self.recovery_posts,
+            self.recovery_accepted,
+        )
+    }
+    pub fn lose_next_recovery_reply(&mut self) {
+        self.lose_recovery = true;
+    }
     pub fn counts(&self) -> (usize, usize, usize, usize, usize, usize) {
         (
             self.creates,
@@ -87,6 +109,35 @@ fn reply(id: uuid::Uuid, v: &Invitation) -> Value {
         "state":if v.ciphertext.is_some(){"approved"}else{"pending"},
         "expiresAt":chrono::DateTime::from_timestamp(v.expires,0).unwrap().to_rfc3339()}})
 }
+fn verified(
+    state: &mut State,
+    body: &Value,
+    public: &Value,
+    action: Action,
+    hash: &str,
+    now: i64,
+) -> bool {
+    let proof = &body["proof"];
+    assert!(proof.as_object().unwrap().len() == 2);
+    let id = uuid::Uuid::parse_str(proof["challengeId"].as_str().unwrap()).unwrap();
+    let challenge = state.challenges.get_mut(&id).unwrap();
+    assert!(challenge.action == action && challenge.hash == hash && challenge.expires > now);
+    let public = bytes(public);
+    let signature = ed25519_dalek::Signature::from_bytes(&bytes(&proof["signature"]));
+    let mut message = b"snippets-library-action-proof-v1\n".to_vec();
+    message.extend_from_slice(&challenge.nonce);
+    ed25519_dalek::VerifyingKey::from_bytes(&public)
+        .unwrap()
+        .verify_strict(&message, &signature)
+        .unwrap();
+    if let Some(receipt) = &challenge.receipt {
+        assert!(receipt == body);
+        true
+    } else {
+        challenge.receipt = Some(body.clone());
+        false
+    }
+}
 pub(super) fn respond(
     request: Request,
     _server: &ServerURL,
@@ -117,14 +168,19 @@ pub(super) fn respond(
     if request.path == format!("{base}/key-challenges") {
         assert!(request.method == "POST" && request.body.as_object().unwrap().len() == 4);
         assert!(request.body["expectedScope"] == scope() && request.body["keyEpoch"] == 1);
-        assert!(request.body["action"] == "approve_pairing" && owner.public.is_some());
+        assert!(owner.public.is_some());
+        let action = match request.body["action"].as_str().unwrap() {
+            "approve_pairing" => Action::Approval,
+            "replace_recovery" => Action::Recovery,
+            _ => panic!("unexpected native fixture signed action"),
+        };
         let _: [u8; 32] = bytes(&request.body["requestHash"]);
         let id = uuid::Uuid::from_u128(700 + state.challenges.len() as u128);
         let nonce: [u8; 32] =
             Sha256::digest(format!("public-native-pairing-challenge-{id}").as_bytes()).into();
         let expires = now + 300;
         let hash = request.body["requestHash"].as_str().unwrap().to_owned();
-        let response = json!({"scope":scope(),"challenge":{"challengeId":id,"action":"approve_pairing",
+        let response = json!({"scope":scope(),"challenge":{"challengeId":id,"action":request.body["action"],
             "keyEpoch":1,"requestHash":hash,"nonce":STANDARD.encode(nonce),
             "expiresAt":chrono::DateTime::from_timestamp(expires,0).unwrap().to_rfc3339()}});
         assert!(
@@ -133,6 +189,7 @@ pub(super) fn respond(
                 .insert(
                     id,
                     Challenge {
+                        action,
                         hash,
                         nonce,
                         expires,
@@ -142,6 +199,51 @@ pub(super) fn respond(
                 .is_none()
         );
         return (200, response);
+    }
+    if request.path == format!("{base}/recovery-envelope") {
+        assert!(request.method == "PUT" && request.body.as_object().unwrap().len() == 5);
+        assert!(
+            request.body["keyEpoch"] == 1
+                && request.body["algorithm"] == "snippets-recovery-hkdf-sha256-aes256gcm-v1"
+        );
+        let prior = request.body["expectedVersion"].as_u64().unwrap();
+        let cipher = request.body["ciphertext"].as_str().unwrap();
+        let decoded = STANDARD.decode(cipher).unwrap();
+        assert!((28..=4096).contains(&decoded.len()));
+        let input = [
+            "snippets-recovery-action-v1",
+            "1",
+            &prior.to_string(),
+            "snippets-recovery-hkdf-sha256-aes256gcm-v1",
+            cipher,
+        ]
+        .join("\n");
+        let hash = STANDARD.encode(Sha256::digest(input.as_bytes()));
+        let replay = verified(
+            state,
+            &request.body,
+            owner.public.as_ref().unwrap(),
+            Action::Recovery,
+            &hash,
+            now,
+        );
+        if replay {
+            assert!(
+                owner.recovery_version == prior + 1
+                    && owner.ciphertext.as_ref() == Some(&request.body["ciphertext"])
+            );
+        } else {
+            assert!(
+                owner.recovery_version == prior
+                    && owner.ciphertext.as_ref() != Some(&request.body["ciphertext"])
+            );
+            owner.ciphertext = Some(request.body["ciphertext"].clone());
+            owner.recovery_version += 1;
+            state.recovery_accepted += 1;
+        }
+        state.recovery_posts += 1;
+        state.lost_reply = std::mem::take(&mut state.lose_recovery);
+        return (200, recovery(owner, &scope()));
     }
     let path = request
         .path
@@ -157,7 +259,7 @@ pub(super) fn respond(
         state.cancels += 1;
         return (204, Value::Null);
     }
-    let invitation = state.invitations.get_mut(&id).unwrap();
+    let invitation = state.invitations.get(&id).unwrap();
     assert!(invitation.expires > now);
     match operation {
         None => {
@@ -190,28 +292,20 @@ pub(super) fn respond(
             ]
             .join("\n");
             let hash = STANDARD.encode(Sha256::digest(input.as_bytes()));
-            let proof = &request.body["proof"];
-            assert!(proof.as_object().unwrap().len() == 2);
-            let challenge_id =
-                uuid::Uuid::parse_str(proof["challengeId"].as_str().unwrap()).unwrap();
-            let challenge = state.challenges.get_mut(&challenge_id).unwrap();
-            assert!(challenge.hash == hash && challenge.expires > now);
-            let public = bytes(owner.public.as_ref().unwrap());
-            let signature = ed25519_dalek::Signature::from_bytes(&bytes(&proof["signature"]));
-            let mut message = b"snippets-library-action-proof-v1\n".to_vec();
-            message.extend_from_slice(&challenge.nonce);
-            ed25519_dalek::VerifyingKey::from_bytes(&public)
-                .unwrap()
-                .verify_strict(&message, &signature)
-                .unwrap();
-            if let Some(receipt) = &challenge.receipt {
-                assert!(
-                    *receipt == request.body && invitation.ciphertext.as_deref() == Some(cipher)
-                );
+            let replay = verified(
+                state,
+                &request.body,
+                owner.public.as_ref().unwrap(),
+                Action::Approval,
+                &hash,
+                now,
+            );
+            let invitation = state.invitations.get_mut(&id).unwrap();
+            if replay {
+                assert!(invitation.ciphertext.as_deref() == Some(cipher));
             } else {
                 assert!(invitation.ciphertext.is_none());
                 invitation.ciphertext = Some(cipher.to_owned());
-                challenge.receipt = Some(request.body);
                 state.accepted += 1;
             }
             state.approvals += 1;

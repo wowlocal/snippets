@@ -35,6 +35,7 @@ pub(super) struct State {
     pub acknowledgements: Vec<(uuid::Uuid, String)>,
     public: Option<Value>,
     ciphertext: Option<Value>,
+    recovery_version: u64,
     records: BTreeMap<uuid::Uuid, (WireRecord, String)>,
     positions: BTreeMap<String, BTreeMap<uuid::Uuid, String>>,
     generation: usize,
@@ -54,6 +55,7 @@ struct Creation {
 struct RemoteLibrary {
     public: Option<Value>,
     ciphertext: Option<Value>,
+    recovery_version: u64,
     records: BTreeMap<uuid::Uuid, (WireRecord, String)>,
     positions: BTreeMap<String, BTreeMap<uuid::Uuid, String>>,
     generation: usize,
@@ -62,12 +64,22 @@ impl RemoteLibrary {
     fn exchange(&mut self, state: &mut State) {
         std::mem::swap(&mut self.public, &mut state.public);
         std::mem::swap(&mut self.ciphertext, &mut state.ciphertext);
+        std::mem::swap(&mut self.recovery_version, &mut state.recovery_version);
         std::mem::swap(&mut self.records, &mut state.records);
         std::mem::swap(&mut self.positions, &mut state.positions);
         std::mem::swap(&mut self.generation, &mut state.generation);
     }
 }
 impl State {
+    pub fn recovery_evidence(&self) -> (u64, Vec<u8>) {
+        use base64::Engine;
+        (
+            self.recovery_version,
+            base64::engine::general_purpose::STANDARD
+                .decode(self.ciphertext.as_ref().unwrap().as_str().unwrap())
+                .unwrap(),
+        )
+    }
     pub fn enable_pairing(&mut self) {
         assert!(self.requests == 0 && self.creation.is_none() && self.pairing.is_none());
         self.pairing = Some(pairing::State::default());
@@ -181,7 +193,7 @@ fn grant(state: &mut State) -> Value {
 }
 fn recovery(state: &State, scope: &Value) -> Value {
     json!({"scope":scope,"keyEpoch":1,"recovery":state.ciphertext.as_ref().map(|ciphertext|
-        json!({"purpose":"recovery","version":1,"keyEpoch":1,"algorithm":bootstrap::RECOVERY_ALGORITHM,
+        json!({"purpose":"recovery","version":state.recovery_version,"keyEpoch":1,"algorithm":bootstrap::RECOVERY_ALGORITHM,
             "ciphertext":ciphertext,"createdAt":"2026-09-30T12:00:00Z"}))})
 }
 struct Request {
@@ -286,7 +298,9 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
         assert!(*token == format!("Bearer public-native-access-{}", state.grants));
     }
     if state.pairing.is_some()
-        && (request.path.contains("/pairings") || request.path.ends_with("/key-challenges"))
+        && (request.path.contains("/pairings")
+            || request.path.ends_with("/key-challenges")
+            || (request.method == "PUT" && request.path.ends_with("/recovery-envelope")))
     {
         return pairing::respond(request, server, state);
     }
@@ -399,6 +413,7 @@ fn respond_library(
         state.bootstrap_posts += 1;
         state.public = Some(request.body["publicKey"].clone());
         state.ciphertext = Some(request.body["recovery"]["ciphertext"].clone());
+        state.recovery_version = 1;
         (200, recovery(state, response_scope))
     } else if request.path.starts_with(&format!("{base}/changes?")) {
         assert!(request.method == "GET");
