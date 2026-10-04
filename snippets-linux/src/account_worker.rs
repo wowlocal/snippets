@@ -758,6 +758,25 @@ fn automatic_outcome(
         )
     }
 }
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum RestorationInterruption {
+    Consent,
+    Baseline,
+    Ordinary,
+    Vault,
+}
+#[cfg(test)]
+impl RestorationInterruption {
+    fn fault(self) -> u8 {
+        match self {
+            Self::Consent => 7,
+            Self::Baseline => 0,
+            Self::Ordinary => 2,
+            Self::Vault => 3,
+        }
+    }
+}
 impl Handle {
     pub(crate) fn new(root: PathBuf) -> Result<Self> {
         let control = Control::new();
@@ -787,11 +806,51 @@ impl Handle {
         agent: ureq::Agent,
         pam_helper: PathBuf,
     ) -> Result<Self> {
+        Self::live_fixture_with_restoration_interruption(root, server, agent, pam_helper, None)
+    }
+    #[cfg(test)]
+    pub(crate) fn live_fixture_with_restoration_interruption(
+        root: PathBuf,
+        server: ServerURL,
+        agent: ureq::Agent,
+        pam_helper: PathBuf,
+        mut interruption: Option<RestorationInterruption>,
+    ) -> Result<Self> {
         let control = Control::new();
         let mut owner = Owner::new(root, control.clone());
         Self::spawn_events(control, move |event| {
             cloud::with_live_fixture_agent(&server, &agent, || {
                 local_auth::with_live_fixture_helper(&pam_helper, || {
+                    // Interpose the existing core I/O fault only after real native
+                    // preparation and PAM consent. All restart commands use the
+                    // ordinary production owner, scheduler and keyring paths.
+                    let event = match event {
+                        Event::Command(command) if interruption.is_some() => match *command {
+                            Command::CommitRestoration { token, permit } => {
+                                let fault = interruption.take().unwrap().fault();
+                                let reply = (|| {
+                                    let review = owner.restoration.consume(token)?;
+                                    owner.transport = None;
+                                    owner.selected = None;
+                                    let failure = restoration::apply_with_fault(
+                                        owner.store.as_mut().ok_or(Failure::InvalidState)?,
+                                        review,
+                                        permit,
+                                        Some(fault),
+                                    )
+                                    .err()
+                                    .map(Failure::from);
+                                    Ok(Reply::Restored {
+                                        failure,
+                                        cancelled: false,
+                                    })
+                                })();
+                                return (Some(reply), owner.pending.is_some(), owner.automatic);
+                            }
+                            command => Event::Command(Box::new(command)),
+                        },
+                        event => event,
+                    };
                     Self::owner_event(&mut owner, event)
                 })
             })

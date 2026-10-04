@@ -177,15 +177,34 @@ fn make_window(
     fixture: &server::Fixture,
     pam: &Pam,
 ) -> Rc<AccountWindow> {
-    let worker = Rc::new(
+    make_window_with_interruption(app, parent, root, fixture, pam, None)
+}
+fn make_window_with_interruption(
+    app: &adw::Application,
+    parent: &adw::ApplicationWindow,
+    root: &Path,
+    fixture: &server::Fixture,
+    pam: &Pam,
+    interruption: Option<crate::account_worker::RestorationInterruption>,
+) -> Rc<AccountWindow> {
+    let worker = Rc::new(if interruption.is_some() {
+        Handle::live_fixture_with_restoration_interruption(
+            root.into(),
+            fixture.server.clone(),
+            fixture.agent(),
+            pam.helper.clone(),
+            interruption,
+        )
+        .unwrap()
+    } else {
         Handle::live_fixture(
             root.into(),
             fixture.server.clone(),
             fixture.agent(),
             pam.helper.clone(),
         )
-        .unwrap(),
-    );
+        .unwrap()
+    });
     let window = AccountWindow::new(app, parent, worker).unwrap();
     window.present();
     until("native account window did not acquire focus", || {

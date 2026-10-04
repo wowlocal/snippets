@@ -1,6 +1,7 @@
 //! Mapped same-vault history restoration with independently wrapped public data.
 use super::*;
 use crate::{
+    account_worker::RestorationInterruption,
     crypto::{self, RootKey},
     key_store::history::SwitchPhase,
     vault::{Document, Record},
@@ -276,6 +277,19 @@ pub(super) fn run(
     pam: &Pam,
     ordinary: &model::Snippet,
 ) {
+    run_interrupted(window, app, parent, root, fixture, pam, ordinary, None);
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) fn run_interrupted(
+    window: &Rc<AccountWindow>,
+    app: &adw::Application,
+    parent: &adw::ApplicationWindow,
+    root: &Path,
+    fixture: &server::Fixture,
+    pam: &Pam,
+    ordinary: &model::Snippet,
+    boundary: Option<RestorationInterruption>,
+) {
     reconnect(window, 1);
     let fixture_data: serde_json::Value =
         serde_json::from_str(include_str!("../tests/fixtures/crypto-v1.json")).unwrap();
@@ -511,11 +525,41 @@ pub(super) fn run(
             && slot(root, Slot::HistoryRestore).is_none()
     );
     assert!(!window.sync.is_sensitive() && window.libraries.selected() == 0);
+    let interrupted_window = boundary.map(|boundary| {
+        until("pre-interruption worker did not drain", || {
+            window.prepare_quit()
+        });
+        window.window.destroy();
+        make_window_with_interruption(app, parent, root, fixture, pam, Some(boundary))
+    });
+    let _interrupted_stop = interrupted_window.as_ref().map(|w| Stop(w.clone()));
+    let window = interrupted_window.as_ref().unwrap_or(window);
     reconnect(window, 2);
+    let authorized_before = creation::images(root);
     let (dialog, entry) = password(window, &recovery, true);
     entry.set_text("Public fictional password");
     press(dialog.upcast_ref(), "Authorize");
     finished(window, std::slice::from_ref(&entry));
+    let completion_window = boundary.and_then(|boundary| {
+        finish_interrupted(
+            InterruptedContext {
+                window,
+                app,
+                parent,
+                root,
+                fixture,
+                pam,
+            },
+            boundary,
+            &authorized_before,
+            unrelated.id,
+        )
+    });
+    if boundary.is_some() && completion_window.is_none() {
+        return;
+    }
+    let _completion_stop = completion_window.as_ref().map(|w| Stop(w.clone()));
+    let window = completion_window.as_ref().unwrap_or(window);
     assert!(
         window.status.label()
             == "Saved changes restored. Current versions and previous keys are kept. Reconnect and select a library before syncing."
@@ -524,8 +568,14 @@ pub(super) fn run(
         !window.sync.is_sensitive()
             && !window.receive.is_sensitive()
             && !window.send.is_sensitive()
-            && window.libraries.selected() == 0
     );
+    // A restarted, never-connected window has an empty GTK model; the same
+    // explicit reconnect gate uses its placeholder row after library listing.
+    let empty = window
+        .libraries
+        .model()
+        .is_some_and(|model| model.n_items() == 0);
+    assert!(window.libraries.selected() == if empty { gtk::INVALID_LIST_POSITION } else { 0 });
     assert!(
         restoration_live::protected(root) == protected
             && slot(root, Slot::HistoryRestore).is_some()
@@ -635,4 +685,355 @@ pub(super) fn run(
     println!(
         "Native secure history restoration: independently wrapped same-vault credentials, whole ordinary/secure review, stale ciphertext refusal, fresh PAM, disabled sealed current-version preservation, unrelated ordinary/secure retention, exact current CAS/feed, completed history, new-worker reconnect and authenticated encrypted copy-before-source synchronization passed."
     );
+}
+
+#[test]
+#[ignore = "explicit native interrupted-restoration consent cancellation; invoke tests/account-live.sh with --restore-cancel-consent"]
+fn live_restoration_cancel_after_consent() {
+    creation::run(creation::Followup::SecureRestorationInterrupted(
+        RestorationInterruption::Consent,
+    ));
+}
+#[test]
+#[ignore = "explicit native interrupted-restoration baseline cancellation; invoke tests/account-live.sh with --restore-cancel-baseline"]
+fn live_restoration_cancel_after_baseline() {
+    creation::run(creation::Followup::SecureRestorationInterrupted(
+        RestorationInterruption::Baseline,
+    ));
+}
+#[test]
+#[ignore = "explicit native partial ordinary/vault restoration completion; invoke tests/account-live.sh with --restore-finish-ordinary"]
+fn live_restoration_finish_after_ordinary() {
+    creation::run(creation::Followup::SecureRestorationInterrupted(
+        RestorationInterruption::Ordinary,
+    ));
+}
+#[test]
+#[ignore = "explicit native pending-receipt restoration completion; invoke tests/account-live.sh with --restore-finish-vault"]
+fn live_restoration_finish_after_vault() {
+    creation::run(creation::Followup::SecureRestorationInterrupted(
+        RestorationInterruption::Vault,
+    ));
+}
+struct InterruptedContext<'a> {
+    window: &'a Rc<AccountWindow>,
+    app: &'a adw::Application,
+    parent: &'a adw::ApplicationWindow,
+    root: &'a Path,
+    fixture: &'a server::Fixture,
+    pam: &'a Pam,
+}
+fn retained_images(root: &Path) -> Vec<(PathBuf, Zeroizing<Vec<u8>>)> {
+    let mut paths = fs::read_dir(root.join("Sync/Reviews"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            assert!(path.symlink_metadata().unwrap().file_type().is_file());
+            let bytes = Zeroizing::new(fs::read(&path).unwrap());
+            (path, bytes)
+        })
+        .collect()
+}
+fn continuation_review(window: &Rc<AccountWindow>, cancel: bool) -> Option<adw::AlertDialog> {
+    press(window.window.upcast_ref(), "Library Recovery History…");
+    until("interrupted restoration history did not map", || {
+        window
+            .history_dialog
+            .borrow()
+            .as_ref()
+            .is_some_and(|d| d.is_mapped())
+    });
+    let history = window.history_dialog.borrow().clone().unwrap();
+    let mut widgets = vec![history.clone().upcast::<gtk::Widget>()];
+    let mut row = None;
+    while let Some(widget) = widgets.pop() {
+        if let Some(candidate) = widget.downcast_ref::<adw::ActionRow>()
+            && candidate.title() == "Complete Saved Restoration"
+        {
+            assert!(row.is_none());
+            row = Some(candidate.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            widgets.push(widget);
+        }
+    }
+    press(
+        row.unwrap().upcast_ref(),
+        if cancel { "Cancel…" } else { "Finish…" },
+    );
+    until("interrupted restoration preparation did not finish", || {
+        !window.busy.get()
+            || window
+                .snapshot_dialog
+                .borrow()
+                .as_ref()
+                .is_some_and(|d| d.is_mapped())
+    });
+    let review = window.snapshot_dialog.borrow().clone();
+    if let Some(review) = &review {
+        assert!(
+            review.heading().as_deref()
+                == Some(if cancel {
+                    "Cancel the Saved Restoration?"
+                } else {
+                    "Finish the Saved Restoration?"
+                })
+        );
+        assert!(
+            review.default_response().as_deref() == Some("back")
+                && review.close_response() == "back"
+        );
+        assert!(
+            review
+                .body()
+                .contains("2 saved records · 2 preserved current versions · 1 secure records")
+        );
+    }
+    assert!(window.restoration_dialog.borrow().is_none());
+    review
+}
+fn continuation_password(
+    window: &Rc<AccountWindow>,
+    cancel: bool,
+) -> (adw::AlertDialog, gtk::PasswordEntry) {
+    let review = continuation_review(window, cancel).unwrap();
+    press(
+        review.upcast_ref(),
+        if cancel {
+            "Cancel Restoration"
+        } else {
+            "Restore Changes"
+        },
+    );
+    until("interrupted restoration PAM dialog did not map", || {
+        window
+            .password_dialog
+            .borrow()
+            .as_ref()
+            .is_some_and(|(d, e)| d.is_mapped() && e.is_mapped())
+    });
+    let (dialog, entry) = window.password_dialog.borrow().clone().unwrap();
+    assert!(
+        dialog.heading().as_deref()
+            == Some(if cancel {
+                "Authorize Restoration Cancellation"
+            } else {
+                "Authorize Restoration Completion"
+            })
+    );
+    assert!(
+        dialog.default_response().as_deref() == Some("cancel")
+            && dialog.close_response() == "cancel"
+    );
+    assert!(!entry.shows_peek_icon() && window.restoration_dialog.borrow().is_none());
+    (dialog, entry)
+}
+fn finish_interrupted(
+    context: InterruptedContext<'_>,
+    boundary: RestorationInterruption,
+    before: &[Option<Zeroizing<Vec<u8>>>],
+    unrelated: uuid::Uuid,
+) -> Option<Rc<AccountWindow>> {
+    let InterruptedContext {
+        window,
+        app,
+        parent,
+        root,
+        fixture,
+        pam,
+    } = context;
+    let cancel = matches!(
+        boundary,
+        RestorationInterruption::Consent | RestorationInterruption::Baseline
+    );
+    let (frozen, catalog) = switching::checkpoint_and_history(root);
+    assert!(catalog.switches.len() == 3 && catalog.restorations.len() == 1);
+    let pending = &catalog.restorations[0];
+    assert!(pending.phase == SwitchPhase::Pending && pending.needs_completion);
+    let actual = creation::images(root);
+    match boundary {
+        RestorationInterruption::Consent => {
+            assert!(actual == before && !root.join("Sync/primary.pending").exists())
+        }
+        RestorationInterruption::Baseline => {
+            assert!(actual[..2] == before[..2] && actual[2] != before[2])
+        }
+        RestorationInterruption::Ordinary => {
+            assert!(actual[0] != before[0] && actual[1] == before[1])
+        }
+        RestorationInterruption::Vault => {
+            assert!(actual[0] != before[0] && actual[1] != before[1])
+        }
+    }
+    if !matches!(boundary, RestorationInterruption::Consent) {
+        assert!(root.join("Sync/primary.pending").is_file());
+    }
+    let expected = frozen
+        .journal
+        .primary_intent
+        .as_ref()
+        .map(|intent| (intent.after_plain.clone(), intent.after_vault.clone()));
+    assert!(expected.is_some() != cancel);
+    if matches!(boundary, RestorationInterruption::Baseline) {
+        // A noncooperative external writer after the baseline: cancellation
+        // may preserve this edit but must never start the approved redo.
+        let mut records = model::decode_library(actual[0].as_deref().unwrap(), false).unwrap();
+        records
+            .iter_mut()
+            .find(|record| record.id == unrelated)
+            .unwrap()
+            .content = "Public later external edit preserved by baseline cancellation".into();
+        model::atomic_write(
+            &root.join("snippets.json"),
+            &model::encode_library(&records, false).unwrap(),
+        )
+        .unwrap();
+    }
+    let primary = creation::images(root);
+    let protected = restoration_live::protected(root);
+    let receipt = slot(root, Slot::HistoryRestore).unwrap();
+    let retained = retained_images(root);
+    let marker = model::read_regular(&root.join("Sync/primary.pending")).unwrap();
+    let requests = {
+        let mut state = fixture.state.lock().unwrap();
+        state.offline = true;
+        state.requests
+    };
+    let unchanged = || {
+        assert!(creation::images(root) == primary);
+        assert!(restoration_live::protected(root) == protected);
+        assert!(slot(root, Slot::HistoryRestore).as_ref() == Some(&receipt));
+        assert!(retained_images(root) == retained);
+        assert!(model::read_regular(&root.join("Sync/primary.pending")).unwrap() == marker);
+        assert!(fixture.state.lock().unwrap().requests == requests);
+    };
+    assert!(!window.sync.is_sensitive() && window.libraries.selected() == 0);
+    until(
+        "interrupted native worker did not release durable operation",
+        || window.prepare_quit(),
+    );
+    window.window.destroy();
+    let reopened = make_window(app, parent, root, fixture, pam);
+    let stop = cancel.then(|| Stop(reopened.clone()));
+    unchanged();
+    if !cancel {
+        assert!(continuation_review(&reopened, true).is_none());
+        finished(&reopened, &[]);
+        unchanged();
+    }
+    let review = continuation_review(&reopened, cancel).unwrap();
+    press(review.upcast_ref(), "Keep Current State");
+    finished(&reopened, &[]);
+    unchanged();
+    let _review = continuation_review(&reopened, cancel).unwrap();
+    parent.present();
+    until("continuation review focus loss did not revoke", || {
+        parent.is_active() && !reopened.busy.get()
+    });
+    finished(&reopened, &[]);
+    unchanged();
+    refocus(&reopened);
+    for (value, response) in [
+        ("Public fictional password", "Cancel"),
+        ("Public incorrect password", "Authorize"),
+    ] {
+        let (dialog, entry) = continuation_password(&reopened, cancel);
+        entry.set_text(value);
+        press(dialog.upcast_ref(), response);
+        finished(&reopened, std::slice::from_ref(&entry));
+        unchanged();
+    }
+    let (_dialog, entry) = continuation_password(&reopened, cancel);
+    entry.set_text("Public fictional password");
+    parent.present();
+    until("continuation PAM focus loss did not revoke", || {
+        parent.is_active() && !reopened.busy.get()
+    });
+    finished(&reopened, std::slice::from_ref(&entry));
+    unchanged();
+    refocus(&reopened);
+    let (dialog, entry) = continuation_password(&reopened, cancel);
+    entry.set_text("Public fictional password");
+    press(dialog.upcast_ref(), "Authorize");
+    finished(&reopened, std::slice::from_ref(&entry));
+    assert!(fixture.state.lock().unwrap().requests == requests);
+    assert!(restoration_live::protected(root) == protected && retained_images(root) == retained);
+    assert!(!root.join("Sync/primary.pending").exists());
+    let (completed, catalog) = switching::checkpoint_and_history(root);
+    assert!(frozen.journal.preserves_transport_state(&completed.journal));
+    let saved = &catalog.restorations[0];
+    assert!(
+        saved.phase
+            == if cancel {
+                SwitchPhase::Cancelled
+            } else {
+                SwitchPhase::Completed
+            }
+    );
+    assert!(
+        !saved.needs_completion && catalog.switches.len() == 3 && catalog.restorations.len() == 1
+    );
+    assert!(
+        saved.summary.restored_records == 2
+            && saved.summary.preserved_versions == 2
+            && saved.summary.secure_records == 1
+    );
+    if cancel {
+        assert!(creation::images(root) == primary && frozen.journal == completed.journal);
+        assert!(
+            reopened.status.label()
+                == "Saved restoration cancelled. Current changes and previous states are kept. Reconnect and select a library before syncing."
+        );
+        let terminal = slot(root, Slot::HistoryRestore).unwrap();
+        until("cancelled restoration worker did not drain", || {
+            reopened.prepare_quit()
+        });
+        reopened.window.destroy();
+        let again = make_window(app, parent, root, fixture, pam);
+        let again_stop = Stop(again.clone());
+        assert!(
+            creation::images(root) == primary && restoration_live::protected(root) == protected
+        );
+        assert!(
+            slot(root, Slot::HistoryRestore).as_ref() == Some(&terminal)
+                && retained_images(root) == retained
+        );
+        let (_, catalog) = switching::checkpoint_and_history(root);
+        assert!(
+            catalog.restorations[0].phase == SwitchPhase::Cancelled
+                && !catalog.restorations[0].needs_completion
+        );
+        assert!(fixture.state.lock().unwrap().requests == requests);
+        until("fresh cancelled restoration worker did not drain", || {
+            again.prepare_quit()
+        });
+        drop(again_stop);
+        fixture.state.lock().unwrap().offline = false;
+        drop(stop);
+        println!(
+            "Native interrupted restoration: durable consent/baseline cancellation, fresh-worker offline history, default/review/PAM/focus refusal, exact current files including later external intent, all protected keys, retained encrypted pair, terminal receipt and second restart passed."
+        );
+        None
+    } else {
+        let expected = expected.unwrap();
+        let final_images = creation::images(root);
+        assert!(final_images[0] == expected.0 && final_images[1] == expected.1);
+        if matches!(boundary, RestorationInterruption::Vault) {
+            assert!(final_images[..2] == primary[..2]);
+        }
+        fixture.state.lock().unwrap().offline = false;
+        // Keep this completed window alive for the independent preservation,
+        // second-worker reconnect and encrypted exchange assertions in run.
+        drop(stop);
+        println!(
+            "Native interrupted restoration: partial ordinary/vault write, cancellation refusal after WAL, fresh-worker offline ciphertext-only finish, default/review/PAM/focus refusal, exact approved images/nonces, all keys, retained encrypted pair and terminal receipt passed."
+        );
+        Some(reopened)
+    }
 }

@@ -4873,3 +4873,76 @@ interrupted switching, raw-child/source-absence reviews, hardware suspend, norma
 Omarchy configuration and Apple-app exchange remain separate acceptance work.
 Final desktop preflight checks real GTK/Wayland/D-Bus, unlocked state, DNS/verified
 HTTPS and fixture cleanup, preserving Stay Awake and its restoration timer.
+
+
+### Native completion of simulated interrupted restoration (2026-10-04)
+
+Four separate mapped GTK workflows cover retained same-vault ordinary/protected
+restoration at durable write boundaries: after the native Secret Service pending
+receipt, after the encrypted baseline checkpoint and primary marker, after the
+ordinary primary image, and after both ordinary/vault images but before completion
+of the checkpoint/receipt. Each includes the native creation/two-library
+switch/return prerequisite, independently wrapped public vault data, real private
+Secret Service, verified loopback HTTPS and a private-policy PAM helper. Each
+complete selection has two restored records, two preserved current versions and
+one secure record, plus unrelated ordinary/protected records.
+
+The cfg(test) fixture factory interposes the existing core I/O error only on the
+first CommitRestoration after actual vault verification, native whole-selection
+review and fresh PAM consent. The window/serialized worker then drains and closes;
+a new ordinary native worker loads the same durable state. The fixture peer refuses
+all requests with HTTP 503. This models an interrupted write; it does not kill a
+process or claim hardware/power-loss testing. No runtime environment variable or
+production fault-injection path is introduced. Existing preparation, native
+history controls and actual prepare/resume/cancel handlers are used.
+
+The history row offers Complete Saved Restoration. Keep Current State and review
+focus loss retain the three images, pending receipt, marker, encrypted retained
+pair and all nine protected key/capability inputs exactly. Each retry uses the
+actual fresh-purpose restoration Completion/Cancellation password dialog with
+Cancel as its default and no peek icon. Cancel, incorrect private PAM credentials
+and filled-dialog focus revocation also preserve all state. No vault password/key
+is loaded again to finish frozen ciphertext. Request counters stay exact across
+restart, inspection, denied attempts and the final authorized action.
+
+After receipt-only consent, Cancel Restoration leaves all current primary images
+unchanged and records terminal cancellation. After baseline publication, a
+simulated noncooperative writer adds a later unrelated ordinary edit. Fresh native
+cancellation retains that edit and the exact vault/checkpoint, clears the primary
+marker, and retains the prior encrypted recovery files. Another worker restart
+observes the same cancelled receipt, current images and keys without HTTP. These
+cases never publish the approved restoration WAL.
+
+Once the WAL is published, native cancellation refuses before offering PAM and
+leaves every pending byte exact. Fresh native Finish uses the already retained
+approved images. The ordinary-only interruption finishes the matching protected
+image; the both-images interruption retains both files byte-for-byte, including
+sealed copy identities/nonces. Completion clears the marker and saves one terminal
+protected restoration receipt. Current scope/CAS/feed/offer/outbound facts and all
+protected inputs remain exact. The independent ordinary/protected preservation
+assertions then check restored fields/bodies, disabled keyword-free current copies,
+unrelated records, vault wraps and previous history. A second fresh worker requires
+explicit reconnect/selection and fresh native vault verification before encrypted
+sync; both preserved copies are submitted before their source records, while the
+other library's protected packet stays exact.
+
+All four scenarios pass in Debug and optimized Release. The ordinary and normal
+same-vault restoration paths also pass on these inputs. Focused restoration-owner
+and serialized-worker core checks, desktop/headless all-target Clippy, formatting
+and shell syntax pass. Fresh production Release binaries and the separately
+installed GUI/CLI private-root acceptance are checked as separate gates. All
+nineteen final serial gates use the same frozen 299 native inputs; documentation
+is recorded separately. Only cfg(test) fixture code, runner and documentation
+change. The separate installed check covers secure create/reveal and executable
+identity; library restoration itself runs in mapped GTK library-test processes.
+A compile-only dialog-type mistake, a Clippy-only enum naming failure and a
+fresh-window empty-dropdown expectation are retained as separate failed receipts.
+Preliminary passing runs stay attached to their earlier source fingerprints.
+These earlier attempts are excluded from final passing evidence.
+
+Actual process termination during restoration, power loss, mixed/foreign-vault
+restoration, interrupted switching, candidate pairing, raw-child/source-absence
+review, physical suspend, normal Omarchy configuration and Apple-app exchange
+remain separate acceptance work. Final preflight rechecks authenticated actual
+Wayland, GTK/D-Bus, unlocked state, DNS/verified HTTPS and fixture cleanup. Stay
+Awake and the existing 2026-10-05 09:00 Minsk lock-restoration timer are preserved.

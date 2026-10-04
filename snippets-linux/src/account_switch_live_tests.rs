@@ -93,7 +93,9 @@ pub(super) fn checkpoint_and_history(root: &Path) -> (Checkpoint, history::Catal
                 let material = owner.checkpoint_material(false)?.unwrap();
                 let key = RootKey::from_bytes(&material[..32]).unwrap();
                 let salt = material[32..].try_into().unwrap();
-                let library = model::Library::open(root.clone()).unwrap();
+                // Read only the protected history and encrypted checkpoint,
+                // including when a pending primary transaction fences readers.
+                let library = model::Library::prepare(root.clone()).unwrap();
                 Ok(Checkpoint::load(&library, &key, &salt, binding.checkpoint_scope()).unwrap())
             })
             .unwrap();

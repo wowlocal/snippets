@@ -72,6 +72,7 @@ pub(super) enum Followup {
     Switch,
     Restoration,
     SecureRestoration,
+    SecureRestorationInterrupted(crate::account_worker::RestorationInterruption),
 }
 pub(super) fn run(followup: Followup) {
     let root = isolated_root();
@@ -226,7 +227,10 @@ pub(super) fn run(followup: Followup) {
     assert!(CloudClient::discover(fixture.server.clone()).is_err());
     if matches!(
         followup,
-        Followup::Switch | Followup::Restoration | Followup::SecureRestoration
+        Followup::Switch
+            | Followup::Restoration
+            | Followup::SecureRestoration
+            | Followup::SecureRestorationInterrupted(_)
     ) {
         super::switching::run(&window, &app, &parent, &root, &fixture, &pam, &local);
     }
@@ -246,6 +250,24 @@ pub(super) fn run(followup: Followup) {
             &restored, &app, &parent, &root, &fixture, &pam, &local,
         );
         until("final secure restoration worker did not drain", || {
+            restored.prepare_quit()
+        });
+        drop(restored_stop);
+    }
+    if let Followup::SecureRestorationInterrupted(boundary) = followup {
+        let restored = make_window(&app, &parent, &root, &fixture, &pam);
+        let restored_stop = Stop(restored.clone());
+        super::secure_restoration_live::run_interrupted(
+            &restored,
+            &app,
+            &parent,
+            &root,
+            &fixture,
+            &pam,
+            &local,
+            Some(boundary),
+        );
+        until("final interrupted restoration worker did not drain", || {
             restored.prepare_quit()
         });
         drop(restored_stop);

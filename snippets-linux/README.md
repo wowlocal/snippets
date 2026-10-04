@@ -554,8 +554,16 @@ separate computer-password authorization. The whole ordinary/protected selection
 is restored; both current versions survive as disabled copies, while unrelated
 ordinary/protected records, vault wraps and active keys stay exact. A new worker
 requires explicit reconnect and fresh vault verification before encrypted sync.
-Mixed-vault, foreign-vault and interrupted restoration, plus interrupted switching,
-remain separate checks.
+Simulated write interruptions in same-vault restoration also pass native checks.
+A fresh window can cancel before the primary update starts, retaining later local
+edits, or finish after partial ordinary/vault writes using the exact already
+approved encrypted images. Keep Current State, wrong PAM password and focus loss
+preserve pending state. Each final action needs fresh purpose-bound PAM; local
+completion makes no HTTP request while the fixture server refuses requests.
+Fresh reconnect and vault verification remain required before encrypted sync.
+These cases simulate I/O errors at durable write boundaries; actual process
+termination and power-loss acceptance remain separate. Mixed/foreign-vault
+restoration and interrupted switching also remain separate checks.
 
 **Library Creation Receipts** in Library Recovery History shows the retained
 requests and completed receipts without reading account credentials. Use
@@ -705,7 +713,7 @@ separate originals. Prior-confirmed cloud-child Keep/Delete before parent
 Keep/Delete also passes all four native combinations with actual saved CAS.
 Unknown pending raw-child decisions, local-absence source review, unrelated
 ambiguous packets, switch-candidate pairing, interrupted switching and mixed-vault,
-foreign-vault or interrupted restoration
+foreign-vault restoration and actual process termination during restoration
 remain under live acceptance. Native recipient pairing and signed approval/recovery
 replacement now pass, including retained-request restart. The native
 interrupted-startup recovery fixture passes with temporary
@@ -737,8 +745,10 @@ library key and synchronized record. Ordinary saved-history restoration now also
 passes, including current-version preservation and explicit reconnect/sync.
 Same-vault protected restoration also passes vault passphrase/recovery review,
 separate fresh PAM, both current-version copies and unrelated-record retention.
-Candidate pairing for switching, interrupted switching and mixed-vault,
-foreign-vault or interrupted library restoration remain under acceptance.
+Simulated interrupted same-vault restoration also passes fresh-worker offline
+cancellation/completion and exact frozen-image checks. Candidate pairing for
+switching, interrupted switching, mixed/foreign-vault restoration and actual
+process termination during restoration remain under acceptance.
 
 ## Secure Snippets
 
@@ -1229,8 +1239,10 @@ restoration also passes current-version/unrelated-record preservation, current
 CAS/feed retention, new-worker reconnect and encrypted dependency ordering.
 Same-vault protected restoration also passes fresh vault and separate PAM
 authorization, exact unrelated records and encrypted preservation ordering.
-Candidate pairing for switching, interrupted switching and mixed-vault,
-foreign-vault or interrupted restoration remain under review.
+Simulated interrupted same-vault restoration also passes offline cancellation
+and completion after a fresh worker, with separate fresh PAM and exact approved
+images. Candidate pairing for switching, interrupted switching, mixed/foreign-vault
+restoration and actual process termination during restoration remain under review.
 All three globally assigned actions, visible tray-menu selection/focus and re-registration
 with a restarted Omarchy host pass; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
@@ -1286,6 +1298,12 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 # Whole ordinary/protected saved history, fresh vault passphrase/recovery and PAM,
 # stale ciphertext refusal, both current versions and unrelated records retained.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --secure-restoration
+# Simulated durable write interruptions; each case restarts the actual native
+# worker, refuses all server requests, and requires fresh local-purpose PAM.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --restore-cancel-consent
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --restore-cancel-baseline
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --restore-finish-ordinary
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --restore-finish-vault
 # Two private native installations: retained public invitation, compare-code gate,
 # fresh PAM approval, original signed-request replay and claimed-key encrypted sync.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --pairing

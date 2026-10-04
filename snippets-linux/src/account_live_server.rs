@@ -19,6 +19,7 @@ mod pairing;
 #[derive(Default)]
 pub(super) struct State {
     pub requests: usize,
+    pub offline: bool,
     pub grants: usize,
     pub bootstrap_posts: usize,
     pub revokes: usize,
@@ -240,6 +241,9 @@ fn request(
 }
 fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Value) {
     state.requests += 1;
+    if state.offline {
+        return (503, json!({"status": 503, "code": "unavailable"}));
+    }
     if request.path == "/.well-known/snippets-sync" {
         assert!(request.method == "GET" && !request.headers.contains_key("authorization"));
         return (200, discovery(server));
