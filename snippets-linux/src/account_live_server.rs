@@ -1,4 +1,5 @@
 //! Certificate-verified loopback account server; public fictional account only.
+//! Native accounts follow server ADR 0006: a generated account key, no email.
 use crate::{bootstrap, cloud::ServerURL, wire::WireRecord};
 use serde_json::{Value, json};
 use std::{
@@ -16,11 +17,16 @@ use std::{
 #[path = "account_pairing_live_server.rs"]
 mod pairing;
 
+/// The public ADR 0006 test vector, never a real credential.
+pub(super) const ACCOUNT_KEY: &str = "7KQF9M2XR4TDH8WBZN3CP6YE1AQ7";
+pub(super) const ACCOUNT_ID: &str = "0f1e2d3c-4b5a-4968-8776-655443322110";
 #[derive(Default)]
 pub(super) struct State {
     pub requests: usize,
     pub offline: bool,
     pub grants: usize,
+    pub accounts: usize,
+    pub rejected_keys: usize,
     pub bootstrap_posts: usize,
     pub revokes: usize,
     pub fetches: usize,
@@ -175,12 +181,12 @@ fn discovery(server: &ServerURL) -> Value {
     json!({"protocolMajor":2,"protocolMinor":1,"serverVersion":"public-native-fixture",
         "serverInstanceId":uuid::Uuid::from_u128(1),"apiBase":format!("{base}/v2"),
         "recordProfile":"snippets-wire-v1",
-        "capabilities":["native-email-code-v1","library-action-proof-v1","pairing-v2","offline-recovery-v1","resource-session-revocation"],
+        "capabilities":["native-account-key-v1","library-action-proof-v1","pairing-v2","offline-recovery-v1","resource-session-revocation"],
         "limits":{"maxBlobBytes":900000,"maxRevisionBytes":256,"maxBatchRecords":50,
             "maxPageRecords":50,"maxRequestBytes":16777216,"maxResponseBytes":67108864,
             "maxKeyEnvelopeBytes":4096,"maxPairingSeconds":600},
-        "nativeAuth":{"flow":"email_code","startEndpoint":format!("{base}/v2/auth/email/start"),
-            "verifyEndpoint":format!("{base}/v2/auth/email/verify"),
+        "nativeAuth":{"flow":"account_key","createAccountEndpoint":format!("{base}/v2/auth/accounts"),
+            "signInEndpoint":format!("{base}/v2/auth/sign-in"),
             "refreshEndpoint":format!("{base}/v2/auth/refresh"),"revokeEndpoint":format!("{base}/v2/auth/revoke")}})
 }
 fn grant(state: &mut State) -> Value {
@@ -190,7 +196,7 @@ fn grant(state: &mut State) -> Value {
     }
     json!({"access_token":format!("public-native-access-{}",state.grants),
         "refresh_token":format!("public-native-refresh-{}",state.grants),"expires_in":300,
-        "token_type":"Bearer","account":{"id":"public-native-account","email":"fixture@example.invalid"}})
+        "token_type":"Bearer","account":{"id":ACCOUNT_ID}})
 }
 fn recovery(state: &State, scope: &Value) -> Value {
     json!({"scope":scope,"keyEpoch":1,"recovery":state.ciphertext.as_ref().map(|ciphertext|
@@ -251,19 +257,30 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
     if request.path.starts_with("/v2/auth/") {
         assert!(request.method == "POST" && !request.headers.contains_key("authorization"));
         return match request.path.as_str() {
-            "/v2/auth/email/start" => {
-                assert!(request.body["email"] == "fixture@example.invalid");
+            "/v2/auth/accounts" => {
+                // Account creation carries no body at all.
+                assert!(
+                    request.body.is_null()
+                        && !request.headers.contains_key("content-type")
+                        && !request.headers.contains_key("transfer-encoding")
+                );
+                state.accounts += 1;
                 (
                     200,
-                    json!({"challengeId":"public-native-challenge","expiresIn":600,"resendAfter":60,"codeLength":6}),
+                    json!({"accountKey":ACCOUNT_KEY,"session":grant(state)}),
                 )
             }
-            "/v2/auth/email/verify" => {
-                assert!(request.body["challengeId"] == "public-native-challenge");
-                if request.body["code"] != "123456" {
+            "/v2/auth/sign-in" => {
+                let object = request.body.as_object().unwrap();
+                assert!(object.len() == 1);
+                let key = object["accountKey"].as_str().unwrap();
+                // Only canonical keys are ever sent; local typing errors never are.
+                assert!(crate::account_key::AccountKey::from_canonical(key).is_some());
+                if key != ACCOUNT_KEY {
+                    state.rejected_keys += 1;
                     (
-                        400,
-                        json!({"type":"urn:snippets:error:invalid_code","status":400,"code":"invalid_code","requestId":uuid::Uuid::from_u128(99)}),
+                        401,
+                        json!({"type":"urn:snippets:error:invalid_account_key","status":401,"code":"invalid_account_key","requestId":uuid::Uuid::from_u128(99)}),
                     )
                 } else {
                     (200, grant(state))

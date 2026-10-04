@@ -44,7 +44,8 @@ let package = Package(
         .target(name: "SnippetsAX", swiftSettings: [.swiftLanguageMode(.v5)]),
         // The secure NSTextView is an AppKit boundary just like pasteboard and AX.
         // Compile the shipping source itself so responder/pasteboard/text-service
-        // overrides are exercised without launching the full application.
+        // overrides are exercised without launching the full application. The renderer's
+        // fill comes from the small `EditorInputPalette.swift`, not the app's design layer.
         .target(name: "SnippetsSecureEditor", swiftSettings: [.swiftLanguageMode(.v5)]),
         .testTarget(
             name: "SnippetsCoreTests",

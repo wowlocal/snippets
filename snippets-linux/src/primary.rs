@@ -309,6 +309,9 @@ pub struct Prepared {
     deferred_deletion_sources: BTreeSet<Uuid>,
     administrative: bool,
     primary_changed: bool,
+    /// Set only for a merge with a newer authoritative remote value. Such an
+    /// outcome refines an active source epoch instead of freezing its old target.
+    authoritative_merge: bool,
     history: Vec<([u8; 16], crate::journal::RestorationGeneration)>,
     pub changed_ids: BTreeSet<Uuid>,
     pub retry_ids: BTreeSet<Uuid>,
@@ -316,6 +319,11 @@ pub struct Prepared {
     pub incompatible_ids: BTreeSet<Uuid>,
 }
 impl Prepared {
+    /// Marks this transaction as the merge of a fetched or CAS-authoritative
+    /// remote value with local intent (never a restoration or local review).
+    pub(crate) fn merged_authoritative_remote(&mut self) {
+        self.authoritative_merge = true;
+    }
     /// Only an exact native deletion decision can release a never-offered
     /// source as a tombstone after its originals receive real acknowledgements.
     pub(crate) fn release_reviewed_deletion(
@@ -558,6 +566,7 @@ fn prepare_impl(
         deferred_deletion_sources: BTreeSet::new(),
         administrative,
         primary_changed: false,
+        authoritative_merge: false,
         history: history::prepare(historical, &primary, expected, keys)?,
         changed_ids: BTreeSet::new(),
         retry_ids: BTreeSet::new(),
@@ -1034,13 +1043,23 @@ fn stage_prepared(mut next: Journal, prepared: &Prepared) -> Result<Journal> {
         for (id, target) in &prepared.unchanged_targets {
             targets.entry(*id).or_insert_with(|| target.clone());
         }
-        next.stage_generation(
-            prepared.intent.nonce,
-            &prepared.dependencies,
-            &prepared.authenticated,
-            &targets,
-            &prepared.release_targets,
-        )?;
+        if prepared.authoritative_merge {
+            next.stage_merge_generation(
+                prepared.intent.nonce,
+                &prepared.dependencies,
+                &prepared.authenticated,
+                &targets,
+                &prepared.release_targets,
+            )?;
+        } else {
+            next.stage_generation(
+                prepared.intent.nonce,
+                &prepared.dependencies,
+                &prepared.authenticated,
+                &targets,
+                &prepared.release_targets,
+            )?;
+        }
     }
     next.projected = prepared.projected.clone();
     next.primary_intent = Some(prepared.intent.clone());

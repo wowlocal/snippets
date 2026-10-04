@@ -671,10 +671,6 @@ private final class ScrollFadeMaskContainerView: NSView {
 /// Colors resolve at drawing time, including appearance and accessibility changes.
 final class EditorInputSurface: NSView {
     enum Role { case input, preview }
-    static var inputBackgroundColor: NSColor { NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                ? NSColor(white: 0.21, alpha: 1) : NSColor(white: 1, alpha: 1)
-        } }
     private let role: Role
     private let cornerRadius: CGFloat
     private var hasEditorFocus = false
@@ -754,7 +750,7 @@ final class EditorInputSurface: NSView {
         let strokeRadius = max(0, cornerRadius - width / 2)
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: width / 2, dy: width / 2),
             xRadius: strokeRadius, yRadius: strokeRadius)
-        Self.inputBackgroundColor.setFill()
+        EditorInputPalette.backgroundColor.setFill()
         path.fill()
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let border = highContrast ? NSColor.labelColor

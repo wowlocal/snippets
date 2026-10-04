@@ -55,17 +55,19 @@ fn authorization_is_one_use_bound_to_exact_purpose_scope_generation_and_digest()
             _ => (),
         }
         if mutation == 3 {
-            changed.binding = KeyBinding::new(
-                ServerURL::parse("https://other.example").unwrap(),
-                Uuid::from_u128(1),
-                Uuid::from_u128(2),
-                (
-                    Binding::from_checkpoint([3; 32]),
-                    Binding::from_checkpoint([4; 32]),
-                ),
-                1,
-            )
-            .unwrap();
+            changed.binding = Some(
+                KeyBinding::new(
+                    ServerURL::parse("https://other.example").unwrap(),
+                    Uuid::from_u128(1),
+                    Uuid::from_u128(2),
+                    (
+                        Binding::from_checkpoint([3; 32]),
+                        Binding::from_checkpoint([4; 32]),
+                    ),
+                    1,
+                )
+                .unwrap(),
+            );
         }
         if mutation < 4 {
             assert!(permit.consume(&changed).err() == Some(Failure::WrongTarget));
@@ -77,6 +79,34 @@ fn authorization_is_one_use_bound_to_exact_purpose_scope_generation_and_digest()
         }
         assert!(gate.pending.is_none());
     }
+}
+#[test]
+fn account_key_disclosure_is_account_scoped_and_never_a_library_purpose() {
+    assert!(target(Purpose::RevealRecovery).binding.is_some());
+    let library = target(Purpose::RevealRecovery).binding.unwrap();
+    assert!(
+        Target::new(library, Purpose::RevealAccountKey, 1, [5; 32]).err()
+            == Some(Failure::InvalidState)
+    );
+    assert!(Target::account_key(0, [5; 32]).err() == Some(Failure::InvalidState));
+    let original = Target::account_key(1, [5; 32]).unwrap();
+    assert!(original.purpose() == Purpose::RevealAccountKey && original.binding.is_none());
+    for changed in [
+        Target::account_key(2, [5; 32]).unwrap(),
+        Target::account_key(1, [6; 32]).unwrap(),
+        target(Purpose::RevealRecovery),
+    ] {
+        let (mut gate, witness) = ready();
+        let request = gate.begin(original.clone(), witness).unwrap();
+        let permit = gate.accept(authenticate(request).unwrap()).unwrap();
+        assert!(permit.consume(&changed).err() == Some(Failure::WrongTarget));
+    }
+    let (mut gate, witness) = ready();
+    let request = gate.begin(original.clone(), witness).unwrap();
+    let permit = gate.accept(authenticate(request).unwrap()).unwrap();
+    let lease = permit.consume(&original).unwrap();
+    gate.set_foreground(false);
+    assert!(lease.check().err() == Some(Failure::Cancelled));
 }
 #[test]
 fn locked_missing_stale_and_lock_cycles_cannot_authorize_a_worker() {

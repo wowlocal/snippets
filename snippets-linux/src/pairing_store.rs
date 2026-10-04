@@ -310,6 +310,13 @@ pub(super) fn require_idle<B: Backend>(
 }
 pub(super) trait Remote: super::Remote {
     fn create(&mut self, draft: &PairingDraft) -> super::Result<Pairing>;
+    /// A pairing created by another device for this device's own key and nonce.
+    fn observe(
+        &mut self,
+        pairing: Uuid,
+        public: &[u8; 65],
+        nonce: &[u8; 32],
+    ) -> super::Result<Pairing>;
     fn poll(&mut self, invitation: &Invitation) -> super::Result<Pairing>;
     fn claim(&mut self, expected: &Pairing) -> super::Result<Vec<u8>>;
     fn cancel(&mut self, invitation: &Invitation) -> super::Result<()>;
@@ -317,6 +324,14 @@ pub(super) trait Remote: super::Remote {
 impl Remote for BoundTransport {
     fn create(&mut self, draft: &PairingDraft) -> super::Result<Pairing> {
         Ok(self.create_pairing(draft)?)
+    }
+    fn observe(
+        &mut self,
+        pairing: Uuid,
+        public: &[u8; 65],
+        nonce: &[u8; 32],
+    ) -> super::Result<Pairing> {
+        Ok(self.observe_pairing(pairing, public, nonce)?)
     }
     fn poll(&mut self, invitation: &Invitation) -> super::Result<Pairing> {
         Ok(self.pairing(invitation)?)
@@ -388,6 +403,64 @@ pub(super) fn begin_locked<B: Backend>(
         sent: false,
     });
     journal.save(owner)?;
+    advance(owner, remote, journal)
+}
+/// Device-approved sign-in (ADR 0007): the approving device already created and
+/// approved a pairing for this device's retained recipient key and nonce. That
+/// material moves into this ordinary recipient journal, and the existing claim,
+/// AEAD, authority and installation steps finish exactly as for this device's
+/// own invitation. The recipient key/nonce equality is checked before claiming.
+pub fn adopt_device_sign_in<B: Backend>(
+    store: &mut Store<B>,
+    remote: &mut BoundTransport,
+) -> Result<Outcome> {
+    store.transaction_with(|owner| adopt_device_locked(owner, remote))
+}
+pub(super) fn adopt_device_locked<B: Backend>(
+    owner: &mut Locked<'_, B>,
+    remote: &mut impl Remote,
+) -> Result<Outcome> {
+    let (binding, _) = preparation(owner, remote)?;
+    let journal = Journal::load(owner)?;
+    if let Some(journal) = &journal {
+        journal.check_binding(&binding)?;
+        if journal.phase.is_some() {
+            let saved = journal_owned(owner)?;
+            return advance(owner, remote, saved);
+        }
+    }
+    let (deployment, draft, approval, snapshot) = crate::auth_store::device::approved_draft(owner)
+        .map_err(|_| Failure::InvalidState)?
+        .ok_or(Failure::InvalidState)?;
+    if !binding.matches_deployment(&deployment) || approval.space != binding.space {
+        return Err(Failure::ReviewRequired.into());
+    }
+    if let Some(installed) = read_installed(owner, &binding)? {
+        // This device already holds the library key; nothing remains to claim.
+        verify_remote(remote, &binding, &installed.bundle)?;
+        crate::auth_store::device::retire(owner, &snapshot).map_err(|_| Failure::InvalidState)?;
+        return ready(owner, remote, &binding, &installed.bundle).map_err(Into::into);
+    }
+    check_remote(remote, &binding)?;
+    let pairing = remote.observe(approval.pairing, draft.public_key(), draft.nonce())?;
+    check_remote(remote, &binding)?;
+    if pairing.state() != PairingState::Approved
+        || pairing.invitation().pairing() != approval.pairing
+    {
+        return Err(Failure::ReviewRequired.into());
+    }
+    // The existing binding check: the pairing's recipient key and nonce must be
+    // this device's own before any envelope is claimed or opened.
+    let pending = PendingPairing::new(draft, pairing.invitation().clone())?;
+    let mut journal = journal.unwrap_or(Journal {
+        generation: 0,
+        binding,
+        phase: None,
+        snapshot: None,
+    });
+    journal.phase = Some(Phase::Waiting(pending));
+    journal.save(owner)?;
+    crate::auth_store::device::retire(owner, &snapshot).map_err(|_| Failure::InvalidState)?;
     advance(owner, remote, journal)
 }
 /// Polls a stored invitation. An already retained claim completes even after

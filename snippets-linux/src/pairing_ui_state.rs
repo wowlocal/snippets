@@ -1,6 +1,7 @@
-//! A public invitation's display/poll lifetime. Repeated status replies cannot
-//! extend it, including when wall time moves backwards or the machine suspends.
-use crate::bootstrap::Invitation;
+//! A public invitation's or device sign-in request's display/poll lifetime.
+//! Repeated status replies cannot extend it, including when wall time moves
+//! backwards or the machine suspends.
+use crate::bootstrap::{DeviceSignIn, Invitation};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -14,23 +15,43 @@ impl Countdown {
     pub(crate) fn new(invitation: &Invitation) -> Option<Self> {
         Self::at(invitation, SystemTime::now(), crate::clock::uptime()?)
     }
+    pub(crate) fn for_device(request: &DeviceSignIn) -> Option<Self> {
+        Self::at_expiry(
+            request.request(),
+            request.expires_at(),
+            SystemTime::now(),
+            crate::clock::uptime()?,
+        )
+    }
     fn at(invitation: &Invitation, wall: SystemTime, uptime: Duration) -> Option<Self> {
-        let expiry = UNIX_EPOCH.checked_add(Duration::from_secs(
-            invitation.expires_at().try_into().ok()?,
-        ))?;
+        Self::at_expiry(invitation.pairing(), invitation.expires_at(), wall, uptime)
+    }
+    fn at_expiry(id: Uuid, expires_at: i64, wall: SystemTime, uptime: Duration) -> Option<Self> {
+        let expiry = UNIX_EPOCH.checked_add(Duration::from_secs(expires_at.try_into().ok()?))?;
         let remaining = expiry
             .duration_since(wall)
             .unwrap_or_default()
             .min(Duration::from_secs(630));
         Some(Self {
-            pairing: invitation.pairing(),
+            pairing: id,
             wall: expiry,
             uptime: uptime.checked_add(remaining)?,
             next_poll: uptime.checked_add(Duration::from_secs(2))?,
         })
     }
-    pub(crate) fn matches(&self, invitation: &Invitation) -> bool {
-        self.pairing == invitation.pairing()
+    pub(crate) fn matches_id(&self, id: Uuid) -> bool {
+        self.pairing == id
+    }
+    /// Honors a server `Retry-After` or a network backoff; never shortens the
+    /// regular two-second interval and never extends the display lifetime.
+    pub(crate) fn defer(&mut self, delay: Duration) {
+        self.defer_at(crate::clock::uptime(), delay);
+    }
+    fn defer_at(&mut self, uptime: Option<Duration>, delay: Duration) {
+        let delay = delay.max(Duration::from_secs(2));
+        self.next_poll = uptime
+            .and_then(|u| u.checked_add(delay))
+            .unwrap_or(Duration::MAX);
     }
     fn remaining_at(&self, wall: SystemTime, uptime: Duration) -> Duration {
         self.wall
@@ -90,7 +111,7 @@ mod tests {
         let wall = UNIX_EPOCH + Duration::from_secs(1700000000);
         let uptime = Duration::from_secs(50);
         let mut countdown = Countdown::at(&invitation, wall, uptime).unwrap();
-        assert!(countdown.matches(&invitation));
+        assert!(countdown.matches_id(invitation.pairing()));
         assert_eq!(countdown.remaining_at(wall, uptime).as_secs(), 300);
         assert!(!countdown.poll_at(wall, uptime));
         assert!(countdown.poll_at(
@@ -132,6 +153,49 @@ mod tests {
         assert!(!countdown.poll_at(
             wall + Duration::from_secs(20),
             uptime + Duration::from_secs(20)
+        ));
+    }
+    #[test]
+    fn device_requests_share_the_lifetime_and_retry_after_delays_polling() {
+        let draft = PairingDraft::generate().unwrap();
+        let request = DeviceSignIn::new(
+            ServerURL::parse("https://public.example.test").unwrap(),
+            Uuid::from_u128(9),
+            *draft.nonce(),
+            *draft.public_key(),
+            1700000600,
+            1700000000,
+        )
+        .unwrap();
+        let wall = UNIX_EPOCH + Duration::from_secs(1700000000);
+        let uptime = Duration::from_secs(50);
+        let mut countdown =
+            Countdown::at_expiry(request.request(), request.expires_at(), wall, uptime).unwrap();
+        assert!(countdown.matches_id(request.request()) && !countdown.matches_id(Uuid::nil()));
+        assert_eq!(countdown.remaining_at(wall, uptime).as_secs(), 600);
+        countdown.defer_at(Some(uptime), Duration::from_secs(30));
+        assert!(!countdown.poll_at(
+            wall + Duration::from_secs(29),
+            uptime + Duration::from_secs(29)
+        ));
+        assert!(countdown.poll_at(
+            wall + Duration::from_secs(30),
+            uptime + Duration::from_secs(30)
+        ));
+        // A shorter delay never polls faster than the regular interval.
+        countdown.defer_at(Some(uptime + Duration::from_secs(30)), Duration::ZERO);
+        assert!(!countdown.poll_at(
+            wall + Duration::from_secs(31),
+            uptime + Duration::from_secs(31)
+        ));
+        assert!(countdown.poll_at(
+            wall + Duration::from_secs(32),
+            uptime + Duration::from_secs(32)
+        ));
+        countdown.defer_at(None, Duration::from_secs(1));
+        assert!(!countdown.poll_at(
+            wall + Duration::from_secs(100),
+            uptime + Duration::from_secs(100)
         ));
     }
     #[test]

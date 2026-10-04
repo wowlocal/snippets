@@ -1,14 +1,14 @@
 # Native Cloud integration
 
 `test-native-cloud-integration.py` exchanges encrypted, disposable snippets through
-the real native email authentication server using the macOS, iPhone, iPad, and Android
+the real native account-key authentication server using the macOS, iPhone, iPad, and Android
 app integration harnesses. The existing `test-cross-platform-sync.sh` remains the
 independent OIDC protocol regression suite.
 
 Requirements:
 
 - A disposable Snippets Cloud server running `AUTH_MODE=native`, with its HTTPS origin
-  in a private file. Its SMTP delivery must use a local Mailpit instance.
+  in a private file. No mail service is involved.
 - Xcode with an available iOS simulator runtime, plus a **disposable Android emulator**.
   The Android harness resets that emulator's Snippets installation and device key.
 - Fresh Android debug and instrumentation APKs built with Snippets Cloud enabled and
@@ -27,7 +27,7 @@ python3 scripts/test-native-cloud-integration-gateway.py \
 ```
 
 It listens on loopback port 8787 and forwards to the API on port 8087. The ports are
-configurable. Mailpit stays on loopback; the gateway does not expose its UI or API.
+configurable.
 
 When running behind cloudflared, configure the API's `AUTH_TRUSTED_PROXY_CIDRS` with
 only this gateway's immediate network peer address. The gateway always removes an
@@ -57,9 +57,11 @@ environment disables automatic host services while the test owns the isolated st
 `--android-ready-file` can wait for a cooperating test runner to hand over the emulator.
 `--apple-ready-file` waits after the Mac seed phase for other iOS test runners to finish.
 Only the simulator needed by the current phase is booted; it shuts down after that phase.
-See `--help` for custom origin, Mailpit, artifact, and report paths.
+See `--help` for custom origin, artifact, and report paths.
 
-The suite verifies email delivery and token rotation, then runs fifteen app phases:
+The suite creates an account, checks the generated key's format and check symbols, signs
+in with it, confirms a wrong key is refused, and verifies token rotation. It then runs
+fifteen app phases:
 create on Mac/iPhone/Android; edit across platforms; reload and converge; delete with
 a lost acknowledgement; recover from a truncated page and invalid cursor; and converge
 on the tombstone. It also checks a real server CAS conflict and verifies that the wire
@@ -68,7 +70,8 @@ isolated library; the Android harness explicitly reloads its persisted installat
 The shared fixed encryption material is test authority supplied directly to isolated
 key stores and never reads or changes the user's library keys.
 
-The account is unique for each run. Cleanup revokes the entire refresh-token family
+The account is unique for each run. Its key stays in memory and is never written to a
+fixture, report or log. Cleanup revokes the entire refresh-token family
 using the original, already rotated token and confirms that the latest access token is
 denied. Fixture files are removed once revocation succeeds. Encrypted synthetic records
 remain in the disposable server database. The suite never resets a server or deletes

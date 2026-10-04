@@ -4,8 +4,13 @@ use crate::diagnostics::{self, AccountOperation as Op, AccountState as State, St
 
 pub(super) fn operation(command: &Command) -> Option<(Op, Stage)> {
     Some(match command {
-        Command::SendCode { .. } => (Op::EmailCodeSend, Stage::Perform),
-        Command::Verify(_) => (Op::EmailCodeVerify, Stage::Confirm),
+        Command::CreateAccount { .. } => (Op::AccountCreate, Stage::Perform),
+        Command::SignIn { .. } => (Op::AccountSignIn, Stage::Perform),
+        Command::BeginDeviceSignIn { .. } => (Op::DeviceRequest, Stage::Perform),
+        Command::CancelDeviceSignIn => (Op::DeviceRequest, Stage::Cancel),
+        Command::CheckDeviceSignIn => (Op::DeviceClaim, Stage::Perform),
+        Command::PrepareDeviceApproval(_) => (Op::DeviceApproval, Stage::Prepare),
+        Command::ApproveDevice(_) => (Op::DeviceApproval, Stage::Confirm),
         Command::Resume | Command::Refresh => (Op::Reconnect, Stage::Resume),
         Command::SignOut => (Op::SignOut, Stage::Perform),
         Command::CreateLibrary | Command::CreateNewLibrary(_) => {
@@ -96,6 +101,12 @@ fn send_state(status: sender::Status) -> State {
         S::ServerDeferred { .. } => State::ServerDeferred,
     }
 }
+/// Claim polling repeats every few seconds while a request is pending. Like
+/// invitation polling it stays quiet; only an approval or a failure is recorded.
+pub(super) fn quiet(operation: (Op, Stage), result: &Result<Reply>) -> bool {
+    operation.0 == Op::DeviceClaim
+        && matches!(result, Ok(Reply::DeviceSignIn { failure: None, .. }))
+}
 pub(super) fn event(
     operation: (Op, Stage),
     started: std::time::Instant,
@@ -108,7 +119,23 @@ pub(super) fn event(
         | Ok(Reply::Selected {
             keys: Err(failure), ..
         }) => Some(Failure::Key(*failure)),
-        Ok(Reply::CreationFailed { failure, .. }) => Some(*failure),
+        Ok(Reply::CreationFailed { failure, .. })
+        | Ok(Reply::AccountCreated {
+            failure: Some(failure),
+            ..
+        })
+        | Ok(Reply::DeviceSignIn {
+            failure: Some(failure),
+            ..
+        })
+        | Ok(Reply::DeviceSignedIn {
+            failure: Some(failure),
+            ..
+        }) => Some(*failure),
+        Ok(Reply::DeviceSignedIn {
+            keys: Some(Err(failure)),
+            ..
+        }) => Some(Failure::Key(*failure)),
         Ok(Reply::Restored {
             failure: Some(failure),
             ..
@@ -248,23 +275,136 @@ mod tests {
     use super::*;
     #[test]
     fn credentials_and_read_only_polling_do_not_enter_account_records() {
-        let command = Command::SendCode {
+        const KEY: &str = "7KQF9M2XR4TDH8WBZN3CP6YE1AQ7";
+        let key = || AccountKey::from_canonical(KEY).unwrap();
+        let command = Command::SignIn {
             server: Zeroizing::new("https://PRIVATE.example".into()),
-            email: Zeroizing::new("PRIVATE@example.com".into()),
+            key: key(),
         };
-        let result: Result<Reply> = Err(Failure::Cloud(cloud::Failure::InvalidCredential));
-        let event = event(
+        let result: Result<Reply> = Err(Failure::Cloud(cloud::Failure::Server {
+            code: cloud::ErrorCode::InvalidAccountKey,
+            retry_after: None,
+        }));
+        let value = serde_json::to_value(event(
             operation(&command).unwrap(),
             std::time::Instant::now(),
             &result,
-        );
-        let value = serde_json::to_value(event).unwrap();
-        assert_eq!(value["fields"]["operation"], "email_code_send");
+        ))
+        .unwrap();
+        assert_eq!(value["fields"]["operation"], "account_sign_in");
         assert_eq!(value["fields"]["outcome"], "failed");
-        assert_eq!(value["fields"]["failure"]["family"], "cloud");
-        assert!(!value.to_string().contains("PRIVATE"));
+        assert_eq!(
+            value["fields"]["failure"],
+            serde_json::json!({"family":"cloud","code":120})
+        );
+        let text = value.to_string();
+        assert!(!text.contains("PRIVATE") && !text.contains(KEY) && !text.contains("7KQF"));
+        let command = Command::CreateAccount {
+            server: Zeroizing::new("https://PRIVATE.example".into()),
+        };
+        let result = Ok(Reply::AccountCreated {
+            key: key(),
+            next: Some(Box::new(Reply::Profile {
+                account: Some("1A2B-3C4D".into()),
+                server: None,
+                interrupted: false,
+                switching: handover::Status::default(),
+                device: None,
+            })),
+            failure: Some(Failure::Cloud(cloud::Failure::Network)),
+        });
+        let value = serde_json::to_value(event(
+            operation(&command).unwrap(),
+            std::time::Instant::now(),
+            &result,
+        ))
+        .unwrap();
+        assert_eq!(value["fields"]["operation"], "account_create");
+        assert_eq!(value["fields"]["outcome"], "attention");
+        assert_eq!(value["fields"]["failure"]["code"], 6);
+        let text = value.to_string();
+        assert!(!text.contains("PRIVATE") && !text.contains("7KQF") && !text.contains("1A2B"));
         assert!(operation(&Command::Inspect).is_none());
         assert!(operation(&Command::CheckPairing).is_none());
+        assert!(operation(&Command::PrepareAccountKeyDisclosure).is_none());
+    }
+    #[test]
+    fn device_sign_in_records_closed_outcomes_without_ids_tokens_or_payloads() {
+        use crate::auth_store::device::Status;
+        let draft = crate::bootstrap::PairingDraft::generate().unwrap();
+        let now = chrono::Utc::now().timestamp();
+        let payload = crate::bootstrap::DeviceSignIn::new(
+            ServerURL::parse("https://private-device.example").unwrap(),
+            uuid::Uuid::from_u128(0x7a6b5c4d),
+            *draft.nonce(),
+            *draft.public_key(),
+            now + 300,
+            now,
+        )
+        .unwrap();
+        let encoded = String::from_utf8(payload.encode_qr().unwrap().to_vec()).unwrap();
+        let code = payload.confirmation_code();
+        let waiting = |failure| {
+            Ok(Reply::DeviceSignIn {
+                state: Some(Status::Waiting(payload.clone())),
+                retry_after: Some(30),
+                failure,
+            })
+        };
+        let check = operation(&Command::CheckDeviceSignIn).unwrap();
+        assert_eq!(check, (Op::DeviceClaim, Stage::Perform));
+        // Pending polls stay quiet; a failed poll is recorded as a closed code.
+        assert!(quiet(check, &waiting(None)));
+        let limited = waiting(Some(Failure::Cloud(cloud::Failure::Server {
+            code: cloud::ErrorCode::RateLimited,
+            retry_after: Some(30),
+        })));
+        assert!(!quiet(check, &limited));
+        let value =
+            serde_json::to_value(event(check, std::time::Instant::now(), &limited)).unwrap();
+        assert_eq!(value["fields"]["operation"], "device_claim");
+        assert_eq!(value["fields"]["outcome"], "attention");
+        assert_eq!(
+            value["fields"]["failure"],
+            serde_json::json!({"family":"cloud","code":116})
+        );
+        let begin = Command::BeginDeviceSignIn {
+            server: Zeroizing::new("https://private-device.example".into()),
+        };
+        let prepare = Command::PrepareDeviceApproval(Zeroizing::new(encoded.clone()));
+        for (command, name) in [
+            (&begin, "device_request"),
+            (&Command::CancelDeviceSignIn, "device_request"),
+            (&prepare, "device_approval"),
+        ] {
+            let operation = operation(command).unwrap();
+            assert!(!quiet(operation, &waiting(None)));
+            let text =
+                serde_json::to_value(event(operation, std::time::Instant::now(), &waiting(None)))
+                    .unwrap()
+                    .to_string();
+            assert!(text.contains(name));
+            for private in [
+                "private-device",
+                "7a6b5c4d",
+                "sn_d_",
+                code.as_str(),
+                &encoded[..20],
+            ] {
+                assert!(!text.contains(private), "{private}");
+            }
+        }
+        let library = Ok(Reply::DeviceSignedIn {
+            libraries: Box::new(Reply::Saved),
+            library: None,
+            selected: None,
+            keys: None,
+            failure: Some(Failure::DeviceLibraryUnavailable),
+        });
+        let value =
+            serde_json::to_value(event(check, std::time::Instant::now(), &library)).unwrap();
+        assert_eq!(value["fields"]["outcome"], "attention");
+        assert_eq!(value["fields"]["failure"]["family"], "other");
     }
     #[test]
     fn partial_sync_and_nested_failures_are_not_reported_as_complete() {

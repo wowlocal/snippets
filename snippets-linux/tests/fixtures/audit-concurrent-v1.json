@@ -1,0 +1,123 @@
+{
+ "description": "Decrypted canonical snippets-wire-v1 envelopes from the 2026-10-03 stateful audit (docs/issues/cloud-account-key). Every body, name and identifier is synthetic public audit data. Order is the server change sequence. minimalThree: Mac (origin 64578a60) wrote 4-5, Android (d317f015) wrote 6-8, Linux (a11d1701) wrote 9-14; sequence 11 is Linux's stale post-copy source written over Android's 7, and 14 is the later body loss. crashChain: Mac 4, iPhone/iPad byte-identical transport-rekey reseals 5-10, Android 11, Linux 12, later copies 13-14.",
+ "minimalThree": [
+  {
+   "sequence": 1,
+   "envelope": "{\"contentHash\":\"f26e1ded27aa66f95ec7929d4735f40202a07adfa3b05176e55a572cb797b2ee\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-race\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":808272000.0},\"hash\":\"6ab8709899528178ec8dbf7cd787f96866427708c48545d8d9563d11fcb3f2bf\",\"hlc\":\"019ff86b2800-0000-64578a60\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"64578a60\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 2,
+   "envelope": "{\"contentHash\":\"5ca31c5fa0b66c42fef1fbb1b99170e0cb0e6baf54e9112a195cb8ebe6445dc9\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-fields\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"fields\",\"tags\":[\"audit\"],\"updatedAt\":808272000.0},\"hash\":\"f09181809e63e59c108d555195ed90360b04eba25da56e876a791add43aa7997\",\"hlc\":\"019ff86b2800-0000-64578a60\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"64578a60\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 3,
+   "envelope": "{\"contentHash\":\"aaa2ab535bdc0f36716dfdac839f89fc452d82c38e776563c6ea38fc1786c0df\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-delete-edit\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"delete-edit\",\"name\":\"delete-edit\",\"tags\":[\"audit\"],\"updatedAt\":808272000.0},\"hash\":\"f73ff649fee4fa9a17871705fef4ee22432b4b160e1a0dee2f93839f12208ad2\",\"hlc\":\"019ff86b2800-0000-64578a60\",\"id\":\"a11ce002-0000-4000-8000-000000000003\",\"origin\":\"64578a60\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 4,
+   "envelope": "{\"contentHash\":\"e71f927923fd845c85d80b50e90d46b53a212a103ebddc4541e13b40e01444d6\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-macos\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":812742226.219845},\"hash\":\"bf629cfcaa7d2d9c758515c5e768fda6c8f9bf13eb577ce98fed06407d26e9e9\",\"hlc\":\"01a102dd652b-0000-64578a60\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"64578a60\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 5,
+   "envelope": "{\"contentHash\":\"5ca31c5fa0b66c42fef1fbb1b99170e0cb0e6baf54e9112a195cb8ebe6445dc9\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-fields\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"audit-name-macos\",\"tags\":[\"audit\"],\"updatedAt\":812742226.219881},\"hash\":\"c03b0731cd2207efdc41d37a101b8b1738db09f2e04d9f73907dc73f672536c1\",\"hlc\":\"01a102dd652b-0000-64578a60\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"64578a60\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 6,
+   "envelope": "{\"contentHash\":\"e71f927923fd845c85d80b50e90d46b53a212a103ebddc4541e13b40e01444d6\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-macos\",\"createdAt\":808272000.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"race (conflict 2026-10-03 17:43 UTC)\",\"tags\":[\"audit\",\"conflict\"],\"updatedAt\":812742226.219845},\"hash\":\"6e08eb4462921ae1e02dc6054c9415f564e0cf9aa3e3bab6ea512c4ae71e22ca\",\"hlc\":\"01a102dd82ba-0000-d317f015\",\"id\":\"4388d2c6-6342-5b4a-a0c8-1ceecddd4c53\",\"origin\":\"d317f015\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 7,
+   "envelope": "{\"contentHash\":\"b947787cdd13251c024732d02a1629a03edd9491336aabcd9d53941bf3817c6b\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-android\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":812742227.970098},\"hash\":\"42740ed76740a1eff290759adcb8c3c1100c2e469a42f6f8e59da3b0ddcfd289\",\"hlc\":\"01a102dd82b9-0001-d317f015\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"d317f015\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 8,
+   "envelope": "{\"contentHash\":\"5ca31c5fa0b66c42fef1fbb1b99170e0cb0e6baf54e9112a195cb8ebe6445dc9\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-fields\",\"createdAt\":808272000.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"audit-name-macos\",\"tags\":[\"audit\"],\"updatedAt\":812742227.9740753},\"hash\":\"722235b8afc1cc6a4186565291eacd5e8d540f3d0a2d6da79507ced9e942494c\",\"hlc\":\"01a102dd82b9-0002-d317f015\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"d317f015\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 9,
+   "envelope": "{\"contentHash\":\"e71f927923fd845c85d80b50e90d46b53a212a103ebddc4541e13b40e01444d6\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-macos\",\"createdAt\":808272000.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"race (conflict 2026-10-03 17:43 UTC)\",\"tags\":[\"audit\",\"conflict\"],\"updatedAt\":812742226.219845},\"hash\":\"6cfa9a242c379e5206a241f2ed52bac2fa2c01573979f72ea4dc3aec162de006\",\"hlc\":\"01a102dd652b-0000-64578a60\",\"id\":\"5d85adc5-ec1a-50ac-a9eb-0d5ea53fcf39\",\"origin\":\"64578a60\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"ce1a2145e0e38826d82447c8372b559edcd3d42f11c11d7f5acb35c27c28f451\",\"sourceID\":\"a11ce002-0000-4000-8000-000000000001\",\"version\":1}}}"
+  },
+  {
+   "sequence": 10,
+   "envelope": "{\"contentHash\":\"bc51cf6c92e5a7067145ae286bc1a6f695742180e82edea68b7a0ad24fa6fba0\",\"deleted\":false,\"fields\":{\"content\":\"audit-field-linux\",\"createdAt\":808272000.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"audit-name-macos\",\"tags\":[\"audit\"],\"updatedAt\":812742230.7119579},\"hash\":\"7d17d10a0bd8d9137f7cf616fe9961e2080e248df64a35fc8f695234de1b3787\",\"hlc\":\"01a102dd82b9-0002-d317f015\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"d317f015\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 11,
+   "envelope": "{\"contentHash\":\"53bc0bf55632932e74379da3216a23b015f6e42f0fd4bb97a11df4e36936d3d0\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-linux\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":812742230.7082067},\"hash\":\"81c7f332b1ea25c172d355808014000a486a3f884aa189556ac13f77f9c35d13\",\"hlc\":\"01a102dd76b4-0000-a11d1701\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"a11d1701\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 12,
+   "envelope": "{\"contentHash\":\"53bc0bf55632932e74379da3216a23b015f6e42f0fd4bb97a11df4e36936d3d0\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-linux\",\"createdAt\":808272000.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"race (conflict 2026-10-03 17:43 UTC)\",\"tags\":[\"audit\",\"conflict\"],\"updatedAt\":812742230.7082067},\"hash\":\"56ce21baff287dc1ffa8fff482a81ac2e5728046e506f892ff59166e512e20c6\",\"hlc\":\"01a102dd76b4-0000-a11d1701\",\"id\":\"4e4e8edf-0082-5883-9b4f-52d464306c04\",\"origin\":\"a11d1701\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"1b1fad829f53ae6118d243e33b83db0a0dd0de6eaba597a0c9187b92d4498d69\",\"sourceID\":\"a11ce002-0000-4000-8000-000000000001\",\"version\":1}}}"
+  },
+  {
+   "sequence": 13,
+   "envelope": "{\"contentHash\":\"b947787cdd13251c024732d02a1629a03edd9491336aabcd9d53941bf3817c6b\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-android\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":812742230.7082067},\"hash\":\"6c104d23730cc4cc101bfc7392d4b6b0bc5a106f96ecc4d743593ea3f4458c45\",\"hlc\":\"01a102dd82b9-0001-d317f015\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"d317f015\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 14,
+   "envelope": "{\"contentHash\":\"53bc0bf55632932e74379da3216a23b015f6e42f0fd4bb97a11df4e36936d3d0\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-linux\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":812742230.7082067},\"hash\":\"a1574e3e8d42565a77cfbee93f873a396c264ebd7642ea5e69c43db07fecb85a\",\"hlc\":\"01a102dd82b9-0001-d317f015\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"d317f015\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  }
+ ],
+ "crashChain": [
+  {
+   "sequence": 1,
+   "envelope": "{\"contentHash\":\"f26e1ded27aa66f95ec7929d4735f40202a07adfa3b05176e55a572cb797b2ee\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-race\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":808272000.0},\"hash\":\"4b7a288d9e4dc7c85425f2f446f5dc5830299aa54f7fe9cf7cba2628a8aff77e\",\"hlc\":\"019ff86b2800-0000-7b62719d\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"7b62719d\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 2,
+   "envelope": "{\"contentHash\":\"5ca31c5fa0b66c42fef1fbb1b99170e0cb0e6baf54e9112a195cb8ebe6445dc9\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-fields\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"fields\",\"tags\":[\"audit\"],\"updatedAt\":808272000.0},\"hash\":\"595176992e2d5952f8d82dd57bf8e679246ba8a8df918b38625d397857d35c96\",\"hlc\":\"019ff86b2800-0000-7b62719d\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"7b62719d\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 3,
+   "envelope": "{\"contentHash\":\"aaa2ab535bdc0f36716dfdac839f89fc452d82c38e776563c6ea38fc1786c0df\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-delete-edit\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"delete-edit\",\"name\":\"delete-edit\",\"tags\":[\"audit\"],\"updatedAt\":808272000.0},\"hash\":\"ffb573a73f8a77076fa7553117c9888aaaf849d32812e2e03c9ae08b49cff6b5\",\"hlc\":\"019ff86b2800-0000-7b62719d\",\"id\":\"a11ce002-0000-4000-8000-000000000003\",\"origin\":\"7b62719d\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 4,
+   "envelope": "{\"contentHash\":\"05330cd823e1bbe9a244e6306df195949c8809b304c1ea211d8ae0935da19012\",\"deleted\":false,\"fields\":{\"content\":\"audit-crash-macos\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"fields\",\"tags\":[\"audit\"],\"updatedAt\":812742502.194072},\"hash\":\"9dd18d03dc21b94358e45fdce242b7895ef1fbcbe87ecf8737312d7f5e4dc7da\",\"hlc\":\"01a102e19b32-0000-7b62719d\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"7b62719d\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 5,
+   "envelope": "{\"contentHash\":\"f26e1ded27aa66f95ec7929d4735f40202a07adfa3b05176e55a572cb797b2ee\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-race\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":808272000.0},\"hash\":\"4b7a288d9e4dc7c85425f2f446f5dc5830299aa54f7fe9cf7cba2628a8aff77e\",\"hlc\":\"019ff86b2800-0000-7b62719d\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"7b62719d\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 6,
+   "envelope": "{\"contentHash\":\"05330cd823e1bbe9a244e6306df195949c8809b304c1ea211d8ae0935da19012\",\"deleted\":false,\"fields\":{\"content\":\"audit-crash-macos\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"fields\",\"tags\":[\"audit\"],\"updatedAt\":812742502.194072},\"hash\":\"9dd18d03dc21b94358e45fdce242b7895ef1fbcbe87ecf8737312d7f5e4dc7da\",\"hlc\":\"01a102e19b32-0000-7b62719d\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"7b62719d\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 7,
+   "envelope": "{\"contentHash\":\"aaa2ab535bdc0f36716dfdac839f89fc452d82c38e776563c6ea38fc1786c0df\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-delete-edit\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"delete-edit\",\"name\":\"delete-edit\",\"tags\":[\"audit\"],\"updatedAt\":808272000.0},\"hash\":\"ffb573a73f8a77076fa7553117c9888aaaf849d32812e2e03c9ae08b49cff6b5\",\"hlc\":\"019ff86b2800-0000-7b62719d\",\"id\":\"a11ce002-0000-4000-8000-000000000003\",\"origin\":\"7b62719d\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 8,
+   "envelope": "{\"contentHash\":\"f26e1ded27aa66f95ec7929d4735f40202a07adfa3b05176e55a572cb797b2ee\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-race\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":808272000.0},\"hash\":\"4b7a288d9e4dc7c85425f2f446f5dc5830299aa54f7fe9cf7cba2628a8aff77e\",\"hlc\":\"019ff86b2800-0000-7b62719d\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"7b62719d\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 9,
+   "envelope": "{\"contentHash\":\"05330cd823e1bbe9a244e6306df195949c8809b304c1ea211d8ae0935da19012\",\"deleted\":false,\"fields\":{\"content\":\"audit-crash-macos\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"fields\",\"tags\":[\"audit\"],\"updatedAt\":812742502.194072},\"hash\":\"9dd18d03dc21b94358e45fdce242b7895ef1fbcbe87ecf8737312d7f5e4dc7da\",\"hlc\":\"01a102e19b32-0000-7b62719d\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"7b62719d\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 10,
+   "envelope": "{\"contentHash\":\"aaa2ab535bdc0f36716dfdac839f89fc452d82c38e776563c6ea38fc1786c0df\",\"deleted\":false,\"fields\":{\"content\":\"audit-original-delete-edit\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"delete-edit\",\"name\":\"delete-edit\",\"tags\":[\"audit\"],\"updatedAt\":808272000.0},\"hash\":\"ffb573a73f8a77076fa7553117c9888aaaf849d32812e2e03c9ae08b49cff6b5\",\"hlc\":\"019ff86b2800-0000-7b62719d\",\"id\":\"a11ce002-0000-4000-8000-000000000003\",\"origin\":\"7b62719d\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 11,
+   "envelope": "{\"contentHash\":\"43f86041a343b05189dcd83271f63c0aeabf6fbbcd9cf13d3fbee4d2950ffc70\",\"deleted\":false,\"fields\":{\"content\":\"audit-crash-android\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"fields\",\"tags\":[\"audit\"],\"updatedAt\":812742530.9223211},\"hash\":\"0e533b7d92bf31b3fdafbb7fd6ae0a6167754f0c0bd8b537eddd1c0695ca9a29\",\"hlc\":\"01a102e20d9c-0001-ca8359be\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"ca8359be\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 12,
+   "envelope": "{\"contentHash\":\"e4960723100fc6e623eafca73cbcec488b874b151068aaec3e1bd5d40bd75f69\",\"deleted\":false,\"fields\":{\"content\":\"audit-crash-linux\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"fields\",\"tags\":[\"audit\"],\"updatedAt\":812742541.4705114},\"hash\":\"e4c454992a6b562221cf0679176a74a4e8135be98b7b1bb7c7238a0a065c86c9\",\"hlc\":\"01a102e2349e-0000-a11d1701\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"a11d1701\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  },
+  {
+   "sequence": 13,
+   "envelope": "{\"contentHash\":\"de013fa4034654fbac3526cb3b087eeca037defacba2786325f3c22ae6047aaf\",\"deleted\":false,\"fields\":{\"content\":\"audit-crash-iphone\",\"createdAt\":808272000.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"fields (conflict 2026-10-03 17:48 UTC)\",\"tags\":[\"audit\",\"conflict\"],\"updatedAt\":812742512.346206},\"hash\":\"7915d29fa65436e6c5f29a0d67c756b2b17b43758ddf624b808cacd943daaf03\",\"hlc\":\"01a102e1c2da-0000-a06ad21b\",\"id\":\"61e29349-3190-5ade-915c-5c6d4caa0934\",\"origin\":\"a06ad21b\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"e45d7de0e23bbc724a2554cd26589be532f7b50a1470db4d28717be988fb0f03\",\"sourceID\":\"a11ce002-0000-4000-8000-000000000002\",\"version\":1}}}"
+  },
+  {
+   "sequence": 14,
+   "envelope": "{\"contentHash\":\"3536fd2b72e7e57c07d76d1a5cec5e5592dc3cc6f9b3280b7407e0c77e1a6be1\",\"deleted\":false,\"fields\":{\"content\":\"audit-crash-ipad\",\"createdAt\":808272000.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"fields (conflict 2026-10-03 17:48 UTC)\",\"tags\":[\"audit\",\"conflict\"],\"updatedAt\":812742521.871344},\"hash\":\"a0e382f28d3c4fb3752fe51ec23841f8b0221bad6583dc675bdbeac654ebe7d3\",\"hlc\":\"01a102e1e80f-0000-c85811a8\",\"id\":\"b6d3916e-daa9-5fbd-b0b7-9ece5b492e42\",\"origin\":\"c85811a8\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"03b18dbe712e4b3d3b914f19d29b56a54afa91bae9c5df28db5bd13100a593a3\",\"sourceID\":\"a11ce002-0000-4000-8000-000000000002\",\"version\":1}}}"
+  },
+  {
+   "sequence": 15,
+   "envelope": "{\"contentHash\":\"e4960723100fc6e623eafca73cbcec488b874b151068aaec3e1bd5d40bd75f69\",\"deleted\":false,\"fields\":{\"content\":\"audit-crash-linux\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"fields\",\"name\":\"fields\",\"tags\":[\"audit\"],\"updatedAt\":812742541.4705114},\"hash\":\"e4c454992a6b562221cf0679176a74a4e8135be98b7b1bb7c7238a0a065c86c9\",\"hlc\":\"01a102e2349e-0000-a11d1701\",\"id\":\"a11ce002-0000-4000-8000-000000000002\",\"origin\":\"a11d1701\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}"
+  }
+ ]
+}

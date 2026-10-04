@@ -44,7 +44,7 @@ fn review(window: &Rc<AccountWindow>, label: &str) -> adw::AlertDialog {
         dialog.heading().as_deref() == Some("Create New Cloud Library?")
             && dialog.default_response().as_deref() == Some("cancel")
             && dialog.close_response() == "cancel"
-            && dialog.body().contains("fixture@example.invalid")
+            && dialog.body().contains("account 0F1E-2D3C")
             && dialog.body().contains("https://127.0.0.1:")
     );
     dialog
@@ -97,13 +97,7 @@ pub(super) fn run(followup: Followup) {
         .unwrap()
         .save(local.clone(), None)
         .unwrap();
-    window.server.set_text(fixture.server.for_secure_storage());
-    window.email.set_text("fixture@example.invalid");
-    press(window.window.upcast_ref(), "Send Sign-in Code");
-    wait_work(&window);
-    window.code.set_text("123456");
-    press(window.window.upcast_ref(), "Sign In");
-    wait_work(&window);
+    create_account(&window, &fixture);
     assert!(window.creation_state.get() == Some(CreationState::Available));
     assert!(!window.create_another.is_visible() && !window.sync.is_sensitive());
     let before = images(&root);

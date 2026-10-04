@@ -1,6 +1,6 @@
 # ADR 0004: Account login and encrypted library access
 
-- Status: library-access decisions implemented; browser account login superseded by ADR 0005
+- Status: library-access decisions implemented; browser account login superseded by ADR 0005, then ADR 0006
 - Date: 2026-09-06
 - Amends: ADR 0003 for the schema-2 additive rollout before public launch
 

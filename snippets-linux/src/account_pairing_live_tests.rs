@@ -8,13 +8,7 @@ fn focus(window: &AccountWindow) {
     });
 }
 fn sign_in(window: &Rc<AccountWindow>, fixture: &server::Fixture) {
-    window.server.set_text(fixture.server.for_secure_storage());
-    window.email.set_text("fixture@example.invalid");
-    press(window.window.upcast_ref(), "Send Sign-in Code");
-    wait_work(window);
-    window.code.set_text("123456");
-    press(window.window.upcast_ref(), "Sign In");
-    wait_work(window);
+    sign_in_saved_key(window, fixture);
     assert!(window.libraries.selected() == 0 && !window.library_panel.is_sensitive());
     window.libraries.set_selected(1);
     wait_work(window);
@@ -33,14 +27,17 @@ fn invitation(window: &AccountWindow) -> Invitation {
     until("native public invitation did not map", || {
         window.pairing_view.area.is_mapped() && window.pairing_view.value.borrow().is_some()
     });
-    window
+    // The view holds only the public payload it draws, for pairing invitations
+    // and device sign-in requests alike; decode exactly what it shows.
+    let payload = window
         .pairing_view
         .value
         .borrow()
         .as_ref()
         .unwrap()
-        .invitation
-        .clone()
+        .payload
+        .clone();
+    Invitation::decode_retained_qr(&payload).unwrap()
 }
 fn prepared(window: &AccountWindow, invitation: &Invitation) {
     assert!(

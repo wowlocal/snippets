@@ -16,92 +16,188 @@ internal data class CloudCredentialReplacementCleanupPlan(
     val refreshTokensToRetire: List<String>,
 )
 
-/** Native email-code authentication; secrets remain in the device-bound encrypted store. */
+/**
+ * Native generated-account-key authentication (server ADR 0006). The account key and
+ * every credential remain in the device-bound encrypted store and never enter logs,
+ * diagnostics, saved-instance state or backups.
+ */
 class CloudAuthenticator(
     @Suppress("UNUSED_PARAMETER") context: Context,
     private val store: EncryptedStore,
 ) {
-    data class CompletedAuthorization(
+    class CompletedAuthorization(
         val serverURL: String,
         val accessToken: String,
         val accountChange: Boolean,
         val stepUpBinding: CloudStepUpBinding?,
         val resumeBinding: CloudStepUpBinding?,
-    )
+        /** Set only by account creation, whose response carries the key exactly once. */
+        val createdAccountKey: String?,
+    ) {
+        override fun toString(): String = "CompletedAuthorization(<redacted>)"
+    }
 
-    private data class PendingEmail(
-        val authority: NativeCloudAuthority,
-        val challenge: CloudEmailChallenge,
-        val accountChange: Boolean,
-        val stepUpBinding: CloudStepUpBinding?,
-        val resumeBinding: CloudStepUpBinding?,
-    )
-
-    private data class StoredSession(
+    private class StoredSession(
         val serverURL: String,
         val generation: NativeCloudCredentialGeneration,
         val accountID: String,
-        val email: String,
+        /** Null when another device approved this sign-in (ADR 0007): no key was transferred. */
+        val accountKey: String?,
         val expiresAtMillis: Long,
-    )
+    ) {
+        override fun toString(): String = "StoredSession(<redacted>)"
+    }
 
     private data class CredentialJournal(
         val serverURL: String,
         val generations: List<NativeCloudCredentialGeneration>,
     )
 
-    // Email and OTP are never written to pending state, diagnostics or saved-instance state.
-    private var pendingEmail: PendingEmail? = null
-
-    suspend fun startEmailSignIn(
+    /** Creates an account; its grant follows exactly the same journal-first path as sign-in. */
+    suspend fun createAccount(
         rawServerURL: String,
-        email: String,
+        chooseAccount: Boolean = false,
+    ): CompletedAuthorization = authorize(rawServerURL, accountKey = null, stepUp = false,
+        chooseAccount = chooseAccount, stepUpBinding = null, resumeBinding = null)
+
+    /** [accountKey] must already be canonical; a locally invalid key is never sent. */
+    suspend fun signInWithAccountKey(
+        rawServerURL: String,
+        accountKey: String,
         stepUp: Boolean = false,
         chooseAccount: Boolean = false,
         stepUpBinding: CloudStepUpBinding? = null,
         resumeBinding: CloudStepUpBinding? = null,
-    ): CloudEmailChallenge = withContext(Dispatchers.IO) {
+    ): CompletedAuthorization {
+        cloudAuthGuard(NativeCloudAccountKey.isCanonical(accountKey), "account_key_malformed")
+        return authorize(rawServerURL, accountKey, stepUp, chooseAccount, stepUpBinding, resumeBinding)
+    }
+
+    private suspend fun authorize(
+        rawServerURL: String,
+        accountKey: String?,
+        stepUp: Boolean,
+        chooseAccount: Boolean,
+        stepUpBinding: CloudStepUpBinding?,
+        resumeBinding: CloudStepUpBinding?,
+    ): CompletedAuthorization = withContext(Dispatchers.IO) {
         cloudAuthGuard(!(stepUp && chooseAccount) && stepUp == (stepUpBinding != null) &&
-            (stepUpBinding == null || resumeBinding == null), "authorization_session_invalid")
+            (stepUpBinding == null || resumeBinding == null) &&
+            (accountKey != null || (!stepUp && resumeBinding == null)), "authorization_session_invalid")
         val serverURL = configuredServerURL()
         cloudAuthGuard(nativeCloudServerURL(rawServerURL) == serverURL, "server_identity_mismatch")
         resumeBinding?.let { cloudAuthGuard(it.serverURL == serverURL, "authorization_session_invalid") }
-        cloudAuthGuard(email.toByteArray().size in 3..254 && email.contains('@') &&
-            email.none { it.isWhitespace() || it.isISOControl() }, "invalid_email")
         retireSupersededInteractiveSessions()
         cloudAuthGuard(store.read(AUTH_REVOCATION) == null, "credential_revocation_incomplete")
         loadSession()?.let { cloudAuthGuard(it.serverURL == serverURL, "authorization_state_invalid") }
         val authority = NativeCloudAuthority.parse(serverURL,
             requestJSON("$serverURL/.well-known/snippets-sync"))
-        val challenge = CloudEmailChallenge.parse(requestJSON(authority.startEndpoint,
-            JSONObject().put("email", email)))
-        pendingEmail = PendingEmail(authority, challenge, chooseAccount && resumeBinding == null,
-            stepUpBinding, resumeBinding)
-        challenge
-    }
-
-    fun cancelEmailSignIn() { pendingEmail = null }
-
-    suspend fun completeEmailSignIn(challengeID: String, code: String): CompletedAuthorization =
-        withContext(Dispatchers.IO + NonCancellable) {
-            val pending = pendingEmail ?: throw CloudAuthFailure("authorization_session_missing")
-            cloudAuthGuard(pending.challenge.challengeID == challengeID &&
-                code.length == pending.challenge.codeLength && code.all { it in '0'..'9' }, "invalid_code")
+        // Once a grant can be issued, finish journaling it even if the caller is cancelled.
+        withContext(NonCancellable) {
             val existing = loadSession()
-            val response = requestJSON(pending.authority.verifyEndpoint,
-                JSONObject().put("challengeId", challengeID).put("code", code))
             val grantID = UUID.randomUUID().toString()
-            // A rejected profile or TTL must not orphan a successfully issued grant.
-            val token = NativeCloudTokenResponse.parseAfterJournaling(response, grantID) { issued ->
-                writeJournal(AUTH_REPLACEMENT, CredentialJournal(pending.authority.serverURL,
+            // A rejected profile, key or TTL must not orphan a successfully issued grant.
+            val journalIssued: (NativeCloudCredentialGeneration) -> Unit = { issued ->
+                writeJournal(AUTH_REPLACEMENT, CredentialJournal(authority.serverURL,
                     listOfNotNull(existing?.generation, issued)))
             }
-            val stored = session(pending.authority.serverURL, token, grantID)
+            val token: NativeCloudTokenResponse
+            val storedKey: String
+            if (accountKey == null) {
+                val created = NativeCloudAccountCreation.parseAfterJournaling(
+                    requestJSON(authority.createAccountEndpoint, post = true), grantID, journalIssued)
+                token = created.session
+                storedKey = created.accountKey
+            } else {
+                token = NativeCloudTokenResponse.parseAfterJournaling(requestJSON(authority.signInEndpoint,
+                    JSONObject().put("accountKey", accountKey)), grantID, persistIssued = journalIssued)
+                storedKey = accountKey
+            }
+            val stored = session(authority.serverURL, token, grantID, storedKey)
             store.write(PENDING_AUTH_SESSION, stored.toJSON())
-            pendingEmail = null
             CompletedAuthorization(stored.serverURL, stored.generation.accessToken,
-                pending.accountChange, pending.stepUpBinding, pending.resumeBinding)
+                chooseAccount && resumeBinding == null, stepUpBinding, resumeBinding,
+                createdAccountKey = storedKey.takeIf { accountKey == null })
         }
+    }
+
+    /** ADR 0007 claim result; an approved grant is already journaled and staged as pending. */
+    sealed class DeviceClaimOutcome {
+        object Pending : DeviceClaimOutcome()
+
+        class Approved(
+            val authorization: CompletedAuthorization,
+            val spaceID: String,
+            val pairingID: String,
+        ) : DeviceClaimOutcome()
+    }
+
+    /** Whether discovery advertises device-approved sign-in on the pinned origin. */
+    suspend fun deviceSignInSupported(rawServerURL: String): Boolean = withContext(Dispatchers.IO) {
+        runCatching { deviceSignInAuthority(rawServerURL) }.isSuccess
+    }
+
+    /** Opens an unauthenticated device request holding only pairing recipient material. */
+    internal suspend fun createDeviceRequest(
+        rawServerURL: String,
+        recipientPublicKey: ByteArray,
+        nonce: ByteArray,
+    ): NativeCloudDeviceRequest = withContext(Dispatchers.IO) {
+        val authority = deviceSignInAuthority(rawServerURL)
+        val encoder = java.util.Base64.getEncoder()
+        NativeCloudDeviceRequest.parse(requestJSON(authority.deviceRequestsEndpoint, JSONObject()
+            .put("recipientPublicKey", encoder.encodeToString(recipientPublicKey))
+            .put("nonce", encoder.encodeToString(nonce))))
+    }
+
+    /**
+     * Polls a device request once. An approved session takes exactly the account-key path:
+     * journal-first replacement grant, then the pending session, which has no account key.
+     */
+    suspend fun claimDeviceRequest(
+        rawServerURL: String,
+        requestID: String,
+        pollToken: String,
+        requestExpiresAtEpochSeconds: Long,
+    ): DeviceClaimOutcome = withContext(Dispatchers.IO) {
+        val serverURL = configuredServerURL()
+        cloudAuthGuard(nativeCloudServerURL(rawServerURL) == serverURL, "server_identity_mismatch")
+        cloudAuthGuard(LibraryKeyBootstrap.isDevicePollToken(pollToken), "authorization_state_invalid")
+        retireSupersededInteractiveSessions()
+        cloudAuthGuard(store.read(AUTH_REVOCATION) == null, "credential_revocation_incomplete")
+        loadSession()?.let { cloudAuthGuard(it.serverURL == serverURL, "authorization_state_invalid") }
+        val authority = NativeCloudAuthority.forServer(serverURL)
+        withContext(NonCancellable) {
+            val existing = loadSession()
+            val grantID = UUID.randomUUID().toString()
+            val response = requestJSON(authority.deviceClaimEndpoint(requestID),
+                JSONObject().put("pollToken", pollToken))
+            when (val claim = NativeCloudDeviceClaim.parseAfterJournaling(response, grantID,
+                requestExpiresAtEpochSeconds) { issued ->
+                writeJournal(AUTH_REPLACEMENT, CredentialJournal(serverURL,
+                    listOfNotNull(existing?.generation, issued)))
+            }) {
+                NativeCloudDeviceClaim.Pending -> DeviceClaimOutcome.Pending
+                is NativeCloudDeviceClaim.Approved -> {
+                    val stored = session(serverURL, claim.session, grantID, accountKey = null)
+                    store.write(PENDING_AUTH_SESSION, stored.toJSON())
+                    DeviceClaimOutcome.Approved(
+                        CompletedAuthorization(stored.serverURL, stored.generation.accessToken,
+                            accountChange = false, stepUpBinding = null, resumeBinding = null,
+                            createdAccountKey = null),
+                        claim.spaceID, claim.pairingID,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun deviceSignInAuthority(rawServerURL: String): NativeCloudAuthority {
+        val serverURL = configuredServerURL()
+        cloudAuthGuard(nativeCloudServerURL(rawServerURL) == serverURL, "server_identity_mismatch")
+        return NativeCloudAuthority.parseWithDeviceSignIn(serverURL,
+            requestJSON("$serverURL/.well-known/snippets-sync"))
+    }
 
     suspend fun freshAccessToken(expectedServerURL: String, forceRefresh: Boolean = false): String =
         freshAccessToken(AUTH_SESSION, expectedServerURL, forceRefresh)
@@ -140,7 +236,7 @@ class CloudAuthenticator(
             catch (_: Exception) { throw CloudAuthFailure("credential_cleanup_required") }
             throw CloudAuthFailure("sign_in_required")
         }
-        val updated = session(stored.serverURL, token, stored.generation.grantID)
+        val updated = session(stored.serverURL, token, stored.generation.grantID, stored.accountKey)
         val journalFile = if (file == PENDING_AUTH_SESSION) AUTH_REPLACEMENT else AUTH_REVOCATION
         loadJournal(journalFile, stored.serverURL)?.let {
             writeJournal(journalFile, it.copy(generations =
@@ -181,7 +277,6 @@ class CloudAuthenticator(
     suspend fun finalizePendingAuthorization() { retireSupersededInteractiveSessions() }
 
     suspend fun discardPendingAuthorization() {
-        pendingEmail = null
         val candidate = loadSession(PENDING_AUTH_SESSION)
         if (store.read(AUTH_REPLACEMENT) == null && candidate != null) {
             writeJournal(AUTH_REPLACEMENT, CredentialJournal(candidate.serverURL, listOf(candidate.generation)))
@@ -208,22 +303,44 @@ class CloudAuthenticator(
     }
 
     fun forgetLocalSession() {
-        pendingEmail = null
         listOf(AUTH_SESSION, PENDING_AUTH_SESSION, AUTH_REVOCATION, AUTH_REPLACEMENT, AUTH_REFRESH).forEach(store::delete)
     }
 
-    fun accountDisplayName(): String = runCatching {
-        loadSession()?.email ?: "Snippets Cloud account"
-    }.getOrDefault("Snippets Cloud account")
+    /** Display form of the committed account's ID, or null when no session is usable. */
+    fun accountIDDisplay(): String? = runCatching {
+        loadSession()?.accountID?.let(::nativeCloudAccountIDDisplay)
+    }.getOrNull()
 
-    private fun session(serverURL: String, token: NativeCloudTokenResponse, grantID: String) =
+    /**
+     * The committed session's canonical account key, or null on a device that another
+     * device signed in. Callers disclose it only after device-owner authentication and
+     * never retain it beyond one presentation.
+     */
+    fun currentAccountKey(expectedServerURL: String): String? {
+        val stored = loadSession() ?: throw CloudAuthFailure("sign_in_required")
+        cloudAuthGuard(stored.serverURL == nativeCloudServerURL(expectedServerURL), "sign_in_required")
+        return stored.accountKey
+    }
+
+    /** Whether the committed session holds an account key that can be shown. */
+    fun hasAccountKey(): Boolean = runCatching { loadSession()?.accountKey != null }.getOrDefault(false)
+
+    /** Whether a newly created key still belongs to the committed (or pending) session. */
+    fun retainsAccountKey(accountKey: String, includePending: Boolean): Boolean = runCatching {
+        loadSession()?.accountKey == accountKey ||
+            (includePending && loadSession(PENDING_AUTH_SESSION)?.accountKey == accountKey)
+    }.getOrDefault(false)
+
+    private fun session(serverURL: String, token: NativeCloudTokenResponse, grantID: String,
+                        accountKey: String?) =
         StoredSession(serverURL, NativeCloudCredentialGeneration(grantID, token.accessToken,
-            token.refreshToken), token.accountID, token.email,
+            token.refreshToken), token.accountID, accountKey,
             System.currentTimeMillis() + token.expiresIn * 1_000L)
 
     private fun StoredSession.toJSON(): String = JSONObject()
-        .put("schemaVersion", 1).put("serverURL", serverURL)
-        .put("accountID", accountID).put("email", email).put("expiresAtMillis", expiresAtMillis)
+        .put("schemaVersion", SESSION_SCHEMA_VERSION).put("serverURL", serverURL)
+        .put("accountID", accountID).put("accountKey", accountKey ?: JSONObject.NULL)
+        .put("expiresAtMillis", expiresAtMillis)
         .put("generation", generationJSON(generation)).toString()
 
     private fun loadSession(file: String = AUTH_SESSION): StoredSession? {
@@ -231,18 +348,22 @@ class CloudAuthenticator(
         try {
             cloudAuthGuard(raw.toByteArray().size <= SESSION_MAX_BYTES, "authorization_state_invalid")
             val value = JSONObject(raw)
-            cloudAuthGuard(value.optInt("schemaVersion") == 1, "authorization_state_invalid")
+            val schemaVersion = value.optInt("schemaVersion")
+            // Schema 1 held a removed email-code session without an account key. It can
+            // never be used again, so it reads as signed out and the user signs in again.
+            if (schemaVersion in 1 until SESSION_SCHEMA_VERSION) return null
+            cloudAuthGuard(schemaVersion == SESSION_SCHEMA_VERSION, "authorization_state_invalid")
             val serverURL = nativeCloudServerURL(value.getString("serverURL"))
             cloudAuthGuard(serverURL == configuredServerURL(), "authorization_state_invalid")
             val generation = parseGeneration(value.getJSONObject("generation"))
             val accountID = value.getString("accountID")
-            val email = value.getString("email")
+            cloudAuthGuard(value.has("accountKey"), "authorization_state_invalid")
+            val accountKey = if (value.isNull("accountKey")) null else value.getString("accountKey")
             val expiresAt = value.getLong("expiresAtMillis")
-            cloudAuthGuard(accountID.toByteArray().size in 1..256 && accountID.none(Char::isISOControl) &&
-                email.toByteArray().size in 3..254 && email.contains('@') &&
-                email.none { it.isWhitespace() || it.isISOControl() } && expiresAt > 0 &&
+            cloudAuthGuard(nativeCloudAccountID(accountID) == accountID &&
+                (accountKey == null || NativeCloudAccountKey.isCanonical(accountKey)) && expiresAt > 0 &&
                 expiresAt <= System.currentTimeMillis() + 300_000L, "authorization_state_invalid")
-            return StoredSession(serverURL, generation, accountID, email, expiresAt)
+            return StoredSession(serverURL, generation, accountID, accountKey, expiresAt)
         } catch (error: CloudAuthFailure) { throw error }
         catch (_: Exception) { throw CloudAuthFailure("authorization_state_invalid") }
     }
@@ -335,32 +456,35 @@ class CloudAuthenticator(
             JSONObject().put("token", it).put("tokenTypeHint", "refresh_token"), emptyResponse = true) }
     }
 
-    /** HTTPS origin is pinned before any credential is sent, and redirects are never followed. */
+    /**
+     * HTTPS origin is pinned before any credential is sent, and redirects are never followed.
+     * A [post] without [body] sends an empty body with `Content-Length: 0`.
+     */
     private fun requestJSON(endpoint: String, body: JSONObject? = null,
-                            emptyResponse: Boolean = false): JSONObject {
+                            emptyResponse: Boolean = false, post: Boolean = body != null): JSONObject {
         val uri = URI(endpoint)
         val origin = URI(configuredServerURL())
         cloudAuthGuard(uri.scheme == origin.scheme && uri.host == origin.host && uri.port == origin.port &&
             uri.userInfo == null && uri.fragment == null && uri.query == null, "server_identity_mismatch")
         val connection = uri.toURL().openConnection() as HttpURLConnection
         try {
-            connection.requestMethod = if (body == null) "GET" else "POST"
+            connection.requestMethod = if (post) "POST" else "GET"
             connection.connectTimeout = 15_000
             connection.readTimeout = 15_000
             connection.instanceFollowRedirects = false
             connection.setRequestProperty("Accept", "application/json")
-            if (body != null) {
-                val bytes = body.toString().toByteArray(Charsets.UTF_8)
+            if (post) {
+                val bytes = body?.toString()?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
                 connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json")
+                if (body != null) connection.setRequestProperty("Content-Type", "application/json")
                 connection.setFixedLengthStreamingMode(bytes.size)
                 connection.outputStream.use { it.write(bytes) }
             }
             val status = connection.responseCode
             val bytes = readBounded(if (status in 200..299) connection.inputStream else connection.errorStream)
             if (status != if (emptyResponse) 204 else 200) {
-                val allowed = setOf("invalid_email", "invalid_code", "code_expired", "too_many_attempts",
-                    "rate_limited", "authentication_required", "dependency_unavailable")
+                val allowed = setOf("invalid_account_key", "rate_limited", "authentication_required",
+                    "dependency_unavailable", "not_found", "pairing_expired", "conflict")
                 val error = runCatching { JSONObject(bytes.toString(Charsets.UTF_8)) }.getOrNull()
                 val code = (error?.optJSONObject("problem")?.optString("code") ?: error?.optString("code"))
                     ?.takeIf { it in allowed } ?: "server_request_failed"
@@ -402,8 +526,10 @@ class CloudAuthenticator(
         const val RESPONSE_MAX_BYTES = 256 * 1024
         const val SESSION_MAX_BYTES = 128 * 1024
         const val JOURNAL_MAX_BYTES = 1024 * 1024
+        /** Schema 2 binds the canonical account key (or null after ADR 0007 approval). */
+        const val SESSION_SCHEMA_VERSION = 2
         // Old browser sessions remain unconsumed. Native authentication never guesses
-        // an account from a legacy email, JWT or saved library configuration.
+        // an account from a legacy identity claim, JWT or saved library configuration.
         const val AUTH_SESSION = "native-cloud-session.enc"
         const val PENDING_AUTH_SESSION = "native-cloud-pending-session.enc"
         const val AUTH_REPLACEMENT = "native-cloud-replacement-journal.enc"

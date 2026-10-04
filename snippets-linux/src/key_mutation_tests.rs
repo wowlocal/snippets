@@ -32,6 +32,10 @@ struct Server {
     cancel_send: Option<Gate>,
     wrong_challenge: bool,
     change_after_send: bool,
+    device_creations: Vec<u32>,
+    device_bindings: Vec<(Uuid, Uuid)>,
+    device_failures: Vec<Failure>,
+    wrong_tag: bool,
 }
 impl Server {
     fn network() -> Failure {
@@ -172,6 +176,52 @@ impl actions::Remote for Server {
             PairingState::Approved,
         ))
     }
+    fn create_for(&mut self, public: &[u8; 65], nonce: &[u8; 32], expires: u32) -> Result<Pairing> {
+        self.core.call();
+        // Owner authority was consumed before any pairing exists.
+        assert!(
+            self.core
+                .memory
+                .slot(Slot::KeyMutation)
+                .is_none_or(|bytes| {
+                    matches!(
+                        canonical::parse(&bytes).unwrap().as_object().unwrap()["intent"],
+                        Value::Null
+                    )
+                })
+        );
+        self.device_creations.push(expires);
+        let now = chrono::Utc::now().timestamp();
+        let mut tagged = *nonce;
+        if self.wrong_tag {
+            tagged[0] ^= 1;
+        }
+        self.invitation = Invitation::new(
+            self.core.pin.server.clone(),
+            self.core.pin.space,
+            Uuid::new_v4(),
+            tagged,
+            *public,
+            now + i64::from(expires),
+            now,
+        )
+        .unwrap();
+        self.approval = None;
+        Ok(Pairing::test(
+            self.invitation.clone(),
+            PairingState::Pending,
+        ))
+    }
+    fn approve_device(&mut self, request: Uuid, pairing: Uuid) -> Result<()> {
+        self.core.call();
+        // Binding follows the acknowledged approval, never precedes it.
+        assert!(self.approval.is_some() && phase(&self.core.memory) == "acknowledged");
+        self.device_bindings.push((request, pairing));
+        if !self.device_failures.is_empty() {
+            return Err(self.device_failures.remove(0));
+        }
+        Ok(())
+    }
 }
 fn fixture() -> (tempfile::TempDir, Store<Memory>, Server, Memory) {
     let memory = Memory::default();
@@ -211,6 +261,10 @@ fn fixture() -> (tempfile::TempDir, Store<Memory>, Server, Memory) {
         cancel_send: None,
         wrong_challenge: false,
         change_after_send: false,
+        device_creations: vec![],
+        device_bindings: vec![],
+        device_failures: vec![],
+        wrong_tag: false,
     };
     (temp, store, server, memory)
 }
@@ -924,10 +978,11 @@ fn losing_the_native_worker_reply_keeps_the_acknowledged_mutation_durable() {
             Command::Inspect => {
                 assert!(phase(&server.core.memory) == "inactive" && server.sent.len() == 1);
                 Ok(Reply::Profile {
-                    email: None,
+                    account: None,
                     server: None,
                     interrupted: false,
                     switching: crate::key_store::handover::Status::default(),
+                    device: None,
                 })
             }
             _ => Err(AccountFailure::InvalidState),
@@ -945,4 +1000,214 @@ fn losing_the_native_worker_reply_keeps_the_acknowledged_mutation_durable() {
     assert!(worker.can_quit());
     inactive(&memory);
     assert!(memory.slot(Slot::LibraryKey).unwrap().as_slice() == root.as_slice());
+}
+
+fn device_request(server: &Server, expires_in: i64) -> crate::bootstrap::DeviceSignIn {
+    let now = chrono::Utc::now().timestamp();
+    crate::bootstrap::DeviceSignIn::new(
+        server.core.pin.server.clone(),
+        Uuid::from_u128(0x7a6b5c4d),
+        *server.draft.nonce(),
+        *server.draft.public_key(),
+        now + expires_in,
+        now,
+    )
+    .unwrap()
+}
+fn prepare_device(
+    store: &mut Store<Memory>,
+    server: &mut Server,
+    request: &crate::bootstrap::DeviceSignIn,
+) -> Result<Target> {
+    store.transaction_with(|o| actions::prepare_device_locked(o, server, request))
+}
+fn approve_device(
+    store: &mut Store<Memory>,
+    server: &mut Server,
+    request: &crate::bootstrap::DeviceSignIn,
+    permit: local_auth::Permit,
+) -> Result<actions::Outcome> {
+    let now = chrono::Utc::now().timestamp();
+    store.transaction_with(|o| actions::approve_device_locked(o, server, request, permit, now))
+}
+
+#[test]
+fn device_pairing_lifetime_clamps_to_the_request_with_the_adr_bounds() {
+    let now = 1_700_000_000;
+    for (expires_at, seconds) in [
+        (now + 600, 595),
+        (now + 605, 600),
+        (now + 3600, 600),
+        (now + 65, 60),
+        (now + 64, 60),
+        (now, 60),
+        (now - 100, 60),
+        (i64::MIN, 60),
+        (i64::MAX, 600),
+    ] {
+        assert_eq!(actions::device_pairing_seconds(expires_at, now), seconds);
+    }
+}
+
+#[test]
+fn device_approval_authorizes_before_creating_the_pairing_then_approves_and_binds() {
+    let (_temp, mut store, mut server, memory) = fixture();
+    let request = device_request(&server, 400);
+    let target = prepare_device(&mut store, &mut server, &request).unwrap();
+    // Owner authorization precedes any pairing or durable intent.
+    assert!(target.purpose() == Purpose::ApprovePairing);
+    assert!(server.device_creations.is_empty() && memory.slot(Slot::KeyMutation).is_none());
+    let (_gate, permit) = authorize(target);
+    assert!(
+        approve_device(&mut store, &mut server, &request, permit).unwrap()
+            == actions::Outcome::DeviceSignedIn
+    );
+    let seconds = server.device_creations[0];
+    assert!((390..=395).contains(&seconds));
+    // The ordinary challenge, proof and envelope path approved the pairing.
+    assert!(server.challenges == 1 && server.sent.len() == 1);
+    let bundle = bootstrap::open_pairing(
+        server.approval.as_ref().unwrap(),
+        &bootstrap::PendingPairing::new(
+            PairingDraft::decode_secret(&server.draft.encode_secret().unwrap()).unwrap(),
+            server.invitation.clone(),
+        )
+        .unwrap(),
+        chrono::Utc::now().timestamp(),
+    )
+    .unwrap();
+    assert!(bundle.for_secure_storage().as_slice() == memory_key(&memory).as_slice());
+    assert!(server.device_bindings == [(request.request(), server.invitation.pairing())]);
+    inactive(&memory);
+}
+fn memory_key(memory: &Memory) -> Vec<u8> {
+    let installed = Installed::decode(&memory.slot(Slot::LibraryKey).unwrap()).unwrap();
+    installed.bundle.for_secure_storage().to_vec()
+}
+
+#[test]
+fn device_approval_refuses_foreign_server_wrong_tag_and_stale_authority() {
+    // A request for another origin is refused before any network call.
+    let (_temp, mut store, mut server, memory) = fixture();
+    let draft = PairingDraft::generate().unwrap();
+    let now = chrono::Utc::now().timestamp();
+    let foreign = crate::bootstrap::DeviceSignIn::new(
+        crate::cloud::ServerURL::parse("https://foreign.example.test").unwrap(),
+        Uuid::from_u128(5),
+        *draft.nonce(),
+        *draft.public_key(),
+        now + 300,
+        now,
+    )
+    .unwrap();
+    let calls = server.core.calls;
+    assert!(
+        prepare_device(&mut store, &mut server, &foreign).err() == Some(Failure::ReviewRequired)
+    );
+    assert_eq!(server.core.calls, calls);
+    // A pairing whose tag is not the shown confirmation code is never approved.
+    let request = device_request(&server, 300);
+    let (_gate, permit) = authorize(prepare_device(&mut store, &mut server, &request).unwrap());
+    server.wrong_tag = true;
+    assert!(
+        approve_device(&mut store, &mut server, &request, permit).err()
+            == Some(Failure::ReviewRequired)
+    );
+    assert!(server.challenges == 0 && server.sent.is_empty() && server.device_bindings.is_empty());
+    assert!(memory.slot(Slot::KeyMutation).is_none());
+    // A permit for another request, or after the owning documents changed, fails.
+    server.wrong_tag = false;
+    let (_gate, permit) = authorize(prepare_device(&mut store, &mut server, &request).unwrap());
+    let other = device_request(&server, 200);
+    assert!(matches!(
+        approve_device(&mut store, &mut server, &other, permit),
+        Err(Failure::Authentication(local_auth::Failure::WrongTarget))
+    ));
+    let creations = server.device_creations.len();
+    let (_gate, permit) = authorize(prepare_device(&mut store, &mut server, &request).unwrap());
+    let (_other_gate, recovery) = authorize(prepare(&mut store, &mut server, false).unwrap());
+    drop(recovery);
+    assert!(matches!(
+        approve_device(&mut store, &mut server, &request, permit),
+        Err(Failure::Busy)
+    ));
+    assert_eq!(server.device_creations.len(), creations);
+}
+
+#[test]
+fn device_binding_retries_transport_failures_and_retires_on_definitive_refusal() {
+    // Transport failures past the bounded retries keep the acknowledged approval.
+    let (_temp, mut store, mut server, memory) = fixture();
+    let request = device_request(&server, 300);
+    server.device_failures = vec![Server::network(); 3];
+    let (_gate, permit) = authorize(prepare_device(&mut store, &mut server, &request).unwrap());
+    assert!(
+        approve_device(&mut store, &mut server, &request, permit).err() == Some(Server::network())
+    );
+    assert_eq!(server.device_bindings.len(), 3);
+    assert!(phase(&memory) == "acknowledged");
+    assert!(
+        String::from_utf8(intent(&memory).to_vec())
+            .unwrap()
+            .contains("deviceRequest")
+    );
+    // Reconciliation retries the idempotent binding without a new proof.
+    assert!(reconcile(&mut store, &mut server).unwrap() == actions::Outcome::DeviceSignedIn);
+    assert!(server.device_bindings.len() == 4 && server.sent.len() == 1);
+    inactive(&memory);
+    // A conflict cannot succeed later; the retained intent is retired.
+    let (_temp, mut store, mut server, memory) = fixture();
+    let request = device_request(&server, 300);
+    server.device_failures = vec![Failure::Cloud(cloud::Failure::Server {
+        code: cloud::ErrorCode::Conflict,
+        retry_after: None,
+    })];
+    let (_gate, permit) = authorize(prepare_device(&mut store, &mut server, &request).unwrap());
+    assert!(matches!(
+        approve_device(&mut store, &mut server, &request, permit),
+        Err(Failure::Cloud(cloud::Failure::Server {
+            code: cloud::ErrorCode::Conflict,
+            ..
+        }))
+    ));
+    assert_eq!(server.device_bindings.len(), 1);
+    inactive(&memory);
+}
+
+#[test]
+fn device_approval_intent_round_trips_and_older_approval_shapes_stay_valid() {
+    let (_temp, mut store, mut server, memory) = fixture();
+    let request = device_request(&server, 300);
+    server.device_failures = vec![Server::network(); 3];
+    let (_gate, permit) = authorize(prepare_device(&mut store, &mut server, &request).unwrap());
+    approve_device(&mut store, &mut server, &request, permit).unwrap_err();
+    let saved = memory.slot(Slot::KeyMutation).unwrap();
+    let mut value: JSON = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(
+        value["intent"]["deviceRequest"],
+        json!(request.request().to_string())
+    );
+    for bad in [
+        json!("not-a-uuid"),
+        json!(Uuid::nil()),
+        json!(null),
+        json!(7),
+    ] {
+        value["intent"]["deviceRequest"] = bad;
+        let bytes = serde_json::to_vec(&value).unwrap();
+        store
+            .transaction(|o| {
+                let before = o.read(Slot::KeyMutation)?.unwrap();
+                o.replace(Slot::KeyMutation, Some(&before), Some(&bytes))
+            })
+            .unwrap();
+        assert!(reconcile(&mut store, &mut server).is_err());
+    }
+    store
+        .transaction(|o| {
+            let before = o.read(Slot::KeyMutation)?.unwrap();
+            o.replace(Slot::KeyMutation, Some(&before), Some(&saved))
+        })
+        .unwrap();
+    assert!(reconcile(&mut store, &mut server).unwrap() == actions::Outcome::DeviceSignedIn);
 }

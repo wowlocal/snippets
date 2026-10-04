@@ -1,6 +1,7 @@
 //! Atomic Secret Service credential lineage. Every issued pair is durable before
 //! metadata acceptance. Cleanup never revokes the committed refresh family.
 use crate::{
+    account_key::{self, AccountKey},
     canonical::{self, Value},
     cloud::{self, CloudClient, Credential, IssuedCredentials, NativeSession, ServerURL},
     secret_store::{self, Backend, Locked, Slot},
@@ -11,6 +12,8 @@ use zeroize::Zeroizing;
 
 #[path = "space_creation.rs"]
 pub mod creation;
+#[path = "device_sign_in.rs"]
+pub mod device;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
@@ -22,6 +25,9 @@ pub enum Failure {
     InvalidClock,
     Expired,
     Cloud(cloud::Failure),
+    Authentication(crate::local_auth::Failure),
+    /// The saved session was approved by another device and has no account key.
+    AccountKeyUnavailable,
 }
 pub type Result<T> = std::result::Result<T, Failure>;
 impl From<secret_store::Failure> for Failure {
@@ -37,6 +43,11 @@ impl From<crate::model::Error> for Failure {
 impl From<cloud::Failure> for Failure {
     fn from(value: cloud::Failure) -> Self {
         Self::Cloud(value)
+    }
+}
+impl From<crate::local_auth::Failure> for Failure {
+    fn from(value: crate::local_auth::Failure) -> Self {
+        Self::Authentication(value)
     }
 }
 
@@ -122,12 +133,15 @@ fn text_token(bytes: &[u8]) -> Result<Zeroizing<String>> {
     Credential::new(text.into()).map_err(|_| Failure::InvalidState)?;
     Ok(Zeroizing::new(text.into()))
 }
+/// The account key is stored beside the session it signed in, in the same
+/// device-only Secret Service document, and is removed with it on sign-out.
+/// A session approved by another device (ADR 0007) has none.
 #[derive(Clone, PartialEq)]
 struct Session {
     deployment: Deployment,
     pair: Pair,
     account: Zeroizing<String>,
-    email: Zeroizing<String>,
+    account_key: Option<AccountKey>,
     expires_at: i64,
 }
 impl Session {
@@ -136,24 +150,29 @@ impl Session {
             ("deployment", self.deployment.value()),
             ("pair", self.pair.value()),
             ("account", Value::text(self.account.as_str())),
-            ("email", Value::text(self.email.as_str())),
+            (
+                "accountKey",
+                optional(
+                    self.account_key
+                        .as_ref()
+                        .map(|key| Value::text(key.canonical())),
+                ),
+            ),
             ("expiresAt", Value::Int(self.expires_at)),
         ])
     }
     fn parse(value: &Value) -> Result<Self> {
         let v = exact(
             value,
-            &["deployment", "pair", "account", "email", "expiresAt"],
+            &["deployment", "pair", "account", "accountKey", "expiresAt"],
         )?;
         let pair = Pair::parse(&v["pair"])?;
         let account = v["account"].as_text()?;
-        let email = v["email"].as_text()?;
+        let account_key = parse_optional(&v["accountKey"], |value| {
+            AccountKey::from_canonical(value.as_text()?).ok_or(Failure::InvalidState)
+        })?;
         let expires_at = v["expiresAt"].as_int()?;
-        if pair.access == pair.refresh
-            || !(1..=256).contains(&account.len())
-            || account.chars().any(char::is_control)
-            || !cloud::email_valid(email)
-            || expires_at < 0
+        if pair.access == pair.refresh || !account_key::valid_account_id(account) || expires_at < 0
         {
             return Err(Failure::InvalidState);
         }
@@ -161,7 +180,7 @@ impl Session {
             deployment: Deployment::parse(&v["deployment"])?,
             pair,
             account: Zeroizing::new(account.into()),
-            email: Zeroizing::new(email.into()),
+            account_key,
             expires_at,
         })
     }
@@ -298,34 +317,48 @@ impl CleanupAction {
         })
     }
 }
+/// Schema 2 stores the account key with each session. Schema 1 belonged to the
+/// retired email/code sign-in, which no deployment ever served.
+const SCHEMA: i64 = 2;
+const RETIRED_EMAIL_SCHEMA: i64 = 1;
 pub struct Archive {
     generation: u64,
     current: Option<Session>,
     pending: Option<Pending>,
     snapshot: Option<Zeroizing<Vec<u8>>>,
+    retired: bool,
 }
 impl Archive {
     pub fn load<B: Backend>(owner: &mut Locked<'_, B>) -> Result<Self> {
         let snapshot = owner.read(Slot::Credentials)?;
-        let (generation, current, pending) = if let Some(bytes) = &snapshot {
+        let (generation, current, pending, retired) = if let Some(bytes) = &snapshot {
             let value = canonical::parse(bytes)?;
             let v = exact(&value, &["schema", "generation", "current", "pending"])?;
-            if v["schema"].as_int()? != 1 {
-                return Err(Failure::InvalidState);
+            let generation =
+                u64::try_from(v["generation"].as_int()?).map_err(|_| Failure::InvalidState)?;
+            match v["schema"].as_int()? {
+                SCHEMA => (
+                    generation,
+                    parse_optional(&v["current"], Session::parse)?,
+                    parse_optional(&v["pending"], Pending::parse)?,
+                    false,
+                ),
+                // Like any session that can no longer be used, a retired email
+                // session is never read or sent: the owner signs in again. Only
+                // its generation survives, so stale leases stay fenced; recovery
+                // replaces the document so no account email remains stored.
+                RETIRED_EMAIL_SCHEMA => (generation, None, None, true),
+                _ => return Err(Failure::InvalidState),
             }
-            (
-                u64::try_from(v["generation"].as_int()?).map_err(|_| Failure::InvalidState)?,
-                parse_optional(&v["current"], Session::parse)?,
-                parse_optional(&v["pending"], Pending::parse)?,
-            )
         } else {
-            (0, None, None)
+            (0, None, None, false)
         };
         let archive = Self {
             generation,
             current,
             pending,
             snapshot,
+            retired,
         };
         archive.validate()?;
         Ok(archive)
@@ -369,7 +402,9 @@ impl Archive {
                 if p.previous.as_ref().is_some_and(|previous| {
                     (previous.deployment == current.deployment
                         && previous.pair.overlaps(&current.pair))
-                        || (p.kind == Replacement::Refresh && previous.account != current.account)
+                        || (p.kind == Replacement::Refresh
+                            && (previous.account != current.account
+                                || previous.account_key != current.account_key))
                 }) {
                     return Err(Failure::InvalidState);
                 }
@@ -382,7 +417,7 @@ impl Archive {
     pub fn save<B: Backend>(&mut self, owner: &mut Locked<'_, B>) -> Result<()> {
         self.validate()?;
         let value = object([
-            ("schema", Value::Int(1)),
+            ("schema", Value::Int(SCHEMA)),
             (
                 "generation",
                 Value::Int(i64::try_from(self.generation).map_err(|_| Failure::InvalidState)?),
@@ -403,6 +438,7 @@ impl Archive {
             Some(&bytes),
         )?;
         self.snapshot = Some(bytes);
+        self.retired = false;
         Ok(())
     }
     pub fn begin(&mut self, kind: Replacement, deployment: Deployment) -> Result<Lease> {
@@ -479,6 +515,25 @@ impl Archive {
         }) {
             return Err(Failure::InvalidState);
         }
+        // An interactive grant carries the key it was issued or signed in with,
+        // except a device-approved grant, which has none on this device. A
+        // rotation keeps the same account's key; it never introduces another.
+        let account_key = match (
+            pending.kind,
+            session.issued_account_key(),
+            session.device_approval(),
+        ) {
+            (Replacement::Interactive, Some(key), None) => Some(key.clone()),
+            (Replacement::Interactive, None, Some(_)) => None,
+            (Replacement::Refresh, issued, None) => {
+                let previous = pending.previous.as_ref().ok_or(Failure::InvalidState)?;
+                if issued.is_some_and(|key| Some(key) != previous.account_key.as_ref()) {
+                    return Err(Failure::InvalidState);
+                }
+                previous.account_key.clone()
+            }
+            _ => return Err(Failure::InvalidState),
+        };
         let expires_at = now
             .checked_add(
                 i64::try_from(session.expires_in().as_secs()).map_err(|_| Failure::InvalidState)?,
@@ -488,7 +543,7 @@ impl Archive {
             deployment: pending.deployment.clone(),
             pair,
             account: Zeroizing::new(session.account_for_secure_storage().into()),
-            email: Zeroizing::new(session.email_for_sign_in_ui().into()),
+            account_key,
             expires_at,
         };
         Session::parse(&current.value())?;
@@ -565,11 +620,53 @@ impl Archive {
     }
     /// Stored access tokens are never handed out after restart. The owner must
     /// refresh, validating wall/monotonic lifetime in its live request context.
-    pub fn profile_email(&self) -> Result<Option<&str>> {
+    /// The profile exposes only the short public account ID for display.
+    pub fn profile_account(&self) -> Result<Option<String>> {
         if self.pending.is_some() {
             return Err(Failure::Busy);
         }
-        Ok(self.current.as_ref().map(|s| s.email.as_str()))
+        self.current
+            .as_ref()
+            .map(|s| account_key::account_id_display(&s.account).ok_or(Failure::InvalidState))
+            .transpose()
+    }
+    /// Exact saved session whose key an owner-authenticated disclosure may show.
+    /// The digest binds deployment, account and generation, never the key itself.
+    pub(crate) fn account_key_target(&self) -> Result<([u8; 32], i64)> {
+        use sha2::{Digest, Sha256};
+        if self.pending.is_some() {
+            return Err(Failure::Busy);
+        }
+        let current = self.current.as_ref().ok_or(Failure::InvalidState)?;
+        if current.account_key.is_none() {
+            return Err(Failure::AccountKeyUnavailable);
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"snippets-account-key-disclosure-v1\0");
+        for field in [
+            current.deployment.server.for_secure_storage(),
+            &current.deployment.instance.to_string(),
+            current.account.as_str(),
+        ] {
+            digest.update((field.len() as u32).to_be_bytes());
+            digest.update(field.as_bytes());
+        }
+        Ok((
+            digest.finalize().into(),
+            i64::try_from(self.generation).map_err(|_| Failure::InvalidState)?,
+        ))
+    }
+    /// Only for a disclosure whose permit was consumed against account_key_target().
+    pub(crate) fn account_key_for_disclosure(&self) -> Result<&AccountKey> {
+        if self.pending.is_some() {
+            return Err(Failure::Busy);
+        }
+        self.current
+            .as_ref()
+            .ok_or(Failure::InvalidState)?
+            .account_key
+            .as_ref()
+            .ok_or(Failure::AccountKeyUnavailable)
     }
     pub fn saved_deployment(&self) -> Result<Option<Deployment>> {
         if self.pending.is_some() {
@@ -673,8 +770,10 @@ impl LiveSession {
         }
         Ok(&self.session.credentials.access)
     }
-    pub fn email(&self) -> &str {
-        self.session.email_for_sign_in_ui()
+    /// Short public account ID for the signed-in screen; never logged.
+    pub fn account_display(&self) -> Result<String> {
+        account_key::account_id_display(self.session.account_for_secure_storage())
+            .ok_or(Failure::InvalidState)
     }
     fn validate_current(&self, archive: &Archive, deployment: &Deployment) -> Result<()> {
         self.access()?;
@@ -705,6 +804,63 @@ pub fn validate_session<B: Backend>(
 struct Previous {
     refresh: Credential,
     account: Zeroizing<String>,
+}
+
+/// One owner-authenticated presentation of the saved account key. It is readable
+/// only while its single-use authorization lease remains valid: backgrounding,
+/// desktop lock, cancellation or either deadline closes it.
+pub struct AccountKeyDisclosure {
+    key: AccountKey,
+    lease: crate::local_auth::AuthorizationLease,
+}
+impl AccountKeyDisclosure {
+    pub fn display(&self) -> Result<Zeroizing<String>> {
+        self.lease.check()?;
+        Ok(self.key.display())
+    }
+    pub fn valid(&self) -> bool {
+        self.lease.check().is_ok()
+    }
+    #[cfg(all(test, feature = "desktop"))]
+    pub(crate) fn fixture(
+        permit: crate::local_auth::Permit,
+        target: &crate::local_auth::Target,
+        key: &str,
+    ) -> Self {
+        // Synthetic UI fixture: exact lease semantics, no keyring/account/PAM.
+        Self {
+            key: AccountKey::from_canonical(key).unwrap(),
+            lease: permit.consume(target).unwrap(),
+        }
+    }
+}
+fn account_key_target(archive: &Archive) -> Result<crate::local_auth::Target> {
+    let (digest, generation) = archive.account_key_target()?;
+    Ok(crate::local_auth::Target::account_key(generation, digest)?)
+}
+/// Offline: identifies the exact saved session whose key the owner may reveal.
+/// No key, token or network request is involved in preparing the target.
+pub fn prepare_account_key_disclosure<B: Backend>(
+    store: &mut secret_store::Store<B>,
+) -> Result<crate::local_auth::Target> {
+    store.transaction_with(|owner| account_key_target(&Archive::load(owner)?))
+}
+/// Consumes fresh owner authority only after rereading the saved credentials.
+/// A permit for a replaced, refreshed or signed-out session discloses nothing.
+pub fn reveal_account_key<B: Backend>(
+    store: &mut secret_store::Store<B>,
+    permit: crate::local_auth::Permit,
+) -> Result<AccountKeyDisclosure> {
+    store.transaction_with(|owner| {
+        let archive = Archive::load(owner)?;
+        let lease = permit.consume(&account_key_target(&archive)?)?;
+        let disclosure = AccountKeyDisclosure {
+            key: archive.account_key_for_disclosure()?.clone(),
+            lease,
+        };
+        disclosure.lease.check()?;
+        Ok(disclosure)
+    })
 }
 
 fn finish<B: Backend>(
@@ -754,6 +910,10 @@ fn recover_with<B: Backend>(
 ) -> Result<()> {
     store.transaction_with(|owner| {
         let mut archive = Archive::load(owner)?;
+        if archive.retired {
+            // Replace the retired email-era document before any new issuance.
+            archive.save(owner)?;
+        }
         if let Some(lease) = archive.resume() {
             finish(owner, &mut archive, &lease, execute)?;
         }
@@ -781,23 +941,86 @@ fn sign_out_with<B: Backend>(
         finish(owner, &mut archive, &lease, execute)
     })
 }
+/// Interactive grants use the same journaled issuance as every other credential
+/// replacement. The key is held only for publication beside the new session.
 pub fn sign_in<B: Backend>(
     store: &mut secret_store::Store<B>,
     client: &CloudClient,
-    challenge: &cloud::EmailChallenge,
-    code: &str,
+    key: &AccountKey,
 ) -> std::result::Result<LiveSession, Rejected> {
     let mut discovered = Vec::new();
-    issue(
+    let mut live = issue(
         store,
         Replacement::Interactive,
         client.credential_deployment(),
         |_| {
             client.preflight_credentials()?;
-            Ok(client.verify_email(challenge, code)?)
+            Ok(client.sign_in(key)?)
+        },
+        &mut |a| execute_network(a, Some(client), &mut discovered),
+    )?;
+    drop(live.session.take_issued_account_key());
+    Ok(live)
+}
+/// Commits an approved device claim through the same journaled issuance as an
+/// account-key sign-in. The claim response was received by the caller, so the
+/// live deadline is anchored when this commit starts, milliseconds later than
+/// issuance. A lost or rejected commit is recovered by claiming again: the
+/// server revokes the earlier family before issuing another.
+pub fn sign_in_with_device<B: Backend>(
+    store: &mut secret_store::Store<B>,
+    client: &CloudClient,
+    grant: cloud::IssuedGrant,
+) -> std::result::Result<(LiveSession, cloud::DeviceApproval), Rejected> {
+    let mut discovered = Vec::new();
+    let live = issue(
+        store,
+        Replacement::Interactive,
+        client.credential_deployment(),
+        |_| Ok(grant),
+        &mut |a| execute_network(a, Some(client), &mut discovered),
+    )?;
+    let approval = live
+        .session
+        .device_approval()
+        .ok_or(Rejected::from(Failure::InvalidState))?;
+    Ok((live, approval))
+}
+/// A new account's key is returned exactly once, after its session is committed
+/// with the key in secure storage, so the owner can be asked to save it.
+pub fn create_account<B: Backend>(
+    store: &mut secret_store::Store<B>,
+    client: &CloudClient,
+) -> std::result::Result<(LiveSession, AccountKey), Rejected> {
+    let mut discovered = Vec::new();
+    create_account_with(
+        store,
+        client.credential_deployment(),
+        |_| {
+            client.preflight_credentials()?;
+            Ok(client.create_account()?)
         },
         &mut |a| execute_network(a, Some(client), &mut discovered),
     )
+}
+fn create_account_with<B: Backend>(
+    store: &mut secret_store::Store<B>,
+    deployment: Deployment,
+    request: impl FnOnce(Option<&Previous>) -> Result<cloud::IssuedGrant>,
+    execute: &mut impl FnMut(CleanupAction) -> Result<CleanupReceipt>,
+) -> std::result::Result<(LiveSession, AccountKey), Rejected> {
+    let mut live = issue(
+        store,
+        Replacement::Interactive,
+        deployment,
+        request,
+        execute,
+    )?;
+    let key = live
+        .session
+        .take_issued_account_key()
+        .ok_or(Failure::InvalidState)?;
+    Ok((live, key))
 }
 pub fn refresh<B: Backend>(
     store: &mut secret_store::Store<B>,
@@ -838,10 +1061,6 @@ pub fn refresh_bound<B: Backend>(
         },
         &mut |a| execute_network(a, Some(client), &mut discovered),
     )
-}
-pub fn start_sign_in(client: &CloudClient, email: &str) -> Result<cloud::EmailChallenge> {
-    client.preflight_credentials()?;
-    Ok(client.start_email(email)?)
 }
 fn issue<B: Backend>(
     store: &mut secret_store::Store<B>,

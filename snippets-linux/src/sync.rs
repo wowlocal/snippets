@@ -244,5 +244,8 @@ impl Owner<'_> {
 }
 
 #[cfg(test)]
+#[path = "sync_conflict_tests.rs"]
+mod conflict_tests;
+#[cfg(test)]
 #[path = "sync_tests.rs"]
 mod tests;

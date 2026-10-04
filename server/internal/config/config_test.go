@@ -85,7 +85,7 @@ func mapLookup(values map[string]string) func(string) (string, bool) {
 	}
 }
 
-func TestNativeModeDoesNotRequireOIDCAndRequiresSafeSMTP(t *testing.T) {
+func TestNativeModeRequiresNoOIDCOrMailConfiguration(t *testing.T) {
 	values := productionEnvironment()
 	for key := range values {
 		if strings.HasPrefix(key, "OIDC_") {
@@ -94,13 +94,11 @@ func TestNativeModeDoesNotRequireOIDCAndRequiresSafeSMTP(t *testing.T) {
 	}
 	values["AUTH_MODE"] = "native"
 	values["NATIVE_AUTH_SECRET"] = base64.RawURLEncoding.EncodeToString(make([]byte, 32))
-	values["SMTP_HOST"] = "smtp.example.test"
-	values["SMTP_FROM"] = "snippets@example.test"
 	value, err := LoadFrom(mapLookup(values))
-	if err != nil || value.AuthMode != "native" || value.OIDC.Issuer != nil || value.NativeAuth.SMTPTLS != "starttls" {
+	if err != nil || value.AuthMode != "native" || value.OIDC.Issuer != nil || len(value.NativeAuth.Secret) != 32 {
 		t.Fatal("native configuration rejected", err)
 	}
-	for key, bad := range map[string]string{"SMTP_FROM": "safe@example.test\r\nBcc: other@example.test", "SMTP_TLS": "none", "NATIVE_AUTH_SECRET": "short", "SMTP_HOST": "host\r\nother", "AUTH_MODE": "unknown", "SMTP_PORT": "65536"} {
+	for key, bad := range map[string]string{"NATIVE_AUTH_SECRET": "short", "AUTH_MODE": "unknown"} {
 		old, exists := values[key]
 		values[key] = bad
 		if _, err := LoadFrom(mapLookup(values)); err == nil {

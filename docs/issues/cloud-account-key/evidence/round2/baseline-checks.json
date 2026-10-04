@@ -1,0 +1,37 @@
+{
+  "commit": "4acbecfce5048cf5d5412547525dd8ffd41062ab",
+  "core": {
+    "main": 939,
+    "AX": 81,
+    "pasteboard": 22,
+    "secureEditor": 15,
+    "XCTest": 28,
+    "failures": 0
+  },
+  "androidJVM": {
+    "passed": 75,
+    "failed": 0
+  },
+  "linux": {
+    "passed": 1044,
+    "failed": 0,
+    "ignored": 46
+  },
+  "serverIntegration": "passed",
+  "builds": [
+    "macos",
+    "ios-universal-simulator",
+    "android",
+    "linux"
+  ],
+  "iphone": {
+    "passedTests": 548,
+    "failedTests": 0,
+    "skippedTests": 3
+  },
+  "ipad": {
+    "passedTests": 548,
+    "failedTests": 0,
+    "skippedTests": 3
+  }
+}

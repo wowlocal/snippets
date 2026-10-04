@@ -93,6 +93,24 @@ func (e CreateLibraryChallengeRequestAction) Valid() bool {
 	}
 }
 
+// Defines values for DeviceSignInClaimState.
+const (
+	DeviceSignInClaimStateApproved DeviceSignInClaimState = "approved"
+	DeviceSignInClaimStatePending  DeviceSignInClaimState = "pending"
+)
+
+// Valid indicates whether the value is a known member of the DeviceSignInClaimState enum.
+func (e DeviceSignInClaimState) Valid() bool {
+	switch e {
+	case DeviceSignInClaimStateApproved:
+		return true
+	case DeviceSignInClaimStatePending:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DiscoveryProtocolMajor.
 const (
 	N2 DiscoveryProtocolMajor = 2
@@ -138,55 +156,9 @@ func (e DiscoveryRecordProfile) Valid() bool {
 	}
 }
 
-// Defines values for EmailChallengeCodeLength.
-const (
-	N6 EmailChallengeCodeLength = 6
-)
-
-// Valid indicates whether the value is a known member of the EmailChallengeCodeLength enum.
-func (e EmailChallengeCodeLength) Valid() bool {
-	switch e {
-	case N6:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for EmailChallengeExpiresIn.
-const (
-	EmailChallengeExpiresInN600 EmailChallengeExpiresIn = 600
-)
-
-// Valid indicates whether the value is a known member of the EmailChallengeExpiresIn enum.
-func (e EmailChallengeExpiresIn) Valid() bool {
-	switch e {
-	case EmailChallengeExpiresInN600:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for EmailChallengeResendAfter.
-const (
-	N60 EmailChallengeResendAfter = 60
-)
-
-// Valid indicates whether the value is a known member of the EmailChallengeResendAfter enum.
-func (e EmailChallengeResendAfter) Valid() bool {
-	switch e {
-	case N60:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ErrorCode.
 const (
 	ErrorCodeAuthenticationRequired   ErrorCode = "authentication_required"
-	ErrorCodeCodeExpired              ErrorCode = "code_expired"
 	ErrorCodeConflict                 ErrorCode = "conflict"
 	ErrorCodeCursorInvalid            ErrorCode = "cursor_invalid"
 	ErrorCodeDatasetReset             ErrorCode = "dataset_reset"
@@ -194,8 +166,7 @@ const (
 	ErrorCodeForbidden                ErrorCode = "forbidden"
 	ErrorCodeIncompatibleVersion      ErrorCode = "incompatible_version"
 	ErrorCodeInternalError            ErrorCode = "internal_error"
-	ErrorCodeInvalidCode              ErrorCode = "invalid_code"
-	ErrorCodeInvalidEmail             ErrorCode = "invalid_email"
+	ErrorCodeInvalidAccountKey        ErrorCode = "invalid_account_key"
 	ErrorCodeInvalidRequest           ErrorCode = "invalid_request"
 	ErrorCodeNotFound                 ErrorCode = "not_found"
 	ErrorCodePairingExpired           ErrorCode = "pairing_expired"
@@ -203,15 +174,12 @@ const (
 	ErrorCodeQuotaExceeded            ErrorCode = "quota_exceeded"
 	ErrorCodeRateLimited              ErrorCode = "rate_limited"
 	ErrorCodeReauthenticationRequired ErrorCode = "reauthentication_required"
-	ErrorCodeTooManyAttempts          ErrorCode = "too_many_attempts"
 )
 
 // Valid indicates whether the value is a known member of the ErrorCode enum.
 func (e ErrorCode) Valid() bool {
 	switch e {
 	case ErrorCodeAuthenticationRequired:
-		return true
-	case ErrorCodeCodeExpired:
 		return true
 	case ErrorCodeConflict:
 		return true
@@ -227,9 +195,7 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case ErrorCodeInternalError:
 		return true
-	case ErrorCodeInvalidCode:
-		return true
-	case ErrorCodeInvalidEmail:
+	case ErrorCodeInvalidAccountKey:
 		return true
 	case ErrorCodeInvalidRequest:
 		return true
@@ -244,8 +210,6 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeRateLimited:
 		return true
 	case ErrorCodeReauthenticationRequired:
-		return true
-	case ErrorCodeTooManyAttempts:
 		return true
 	default:
 		return false
@@ -347,13 +311,13 @@ func (e LimitsMaxPageRecords) Valid() bool {
 
 // Defines values for LimitsMaxPairingSeconds.
 const (
-	LimitsMaxPairingSecondsN600 LimitsMaxPairingSeconds = 600
+	N600 LimitsMaxPairingSeconds = 600
 )
 
 // Valid indicates whether the value is a known member of the LimitsMaxPairingSeconds enum.
 func (e LimitsMaxPairingSeconds) Valid() bool {
 	switch e {
-	case LimitsMaxPairingSecondsN600:
+	case N600:
 		return true
 	default:
 		return false
@@ -407,13 +371,13 @@ func (e LimitsMaxRevisionBytes) Valid() bool {
 
 // Defines values for NativeAuthDiscoveryFlow.
 const (
-	EmailCode NativeAuthDiscoveryFlow = "email_code"
+	NativeAuthDiscoveryFlowAccountKey NativeAuthDiscoveryFlow = "account_key"
 )
 
 // Valid indicates whether the value is a known member of the NativeAuthDiscoveryFlow enum.
 func (e NativeAuthDiscoveryFlow) Valid() bool {
 	switch e {
-	case EmailCode:
+	case NativeAuthDiscoveryFlowAccountKey:
 		return true
 	default:
 		return false
@@ -470,16 +434,16 @@ func (e OIDCDiscoveryAuthorizationFlow) Valid() bool {
 
 // Defines values for PairingState.
 const (
-	Approved PairingState = "approved"
-	Pending  PairingState = "pending"
+	PairingStateApproved PairingState = "approved"
+	PairingStatePending  PairingState = "pending"
 )
 
 // Valid indicates whether the value is a known member of the PairingState enum.
 func (e PairingState) Valid() bool {
 	switch e {
-	case Approved:
+	case PairingStateApproved:
 		return true
-	case Pending:
+	case PairingStatePending:
 		return true
 	default:
 		return false
@@ -552,6 +516,21 @@ func (e SpaceRole) Valid() bool {
 	}
 }
 
+// AccountKey Canonical server-generated account key: 26 random Crockford Base32 symbols and two check symbols. See server ADR 0006.
+type AccountKey = string
+
+// AccountKeySignInRequest defines model for AccountKeySignInRequest.
+type AccountKeySignInRequest struct {
+	// AccountKey Canonical server-generated account key: 26 random Crockford Base32 symbols and two check symbols. See server ADR 0006.
+	AccountKey AccountKey `json:"accountKey"`
+}
+
+// ApproveDeviceSignInRequest defines model for ApproveDeviceSignInRequest.
+type ApproveDeviceSignInRequest struct {
+	PairingId openapi_types.UUID `json:"pairingId"`
+	SpaceId   openapi_types.UUID `json:"spaceId"`
+}
+
 // ApprovePairingRequest defines model for ApprovePairingRequest.
 type ApprovePairingRequest struct {
 	Algorithm        ApprovePairingRequestAlgorithm `json:"algorithm"`
@@ -604,6 +583,11 @@ type ChangesPage struct {
 	Scope        Scope          `json:"scope"`
 }
 
+// ClaimDeviceSignInRequest defines model for ClaimDeviceSignInRequest.
+type ClaimDeviceSignInRequest struct {
+	PollToken string `json:"pollToken"`
+}
+
 // ClaimPairingResponse defines model for ClaimPairingResponse.
 type ClaimPairingResponse struct {
 	Algorithm  ClaimPairingResponseAlgorithm `json:"algorithm"`
@@ -614,6 +598,12 @@ type ClaimPairingResponse struct {
 
 // ClaimPairingResponseAlgorithm defines model for ClaimPairingResponse.Algorithm.
 type ClaimPairingResponseAlgorithm string
+
+// CreateDeviceSignInRequest defines model for CreateDeviceSignInRequest.
+type CreateDeviceSignInRequest struct {
+	Nonce              []byte `json:"nonce"`
+	RecipientPublicKey []byte `json:"recipientPublicKey"`
+}
 
 // CreateLibraryChallengeRequest defines model for CreateLibraryChallengeRequest.
 type CreateLibraryChallengeRequest struct {
@@ -631,6 +621,25 @@ type CreatePairingRequest struct {
 	ExpiresInSeconds   int    `json:"expiresInSeconds"`
 	Nonce              []byte `json:"nonce"`
 	RecipientPublicKey []byte `json:"recipientPublicKey"`
+}
+
+// DeviceSignInClaim defines model for DeviceSignInClaim.
+type DeviceSignInClaim struct {
+	ExpiresAt time.Time              `json:"expiresAt"`
+	PairingId *openapi_types.UUID    `json:"pairingId,omitempty"`
+	Session   *NativeTokenResponse   `json:"session,omitempty"`
+	SpaceId   *openapi_types.UUID    `json:"spaceId,omitempty"`
+	State     DeviceSignInClaimState `json:"state"`
+}
+
+// DeviceSignInClaimState defines model for DeviceSignInClaim.State.
+type DeviceSignInClaimState string
+
+// DeviceSignInRequest defines model for DeviceSignInRequest.
+type DeviceSignInRequest struct {
+	ExpiresAt time.Time          `json:"expiresAt"`
+	PollToken string             `json:"pollToken"`
+	RequestId openapi_types.UUID `json:"requestId"`
 }
 
 // Discovery defines model for Discovery.
@@ -655,34 +664,6 @@ type DiscoveryProtocolMinor int
 
 // DiscoveryRecordProfile defines model for Discovery.RecordProfile.
 type DiscoveryRecordProfile string
-
-// EmailChallenge defines model for EmailChallenge.
-type EmailChallenge struct {
-	ChallengeId string                    `json:"challengeId"`
-	CodeLength  EmailChallengeCodeLength  `json:"codeLength"`
-	ExpiresIn   EmailChallengeExpiresIn   `json:"expiresIn"`
-	ResendAfter EmailChallengeResendAfter `json:"resendAfter"`
-}
-
-// EmailChallengeCodeLength defines model for EmailChallenge.CodeLength.
-type EmailChallengeCodeLength int
-
-// EmailChallengeExpiresIn defines model for EmailChallenge.ExpiresIn.
-type EmailChallengeExpiresIn int
-
-// EmailChallengeResendAfter defines model for EmailChallenge.ResendAfter.
-type EmailChallengeResendAfter int
-
-// EmailStartRequest defines model for EmailStartRequest.
-type EmailStartRequest struct {
-	Email string `json:"email"`
-}
-
-// EmailVerifyRequest defines model for EmailVerifyRequest.
-type EmailVerifyRequest struct {
-	ChallengeId string `json:"challengeId"`
-	Code        string `json:"code"`
-}
 
 // ErrorCode defines model for ErrorCode.
 type ErrorCode string
@@ -772,17 +753,23 @@ type LimitsMaxRevisionBytes int
 
 // NativeAccount defines model for NativeAccount.
 type NativeAccount struct {
-	Email string `json:"email"`
-	Id    string `json:"id"`
+	Id openapi_types.UUID `json:"id"`
+}
+
+// NativeAccountCreation defines model for NativeAccountCreation.
+type NativeAccountCreation struct {
+	// AccountKey Canonical server-generated account key: 26 random Crockford Base32 symbols and two check symbols. See server ADR 0006.
+	AccountKey AccountKey          `json:"accountKey"`
+	Session    NativeTokenResponse `json:"session"`
 }
 
 // NativeAuthDiscovery defines model for NativeAuthDiscovery.
 type NativeAuthDiscovery struct {
-	Flow            NativeAuthDiscoveryFlow `json:"flow"`
-	RefreshEndpoint string                  `json:"refreshEndpoint"`
-	RevokeEndpoint  string                  `json:"revokeEndpoint"`
-	StartEndpoint   string                  `json:"startEndpoint"`
-	VerifyEndpoint  string                  `json:"verifyEndpoint"`
+	CreateAccountEndpoint string                  `json:"createAccountEndpoint"`
+	Flow                  NativeAuthDiscoveryFlow `json:"flow"`
+	RefreshEndpoint       string                  `json:"refreshEndpoint"`
+	RevokeEndpoint        string                  `json:"revokeEndpoint"`
+	SignInEndpoint        string                  `json:"signInEndpoint"`
 }
 
 // NativeAuthDiscoveryFlow defines model for NativeAuthDiscovery.Flow.
@@ -933,6 +920,9 @@ type WireRecord struct {
 	Rev     string             `json:"rev"`
 }
 
+// DeviceRequestID defines model for DeviceRequestID.
+type DeviceRequestID = openapi_types.UUID
+
 // PairingID defines model for PairingID.
 type PairingID = openapi_types.UUID
 
@@ -956,17 +946,23 @@ type GetChangesParams struct {
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
-// StartEmailAuthenticationJSONRequestBody defines body for StartEmailAuthentication for application/json ContentType.
-type StartEmailAuthenticationJSONRequestBody = EmailStartRequest
+// CreateDeviceSignInRequestJSONRequestBody defines body for CreateDeviceSignInRequest for application/json ContentType.
+type CreateDeviceSignInRequestJSONRequestBody = CreateDeviceSignInRequest
 
-// VerifyEmailAuthenticationJSONRequestBody defines body for VerifyEmailAuthentication for application/json ContentType.
-type VerifyEmailAuthenticationJSONRequestBody = EmailVerifyRequest
+// ApproveDeviceSignInRequestJSONRequestBody defines body for ApproveDeviceSignInRequest for application/json ContentType.
+type ApproveDeviceSignInRequestJSONRequestBody = ApproveDeviceSignInRequest
+
+// ClaimDeviceSignInRequestJSONRequestBody defines body for ClaimDeviceSignInRequest for application/json ContentType.
+type ClaimDeviceSignInRequestJSONRequestBody = ClaimDeviceSignInRequest
 
 // RefreshNativeSessionJSONRequestBody defines body for RefreshNativeSession for application/json ContentType.
 type RefreshNativeSessionJSONRequestBody = NativeRefreshRequest
 
 // RevokeNativeSessionJSONRequestBody defines body for RevokeNativeSession for application/json ContentType.
 type RevokeNativeSessionJSONRequestBody = NativeRevokeRequest
+
+// SignInWithAccountKeyJSONRequestBody defines body for SignInWithAccountKey for application/json ContentType.
+type SignInWithAccountKeyJSONRequestBody = AccountKeySignInRequest
 
 // BootstrapLibraryKeyJSONRequestBody defines body for BootstrapLibraryKey for application/json ContentType.
 type BootstrapLibraryKeyJSONRequestBody = KeyBootstrapRequest
@@ -998,17 +994,26 @@ type ServerInterface interface {
 	// (GET /health/ready)
 	GetReadiness(w http.ResponseWriter, r *http.Request)
 
-	// (POST /v2/auth/email/start)
-	StartEmailAuthentication(w http.ResponseWriter, r *http.Request)
+	// (POST /v2/auth/accounts)
+	CreateNativeAccount(w http.ResponseWriter, r *http.Request)
 
-	// (POST /v2/auth/email/verify)
-	VerifyEmailAuthentication(w http.ResponseWriter, r *http.Request)
+	// (POST /v2/auth/device-requests)
+	CreateDeviceSignInRequest(w http.ResponseWriter, r *http.Request)
+
+	// (POST /v2/auth/device-requests/{deviceRequest}/approval)
+	ApproveDeviceSignInRequest(w http.ResponseWriter, r *http.Request, deviceRequest DeviceRequestID)
+
+	// (POST /v2/auth/device-requests/{deviceRequest}/claim)
+	ClaimDeviceSignInRequest(w http.ResponseWriter, r *http.Request, deviceRequest DeviceRequestID)
 
 	// (POST /v2/auth/refresh)
 	RefreshNativeSession(w http.ResponseWriter, r *http.Request)
 
 	// (POST /v2/auth/revoke)
 	RevokeNativeSession(w http.ResponseWriter, r *http.Request)
+
+	// (POST /v2/auth/sign-in)
+	SignInWithAccountKey(w http.ResponseWriter, r *http.Request)
 
 	// (DELETE /v2/session)
 	RevokeCurrentSession(w http.ResponseWriter, r *http.Request)
@@ -1110,11 +1115,11 @@ func (siw *ServerInterfaceWrapper) GetReadiness(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
-// StartEmailAuthentication operation middleware
-func (siw *ServerInterfaceWrapper) StartEmailAuthentication(w http.ResponseWriter, r *http.Request) {
+// CreateNativeAccount operation middleware
+func (siw *ServerInterfaceWrapper) CreateNativeAccount(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StartEmailAuthentication(w, r)
+		siw.Handler.CreateNativeAccount(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1124,11 +1129,63 @@ func (siw *ServerInterfaceWrapper) StartEmailAuthentication(w http.ResponseWrite
 	handler.ServeHTTP(w, r)
 }
 
-// VerifyEmailAuthentication operation middleware
-func (siw *ServerInterfaceWrapper) VerifyEmailAuthentication(w http.ResponseWriter, r *http.Request) {
+// CreateDeviceSignInRequest operation middleware
+func (siw *ServerInterfaceWrapper) CreateDeviceSignInRequest(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.VerifyEmailAuthentication(w, r)
+		siw.Handler.CreateDeviceSignInRequest(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ApproveDeviceSignInRequest operation middleware
+func (siw *ServerInterfaceWrapper) ApproveDeviceSignInRequest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deviceRequest" -------------
+	var deviceRequest DeviceRequestID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deviceRequest", r.PathValue("deviceRequest"), &deviceRequest, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deviceRequest", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ApproveDeviceSignInRequest(w, r, deviceRequest)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClaimDeviceSignInRequest operation middleware
+func (siw *ServerInterfaceWrapper) ClaimDeviceSignInRequest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deviceRequest" -------------
+	var deviceRequest DeviceRequestID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deviceRequest", r.PathValue("deviceRequest"), &deviceRequest, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deviceRequest", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClaimDeviceSignInRequest(w, r, deviceRequest)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1157,6 +1214,20 @@ func (siw *ServerInterfaceWrapper) RevokeNativeSession(w http.ResponseWriter, r 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RevokeNativeSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SignInWithAccountKey operation middleware
+func (siw *ServerInterfaceWrapper) SignInWithAccountKey(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SignInWithAccountKey(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1761,8 +1832,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/.well-known/snippets-sync", wrapper.GetDiscovery)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/live", wrapper.GetLiveness)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health/ready", wrapper.GetReadiness)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/email/start", wrapper.StartEmailAuthentication)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/email/verify", wrapper.VerifyEmailAuthentication)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/accounts", wrapper.CreateNativeAccount)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/sign-in", wrapper.SignInWithAccountKey)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/device-requests", wrapper.CreateDeviceSignInRequest)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/device-requests/{deviceRequest}/approval", wrapper.ApproveDeviceSignInRequest)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/device-requests/{deviceRequest}/claim", wrapper.ClaimDeviceSignInRequest)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/refresh", wrapper.RefreshNativeSession)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v2/auth/revoke", wrapper.RevokeNativeSession)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v2/session", wrapper.RevokeCurrentSession)
@@ -1885,17 +1959,16 @@ func (response GetReadiness503ApplicationProblemPlusJSONResponse) VisitGetReadin
 	return err
 }
 
-type StartEmailAuthenticationRequestObject struct {
-	Body *StartEmailAuthenticationJSONRequestBody
+type CreateNativeAccountRequestObject struct {
 }
 
-type StartEmailAuthenticationResponseObject interface {
-	VisitStartEmailAuthenticationResponse(w http.ResponseWriter) error
+type CreateNativeAccountResponseObject interface {
+	VisitCreateNativeAccountResponse(w http.ResponseWriter) error
 }
 
-type StartEmailAuthentication200JSONResponse EmailChallenge
+type CreateNativeAccount200JSONResponse NativeAccountCreation
 
-func (response StartEmailAuthentication200JSONResponse) VisitStartEmailAuthenticationResponse(w http.ResponseWriter) error {
+func (response CreateNativeAccount200JSONResponse) VisitCreateNativeAccountResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -1907,12 +1980,12 @@ func (response StartEmailAuthentication200JSONResponse) VisitStartEmailAuthentic
 	return err
 }
 
-type StartEmailAuthenticationdefaultApplicationProblemPlusJSONResponse struct {
+type CreateNativeAccountdefaultApplicationProblemPlusJSONResponse struct {
 	Body       Problem
 	StatusCode int
 }
 
-func (response StartEmailAuthenticationdefaultApplicationProblemPlusJSONResponse) VisitStartEmailAuthenticationResponse(w http.ResponseWriter) error {
+func (response CreateNativeAccountdefaultApplicationProblemPlusJSONResponse) VisitCreateNativeAccountResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -1924,17 +1997,17 @@ func (response StartEmailAuthenticationdefaultApplicationProblemPlusJSONResponse
 	return err
 }
 
-type VerifyEmailAuthenticationRequestObject struct {
-	Body *VerifyEmailAuthenticationJSONRequestBody
+type CreateDeviceSignInRequestRequestObject struct {
+	Body *CreateDeviceSignInRequestJSONRequestBody
 }
 
-type VerifyEmailAuthenticationResponseObject interface {
-	VisitVerifyEmailAuthenticationResponse(w http.ResponseWriter) error
+type CreateDeviceSignInRequestResponseObject interface {
+	VisitCreateDeviceSignInRequestResponse(w http.ResponseWriter) error
 }
 
-type VerifyEmailAuthentication200JSONResponse NativeTokenResponse
+type CreateDeviceSignInRequest200JSONResponse DeviceSignInRequest
 
-func (response VerifyEmailAuthentication200JSONResponse) VisitVerifyEmailAuthenticationResponse(w http.ResponseWriter) error {
+func (response CreateDeviceSignInRequest200JSONResponse) VisitCreateDeviceSignInRequestResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -1946,12 +2019,86 @@ func (response VerifyEmailAuthentication200JSONResponse) VisitVerifyEmailAuthent
 	return err
 }
 
-type VerifyEmailAuthenticationdefaultApplicationProblemPlusJSONResponse struct {
+type CreateDeviceSignInRequestdefaultApplicationProblemPlusJSONResponse struct {
 	Body       Problem
 	StatusCode int
 }
 
-func (response VerifyEmailAuthenticationdefaultApplicationProblemPlusJSONResponse) VisitVerifyEmailAuthenticationResponse(w http.ResponseWriter) error {
+func (response CreateDeviceSignInRequestdefaultApplicationProblemPlusJSONResponse) VisitCreateDeviceSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveDeviceSignInRequestRequestObject struct {
+	DeviceRequest DeviceRequestID `json:"deviceRequest"`
+	Body          *ApproveDeviceSignInRequestJSONRequestBody
+}
+
+type ApproveDeviceSignInRequestResponseObject interface {
+	VisitApproveDeviceSignInRequestResponse(w http.ResponseWriter) error
+}
+
+type ApproveDeviceSignInRequest204Response struct {
+}
+
+func (response ApproveDeviceSignInRequest204Response) VisitApproveDeviceSignInRequestResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type ApproveDeviceSignInRequestdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ApproveDeviceSignInRequestdefaultApplicationProblemPlusJSONResponse) VisitApproveDeviceSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ClaimDeviceSignInRequestRequestObject struct {
+	DeviceRequest DeviceRequestID `json:"deviceRequest"`
+	Body          *ClaimDeviceSignInRequestJSONRequestBody
+}
+
+type ClaimDeviceSignInRequestResponseObject interface {
+	VisitClaimDeviceSignInRequestResponse(w http.ResponseWriter) error
+}
+
+type ClaimDeviceSignInRequest200JSONResponse DeviceSignInClaim
+
+func (response ClaimDeviceSignInRequest200JSONResponse) VisitClaimDeviceSignInRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ClaimDeviceSignInRequestdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ClaimDeviceSignInRequestdefaultApplicationProblemPlusJSONResponse) VisitClaimDeviceSignInRequestResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2024,6 +2171,45 @@ type RevokeNativeSessiondefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response RevokeNativeSessiondefaultApplicationProblemPlusJSONResponse) VisitRevokeNativeSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignInWithAccountKeyRequestObject struct {
+	Body *SignInWithAccountKeyJSONRequestBody
+}
+
+type SignInWithAccountKeyResponseObject interface {
+	VisitSignInWithAccountKeyResponse(w http.ResponseWriter) error
+}
+
+type SignInWithAccountKey200JSONResponse NativeTokenResponse
+
+func (response SignInWithAccountKey200JSONResponse) VisitSignInWithAccountKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignInWithAccountKeydefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response SignInWithAccountKeydefaultApplicationProblemPlusJSONResponse) VisitSignInWithAccountKeyResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2668,17 +2854,26 @@ type StrictServerInterface interface {
 	// (GET /health/ready)
 	GetReadiness(ctx context.Context, request GetReadinessRequestObject) (GetReadinessResponseObject, error)
 
-	// (POST /v2/auth/email/start)
-	StartEmailAuthentication(ctx context.Context, request StartEmailAuthenticationRequestObject) (StartEmailAuthenticationResponseObject, error)
+	// (POST /v2/auth/accounts)
+	CreateNativeAccount(ctx context.Context, request CreateNativeAccountRequestObject) (CreateNativeAccountResponseObject, error)
 
-	// (POST /v2/auth/email/verify)
-	VerifyEmailAuthentication(ctx context.Context, request VerifyEmailAuthenticationRequestObject) (VerifyEmailAuthenticationResponseObject, error)
+	// (POST /v2/auth/device-requests)
+	CreateDeviceSignInRequest(ctx context.Context, request CreateDeviceSignInRequestRequestObject) (CreateDeviceSignInRequestResponseObject, error)
+
+	// (POST /v2/auth/device-requests/{deviceRequest}/approval)
+	ApproveDeviceSignInRequest(ctx context.Context, request ApproveDeviceSignInRequestRequestObject) (ApproveDeviceSignInRequestResponseObject, error)
+
+	// (POST /v2/auth/device-requests/{deviceRequest}/claim)
+	ClaimDeviceSignInRequest(ctx context.Context, request ClaimDeviceSignInRequestRequestObject) (ClaimDeviceSignInRequestResponseObject, error)
 
 	// (POST /v2/auth/refresh)
 	RefreshNativeSession(ctx context.Context, request RefreshNativeSessionRequestObject) (RefreshNativeSessionResponseObject, error)
 
 	// (POST /v2/auth/revoke)
 	RevokeNativeSession(ctx context.Context, request RevokeNativeSessionRequestObject) (RevokeNativeSessionResponseObject, error)
+
+	// (POST /v2/auth/sign-in)
+	SignInWithAccountKey(ctx context.Context, request SignInWithAccountKeyRequestObject) (SignInWithAccountKeyResponseObject, error)
 
 	// (DELETE /v2/session)
 	RevokeCurrentSession(ctx context.Context, request RevokeCurrentSessionRequestObject) (RevokeCurrentSessionResponseObject, error)
@@ -2840,30 +3035,23 @@ func (sh *strictHandler) GetReadiness(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// StartEmailAuthentication operation middleware
-func (sh *strictHandler) StartEmailAuthentication(w http.ResponseWriter, r *http.Request) {
-	var request StartEmailAuthenticationRequestObject
-
-	var body StartEmailAuthenticationJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
+// CreateNativeAccount operation middleware
+func (sh *strictHandler) CreateNativeAccount(w http.ResponseWriter, r *http.Request) {
+	var request CreateNativeAccountRequestObject
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.StartEmailAuthentication(ctx, request.(StartEmailAuthenticationRequestObject))
+		return sh.ssi.CreateNativeAccount(ctx, request.(CreateNativeAccountRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "StartEmailAuthentication")
+		handler = middleware(handler, "CreateNativeAccount")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(StartEmailAuthenticationResponseObject); ok {
-		if err := validResponse.VisitStartEmailAuthenticationResponse(w); err != nil {
+	} else if validResponse, ok := response.(CreateNativeAccountResponseObject); ok {
+		if err := validResponse.VisitCreateNativeAccountResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -2871,11 +3059,11 @@ func (sh *strictHandler) StartEmailAuthentication(w http.ResponseWriter, r *http
 	}
 }
 
-// VerifyEmailAuthentication operation middleware
-func (sh *strictHandler) VerifyEmailAuthentication(w http.ResponseWriter, r *http.Request) {
-	var request VerifyEmailAuthenticationRequestObject
+// CreateDeviceSignInRequest operation middleware
+func (sh *strictHandler) CreateDeviceSignInRequest(w http.ResponseWriter, r *http.Request) {
+	var request CreateDeviceSignInRequestRequestObject
 
-	var body VerifyEmailAuthenticationJSONRequestBody
+	var body CreateDeviceSignInRequestJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
 		return
@@ -2883,18 +3071,84 @@ func (sh *strictHandler) VerifyEmailAuthentication(w http.ResponseWriter, r *htt
 	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.VerifyEmailAuthentication(ctx, request.(VerifyEmailAuthenticationRequestObject))
+		return sh.ssi.CreateDeviceSignInRequest(ctx, request.(CreateDeviceSignInRequestRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "VerifyEmailAuthentication")
+		handler = middleware(handler, "CreateDeviceSignInRequest")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(VerifyEmailAuthenticationResponseObject); ok {
-		if err := validResponse.VisitVerifyEmailAuthenticationResponse(w); err != nil {
+	} else if validResponse, ok := response.(CreateDeviceSignInRequestResponseObject); ok {
+		if err := validResponse.VisitCreateDeviceSignInRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ApproveDeviceSignInRequest operation middleware
+func (sh *strictHandler) ApproveDeviceSignInRequest(w http.ResponseWriter, r *http.Request, deviceRequest DeviceRequestID) {
+	var request ApproveDeviceSignInRequestRequestObject
+
+	request.DeviceRequest = deviceRequest
+
+	var body ApproveDeviceSignInRequestJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ApproveDeviceSignInRequest(ctx, request.(ApproveDeviceSignInRequestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ApproveDeviceSignInRequest")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ApproveDeviceSignInRequestResponseObject); ok {
+		if err := validResponse.VisitApproveDeviceSignInRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ClaimDeviceSignInRequest operation middleware
+func (sh *strictHandler) ClaimDeviceSignInRequest(w http.ResponseWriter, r *http.Request, deviceRequest DeviceRequestID) {
+	var request ClaimDeviceSignInRequestRequestObject
+
+	request.DeviceRequest = deviceRequest
+
+	var body ClaimDeviceSignInRequestJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ClaimDeviceSignInRequest(ctx, request.(ClaimDeviceSignInRequestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ClaimDeviceSignInRequest")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ClaimDeviceSignInRequestResponseObject); ok {
+		if err := validResponse.VisitClaimDeviceSignInRequestResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -2957,6 +3211,37 @@ func (sh *strictHandler) RevokeNativeSession(w http.ResponseWriter, r *http.Requ
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RevokeNativeSessionResponseObject); ok {
 		if err := validResponse.VisitRevokeNativeSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SignInWithAccountKey operation middleware
+func (sh *strictHandler) SignInWithAccountKey(w http.ResponseWriter, r *http.Request) {
+	var request SignInWithAccountKeyRequestObject
+
+	var body SignInWithAccountKeyJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SignInWithAccountKey(ctx, request.(SignInWithAccountKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SignInWithAccountKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SignInWithAccountKeyResponseObject); ok {
+		if err := validResponse.VisitSignInWithAccountKeyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -3428,72 +3713,79 @@ func (sh *strictHandler) PutRecoveryEnvelope(w http.ResponseWriter, r *http.Requ
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

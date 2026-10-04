@@ -752,3 +752,29 @@ fn finite_ordinary_edit_matrix_never_loses_a_body_and_is_commutative() {
         }
     }
 }
+
+#[test]
+fn canonical_conflict_copies_match_the_cross_client_vectors() {
+    // Shared with Apple (SyncConflictCopyVectorTests) and Android
+    // (AndroidConflictCopyTests): one losing envelope, one copy, on every client.
+    let reference: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/conflict-copy-v1.json")).unwrap();
+    for vector in reference["vectors"].as_array().unwrap() {
+        let source = Envelope::parse(vector["source"].as_str().unwrap().as_bytes()).unwrap();
+        let expected = Envelope::parse(vector["copy"].as_str().unwrap().as_bytes()).unwrap();
+        let copy = plain_copy(&source).unwrap();
+        assert!(*copy.encode().unwrap() == *expected.encode().unwrap());
+        assert_eq!(copy.id.to_string(), vector["copyID"].as_str().unwrap());
+        assert_eq!(
+            provenance(&copy).unwrap().fingerprint,
+            vector["fingerprint"].as_str().unwrap()
+        );
+        assert!(
+            valid_copy_identity(&copy)
+                && copy_id(source.id, &provenance(&copy).unwrap().fingerprint) == copy.id
+        );
+        let f = copy.fields.as_ref().unwrap();
+        assert!(!f.is_enabled && !f.is_pinned && f.keyword.is_empty());
+        assert!(f.content == source.fields.as_ref().unwrap().content);
+    }
+}

@@ -10,7 +10,11 @@ import (
 const nativeClientIPHeader = "X-Snippets-Client-IP"
 
 func nativeUsesClientIP(operation string) bool {
-	return operation == "native_email_start" || operation == "native_email_verify" || operation == "native_refresh"
+	switch operation {
+	case "native_account_create", "native_sign_in", "native_refresh", "native_device_request", "native_device_claim":
+		return true
+	}
+	return false
 }
 
 // The immediate peer is the trust boundary. The configured edge must overwrite

@@ -613,7 +613,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             cell.textLabel?.text = "Export Diagnostic Logs"
             cell.detailTextLabel?.text = "Plaintext JSON Lines. Operation counts, CloudKit "
                 + "callback and scheduler states, sign-in stages and HTTP status codes, paste outcomes and methods, insertion stages, interruption reasons and source categories, selection verification and restoration outcomes, Accessibility replacement outcomes, write-attempt status and timings, delete-attempt counts, paste-dispatch status, clipboard restoration outcomes and timings, Secure Paste stages, destination categories, failure reasons, retry and focus-confirmation counts, authentication-handoff status and numeric AX codes, and secure-snippet keywords may be included; "
-                + "bodies, clipboard contents, names, tags, IDs, paths, email addresses, sign-in codes, tokens, keys and ciphertext are excluded."
+                + "bodies, clipboard contents, names, tags, IDs, paths, account keys, account IDs, tokens, keys and ciphertext are excluded."
             cell.imageView?.image = UIImage(systemName: "square.and.arrow.up")
             cell.textLabel?.textColor = AppTheme.tint
         case .deleteDiagnostics:
@@ -792,6 +792,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
                         try await self.cloudBootstrap.prepareRecoveryReplacement())
                 }
             },
+            showAccountKey: { [weak self] in self?.showCloudAccountKey() },
             changeAccount: { [weak self] in
                 self?.confirmCloudAccountChange()
             },
@@ -940,25 +941,63 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         cloudSignInInProgress = true
         Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { cloudSignInInProgress = false }
+            defer {
+                cloudSignInInProgress = false
+                reloadVisibleCloudAccountPage()
+            }
             do {
                 let state = try await cloudBootstrap.signIn(
                     serverURL: serverURL,
                     changeAccount: changeAccount,
                     chooseLibrary: chooseCloudLibrary,
                     authenticate: authenticateCloudAccount)
+                reloadVisibleCloudAccountPage()
                 try presentCloudState(state)
             } catch is CancellationError {
                 // The native sign-in sheet was cancelled.
-            } catch SnippetsCloudEmailSignInFailure.cancelled {
+            } catch SnippetsCloudAccountKeySignInFailure.cancelled {
             } catch {
                 showError(title: "Couldn’t Sign In to Snippets Cloud", error: error)
             }
         }
     }
 
-    private func authenticateCloudAccount(_ flow: SnippetsCloudEmailSignInFlow) async throws {
-        try await CloudEmailSignInViewController.authenticate(flow: flow, presenting: self)
+    /// The account page stays pushed while the sign-in sheet is presented over it.
+    /// Refresh it so its Account ID and actions match the new session.
+    private func reloadVisibleCloudAccountPage() {
+        navigationController?.viewControllers
+            .compactMap { $0 as? SnippetsCloudAccountViewController }
+            .forEach { $0.tableView.reloadData() }
+    }
+
+    private func authenticateCloudAccount(_ flow: SnippetsCloudAccountKeySignInFlow) async throws {
+        try await CloudAccountKeySignInViewController.authenticate(flow: flow, presenting: self)
+    }
+
+    /// Uses the same fresh device-owner authentication as recovery-kit disclosure.
+    private func showCloudAccountKey() {
+        guard environment.backendSelection.cloudAccountKeyIsStored else {
+            // ADR 0007: a device signed in by another device never received the key.
+            let alert = UIAlertController(
+                title: "Account Key",
+                message: SnippetsCloudAccountKeyCopy.signedInByAnotherDevice,
+                preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            ((try? CloudAccountKeySignInViewController.visiblePresenter(for: self)) ?? self)
+                .present(alert, animated: true)
+            return
+        }
+        runCloudTask(title: "Couldn’t Show Account Key") { [weak self] in
+            guard let self else { return }
+            try await requireDeviceOwnerAuthentication(
+                reason: "Show your Snippets Cloud account key")
+            let key = try environment.backendSelection.cloudAccountKeyAfterLocalAuthentication()
+            let controller = CloudAccountKeyRevealViewController(key: key)
+            let navigation = UINavigationController(rootViewController: controller)
+            navigation.modalPresentationStyle = .formSheet
+            try CloudAccountKeySignInViewController.visiblePresenter(for: self)
+                .present(navigation, animated: true)
+        }
     }
 
     private func confirmCloudAccountChange() {
@@ -1027,6 +1066,16 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
                 expiresAt: expiresAt)
         case .approvalReady(let code):
             confirmPairingApproval(code: code)
+        case .deviceSignInApprovalReady(let code):
+            confirmDeviceSignInApproval(code: code)
+        case .deviceSignInApproved:
+            tableView.reloadData()
+            let done = UIAlertController(
+                title: "New Device Signed In",
+                message: SnippetsCloudPairingApprovalCopy.deviceSignInApprovedMessage,
+                preferredStyle: .alert)
+            done.addAction(UIAlertAction(title: "OK", style: .default))
+            present(done, animated: true)
         case .localAuthenticationRequired(let action):
             authenticateAndContinue(action: action)
         case .recoveryKitAuthenticationRequired:
@@ -1227,12 +1276,34 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         present(alert, animated: true)
     }
 
+    /// ADR 0007: the code and warning are shown before any network call; approval then
+    /// requires the same fresh device-owner authentication as pairing approval.
+    private func confirmDeviceSignInApproval(code: String) {
+        let alert = UIAlertController(
+            title: "Sign In a New Device?",
+            message: SnippetsCloudPairingApprovalCopy.deviceSignInMessage(code: code),
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            try? self?.cloudBootstrap.cancelApproval()
+        })
+        alert.addAction(UIAlertAction(
+            title: SnippetsCloudPairingApprovalCopy.approveButtonTitle(code: code),
+            style: .default
+        ) { [weak self] _ in
+            self?.authenticateAndContinue(action: .signInDevice)
+        })
+        present(alert, animated: true)
+    }
+
     private func authenticateAndContinue(action: SnippetsCloudAccountBootstrap.LocalAction) {
         runCloudTask(title: "Approval Failed") { [weak self] in
             guard let self else { return }
-            try await requireDeviceOwnerAuthentication(reason: action == .approveDevice
-                ? "Approve a new device for your encrypted Snippets library"
-                : "Replace your Snippets Cloud recovery kit")
+            let reason = switch action {
+            case .approveDevice: "Approve a new device for your encrypted Snippets library"
+            case .signInDevice: "Sign in a new device to your Snippets Cloud account"
+            case .replaceRecovery: "Replace your Snippets Cloud recovery kit"
+            }
+            try await requireDeviceOwnerAuthentication(reason: reason)
             try presentCloudState(try await cloudBootstrap.continueAfterLocalAuthentication())
         }
     }
@@ -1273,7 +1344,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         }
         let alert = UIAlertController(
             title: "Disconnect Snippets Cloud from This Device?",
-            message: "This removes this device’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery check: \(recoveryMessage)",
+            message: "This removes this device’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect. \(SnippetsCloudAccountKeyCopy.signOutReminder)\n\nRecovery check: \(recoveryMessage)",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         guard recoveryStatus != .knownReplaced,
@@ -1288,6 +1359,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
                     try await self.cloudBootstrap.signOutThisDevice()
                 }
                 self.tableView.reloadData()
+                self.reloadVisibleCloudAccountPage()
             }
         })
         present(alert, animated: true)
@@ -1300,7 +1372,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         Task { @MainActor [weak self] in
             do { try await operation() }
             catch is CancellationError { }
-            catch SnippetsCloudEmailSignInFailure.cancelled { }
+            catch SnippetsCloudAccountKeySignInFailure.cancelled { }
             catch { self?.showError(title: title, error: error) }
         }
     }
@@ -1543,7 +1615,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
     private enum Section: Int, CaseIterable { case account, sync, security, actions }
     private enum Action: CaseIterable {
         case continueSetup, saveRecovery, switchToCloud, syncNow, addDevice, replaceRecovery
-        case changeAccount, changeLibrary, disconnect
+        case showAccountKey, changeAccount, changeLibrary, disconnect
     }
 
     private let environment: AppEnvironment
@@ -1553,6 +1625,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
     private let syncNowAction: () -> Void
     private let addDevice: () -> Void
     private let replaceRecoveryKit: () -> Void
+    private let showAccountKey: () -> Void
     private let changeAccount: () -> Void
     private let changeLibrary: () -> Void
     private let disconnect: () -> Void
@@ -1566,6 +1639,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         syncNow: @escaping () -> Void,
         addDevice: @escaping () -> Void,
         replaceRecoveryKit: @escaping () -> Void,
+        showAccountKey: @escaping () -> Void,
         changeAccount: @escaping () -> Void,
         changeLibrary: @escaping () -> Void,
         disconnect: @escaping () -> Void
@@ -1577,6 +1651,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         self.syncNowAction = syncNow
         self.addDevice = addDevice
         self.replaceRecoveryKit = replaceRecoveryKit
+        self.showAccountKey = showAccountKey
         self.changeAccount = changeAccount
         self.changeLibrary = changeLibrary
         self.disconnect = disconnect
@@ -1657,7 +1732,8 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         case .account:
             if indexPath.row == 0 {
                 cell.textLabel?.text = accountStatusTitle
-                cell.detailTextLabel?.text = environment.backendSelection.cloudAccountDisplayName
+                cell.detailTextLabel?.text = environment.backendSelection.cloudAccountIdentifier
+                    .map { "Account ID \($0)" } ?? "Not signed in"
             } else {
                 cell.textLabel?.text = "Selected library"
                 cell.detailTextLabel?.text = bootstrap.libraryID.map { "Library ID \($0) · Used for support" }
@@ -1702,6 +1778,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         case .syncNow: syncNowAction()
         case .addDevice: addDevice()
         case .replaceRecovery: replaceRecoveryKit()
+        case .showAccountKey: showAccountKey()
         case .changeAccount: changeAccount()
         case .changeLibrary: changeLibrary()
         case .disconnect: disconnect()
@@ -1713,10 +1790,19 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
     }
 
     private var visibleActions: [Action] {
+        let actions = stateActions
+        // The key is stored with the session, so it can be shown whenever one exists.
+        guard environment.backendSelection.cloudAccountIdentifier != nil else { return actions }
+        var withKey = actions
+        withKey.insert(.showAccountKey, at: actions.firstIndex(of: .changeAccount) ?? actions.endIndex)
+        return withKey
+    }
+
+    private var stateActions: [Action] {
         switch state {
         case .signedOut:
             [.continueSetup]
-        case .ready:
+        case .ready, .deviceSignInApproved:
             (environment.backendSelection.provider == .snippetsCloud
                 ? [.syncNow]
                 : [.switchToCloud])
@@ -1730,7 +1816,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
              .recoveryKitAuthenticationRequired, .recoveryKitReady:
             [.continueSetup, .changeAccount]
         case .needsTrustedDeviceOrRecovery, .waitingForApproval,
-             .approvalReady, .localAuthenticationRequired:
+             .approvalReady, .deviceSignInApprovalReady, .localAuthenticationRequired:
             [.continueSetup, .changeAccount, .disconnect]
         }
     }
@@ -1778,7 +1864,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         switch action {
         case .continueSetup:
             switch state {
-            case .signedOut: "Sign in to Snippets Cloud"
+            case .signedOut: "Create account or sign in"
             case .setupInterrupted: "Resume library setup"
             case .setupStateUnverified: "Retry setup verification"
             case .waitingForApproval: "Return to device approval"
@@ -1791,6 +1877,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
         case .syncNow: "Sync now"
         case .addDevice: "Scan a new device invitation"
         case .replaceRecovery: "Replace recovery kit"
+        case .showAccountKey: "Show account key"
         case .changeAccount: "Change account"
         case .changeLibrary: "Change library"
         case .disconnect: "Disconnect this device"
@@ -1984,14 +2071,7 @@ private final class CloudQRViewController: UIViewController {
     }
 
     fileprivate static func qrImage(_ value: String) -> UIImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(value.utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage else { return nil }
-        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
-        let context = CIContext(options: [.useSoftwareRenderer: false])
-        guard let image = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return UIImage(cgImage: image)
+        CloudQRCodeImage.image(for: value)
     }
 }
 
@@ -2324,12 +2404,7 @@ private final class RecoveryKitViewController: UIViewController, UITextFieldDele
     }
 
     @objc private func copyCode() {
-        UIPasteboard.general.setItems(
-            [[UTType.utf8PlainText.identifier: longCode]],
-            options: [
-                .localOnly: true,
-                .expirationDate: Date().addingTimeInterval(120),
-            ])
+        CloudSecretPasteboard.copy(longCode)
     }
 
     @objc private func shareSheet() {

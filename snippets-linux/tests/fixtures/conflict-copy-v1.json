@@ -1,0 +1,19 @@
+{
+ "description": "Canonical plain conflict-copy vectors (docs/cloud-sync.md, 'Conflict-copy identity'). Both copies were minted by the Linux client during the 2026-10-03 audit; Apple (SyncMerge.makePlainContentConflictCopy), Android (AndroidBridge reconcile) and Linux (merge::plain_copy) must reproduce each copy byte-for-byte from its losing source envelope. All content is synthetic public audit data.",
+ "vectors": [
+  {
+   "name": "published Mac edit that lost to a newer local edit",
+   "source": "{\"contentHash\":\"e71f927923fd845c85d80b50e90d46b53a212a103ebddc4541e13b40e01444d6\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-macos\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":812742226.219845},\"hash\":\"bf629cfcaa7d2d9c758515c5e768fda6c8f9bf13eb577ce98fed06407d26e9e9\",\"hlc\":\"01a102dd652b-0000-64578a60\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"64578a60\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+   "copy": "{\"contentHash\":\"e71f927923fd845c85d80b50e90d46b53a212a103ebddc4541e13b40e01444d6\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-macos\",\"createdAt\":808272000.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"race (conflict 2026-10-03 17:43 UTC)\",\"tags\":[\"audit\",\"conflict\"],\"updatedAt\":812742226.219845},\"hash\":\"6cfa9a242c379e5206a241f2ed52bac2fa2c01573979f72ea4dc3aec162de006\",\"hlc\":\"01a102dd652b-0000-64578a60\",\"id\":\"5d85adc5-ec1a-50ac-a9eb-0d5ea53fcf39\",\"origin\":\"64578a60\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"ce1a2145e0e38826d82447c8372b559edcd3d42f11c11d7f5acb35c27c28f451\",\"sourceID\":\"a11ce002-0000-4000-8000-000000000001\",\"version\":1}}}",
+   "copyID": "5d85adc5-ec1a-50ac-a9eb-0d5ea53fcf39",
+   "fingerprint": "ce1a2145e0e38826d82447c8372b559edcd3d42f11c11d7f5acb35c27c28f451"
+  },
+  {
+   "name": "merged local survivor that lost to a newer published edit",
+   "source": "{\"contentHash\":\"53bc0bf55632932e74379da3216a23b015f6e42f0fd4bb97a11df4e36936d3d0\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-linux\",\"createdAt\":808272000.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"race\",\"name\":\"race\",\"tags\":[\"audit\"],\"updatedAt\":812742230.7082067},\"hash\":\"81c7f332b1ea25c172d355808014000a486a3f884aa189556ac13f77f9c35d13\",\"hlc\":\"01a102dd76b4-0000-a11d1701\",\"id\":\"a11ce002-0000-4000-8000-000000000001\",\"origin\":\"a11d1701\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+   "copy": "{\"contentHash\":\"53bc0bf55632932e74379da3216a23b015f6e42f0fd4bb97a11df4e36936d3d0\",\"deleted\":false,\"fields\":{\"content\":\"audit-concurrent-linux\",\"createdAt\":808272000.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"race (conflict 2026-10-03 17:43 UTC)\",\"tags\":[\"audit\",\"conflict\"],\"updatedAt\":812742230.7082067},\"hash\":\"56ce21baff287dc1ffa8fff482a81ac2e5728046e506f892ff59166e512e20c6\",\"hlc\":\"01a102dd76b4-0000-a11d1701\",\"id\":\"4e4e8edf-0082-5883-9b4f-52d464306c04\",\"origin\":\"a11d1701\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"1b1fad829f53ae6118d243e33b83db0a0dd0de6eaba597a0c9187b92d4498d69\",\"sourceID\":\"a11ce002-0000-4000-8000-000000000001\",\"version\":1}}}",
+   "copyID": "4e4e8edf-0082-5883-9b4f-52d464306c04",
+   "fingerprint": "1b1fad829f53ae6118d243e33b83db0a0dd0de6eaba597a0c9187b92d4498d69"
+  }
+ ]
+}

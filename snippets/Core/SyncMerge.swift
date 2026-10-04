@@ -858,7 +858,10 @@ nonisolated extension SyncMerge {
         return try ranked.canonicalData()
     }
 
-    private static func makePlainContentConflictCopy(
+    /// The canonical plain conflict copy of one exact losing envelope. Every client
+    /// (Apple, Android, Linux) must derive a copy of the same published version to the
+    /// same bytes, so that any number of devices preserving it mint one record.
+    static func makePlainContentConflictCopy(
         from source: SyncEnvelope
     ) throws -> SyncEnvelope {
         guard var copy = source.plainSnippet else {

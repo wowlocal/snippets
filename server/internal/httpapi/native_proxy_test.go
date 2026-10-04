@@ -14,8 +14,9 @@ import (
 
 func TestNativeHTTPProxyTrustBindsRateIdentityAndRejectsAmbiguity(t *testing.T) {
 	for _, operation := range []struct{ path, body string }{
-		{"/v2/auth/email/start", `{"email":"private@example.test"}`},
-		{"/v2/auth/email/verify", `{"challengeId":"private-challenge","code":"123456"}`},
+		{"/v2/auth/accounts", ``},
+		{"/v2/auth/sign-in", `{"accountKey":"7KQF9M2XR4TDH8WBZN3CP6YE1AQ7"}`},
+		{"/v2/auth/device-requests/4f7d3c3e-41d9-4a0b-9b6e-7f0d1e2c3b4a/claim", `{"pollToken":"private-poll"}`},
 		{"/v2/auth/refresh", `{"refreshToken":"private-refresh"}`},
 	} {
 		for _, scenario := range []struct {
@@ -57,7 +58,9 @@ func TestNativeHTTPProxyTrustBindsRateIdentityAndRejectsAmbiguity(t *testing.T) 
 				service := NewServer(configuration, store, probe, slog.New(slog.NewJSONHandler(&logs, nil)))
 				request := httptest.NewRequest(http.MethodPost, "https://local"+operation.path, strings.NewReader(operation.body))
 				request.RemoteAddr = scenario.peer
-				request.Header.Set("Content-Type", "application/json")
+				if operation.body != "" {
+					request.Header.Set("Content-Type", "application/json")
+				}
 				request.Header.Set("X-Forwarded-For", "203.0.113.99")
 				for _, header := range scenario.headers {
 					request.Header.Add(nativeClientIPHeader, header)

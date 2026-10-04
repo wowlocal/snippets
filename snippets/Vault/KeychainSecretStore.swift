@@ -323,6 +323,14 @@ nonisolated final class KeychainSecretStore: Sendable {
         try loadItem(account: account, expectedByteCount: expectedByteCount)
     }
 
+    /// Reads several items, in order, in one hop off the caller's actor. Each result is
+    /// independent: the caller validates them afterwards in its own order, so it keeps
+    /// the same error precedence as consecutive `loadItem` calls would have had.
+    @concurrent
+    func loadItemsInBackground(accounts: [String]) async -> [Result<Data?, any Error>] {
+        accounts.map { account in Result { try loadItem(account: account) } }
+    }
+
     /// Whether an item exists, without reading its bytes. The legacy-tier fallback keeps
     /// an entitlement upgrade from making an existing vault look keyless. A query
     /// failure is deliberately treated as present: Boolean presentation callers must

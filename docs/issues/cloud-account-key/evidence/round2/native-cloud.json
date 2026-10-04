@@ -1,0 +1,96 @@
+{
+  "started": "2026-10-03T20:54:13.067953+00:00",
+  "status": "passed",
+  "phases": [
+    {
+      "surface": "macos",
+      "phase": "mac-seed",
+      "status": "passed"
+    },
+    {
+      "surface": "iphone",
+      "phase": "ios-seed",
+      "status": "passed"
+    },
+    {
+      "surface": "android",
+      "phase": "contribute",
+      "status": "passed"
+    },
+    {
+      "surface": "macos",
+      "phase": "mac-update-android",
+      "status": "passed"
+    },
+    {
+      "surface": "iphone",
+      "phase": "ios-update-mac",
+      "status": "passed"
+    },
+    {
+      "surface": "android",
+      "phase": "verify",
+      "status": "passed"
+    },
+    {
+      "surface": "macos",
+      "phase": "mac-verify",
+      "status": "passed"
+    },
+    {
+      "surface": "iphone",
+      "phase": "ios-verify",
+      "status": "passed"
+    },
+    {
+      "surface": "ipad",
+      "phase": "ios-verify",
+      "status": "passed"
+    },
+    {
+      "surface": "android",
+      "phase": "delete-lost-ack",
+      "status": "passed"
+    },
+    {
+      "surface": "macos",
+      "phase": "mac-chaos-truncated-fetch",
+      "status": "passed"
+    },
+    {
+      "surface": "android",
+      "phase": "chaos-stale-cursor",
+      "status": "passed"
+    },
+    {
+      "surface": "iphone",
+      "phase": "ios-verify-deletion",
+      "status": "passed"
+    },
+    {
+      "surface": "ipad",
+      "phase": "ios-verify-deletion",
+      "status": "passed"
+    },
+    {
+      "surface": "android",
+      "phase": "verify-deletion",
+      "status": "passed"
+    }
+  ],
+  "native_account_key_authentication": "passed",
+  "server_cas_conflict": "passed",
+  "plaintext_probes_absent": true,
+  "final_records": {
+    "live": 2,
+    "tombstones": 1
+  },
+  "chaos": [
+    "lost_ack",
+    "truncated_page",
+    "stale_cursor"
+  ],
+  "logout": "passed",
+  "completed": "2026-10-03T20:56:49.106561+00:00"
+}
+

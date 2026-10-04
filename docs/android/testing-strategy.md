@@ -38,7 +38,7 @@ prove it, and critical boundaries are repeated in the real cross-process lane.
 | L0 — static contract | OpenAPI generation diff, project/scheme validity, manifest permissions, ABI/native library inventory, schema review, dependency locks | Every relevant PR | No accidental protocol drift, IME/Accessibility/overlay component, missing ABI, or destructive schema change |
 | L1 — shared core | Canonical JSON, crypto vectors, envelopes, merge, HLC, journal, CAS, tombstones, deletion guard, account binding, fault injection and property tests | Every shared-core PR | `CorePackage` and Android shared-core tests use the canonical Swift sources |
 | L2 — platform integration | Apple stores/keychains/lifecycle/UI; Android encrypted store/Keystore/JNI/Compose/Process Text; app test hosts | Every platform PR | Real platform APIs with isolated storage and no live user data |
-| L3 — service integration | HTTP handlers, native email-code/session lifecycle, optional legacy OIDC, fresh PostgreSQL schema/transactions/runtime role/RLS, OpenAPI conformance | Every server PR; real-DB lane when PostgreSQL is available | Server response and database state agree under the restricted runtime role |
+| L3 — service integration | HTTP handlers, native account-key/session lifecycle, optional legacy OIDC, fresh PostgreSQL schema/transactions/runtime role/RLS, OpenAPI conformance | Every server PR; real-DB lane when PostgreSQL is available | Server response and database state agree under the restricted runtime role |
 | L4 — disposable cross-platform E2E | Compiled macOS and iOS production object graphs, Android instrumentation, real server, isolated authentication fixture, HTTPS, PostgreSQL | Sync/protocol PRs and nightly | Cross-process encrypted convergence and tenant/privacy assertions |
 | L5 — provider compatibility | Signed CloudKit Development canary and pre-release Production canary with a dedicated synthetic Apple ID, plus disposable HTTP | Nightly/weekly and release candidate | iCloud -> HTTP -> iCloud logical and ciphertext compatibility without touching real libraries |
 | L6 — operational resilience | Load/soak, network chaos, database backup/restore, clean schema bootstrap, key loss, account revocation, deletion/export drill | Nightly/weekly/release | Recovery objectives, alerts, runbooks, and fail-closed client behavior |
@@ -78,23 +78,40 @@ the assertion that proves it. A test that only checks HTTP 200 does not prove co
 
 ## Native sign-in verification
 
-The current app flow is native email plus a six-digit code. It must open the email form
-before discovery, keep resend/edit-email/cancellation and request errors on native screens,
-and never launch a browser or WebView. Test email delivery with a disposable inbox; do not
-send codes to a real user's address or persist codes and credentials in test output.
+The current app flow is the generated account key of server ADR 0006: **Create Account**
+or **Sign In with Account Key** in native dialogs, never a browser or WebView. Account
+creation must show **Save Your Account Key** and wait for **I've Saved It**; a locally
+invalid key must be rejected without a request. Tests create disposable accounts and must
+not persist account keys, tokens or account IDs in test output.
 
-Android's `NativeCloudProtocolTest` covers native discovery without OIDC fields, rejection
-of cross-origin endpoints and browser-flow downgrade, opaque tokens, short token lifetimes,
-immutable account ID on refresh, bounded challenges and refresh-family-aware cleanup. Run
-`./gradlew :app:testDebugUnitTest :app:assembleDebug` for those checks and compilation. Native
-UI transitions and interruption behavior also require platform UI/device verification;
-unit tests alone do not demonstrate email delivery or keyboard behavior.
+Android's `NativeCloudAccountKeyTest` covers the ADR test vectors, normalization examples,
+the 64-byte input limit and local typo rejection. `NativeCloudProtocolTest` covers native
+discovery without OIDC fields, exact endpoint pinning and rejection of cross-origin or
+moved endpoints, browser- and email-flow downgrade, opaque tokens, short token lifetimes,
+UUID account identity preserved on refresh, journal-first account creation and
+refresh-family-aware cleanup. `CloudAccountUxTest` covers the account-key error copy. Run
+`./gradlew :app:testDebugUnitTest :app:assembleDebug` for those checks and compilation.
+`DeviceSignInTest` covers ADR 0007: the `snippets-device-sign-in` payload's exact
+canonical encoding and strict-key round trip, confirmation-code equality with the pairing
+derivation, poll-token and pending-state validation, the approver's pairing lifetime clamp,
+poll backoff, the capability gate and fixed endpoint paths, and exact-member parsing of the
+device request and pending/approved claim responses, including journal-first handling of a
+malformed approved claim. The repository flow (claim, library selection, recipient pairing
+claim, approver bind) has no JVM fake-transport seam yet and needs a two-device lane against
+a disposable server.
 
-Server tests must exercise invalid/expired/exhausted codes, resend/rate limits, mailbox
-identity reuse, token rotation/reuse, exact access-token revocation, family revocation and
-tenant isolation against a disposable PostgreSQL database. Account access must never be
-accepted as proof of the end-to-end library key. App diagnostics must exclude email,
-account ID, codes, challenge IDs and tokens.
+The opt-in `NativeCloudAuthEndToEndTest` drives the real UI against a disposable server
+on a disposable emulator: a local typo, an unknown well-formed key, account creation and
+acknowledgement, refresh rotation, activity recreation, sign-out, and sign-in again with
+the saved key. It runs only with `-e snippetsNativeAuthE2E disposable-emulator` and
+`-e snippetsServerUrl <pinned origin>` on an emulator whose installation has no session.
+Device-owner authentication for **Show Account Key** still needs manual verification.
+
+Server tests must exercise malformed and unknown keys, creation and sign-in rate limits,
+token rotation/reuse, exact access-token revocation, family revocation and tenant
+isolation against a disposable PostgreSQL database. Account access must never be accepted
+as proof of the end-to-end library key. App diagnostics must exclude account keys,
+account IDs and tokens.
 
 ## Disposable four-way scenario
 
@@ -102,8 +119,8 @@ account ID, codes, challenge IDs and tokens.
 PostgreSQL cluster, owner and non-bypass runtime roles, synthetic OIDC issuer/key, local
 server, one ephemeral HTTPS edge, a new user/space, and isolated client installations.
 This established lane still uses synthetic OIDC credentials as a data-plane fixture; it
-does not exercise current native email screens or SMTP delivery, and passing it is not
-proof that native sign-in works. It runs this ordered state machine:
+does not exercise the current native account-key screens, and passing it is not proof
+that native sign-in works. It runs this ordered state machine:
 
 1. macOS creates and uploads record M.
 2. Fresh iOS downloads M, creates I, and uploads it.

@@ -2515,6 +2515,10 @@ private final class SyncSettingsViewController: NSViewController {
                         try await self.cloudBootstrap.prepareRecoveryReplacement())
                 }
             },
+            showAccountKey: { [weak self] in
+                self?.closeCloudAccountSheet()
+                self?.showCloudAccountKey()
+            },
             changeAccount: { [weak self] in
                 self?.closeCloudAccountSheet()
                 self?.confirmCloudAccountChange()
@@ -2694,7 +2698,7 @@ private final class SyncSettingsViewController: NSViewController {
                 try presentCloudState(state)
             } catch is CancellationError {
                 // The native sign-in sheet was cancelled.
-            } catch SnippetsCloudEmailSignInFailure.cancelled {
+            } catch SnippetsCloudAccountKeySignInFailure.cancelled {
             } catch {
                 showCloudError("Couldn’t Sign In to Snippets Cloud", error: error)
             }
@@ -2702,8 +2706,38 @@ private final class SyncSettingsViewController: NSViewController {
         }
     }
 
-    private func authenticateCloudAccount(_ flow: SnippetsCloudEmailSignInFlow) async throws {
-        try await CloudEmailSignInViewController.authenticate(flow: flow, presenting: self)
+    private func authenticateCloudAccount(_ flow: SnippetsCloudAccountKeySignInFlow) async throws {
+        try await CloudAccountKeySignInViewController.authenticate(flow: flow, presenting: self)
+    }
+
+    /// Uses the same fresh device-owner authentication as recovery-kit disclosure.
+    private func showCloudAccountKey() {
+        guard backendSelection.cloudAccountKeyIsStored else {
+            // ADR 0007: a device signed in by another device never received the key.
+            let alert = NSAlert()
+            alert.messageText = "Account Key"
+            alert.informativeText = SnippetsCloudAccountKeyCopy.signedInByAnotherDevice
+            alert.runModal()
+            return
+        }
+        runCloudTask("Couldn’t Show Account Key") { [weak self] in
+            guard let self else { return }
+            try await requireMacOwnerAuthentication(
+                reason: "Show your Snippets Cloud account key")
+            let key = try backendSelection.cloudAccountKeyAfterLocalAuthentication()
+            guard let parent = view.window else { return }
+            let controller = CloudAccountKeyRevealViewController(key: key)
+            let sheet = NSWindow(contentViewController: controller)
+            sheet.title = "Account Key"
+            sheet.styleMask = [.titled]
+            sheet.isReleasedWhenClosed = false
+            controller.close = { [weak parent, weak sheet] in
+                guard let parent, let sheet else { return }
+                parent.endSheet(sheet)
+                sheet.orderOut(nil)
+            }
+            parent.beginSheet(sheet, completionHandler: nil)
+        }
     }
 
     private func confirmCloudAccountChange() {
@@ -2761,6 +2795,14 @@ private final class SyncSettingsViewController: NSViewController {
                 expiresAt: expiresAt)
         case .approvalReady(let code):
             confirmPairingApproval(code: code)
+        case .deviceSignInApprovalReady(let code):
+            confirmDeviceSignInApproval(code: code)
+        case .deviceSignInApproved:
+            reloadFromStorage()
+            let done = NSAlert()
+            done.messageText = "New Device Signed In"
+            done.informativeText = SnippetsCloudPairingApprovalCopy.deviceSignInApprovedMessage
+            done.runModal()
         case .localAuthenticationRequired(let action):
             authenticateAndContinue(action: action)
         case .recoveryKitAuthenticationRequired:
@@ -2927,7 +2969,7 @@ private final class SyncSettingsViewController: NSViewController {
     private func promptForPairingInvitation() {
         promptForCloudPayload(
             title: "New Device Invitation",
-            message: "Paste the invitation copied from the new device, or read a saved QR image.",
+            message: "Paste the invitation or sign-in request copied from the new device, or read a saved QR image.",
             actionTitle: "Review Device",
             supportsImage: true
         ) { [weak self] payload in
@@ -3060,12 +3102,32 @@ private final class SyncSettingsViewController: NSViewController {
         }
     }
 
+    /// ADR 0007: the code and warning are shown before any network call; approval then
+    /// requires the same fresh owner authentication as pairing approval.
+    private func confirmDeviceSignInApproval(code: String) {
+        let alert = NSAlert()
+        alert.messageText = "Sign In a New Device?"
+        alert.informativeText = SnippetsCloudPairingApprovalCopy.deviceSignInMessage(code: code)
+            + "\n\nTouch ID or the Mac password is required next."
+        alert.addButton(
+            withTitle: SnippetsCloudPairingApprovalCopy.approveButtonTitle(code: code))
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            authenticateAndContinue(action: .signInDevice)
+        } else {
+            try? cloudBootstrap.cancelApproval()
+        }
+    }
+
     private func authenticateAndContinue(action: SnippetsCloudAccountBootstrap.LocalAction) {
         runCloudTask("Approval Failed") { [weak self] in
             guard let self else { return }
-            try await requireMacOwnerAuthentication(reason: action == .approveDevice
-                ? "Approve a new device for your encrypted Snippets library"
-                : "Replace your Snippets Cloud recovery kit")
+            let reason = switch action {
+            case .approveDevice: "Approve a new device for your encrypted Snippets library"
+            case .signInDevice: "Sign in a new device to your Snippets Cloud account"
+            case .replaceRecovery: "Replace your Snippets Cloud recovery kit"
+            }
+            try await requireMacOwnerAuthentication(reason: reason)
             try presentCloudState(try await cloudBootstrap.continueAfterLocalAuthentication())
         }
     }
@@ -3084,7 +3146,7 @@ private final class SyncSettingsViewController: NSViewController {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Disconnect Snippets Cloud from This Mac?"
-        alert.informativeText = "This removes this Mac’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect.\n\nRecovery check: \(recoveryMessage)"
+        alert.informativeText = "This removes this Mac’s cloud connection and its access to open the library. Your cloud library is not deleted. You will need another approved device or the recovery kit to reconnect. \(SnippetsCloudAccountKeyCopy.signOutReminder)\n\nRecovery check: \(recoveryMessage)"
         alert.addButton(withTitle: "Cancel")
         guard recoveryStatus != .knownReplaced,
               recoveryStatus != .replacementInProgress else {
@@ -3115,7 +3177,7 @@ private final class SyncSettingsViewController: NSViewController {
         Task { @MainActor [weak self] in
             do { try await operation() }
             catch is CancellationError { }
-            catch SnippetsCloudEmailSignInFailure.cancelled { }
+            catch SnippetsCloudAccountKeySignInFailure.cancelled { }
             catch { self?.showCloudError(title, error: error) }
         }
     }
@@ -3197,6 +3259,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     private let syncNowAction: () -> Void
     private let addDevice: () -> Void
     private let replaceRecoveryKit: () -> Void
+    private let showAccountKey: () -> Void
     private let changeAccount: () -> Void
     private let changeLibrary: () -> Void
     private let disconnect: () -> Void
@@ -3213,6 +3276,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         syncNow: @escaping () -> Void,
         addDevice: @escaping () -> Void,
         replaceRecoveryKit: @escaping () -> Void,
+        showAccountKey: @escaping () -> Void,
         changeAccount: @escaping () -> Void,
         changeLibrary: @escaping () -> Void,
         disconnect: @escaping () -> Void
@@ -3226,6 +3290,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         self.syncNowAction = syncNow
         self.addDevice = addDevice
         self.replaceRecoveryKit = replaceRecoveryKit
+        self.showAccountKey = showAccountKey
         self.changeAccount = changeAccount
         self.changeLibrary = changeLibrary
         self.disconnect = disconnect
@@ -3295,7 +3360,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
         stack.addArrangedSubview(section(
             title: "Account",
             lines: [
-                selection.cloudAccountDisplayName,
+                selection.cloudAccountIdentifier.map { "Account ID \($0)" } ?? "Not signed in",
                 bootstrap.libraryID.map { "Library ID \($0) · Used for support" } ?? "No library selected",
             ]))
         stack.addArrangedSubview(section(
@@ -3343,7 +3408,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
 
     private enum Action: Equatable {
         case continueSetup, saveRecovery, switchToCloud, syncNow, addDevice, replaceRecovery
-        case changeAccount, changeLibrary, disconnect
+        case showAccountKey, changeAccount, changeLibrary, disconnect
 
         var selector: Selector {
             switch self {
@@ -3355,6 +3420,8 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
             case .addDevice: #selector(MacSnippetsCloudAccountViewController.addDevicePressed)
             case .replaceRecovery:
                 #selector(MacSnippetsCloudAccountViewController.replaceRecoveryPressed)
+            case .showAccountKey:
+                #selector(MacSnippetsCloudAccountViewController.showAccountKeyPressed)
             case .changeAccount:
                 #selector(MacSnippetsCloudAccountViewController.changeAccountPressed)
             case .changeLibrary:
@@ -3368,7 +3435,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
             switch self {
             case .continueSetup:
                 switch state {
-                case .signedOut: "Sign In to Snippets Cloud…"
+                case .signedOut: "Create Account or Sign In…"
                 case .setupInterrupted: "Resume Library Setup…"
                 case .setupStateUnverified: "Retry Setup Verification…"
                 case .waitingForApproval: "Return to Device Approval…"
@@ -3381,6 +3448,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
             case .syncNow: "Sync Now"
             case .addDevice: "Scan a New Device Invitation…"
             case .replaceRecovery: "Replace Recovery Kit…"
+            case .showAccountKey: "Show Account Key…"
             case .changeAccount: "Change Account…"
             case .changeLibrary: "Change Library…"
             case .disconnect: "Disconnect This Mac…"
@@ -3393,10 +3461,19 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     }
 
     private var visibleActions: [Action] {
+        let actions = stateActions
+        // The key is stored with the session, so it can be shown whenever one exists.
+        guard selection.cloudAccountIdentifier != nil else { return actions }
+        var withKey = actions
+        withKey.insert(.showAccountKey, at: actions.firstIndex(of: .changeAccount) ?? actions.endIndex)
+        return withKey
+    }
+
+    private var stateActions: [Action] {
         switch state {
         case .signedOut:
             [.continueSetup]
-        case .ready:
+        case .ready, .deviceSignInApproved:
             (selection.provider == .snippetsCloud ? [.syncNow] : [.switchToCloud])
                 + (bootstrap.hasPendingRecoveryKit ? [.saveRecovery] : [])
                 + [.addDevice, .replaceRecovery, .changeLibrary, .changeAccount, .disconnect]
@@ -3408,7 +3485,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
              .recoveryKitAuthenticationRequired, .recoveryKitReady:
             [.continueSetup, .changeAccount]
         case .needsTrustedDeviceOrRecovery, .waitingForApproval,
-             .approvalReady, .localAuthenticationRequired:
+             .approvalReady, .deviceSignInApprovalReady, .localAuthenticationRequired:
             [.continueSetup, .changeAccount, .disconnect]
         }
     }
@@ -3473,6 +3550,7 @@ private final class MacSnippetsCloudAccountViewController: NSViewController {
     @objc private func syncNowPressed() { syncNowAction() }
     @objc private func addDevicePressed() { addDevice() }
     @objc private func replaceRecoveryPressed() { replaceRecoveryKit() }
+    @objc private func showAccountKeyPressed() { showAccountKey() }
     @objc private func changeAccountPressed() { changeAccount() }
     @objc private func changeLibraryPressed() { changeLibrary() }
     @objc private func disconnectPressed() { disconnect() }
@@ -3607,13 +3685,7 @@ private final class MacCloudPairingWaitViewController: NSViewController {
     }
 
     private func qrImage(_ value: String) -> NSImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(value.utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage else { return nil }
-        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
-        guard let image = CIContext().createCGImage(scaled, from: scaled.extent) else { return nil }
-        return NSImage(cgImage: image, size: NSSize(width: 300, height: 300))
+        MacCloudQRCodeImage.image(for: value, side: 300)
     }
 
     @objc private func checkAgain() {
@@ -3774,13 +3846,7 @@ private final class MacRecoveryKitViewController: NSViewController, NSTextFieldD
     }
 
     private func qrImage(_ value: String) -> NSImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(value.utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage else { return nil }
-        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
-        guard let image = CIContext().createCGImage(scaled, from: scaled.extent) else { return nil }
-        return NSImage(cgImage: image, size: NSSize(width: 280, height: 280))
+        MacCloudQRCodeImage.image(for: value, side: 280)
     }
 
     private func recoverySheetView() -> NSView {
@@ -3804,16 +3870,7 @@ private final class MacRecoveryKitViewController: NSViewController, NSTextFieldD
     }
 
     @objc private func copyCode() {
-        let pasteboard = NSPasteboard.general
-        let marker = UUID().uuidString
-        let markerType = NSPasteboard.PasteboardType("com.khm.snippets.recovery-marker")
-        pasteboard.clearContents()
-        pasteboard.setString(longCode, forType: .string)
-        pasteboard.setString(marker, forType: markerType)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 120) {
-            guard pasteboard.string(forType: markerType) == marker else { return }
-            pasteboard.clearContents()
-        }
+        MacCloudSecretPasteboard.copy(longCode)
     }
 
     @objc private func saveSheet() {
@@ -3904,7 +3961,7 @@ private final class DiagnosticsSettingsViewController: NSViewController {
             + "enabled, they can also include "
             + "content-free Accessibility stages, outcomes, state transitions, query lengths, "
             + "and numeric AX error codes. Snippet bodies, clipboard contents, names, tags, paths, record IDs, keys and "
-            + "ciphertext, email addresses, sign-in codes and tokens are never accepted by the logging API.")
+            + "ciphertext, account keys, account IDs and tokens are never accepted by the logging API.")
 
         let expansionVerboseTitle = NSTextField(labelWithString: "Expansion Accessibility logging")
         expansionVerboseTitle.font = .systemFont(ofSize: 13, weight: .medium)

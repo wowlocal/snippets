@@ -1,0 +1,125 @@
+{
+  "status": "passed",
+  "phases": [
+    {
+      "role": "macos",
+      "stage": "seed",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "join",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    }
+  ],
+  "initial_snapshot_pages": 3,
+  "records": [
+    128,
+    128,
+    128,
+    128,
+    128
+  ],
+  "equal": true,
+  "incremental_same_record_changes": 125
+}

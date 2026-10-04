@@ -40,7 +40,8 @@ final class AppEnvironment {
         cloudBootstrapSecrets: KeychainSecretStore? = nil,
         syncTransportFactory: (() throws -> any SyncTransport)? = nil,
         pasteboard: (any SnippetPasteboard)? = nil,
-        secureContentLoader: SnippetActionService.SecureContentLoader? = nil
+        secureContentLoader: SnippetActionService.SecureContentLoader? = nil,
+        snippetsCloudEnabled: Bool = SnippetsCloudFeature.isEnabled
     ) {
         #if DEBUG
         let isUITestReset = CommandLine.arguments.contains("--ui-testing-reset")
@@ -79,6 +80,7 @@ final class AppEnvironment {
         backendSelection = SyncBackendSelectionStore(
             keychain: cloudCredentialStore,
             bootstrapSecrets: cloudBootstrapSecrets,
+            snippetsCloudEnabled: snippetsCloudEnabled,
             defersCredentialRecovery: true)
         cloudBootstrap = SnippetsCloudAccountBootstrap(
             selection: backendSelection, secrets: cloudBootstrapSecrets)

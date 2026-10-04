@@ -1,0 +1,198 @@
+{
+  "status": "failed",
+  "phases": [
+    {
+      "role": "macos",
+      "stage": "seed",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "join",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "replay",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "macos",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "iphone",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "ipad",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "android",
+      "stage": "verify",
+      "status": "passed"
+    },
+    {
+      "role": "linux",
+      "stage": "verify",
+      "status": "passed"
+    }
+  ],
+  "crashes": [
+    {
+      "role": "macos",
+      "accepted_before_kill": 1,
+      "recovered": true,
+      "records": 3
+    },
+    {
+      "role": "iphone",
+      "accepted_before_kill": 3,
+      "recovered": true,
+      "records": 3
+    },
+    {
+      "role": "ipad",
+      "accepted_before_kill": 3,
+      "recovered": true,
+      "records": 3
+    },
+    {
+      "role": "android",
+      "accepted_before_kill": 1,
+      "recovered": true,
+      "records": 3
+    },
+    {
+      "role": "linux",
+      "accepted_before_kill": 1,
+      "recovered": true,
+      "records": 3,
+      "runner_note": "service kill observed; exit polling resumed separately"
+    }
+  ],
+  "failure": "final_convergence",
+  "post_recovery_cycles": [
+    {
+      "counts": [
+        3,
+        4,
+        5,
+        5,
+        5
+      ],
+      "equal": false
+    },
+    {
+      "counts": [
+        5,
+        5,
+        5,
+        5,
+        5
+      ],
+      "equal": true
+    }
+  ],
+  "post_recovery_failure": "1401-macos-verify_failed",
+  "post_recovery_authentication_note": "Initial continuation used an expired manual access fixture; after native refresh both additional cycles executed."
+}

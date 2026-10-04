@@ -1,6 +1,7 @@
 //! One serialized account owner. GTK never owns a token or calls a blocking
 //! secret/network API. Unrecorded grants remain here across window dismissal.
 use crate::{
+    account_key::AccountKey,
     auth_store::{self, LiveSession, creation},
     auto_sync::{self, Control, Preference, Schedule, Target, Ticket, Wake},
     bootstrap::{Invitation, RecoveryKit},
@@ -56,6 +57,14 @@ pub(crate) enum Failure {
     ExistingLibrary,
     CreationRetentionFull,
     Automatic(auto_sync::Failure),
+    /// A local typing error. Such a key is never sent to a server.
+    InvalidAccountKey,
+    /// The pasted or scanned device request is malformed, expired or foreign.
+    InvalidDeviceRequest,
+    /// The library an approving device named is not in this account's list.
+    DeviceLibraryUnavailable,
+    /// Discovery does not advertise `native-device-sign-in-v1`.
+    DeviceSignInUnsupported,
 }
 pub(crate) type Result<T> = std::result::Result<T, Failure>;
 impl From<auto_sync::Failure> for Failure {
@@ -77,6 +86,7 @@ impl From<auth_store::Failure> for Failure {
         match v {
             auth_store::Failure::Cloud(e) => Self::Cloud(e),
             auth_store::Failure::Secret(e) => Self::Secret(e),
+            auth_store::Failure::Authentication(e) => Self::Authentication(e),
             other => Self::Account(other),
         }
     }
@@ -275,8 +285,25 @@ impl Failure {
             }
             Self::Cloud(cloud::Failure::InvalidServer) => "Enter a valid HTTPS server address.",
             Self::Cloud(cloud::Failure::InvalidCredential) => {
-                "Check your email or sign-in code, then try again."
+                "Sign in again with your account key."
             }
+            Self::InvalidAccountKey => "This isn't a valid account key. Check it for typos.",
+            Self::Account(auth_store::Failure::AccountKeyUnavailable) => {
+                "This device was signed in by another device. View the account key on a device that has it."
+            }
+            Self::InvalidDeviceRequest => {
+                "This sign-in request is invalid, expired or for another server. Start again on the new device."
+            }
+            Self::DeviceSignInUnsupported => {
+                "This server doesn't support signing in with another device. Sign in with your account key instead."
+            }
+            Self::DeviceLibraryUnavailable => {
+                "The library this device was approved for isn't available to this account. Cancel and sign in again."
+            }
+            Self::Cloud(cloud::Failure::Server {
+                code: cloud::ErrorCode::InvalidAccountKey,
+                ..
+            }) => "That account key wasn't accepted. Check it and try again.",
             Self::Cloud(cloud::Failure::IncompatibleServer) => {
                 "This server does not support the required Snippets Cloud protocol."
             }
@@ -290,14 +317,6 @@ impl Failure {
                 "The saved account changed. Reconnect before continuing."
             }
             Self::Cloud(cloud::Failure::Network) => "The server could not be reached. Try again.",
-            Self::Cloud(cloud::Failure::Server {
-                code: cloud::ErrorCode::InvalidCode,
-                ..
-            }) => "The sign-in code is incorrect.",
-            Self::Cloud(cloud::Failure::Server {
-                code: cloud::ErrorCode::CodeExpired,
-                ..
-            }) => "Request a new sign-in code.",
             Self::Cloud(cloud::Failure::AccountReview | cloud::Failure::DatasetReview)
             | Self::Key(key_store::Failure::ReviewRequired | key_store::Failure::KeyConflict) => {
                 "The account or library changed. Review is required before continuing."
@@ -403,11 +422,22 @@ pub(crate) enum Command {
         permit: local_auth::Permit,
     },
     Resume,
-    SendCode {
+    CreateAccount {
         server: Zeroizing<String>,
-        email: Zeroizing<String>,
     },
-    Verify(Zeroizing<String>),
+    SignIn {
+        server: Zeroizing<String>,
+        key: AccountKey,
+    },
+    PrepareAccountKeyDisclosure,
+    RevealAccountKey(local_auth::Permit),
+    BeginDeviceSignIn {
+        server: Zeroizing<String>,
+    },
+    CheckDeviceSignIn,
+    CancelDeviceSignIn,
+    PrepareDeviceApproval(Zeroizing<String>),
+    ApproveDevice(local_auth::Permit),
     Refresh,
     SignOut,
     Retain,
@@ -481,6 +511,8 @@ impl Command {
                 | Self::Receive
                 | Self::Send
                 | Self::PrepareDisclosure
+                | Self::PrepareAccountKeyDisclosure
+                | Self::RevealAccountKey(_)
                 | Self::Authenticate { .. }
                 | Self::Reveal(_)
                 | Self::Confirm { .. }
@@ -543,15 +575,40 @@ pub(crate) enum Reply {
         failure: Option<Failure>,
         cancelled: bool,
     },
+    /// `account` is only the short public account ID shown to the owner.
     Profile {
-        email: Option<Zeroizing<String>>,
+        account: Option<String>,
         server: Option<ServerURL>,
         interrupted: bool,
         switching: handover::Status,
+        device: Option<auth_store::device::Status>,
     },
-    CodeRequired,
+    /// A signed-out device's request: displayable state, a server-requested
+    /// delay, and any failure of this poll (the request itself is kept).
+    DeviceSignIn {
+        state: Option<auth_store::device::Status>,
+        retry_after: Option<u32>,
+        failure: Option<Failure>,
+    },
+    /// Approved and committed: the library list, the selection of the approved
+    /// library and the claimed key, each applied in this order.
+    DeviceSignedIn {
+        libraries: Box<Reply>,
+        /// The approved library, already selected by the worker.
+        library: Option<uuid::Uuid>,
+        selected: Option<Box<Reply>>,
+        keys: Option<key_store::Result<key_store::Outcome>>,
+        failure: Option<Failure>,
+    },
+    /// The new account's key, shown once for saving before `next` is applied.
+    AccountCreated {
+        key: AccountKey,
+        next: Option<Box<Reply>>,
+        failure: Option<Failure>,
+    },
+    AccountKey(auth_store::AccountKeyDisclosure),
     Libraries {
-        email: Zeroizing<String>,
+        account: String,
         server: ServerURL,
         spaces: Vec<Space>,
         creation: creation::Result<creation::State>,
@@ -1001,10 +1058,11 @@ impl Handle {
                         Ok(Reply::History(key_store::history::Catalog::default()))
                     }
                     Command::Inspect => Ok(Reply::Profile {
-                        email: None,
+                        account: None,
                         server: None,
                         interrupted: false,
                         switching: handover::Status::default(),
+                        device: None,
                     }),
                     Command::PrepareDeletionReview => Ok(Reply::DeletionReview {
                         token: uuid::Uuid::from_u128(900),
@@ -1048,8 +1106,9 @@ struct Owner {
     root: PathBuf,
     store: Option<Store<Native>>,
     client: Option<CloudClient>,
-    challenge: Option<cloud::EmailChallenge>,
     live: Option<LiveSession>,
+    /// The decoded request between its owner authorization and the approval.
+    device_approval: Option<crate::bootstrap::DeviceSignIn>,
     spaces: Vec<Space>,
     selected: Option<Space>,
     transport: Option<BoundTransport>,
@@ -1097,8 +1156,8 @@ impl Owner {
             root,
             store: None,
             client: None,
-            challenge: None,
             live: None,
+            device_approval: None,
             spaces: vec![],
             selected: None,
             transport: None,
@@ -1144,7 +1203,9 @@ impl Owner {
         let operation = diagnostic::operation(&command);
         let started = std::time::Instant::now();
         let result = self.handle_scheduled_inner(command);
-        if let Some(operation) = operation {
+        if let Some(operation) = operation
+            && !diagnostic::quiet(operation, &result)
+        {
             crate::diagnostics::record(diagnostic::event(operation, started, &result));
         }
         result
@@ -1366,15 +1427,18 @@ impl Owner {
         match self.ensure_store(false) {
             Err(Failure::Secret(secret_store::Failure::MissingOwner)) => {
                 return Ok(Reply::Profile {
-                    email: None,
+                    account: None,
                     server: None,
                     interrupted: false,
                     switching: handover::Status::default(),
+                    device: None,
                 });
             }
             result => result?,
         }
         let switching = handover::inspect(self.store.as_mut().ok_or(Failure::InvalidState)?)?;
+        let device =
+            auth_store::device::inspect(self.store.as_mut().ok_or(Failure::InvalidState)?)?;
         self.store
             .as_mut()
             .ok_or(Failure::InvalidState)?
@@ -1382,16 +1446,18 @@ impl Owner {
                 let archive = auth_store::Archive::load(o)?;
                 match archive.saved_deployment() {
                     Ok(deployment) => Ok(Reply::Profile {
-                        email: archive.profile_email()?.map(|s| Zeroizing::new(s.into())),
+                        account: archive.profile_account()?,
                         server: deployment.map(|d| d.server().clone()),
                         interrupted: false,
                         switching,
+                        device,
                     }),
                     Err(auth_store::Failure::Busy) => Ok(Reply::Profile {
-                        email: None,
+                        account: None,
                         server: None,
                         interrupted: true,
                         switching,
+                        device,
                     }),
                     Err(failure) => Err(failure.into()),
                 }
@@ -1414,7 +1480,7 @@ impl Owner {
         client.preflight_credentials()?;
         live.access()?;
         let reply = Reply::Libraries {
-            email: Zeroizing::new(live.email().into()),
+            account: live.account_display()?,
             server: client.credential_deployment().server().clone(),
             spaces: self.spaces.clone(),
             creation,
@@ -1428,6 +1494,234 @@ impl Owner {
         };
         self.check_owner()?;
         Ok(reply)
+    }
+    /// Create and sign-in share one interactive issuance path: they drop any live
+    /// session, finish retained credential cleanup and pin a freshly discovered
+    /// deployment before the serialized credential owner journals the grant.
+    fn begin_interactive(&mut self, server: &str) -> Result<CloudClient> {
+        let server = ServerURL::parse(server)?;
+        self.live = None;
+        self.disconnect_transport();
+        self.client = None;
+        self.ensure_store(true)?;
+        auth_store::recover(self.store.as_mut().ok_or(Failure::InvalidState)?)?;
+        Ok(CloudClient::discover(server)?)
+    }
+    /// One poll of a signed-out device's request, or the continuation of an
+    /// already approved one. Polling failures keep the request and its display.
+    fn check_device_sign_in(&mut self) -> Result<Reply> {
+        use auth_store::device::{self, Claim, Status};
+        self.ensure_store(false)?;
+        let store = self.store.as_mut().ok_or(Failure::InvalidState)?;
+        let Some(status) = device::inspect(store)? else {
+            return self.profile();
+        };
+        if matches!(status, Status::Approved) {
+            if self.live.is_none() {
+                self.reconnect()?;
+            }
+            return self.finish_device_sign_in();
+        }
+        // Like account-key sign-in, a retry after a rejected commit first finishes
+        // that attempt's journaled cleanup, so the next issuance is not refused
+        // as busy; the server revokes the earlier family on the next claim.
+        if let Err(failure) = auth_store::recover(store) {
+            return Ok(Self::device_waiting(status, failure.into()));
+        }
+        let deployment = device::saved_deployment(store)?.ok_or(Failure::InvalidState)?;
+        let client = match &self.client {
+            Some(client) if client.credential_deployment() == deployment => client.clone(),
+            _ => match deployment.discover() {
+                Ok(client) => client,
+                Err(failure) => return Ok(Self::device_waiting(status, failure.into())),
+            },
+        };
+        self.client = Some(client.clone());
+        let store = self.store.as_mut().ok_or(Failure::InvalidState)?;
+        let grant = match device::claim(store, &client) {
+            Ok(Claim::Pending(payload)) => {
+                return Ok(Reply::DeviceSignIn {
+                    state: Some(Status::Waiting(payload)),
+                    retry_after: None,
+                    failure: None,
+                });
+            }
+            Ok(Claim::Approved(grant)) => grant,
+            Err(failure) => return Ok(Self::device_waiting(status, failure.into())),
+        };
+        let result = auth_store::sign_in_with_device(store, &client, *grant);
+        let (live, approval) = result.map_err(|e| self.rejected(e))?;
+        self.live = Some(live);
+        device::record_approval(
+            self.store.as_mut().ok_or(Failure::InvalidState)?,
+            &deployment,
+            approval,
+        )?;
+        self.finish_device_sign_in()
+    }
+    fn device_waiting(status: auth_store::device::Status, failure: Failure) -> Reply {
+        let retry_after = match failure {
+            Failure::Cloud(cloud::Failure::Server { retry_after, .. }) => retry_after,
+            _ => None,
+        };
+        Reply::DeviceSignIn {
+            state: Some(status),
+            retry_after,
+            failure: Some(failure),
+        }
+    }
+    /// Lists libraries, selects exactly the approved one without a chooser
+    /// (failing closed when it is absent), then claims its key with this
+    /// device's retained recipient material through the recipient journal.
+    fn finish_device_sign_in(&mut self) -> Result<Reply> {
+        let approval =
+            auth_store::device::saved_approval(self.store.as_mut().ok_or(Failure::InvalidState)?)?
+                .ok_or(Failure::InvalidState)?;
+        let libraries = Box::new(self.connected(None)?);
+        let Some(index) = self.spaces.iter().position(|s| s.id() == approval.space) else {
+            return Ok(Reply::DeviceSignedIn {
+                libraries,
+                library: None,
+                selected: None,
+                keys: None,
+                failure: Some(Failure::DeviceLibraryUnavailable),
+            });
+        };
+        let selected = match self.select(index) {
+            Ok(reply) => reply,
+            Err(failure) => {
+                return Ok(Reply::DeviceSignedIn {
+                    libraries,
+                    library: None,
+                    selected: None,
+                    keys: None,
+                    failure: Some(failure),
+                });
+            }
+        };
+        let (store, transport) = self.parts()?;
+        let (keys, failure) = match recipient::adopt_device_sign_in(store, transport) {
+            Ok(recipient::Outcome::Ready { kit }) => {
+                (Some(Ok(key_store::Outcome::Ready { kit })), None)
+            }
+            Ok(_) => (None, Some(Failure::InvalidState)),
+            Err(error) => {
+                let failure = if let Some(owner) = error.unrecorded {
+                    self.pending = Some(Pending::Pairing(owner));
+                    Failure::RetentionRequired
+                } else {
+                    error.failure.into()
+                };
+                (None, Some(failure))
+            }
+        };
+        self.check_owner()?;
+        Ok(Reply::DeviceSignedIn {
+            libraries,
+            library: Some(approval.space),
+            selected: Some(Box::new(selected)),
+            keys,
+            failure,
+        })
+    }
+    /// The saved-session refresh behind Reconnect Saved Account.
+    fn reconnect(&mut self) -> Result<()> {
+        self.live = None;
+        self.disconnect_transport();
+        self.ensure_store(false)?;
+        let store = self.store.as_mut().ok_or(Failure::InvalidState)?;
+        auth_store::recover(store)?;
+        let deployment = store.transaction_with::<_, auth_store::Failure>(|o| {
+            auth_store::Archive::load(o)?
+                .saved_deployment()?
+                .ok_or(auth_store::Failure::InvalidState)
+        })?;
+        let client = deployment.discover()?;
+        let result = auth_store::refresh(store, &client);
+        let live = result.map_err(|e| self.rejected(e))?;
+        self.disconnect_transport();
+        self.client = Some(client);
+        self.live = Some(live);
+        Ok(())
+    }
+    fn select(&mut self, index: usize) -> Result<Reply> {
+        self.check_owner()?;
+        let space = self
+            .spaces
+            .get(index)
+            .cloned()
+            .ok_or(Failure::InvalidState)?;
+        self.transport = None;
+        self.selected = None;
+        let client = self.client.as_ref().ok_or(Failure::InvalidState)?;
+        let live = self.live.as_ref().ok_or(Failure::InvalidState)?;
+        let space = client.observe_space(live.access()?, space.id())?;
+        let binding = client.key_binding_for_observation(&space)?;
+        let store = self.store.as_mut().ok_or(Failure::InvalidState)?;
+        let admission = key_store::check_admission(store, &binding);
+        if let Err(failure) = admission
+            && !matches!(
+                failure,
+                key_store::Failure::ReviewRequired
+                    | key_store::Failure::KeyConflict
+                    | key_store::Failure::Busy
+            )
+        {
+            return Err(failure.into());
+        }
+        let token = cloud::Credential::new(
+            std::str::from_utf8(live.access()?.for_secure_storage())
+                .map_err(|_| Failure::InvalidState)?
+                .into(),
+        )?;
+        let identities = space
+            .scope
+            .identities(client.credential_deployment().server());
+        let mut transport =
+            client
+                .clone()
+                .admit(token, space.clone(), &identities.0, &identities.1)?;
+        // Selection itself does not generate a library key. Setup is a
+        // separate explicit action, even for an empty remote library.
+        let key = admission.and_then(|_| key_store::load_verified(store, &mut transport));
+        self.transport = Some(transport);
+        self.selected = Some(space);
+        let outcome = match key {
+            Ok(Some(_)) => {
+                key_store::initialize(store, self.transport.as_mut().ok_or(Failure::InvalidState)?)
+            }
+            Ok(None) => Ok(key_store::Outcome::NeedsTrustedDeviceOrRecovery),
+            Err(failure) => Err(failure),
+        };
+        let pairing = recipient::inspect_retained(
+            store,
+            self.transport.as_ref().ok_or(Failure::InvalidState)?,
+        );
+        let mutation = mutations::inspect_retained(
+            store,
+            self.transport.as_ref().ok_or(Failure::InvalidState)?,
+        );
+        let switching = handover::inspect(store)?;
+        let pending_matches = handover::matches_pending(store, &binding)?;
+        let candidate = candidate::inspect(store, &binding);
+        let bootstrap = initial_candidate::inspect(store, &binding);
+        let can_create_new = creation::can_begin_new(
+            store,
+            self.client.as_ref().ok_or(Failure::InvalidState)?,
+            self.live.as_ref().ok_or(Failure::InvalidState)?,
+        );
+        self.check_owner()?;
+        Ok(Reply::Selected {
+            role: self.selected.as_ref().ok_or(Failure::InvalidState)?.role,
+            can_create_new,
+            keys: outcome,
+            pairing,
+            mutation,
+            switching,
+            pending_matches,
+            candidate,
+            bootstrap,
+        })
     }
     fn disconnect_transport(&mut self) {
         self.creation_review = None;
@@ -1703,6 +1997,12 @@ impl Owner {
         ) {
             self.handover_review = None;
         }
+        if !matches!(
+            &command,
+            Command::ApproveDevice(_) | Command::Authenticate { .. }
+        ) {
+            self.device_approval = None;
+        }
         self.restoration.keep_for(&command);
         self.history_removal.keep_for(&command);
         match command {
@@ -1868,56 +2168,100 @@ impl Owner {
                 auth_store::recover(self.store.as_mut().ok_or(Failure::InvalidState)?)?;
                 self.profile()
             }
-            Command::SendCode { server, email } => {
-                let server = ServerURL::parse(&server)?;
-                if !cloud::email_valid(&email) {
-                    return Err(Failure::Cloud(cloud::Failure::InvalidCredential));
-                }
-                self.live = None;
-                self.disconnect_transport();
-                self.challenge = None;
-                self.ensure_store(true)?;
+            Command::CreateAccount { server } => {
+                let client = self.begin_interactive(&server)?;
                 let store = self.store.as_mut().ok_or(Failure::InvalidState)?;
-                auth_store::recover(store)?;
-                let client = CloudClient::discover(server)?;
-                let challenge = auth_store::start_sign_in(&client, &email)?;
+                let result = auth_store::create_account(store, &client);
+                let (live, key) = result.map_err(|e| self.rejected(e))?;
                 self.client = Some(client);
-                self.challenge = Some(challenge);
-                Ok(Reply::CodeRequired)
-            }
-            Command::Verify(code) => {
-                // A rejected exchange can leave the journal's requested phase.
-                // Recover it before retrying this still-valid challenge, using
-                // the same cleanup/admission path as SendCode and Refresh.
-                auth_store::recover(self.store.as_mut().ok_or(Failure::InvalidState)?)?;
-                let result = auth_store::sign_in(
-                    self.store.as_mut().ok_or(Failure::InvalidState)?,
-                    self.client.as_ref().ok_or(Failure::InvalidState)?,
-                    self.challenge.as_ref().ok_or(Failure::InvalidState)?,
-                    &code,
-                );
-                let live = result.map_err(|e| self.rejected(e))?;
                 self.live = Some(live);
-                self.challenge = None;
+                // The account and its key are committed. A failed library listing
+                // must not hide the only presentation of the new key.
+                let (next, failure) = match self.connected(None) {
+                    Ok(reply) => (Some(Box::new(reply)), None),
+                    Err(failure) => (self.profile().ok().map(Box::new), Some(failure)),
+                };
+                Ok(Reply::AccountCreated { key, next, failure })
+            }
+            Command::SignIn { server, key } => {
+                let client = self.begin_interactive(&server)?;
+                let store = self.store.as_mut().ok_or(Failure::InvalidState)?;
+                let result = auth_store::sign_in(store, &client, &key);
+                drop(key);
+                let live = result.map_err(|e| self.rejected(e))?;
+                self.client = Some(client);
+                self.live = Some(live);
                 self.connected(None)
             }
-            Command::Refresh => {
-                self.live = None;
-                self.disconnect_transport();
-                self.ensure_store(false)?;
+            Command::BeginDeviceSignIn { server } => {
+                let client = self.begin_interactive(&server)?;
+                // Offered only when discovery advertises the capability.
+                if !client.supports_device_sign_in() {
+                    return Err(Failure::DeviceSignInUnsupported);
+                }
                 let store = self.store.as_mut().ok_or(Failure::InvalidState)?;
-                auth_store::recover(store)?;
-                let deployment = store.transaction_with::<_, auth_store::Failure>(|o| {
-                    auth_store::Archive::load(o)?
-                        .saved_deployment()?
-                        .ok_or(auth_store::Failure::InvalidState)
-                })?;
-                let client = deployment.discover()?;
-                let result = auth_store::refresh(store, &client);
-                let live = result.map_err(|e| self.rejected(e))?;
-                self.disconnect_transport();
+                let payload = auth_store::device::begin(store, &client)?;
                 self.client = Some(client);
-                self.live = Some(live);
+                Ok(Reply::DeviceSignIn {
+                    state: Some(auth_store::device::Status::Waiting(payload)),
+                    retry_after: None,
+                    failure: None,
+                })
+            }
+            Command::CheckDeviceSignIn => self.check_device_sign_in(),
+            Command::CancelDeviceSignIn => {
+                self.ensure_store(false)?;
+                auth_store::device::cancel(self.store.as_mut().ok_or(Failure::InvalidState)?)?;
+                self.profile()
+            }
+            Command::PrepareDeviceApproval(payload) => {
+                let request = crate::bootstrap::DeviceSignIn::decode_qr(
+                    payload.as_bytes(),
+                    chrono::Utc::now().timestamp(),
+                )
+                .map_err(|_| Failure::InvalidDeviceRequest)?;
+                drop(payload);
+                if !self
+                    .client
+                    .as_ref()
+                    .ok_or(Failure::InvalidState)?
+                    .supports_device_sign_in()
+                {
+                    return Err(Failure::DeviceSignInUnsupported);
+                }
+                // The request's server is compared with the pinned origin before
+                // the key owner makes any network call.
+                let (store, transport) = self.parts()?;
+                let target = mutations::prepare_device_approval(store, transport, &request)?;
+                self.check_owner()?;
+                self.device_approval = Some(request);
+                Ok(Reply::Target(target))
+            }
+            Command::ApproveDevice(permit) => {
+                let request = self.device_approval.take().ok_or(Failure::InvalidState)?;
+                let (store, transport) = self.parts()?;
+                let result = mutations::approve_device(store, transport, &request, permit)
+                    .map_err(Failure::from);
+                let check = self.check_owner();
+                let outcome = result.as_ref().ok().copied();
+                let failure = check.err().or_else(|| result.err());
+                Ok(self.mutation_status(outcome, failure))
+            }
+            Command::PrepareAccountKeyDisclosure => {
+                self.ensure_store(false)?;
+                Ok(Reply::Target(auth_store::prepare_account_key_disclosure(
+                    self.store.as_mut().ok_or(Failure::InvalidState)?,
+                )?))
+            }
+            Command::RevealAccountKey(permit) => {
+                self.ensure_store(false)?;
+                Ok(Reply::AccountKey(auth_store::reveal_account_key(
+                    self.store.as_mut().ok_or(Failure::InvalidState)?,
+                    permit,
+                )?))
+            }
+            Command::Refresh => {
+                self.reconnect()?;
                 self.connected(None)
             }
             Command::SignOut => {
@@ -1926,8 +2270,9 @@ impl Owner {
                 self.disconnect_transport();
                 auth_store::recover(self.store.as_mut().ok_or(Failure::InvalidState)?)?;
                 auth_store::sign_out(self.store.as_mut().ok_or(Failure::InvalidState)?)?;
+                // An approved device sign-in belongs to the signed-out session.
+                auth_store::device::cancel(self.store.as_mut().ok_or(Failure::InvalidState)?)?;
                 self.client = None;
-                self.challenge = None;
                 self.profile()
             }
             Command::Retain => {
@@ -1960,86 +2305,7 @@ impl Owner {
                 self.disconnect_transport();
                 self.profile()
             }
-            Command::Select(index) => {
-                self.check_owner()?;
-                let space = self
-                    .spaces
-                    .get(index)
-                    .cloned()
-                    .ok_or(Failure::InvalidState)?;
-                self.transport = None;
-                self.selected = None;
-                let client = self.client.as_ref().ok_or(Failure::InvalidState)?;
-                let live = self.live.as_ref().ok_or(Failure::InvalidState)?;
-                let space = client.observe_space(live.access()?, space.id())?;
-                let binding = client.key_binding_for_observation(&space)?;
-                let store = self.store.as_mut().ok_or(Failure::InvalidState)?;
-                let admission = key_store::check_admission(store, &binding);
-                if let Err(failure) = admission
-                    && !matches!(
-                        failure,
-                        key_store::Failure::ReviewRequired
-                            | key_store::Failure::KeyConflict
-                            | key_store::Failure::Busy
-                    )
-                {
-                    return Err(failure.into());
-                }
-                let token = cloud::Credential::new(
-                    std::str::from_utf8(live.access()?.for_secure_storage())
-                        .map_err(|_| Failure::InvalidState)?
-                        .into(),
-                )?;
-                let identities = space
-                    .scope
-                    .identities(client.credential_deployment().server());
-                let mut transport =
-                    client
-                        .clone()
-                        .admit(token, space.clone(), &identities.0, &identities.1)?;
-                // Selection itself does not generate a library key. Setup is a
-                // separate explicit action, even for an empty remote library.
-                let key = admission.and_then(|_| key_store::load_verified(store, &mut transport));
-                self.transport = Some(transport);
-                self.selected = Some(space);
-                let outcome = match key {
-                    Ok(Some(_)) => key_store::initialize(
-                        store,
-                        self.transport.as_mut().ok_or(Failure::InvalidState)?,
-                    ),
-                    Ok(None) => Ok(key_store::Outcome::NeedsTrustedDeviceOrRecovery),
-                    Err(failure) => Err(failure),
-                };
-                let pairing = recipient::inspect_retained(
-                    store,
-                    self.transport.as_ref().ok_or(Failure::InvalidState)?,
-                );
-                let mutation = mutations::inspect_retained(
-                    store,
-                    self.transport.as_ref().ok_or(Failure::InvalidState)?,
-                );
-                let switching = handover::inspect(store)?;
-                let pending_matches = handover::matches_pending(store, &binding)?;
-                let candidate = candidate::inspect(store, &binding);
-                let bootstrap = initial_candidate::inspect(store, &binding);
-                let can_create_new = creation::can_begin_new(
-                    store,
-                    self.client.as_ref().ok_or(Failure::InvalidState)?,
-                    self.live.as_ref().ok_or(Failure::InvalidState)?,
-                );
-                self.check_owner()?;
-                Ok(Reply::Selected {
-                    role: self.selected.as_ref().ok_or(Failure::InvalidState)?.role,
-                    can_create_new,
-                    keys: outcome,
-                    pairing,
-                    mutation,
-                    switching,
-                    pending_matches,
-                    candidate,
-                    bootstrap,
-                })
-            }
+            Command::Select(index) => self.select(index),
             Command::PrepareHandover(code) => self.prepare_handover(code),
             Command::CommitHandover { token, permit } => {
                 let (expected, review) =
@@ -2691,7 +2957,7 @@ mod tests {
         let mut pending = false;
         let worker = Handle::spawn(move |command| {
             let reply = match command {
-                Command::Verify(_) => {
+                Command::SignIn { .. } => {
                     pending = true;
                     Err(Failure::RetentionRequired)
                 }
@@ -2700,10 +2966,11 @@ mod tests {
                     Ok(Reply::Saved)
                 }
                 _ => Ok(Reply::Profile {
-                    email: None,
+                    account: None,
                     server: None,
                     interrupted: pending,
                     switching: handover::Status::default(),
+                    device: None,
                 }),
             };
             (reply, pending)
@@ -2711,9 +2978,10 @@ mod tests {
         .unwrap();
         drop(
             worker
-                .request(Command::Verify(Zeroizing::new(
-                    "public fictional code".into(),
-                )))
+                .request(Command::SignIn {
+                    server: Zeroizing::new("https://public.example.test".into()),
+                    key: AccountKey::parse_input("7KQF-9M2X-R4TD-H8WB-ZN3C-P6YE-1AQ7").unwrap(),
+                })
                 .unwrap(),
         );
         let inspected = worker.request(Command::Inspect).unwrap();

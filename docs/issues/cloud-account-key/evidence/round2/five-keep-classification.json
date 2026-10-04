@@ -1,0 +1,13 @@
+{
+  "raw_orchestrator_status": "failed",
+  "raw_failure": "delete_swallowed_edit",
+  "classification": "test_oracle_mismatch_explicit_keep_is_new_edit",
+  "product_data_loss": false,
+  "stable_equal_platforms": 5,
+  "records": 8,
+  "race_bodies_preserved": 5,
+  "independent_fields_preserved": true,
+  "restored_local_and_iphone_edit_preserved": true,
+  "expected_race_copies": 4,
+  "expected_keep_conflict_copies": 1
+}

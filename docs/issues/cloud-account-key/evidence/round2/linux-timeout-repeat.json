@@ -1,0 +1,7 @@
+{
+  "repetitions": 20,
+  "passed": 20,
+  "failed": 0,
+  "ignored": 0,
+  "known_prior_flake_not_declared_fixed": true
+}

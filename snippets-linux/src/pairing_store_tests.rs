@@ -81,6 +81,24 @@ impl Remote for Server {
     }
 }
 impl recipient::Remote for Server {
+    fn observe(&mut self, pairing: Uuid, public: &[u8; 65], nonce: &[u8; 32]) -> Result<Pairing> {
+        self.core.call();
+        self.polls += 1;
+        let invitation = self.invitation.clone().unwrap();
+        assert!(invitation.pairing() == pairing);
+        // Mirrors the transport's decoder: another key or nonce is refused.
+        if invitation.public_key() != public || invitation.nonce() != nonce {
+            return Err(Failure::Cloud(cloud::Failure::InvalidResponse));
+        }
+        Ok(Pairing::test(
+            invitation,
+            if self.ciphertext.is_some() {
+                PairingState::Approved
+            } else {
+                PairingState::Pending
+            },
+        ))
+    }
     fn create(&mut self, draft: &PairingDraft) -> Result<Pairing> {
         self.core.call();
         self.creates += 1;
@@ -399,10 +417,11 @@ fn native_account_owner_keeps_a_lost_ui_claim_and_retries_locked_retention_befor
                             }
                         },
                         Command::Inspect => Ok(Reply::Profile {
-                            email: None,
+                            account: None,
                             server: None,
                             interrupted: pending.is_some(),
                             switching: crate::key_store::handover::Status::default(),
+                            device: None,
                         }),
                         _ => Err(AccountFailure::InvalidState),
                     }
@@ -786,4 +805,139 @@ fn offline_inspection_returns_only_the_retained_public_step_and_never_activates_
             && memory.slot(Slot::LibraryKey).is_none()
     );
     assert!(server.polls == 1 && server.claims == 1);
+}
+
+/// A device-approved sign-in (ADR 0007) after its session was committed: the
+/// approving device created and approved a pairing for this draft's key/nonce.
+fn approved_device(
+    store: &mut Store<Memory>,
+    server: &mut Server,
+    draft: &PairingDraft,
+    space: Uuid,
+) -> Uuid {
+    let pairing = Uuid::from_u128(0x5a5a);
+    let document = serde_json::json!({
+        "schema":1,
+        "deployment":{"server":server.core.pin.server.for_secure_storage(),"instance":server.core.pin.instance},
+        "draft":serde_json::from_slice::<serde_json::Value>(&draft.encode_secret().unwrap()).unwrap(),
+        "request":null,
+        "approval":{"spaceId":space,"pairingId":pairing}
+    });
+    store
+        .transaction(|o| {
+            o.replace(
+                Slot::DeviceSignIn,
+                None,
+                Some(&serde_json::to_vec(&document).unwrap()),
+            )
+        })
+        .unwrap();
+    server.invitation = Some(
+        Invitation::new(
+            server.core.pin.server.clone(),
+            server.core.pin.space,
+            pairing,
+            *draft.nonce(),
+            *draft.public_key(),
+            now() + 300,
+            now(),
+        )
+        .unwrap(),
+    );
+    server.approve();
+    pairing
+}
+fn adopt(store: &mut Store<Memory>, server: &mut Server) -> recipient::Result<PairingOutcome> {
+    store.transaction_with(|owner| recipient::adopt_device_locked(owner, server))
+}
+fn draft_copy(draft: &PairingDraft) -> PairingDraft {
+    PairingDraft::decode_secret(&draft.encode_secret().unwrap()).unwrap()
+}
+
+#[test]
+fn device_sign_in_adopts_retained_recipient_material_into_the_ordinary_claim_path() {
+    let (temp, mut store, mut server, memory) = setup_pairing();
+    let draft = PairingDraft::generate().unwrap();
+    let space = server.core.pin.space;
+    approved_device(&mut store, &mut server, &draft, space);
+    assert_ready(good(adopt(&mut store, &mut server)));
+    // Observed with the device's own key/nonce, then claimed exactly once.
+    assert!(server.claims == 1 && server.creates == 0);
+    assert!(memory.slot(Slot::DeviceSignIn).is_none());
+    assert!(retirement_terminal(memory.slot(Slot::PairingRecipient)).unwrap());
+    let key = store
+        .transaction_with(|o| load_locked(o, &mut server))
+        .unwrap()
+        .unwrap();
+    assert!(key.bundle.for_secure_storage() == server.bundle.for_secure_storage());
+    assert!(!temp.path().join("Sync").exists());
+    // Nothing remains to adopt.
+    assert!(rejected(adopt(&mut store, &mut server)).failure == Failure::InvalidState);
+}
+
+#[test]
+fn device_sign_in_refuses_another_recipient_or_library_before_any_claim() {
+    // A pairing for another key fails the existing recipient-key/nonce check.
+    let (_temp, mut store, mut server, memory) = setup_pairing();
+    let draft = PairingDraft::generate().unwrap();
+    let space = server.core.pin.space;
+    approved_device(&mut store, &mut server, &draft, space);
+    let other = PairingDraft::generate().unwrap();
+    let invitation = server.invitation.clone().unwrap();
+    server.invitation = Some(
+        Invitation::new(
+            invitation.server().clone(),
+            invitation.space(),
+            invitation.pairing(),
+            *other.nonce(),
+            *other.public_key(),
+            invitation.expires_at(),
+            now(),
+        )
+        .unwrap(),
+    );
+    let saved = memory.slot(Slot::DeviceSignIn).unwrap();
+    assert!(
+        rejected(adopt(&mut store, &mut server)).failure
+            == Failure::Cloud(cloud::Failure::InvalidResponse)
+    );
+    assert!(server.claims == 0 && memory.slot(Slot::LibraryKey).is_none());
+    assert!(memory.slot(Slot::DeviceSignIn).unwrap() == saved);
+    assert!(memory.slot(Slot::PairingRecipient).is_none());
+    // An approval for another library never contacts the server.
+    let (_temp, mut store, mut server, memory) = setup_pairing();
+    let draft = PairingDraft::generate().unwrap();
+    approved_device(
+        &mut store,
+        &mut server,
+        &draft_copy(&draft),
+        Uuid::from_u128(77),
+    );
+    assert!(rejected(adopt(&mut store, &mut server)).failure == Failure::ReviewRequired);
+    assert!(server.polls == 0 && server.claims == 0);
+    assert!(memory.slot(Slot::LibraryKey).is_none() && memory.slot(Slot::DeviceSignIn).is_some());
+    // A pairing not yet approved is not claimed.
+    let (_temp, mut store, mut server, memory) = setup_pairing();
+    let draft = PairingDraft::generate().unwrap();
+    let space = server.core.pin.space;
+    approved_device(&mut store, &mut server, &draft, space);
+    server.ciphertext = None;
+    assert!(rejected(adopt(&mut store, &mut server)).failure == Failure::ReviewRequired);
+    assert!(server.claims == 0 && memory.slot(Slot::DeviceSignIn).is_some());
+}
+
+#[test]
+fn interrupted_device_claim_resumes_through_the_saved_recipient_journal() {
+    let (_temp, mut store, mut server, memory) = setup_pairing();
+    let draft = PairingDraft::generate().unwrap();
+    let space = server.core.pin.space;
+    approved_device(&mut store, &mut server, &draft, space);
+    server.lose_claim = true;
+    assert!(rejected(adopt(&mut store, &mut server)).failure == Server::network());
+    // Ownership moved: the draft is in the recipient journal, the request gone.
+    assert!(memory.slot(Slot::DeviceSignIn).is_none());
+    assert!(memory.slot(Slot::PairingRecipient).is_some());
+    assert!(memory.slot(Slot::LibraryKey).is_none());
+    assert_ready(good(check(&mut store, &mut server)));
+    assert!(server.claims == 2);
 }

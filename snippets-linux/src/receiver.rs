@@ -325,6 +325,22 @@ impl Owner<'_> {
             }
             while let Some(remote_record) = checkpoint.journal.inbox.next().cloned() {
                 (self.validate_session)()?;
+                if checkpoint.journal.inbox.next_precedes(
+                    checkpoint
+                        .journal
+                        .confirmed(remote_record.envelope.id)
+                        .map(|c| &c.record_version),
+                ) {
+                    // A receipt already confirmed a later generation of this record
+                    // that this ordered page also delivers (typically this device's
+                    // own acknowledged write). This one is its ancestor: merging it
+                    // against that newer confirmed value would roll primary back or
+                    // mint a copy of a version both sides already superseded.
+                    checkpoint.journal.inbox.acknowledge_record()?;
+                    self.save(&mut checkpoint, fault)?;
+                    progress.applied_records += 1;
+                    continue;
+                }
                 let id = remote_record.envelope.id;
                 let current = primary::current(self.library, &checkpoint.journal, &device)?;
                 // Deletion of a retained original or current raw carrier group
@@ -379,8 +395,9 @@ impl Owner<'_> {
                 }
                 let expected =
                     primary::preservation_read_set(std::slice::from_ref(&outcome), &current)?;
-                let prepared =
+                let mut prepared =
                     self.prepare_primary(&checkpoint.journal, &device, &outcome, &expected)?;
+                prepared.merged_authoritative_remote();
                 let status = if !prepared.incompatible_ids.is_empty() {
                     Some(Status::IncompatibleVault)
                 } else if !prepared.deferred_ids.is_empty() {

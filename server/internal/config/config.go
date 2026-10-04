@@ -45,12 +45,6 @@ type OIDC struct {
 type NativeAuth struct {
 	Secret            []byte
 	IdentityPepper    []byte
-	SMTPHost          string
-	SMTPPort          int
-	SMTPUsername      string
-	SMTPPassword      string
-	SMTPFrom          string
-	SMTPTLS           string
 	TrustedProxyCIDRs []netip.Prefix
 }
 
@@ -278,27 +272,6 @@ func LoadFrom(lookup func(string) (string, bool)) (Server, error) {
 		native.IdentityPepper = pepper
 		native.Secret, err = secret("NATIVE_AUTH_SECRET")
 		if err != nil {
-			return Server{}, err
-		}
-		native.SMTPHost, err = required("SMTP_HOST")
-		if err != nil {
-			return Server{}, err
-		}
-		native.SMTPPort, err = positive("SMTP_PORT", 587)
-		if err != nil || native.SMTPPort > 65535 {
-			return Server{}, errors.New("invalid SMTP_PORT")
-		}
-		native.SMTPFrom, err = required("SMTP_FROM")
-		if err != nil {
-			return Server{}, err
-		}
-		native.SMTPUsername, _ = lookup("SMTP_USERNAME")
-		native.SMTPPassword, _ = lookup("SMTP_PASSWORD")
-		native.SMTPTLS = "starttls"
-		if value, ok := lookup("SMTP_TLS"); ok {
-			native.SMTPTLS = value
-		}
-		if err := ValidateNativeSMTP(native, environment); err != nil {
 			return Server{}, err
 		}
 		trustedProxies, _ := lookup("AUTH_TRUSTED_PROXY_CIDRS")

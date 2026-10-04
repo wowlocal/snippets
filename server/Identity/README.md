@@ -1,6 +1,10 @@
 # Snippets account deployment
 
-Native clients now use OIDC code + PKCE with Apple, Google, or email OTP. Passkeys are
+> This guide applies only to the optional `AUTH_MODE=oidc` adapter. Native clients sign in
+> with generated account keys ([ADR 0006](../ADR/0006-generated-account-key-authentication.md))
+> and need no identity provider, browser or mail service.
+
+The OIDC adapter uses OIDC code + PKCE with Apple, Google, or email OTP. Passkeys are
 optional for new libraries. Global uses Logto Cloud; the regional deployment uses the
 pinned Logto OSS stack in `docker-compose.yml`. These are independent identity domains:
 separate issuer, subjects, databases, API origins, server instance IDs, SMTP and callback

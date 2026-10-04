@@ -43,6 +43,12 @@ class SnippetRepository(
     private var recoveryVerificationState = RecoveryKitVerificationState.neverVerified
     private var pendingLibrarySelection: PendingLibrarySelection? = null
     private var pendingPostAuthorization: PendingPostAuthorizationBootstrap? = null
+    // ADR 0007 new-device request. Its recipient private key and poll token stay in the
+    // encrypted store and never enter LibraryState, logs or diagnostics.
+    private var pendingDeviceSignIn: LibraryKeyBootstrap.PendingDeviceSignIn? = null
+    private var approvalSignsInDevice = false
+    @Volatile private var deviceSignInAvailable = false
+    private var notice: String? = null
 
     private val mutableState = MutableStateFlow(LibraryState(isBusy = true))
     val state: StateFlow<LibraryState> = mutableState.asStateFlow()
@@ -177,6 +183,23 @@ class SnippetRepository(
                         }
                         .onFailure { store.delete(PENDING_APPROVAL) }
                 }
+                store.read(PENDING_DEVICE_APPROVAL)?.let { raw ->
+                    runCatching { LibraryKeyBootstrap.PendingDeviceApproval.fromJSON(raw) }
+                        .onSuccess { pending ->
+                            approvalConfirmationCode = pending.request.confirmationCode
+                            approvalSignsInDevice = true
+                            cloudKeyStatus = CloudKeyStatus.APPROVAL_READY
+                        }
+                        .onFailure { store.delete(PENDING_DEVICE_APPROVAL) }
+                }
+                store.read(PENDING_DEVICE_SIGN_IN)?.let { raw ->
+                    // An expired, foreign or superseded request is discarded; it simply expires.
+                    runCatching { LibraryKeyBootstrap.PendingDeviceSignIn.fromJSON(raw) }
+                        .getOrNull()
+                        ?.takeIf { !cloudSessionAvailable && it.request.serverURL == pinnedServerURL() }
+                        ?.let { pendingDeviceSignIn = it }
+                        ?: store.delete(PENDING_DEVICE_SIGN_IN)
+                }
                 store.read(RECOVERY_PRESENTATION)?.let { payload ->
                     runCatching { LibraryKeyBootstrap.RecoveryKit.fromQRPayload(payload) }
                         .onSuccess { kit ->
@@ -300,226 +323,192 @@ class SnippetRepository(
         persistSyncState()
     }
 
-    suspend fun beginCloudSignIn(
+    /**
+     * Creates a Snippets Cloud account. Its grant takes exactly the sign-in path below:
+     * repository mutex, journal-first token handling, library selection and commit.
+     */
+    internal suspend fun createCloudAccount(
         serverURL: String,
-        email: String,
+        chooseAccount: Boolean = false,
+    ): CloudSignInCompletion = completeCloudAuthorization(resume = false) {
+        if (store.read(PENDING_LOCAL_ERASE) != null) completePendingLocalErase()
+        if (pendingPostAuthorization != null) throw CloudAuthFailure("post_authorization_incomplete")
+        authenticator.createAccount(serverURL, chooseAccount)
+    }
+
+    /** [accountKey] is the canonical form produced by [NativeCloudAccountKey.normalize]. */
+    internal suspend fun signInWithAccountKey(
+        serverURL: String,
+        accountKey: String,
         stepUp: Boolean = false,
         chooseAccount: Boolean = false,
-    ): CloudEmailChallenge {
-        initialization.await()
-        if (!snippetsCloudEnabled) throw CloudAuthFailure("cloud_build_not_configured")
-        return mutex.withLock {
-            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
-            try {
-                val challenge = withContext(Dispatchers.IO) {
-                    if (store.read(PENDING_LOCAL_ERASE) != null) completePendingLocalErase()
-                    if (!stepUp && pendingPostAuthorization != null) {
-                        throw CloudAuthFailure("post_authorization_incomplete")
-                    }
-                    authenticator.startEmailSignIn(serverURL, email, stepUp, chooseAccount,
-                        if (stepUp) currentStepUpBinding() else null)
-                }
-                publish()
-                challenge
-            } catch (error: CloudAuthFailure) {
-                publish(errorCode = error.code)
-                throw error
-            } catch (_: Exception) {
-                publish(errorCode = "sign_in_failed")
-                throw CloudAuthFailure("sign_in_failed")
-            }
+    ): CloudSignInCompletion = completeCloudAuthorization(resume = false) {
+        if (store.read(PENDING_LOCAL_ERASE) != null) completePendingLocalErase()
+        if (!stepUp && pendingPostAuthorization != null) {
+            throw CloudAuthFailure("post_authorization_incomplete")
         }
+        authenticator.signInWithAccountKey(serverURL, accountKey, stepUp, chooseAccount,
+            if (stepUp) currentStepUpBinding() else null)
     }
 
-    internal suspend fun beginResumeCloudSetupSignIn(email: String): CloudEmailChallenge {
+    /** Sign-in bound to the exact library whose post-authorization setup was interrupted. */
+    internal suspend fun resumeCloudSetupWithAccountKey(accountKey: String): CloudSignInCompletion =
+        completeCloudAuthorization(resume = true) {
+            val pending = pendingPostAuthorization
+                ?: throw CloudAuthFailure("post_authorization_incomplete")
+            if (!pending.matches(configuration)) throw CloudAuthFailure("scope_review_required")
+            authenticator.signInWithAccountKey(pending.serverURL, accountKey, chooseAccount = true,
+                resumeBinding = CloudStepUpBinding(pending.serverURL, pending.serverInstanceID,
+                    pending.spaceID, pending.scopeBinding))
+        }
+
+    private suspend fun completeCloudAuthorization(
+        resume: Boolean,
+        authorize: suspend () -> CloudAuthenticator.CompletedAuthorization,
+    ): CloudSignInCompletion {
         initialization.await()
-        if (!snippetsCloudEnabled) throw CloudAuthFailure("cloud_build_not_configured")
-        return mutex.withLock {
-            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
-            try {
-                val challenge = withContext(Dispatchers.IO) {
+        if (!snippetsCloudEnabled) {
+            return CloudSignInCompletion(succeeded = false, errorCode = "cloud_build_not_configured")
+        }
+        return mutex.withLock { completeCloudAuthorizationLocked(resume, deviceGrant = null, authorize) }
+    }
+
+    /** The one grant path for create, sign-in, resume and device approval. Caller holds [mutex]. */
+    private suspend fun completeCloudAuthorizationLocked(
+        resume: Boolean,
+        deviceGrant: DeviceSignInGrant?,
+        authorize: suspend () -> CloudAuthenticator.CompletedAuthorization,
+    ): CloudSignInCompletion {
+        mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+        var rejectResumeCandidate = false
+        var receivedAuthorization = false
+        var createdAccountKey: String? = null
+        // A created key is shown only while a committed or chooser-pending session holds
+        // it. A discarded candidate leaves an orphan account; the user simply creates another.
+        fun retainedAccountKey(includePending: Boolean): String? = createdAccountKey
+            ?.takeIf { authenticator.retainsAccountKey(it, includePending) }
+        return try {
+            val completion = withContext(Dispatchers.IO) {
+                val authorization = authorize()
+                createdAccountKey = authorization.createdAccountKey
+                receivedAuthorization = true
+                cloudSessionAvailable = true
+                deviceGrant?.let { grant ->
+                    return@withContext PostAuthorizationCompletion(
+                        recoveryKit = completeDeviceApprovedAuthorization(authorization, grant),
+                        needsLibrarySelection = false,
+                    )
+                }
+                authorization.resumeBinding?.let { expected ->
+                    rejectResumeCandidate = true
                     val pending = pendingPostAuthorization
-                        ?: throw CloudAuthFailure("post_authorization_incomplete")
-                    if (!pending.matches(configuration)) throw CloudAuthFailure("scope_review_required")
-                    authenticator.startEmailSignIn(pending.serverURL, email, chooseAccount = true,
-                        resumeBinding = CloudStepUpBinding(pending.serverURL, pending.serverInstanceID,
-                            pending.spaceID, pending.scopeBinding))
-                }
-                publish()
-                challenge
-            } catch (error: CloudAuthFailure) {
-                cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
-                publish(errorCode = error.code)
-                throw error
-            } catch (_: Exception) {
-                cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
-                publish(errorCode = "post_authorization_incomplete")
-                throw CloudAuthFailure("post_authorization_incomplete")
-            }
-        }
-    }
-
-    internal fun cancelCloudEmailSignIn() { authenticator.cancelEmailSignIn() }
-
-    internal suspend fun completeCloudSignIn(challengeID: String, code: String): CloudSignInCompletion {
-        initialization.await()
-        if (!snippetsCloudEnabled) return CloudSignInCompletion(succeeded = false)
-        return mutex.withLock {
-            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
-            var rejectResumeCandidate = false
-            var receivedAuthorization = false
-            try {
-                val completion = withContext(Dispatchers.IO) {
-                    val authorization = authenticator.completeEmailSignIn(challengeID, code)
-                    receivedAuthorization = true
-                    cloudSessionAvailable = true
-                    authorization.resumeBinding?.let { expected ->
-                        rejectResumeCandidate = true
-                        val pending = pendingPostAuthorization
-                            ?: throw CloudAuthFailure("resume_account_mismatch")
-                        if (!pending.matches(configuration) || !pending.matches(expected)) {
+                        ?: throw CloudAuthFailure("resume_account_mismatch")
+                    if (!pending.matches(configuration) || !pending.matches(expected)) {
+                        throw CloudAuthFailure("resume_account_mismatch")
+                    }
+                    val resolution = try {
+                        client.resolveSpace(
+                            authorization.serverURL,
+                            expected.spaceID,
+                            authorization.accessToken,
+                        )
+                    } catch (error: SyncFailure) {
+                        if (error.code == "not_found" || error.code == "forbidden" ||
+                            error.code == "authentication_required") {
                             throw CloudAuthFailure("resume_account_mismatch")
                         }
-                        val resolution = try {
-                            client.resolveSpace(
-                                authorization.serverURL,
-                                expected.spaceID,
-                                authorization.accessToken,
-                            )
-                        } catch (error: SyncFailure) {
-                            if (error.code == "not_found" || error.code == "forbidden" ||
-                                error.code == "authentication_required") {
-                                throw CloudAuthFailure("resume_account_mismatch")
-                            }
-                            throw error
-                        }
-                        if (!expected.matches(authorization.serverURL, resolution)) {
-                            throw CloudAuthFailure("resume_account_mismatch")
-                        }
-                        rejectResumeCandidate = false
-                        val recoveryKit = completeResolvedAuthorization(
-                            authorization.serverURL,
-                            authorization.accessToken,
-                            resolution,
-                            operation = pending.operation,
-                        )
-                        return@withContext PostAuthorizationCompletion(
-                            recoveryKit = recoveryKit,
-                            needsLibrarySelection = false,
-                        )
+                        throw error
                     }
-                    authorization.stepUpBinding?.let { expected ->
-                        if (configuration.serverURL != expected.serverURL ||
-                            !configuration.serverInstanceID.equals(
-                                expected.serverInstanceID,
-                                ignoreCase = true,
-                            ) || !configuration.spaceID.equals(
-                                expected.spaceID,
-                                ignoreCase = true,
-                            )) {
-                            throw CloudAuthFailure("step_up_account_mismatch")
-                        }
-                        val resolution = try {
-                            client.resolveSpace(
-                                authorization.serverURL,
-                                expected.spaceID,
-                                authorization.accessToken,
-                            )
-                        } catch (error: SyncFailure) {
-                            if (error.code == "not_found" || error.code == "forbidden" ||
-                                error.code == "authentication_required") {
-                                throw CloudAuthFailure("step_up_account_mismatch")
-                            }
-                            throw error
-                        }
-                        if (!expected.matches(authorization.serverURL, resolution)) {
-                            throw CloudAuthFailure("step_up_account_mismatch")
-                        }
-                        val recoveryKit = completeResolvedAuthorization(
-                            authorization.serverURL,
-                            authorization.accessToken,
-                            resolution,
-                            operation = CloudPostAuthorizationOperation.STEP_UP,
-                        )
-                        return@withContext PostAuthorizationCompletion(
-                            recoveryKit = recoveryKit,
-                            needsLibrarySelection = false,
-                        )
+                    if (!expected.matches(authorization.serverURL, resolution)) {
+                        throw CloudAuthFailure("resume_account_mismatch")
                     }
-                    val existingSpace = configuration.takeIf {
-                        it.serverURL == authorization.serverURL
-                    }?.spaceID?.takeIf(String::isNotBlank)
-                    val candidates = client.personalSpaceCandidates(
+                    rejectResumeCandidate = false
+                    val recoveryKit = completeResolvedAuthorization(
                         authorization.serverURL,
                         authorization.accessToken,
+                        resolution,
+                        operation = pending.operation,
                     )
-                    val resolution = automaticPersonalSpace(candidates, existingSpace)
-                        ?: if (candidates.isEmpty()) {
-                            client.createPersonalSpace(
-                                authorization.serverURL,
-                                authorization.accessToken,
-                            )
-                        } else if (candidates.none(HttpSyncClient.SpaceCandidate::canWrite)) {
-                            throw SyncFailure("read_only_library")
-                        } else {
-                            val pending = PendingLibrarySelection(
-                                serverURL = authorization.serverURL,
-                                choices = candidates.map {
-                                    CloudLibraryChoice(
-                                        spaceID = it.spaceID,
-                                        serverInstanceID = it.serverInstanceID,
-                                        role = it.role,
-                                        scopeBinding = it.scopeBinding,
-                                    )
-                                },
-                                previousLibraryID = if (authorization.accountChange) {
-                                    libraryID()
-                                } else {
-                                    null
-                                },
-                                usesPendingAuthorization = true,
-                                operation = if (authorization.accountChange) {
-                                    CloudPostAuthorizationOperation.CHANGE_ACCOUNT
-                                } else {
-                                    CloudPostAuthorizationOperation.SIGN_IN
-                                },
-                            )
-                            store.write(PENDING_SPACE_SELECTION, pending.toJSON())
-                            pendingLibrarySelection = pending
-                            return@withContext PostAuthorizationCompletion(
-                                recoveryKit = null,
-                                needsLibrarySelection = true,
-                            )
-                        }
-                    if (authorization.accountChange && (
-                            configuration.serverURL != authorization.serverURL ||
-                                !configuration.spaceID.equals(
-                                    resolution.spaceID,
-                                    ignoreCase = true,
-                                ) ||
-                                !configuration.serverInstanceID.equals(
-                                    resolution.serverInstanceID,
-                                    ignoreCase = true,
-                                )
-                            )) {
-                        val choice = candidates.firstOrNull {
-                            it.spaceID.equals(resolution.spaceID, ignoreCase = true)
-                        }?.let {
-                            CloudLibraryChoice(
-                                it.spaceID, it.serverInstanceID, it.role, it.scopeBinding,
-                            )
-                        } ?: CloudLibraryChoice(
-                            resolution.spaceID,
-                            resolution.serverInstanceID,
-                            resolution.role,
-                            resolution.scopeBinding,
+                    return@withContext PostAuthorizationCompletion(
+                        recoveryKit = recoveryKit,
+                        needsLibrarySelection = false,
+                    )
+                }
+                authorization.stepUpBinding?.let { expected ->
+                    if (configuration.serverURL != expected.serverURL ||
+                        !configuration.serverInstanceID.equals(
+                            expected.serverInstanceID,
+                            ignoreCase = true,
+                        ) || !configuration.spaceID.equals(
+                            expected.spaceID,
+                            ignoreCase = true,
+                        )) {
+                        throw CloudAuthFailure("step_up_account_mismatch")
+                    }
+                    val resolution = try {
+                        client.resolveSpace(
+                            authorization.serverURL,
+                            expected.spaceID,
+                            authorization.accessToken,
                         )
+                    } catch (error: SyncFailure) {
+                        if (error.code == "not_found" || error.code == "forbidden" ||
+                            error.code == "authentication_required") {
+                            throw CloudAuthFailure("step_up_account_mismatch")
+                        }
+                        throw error
+                    }
+                    if (!expected.matches(authorization.serverURL, resolution)) {
+                        throw CloudAuthFailure("step_up_account_mismatch")
+                    }
+                    val recoveryKit = completeResolvedAuthorization(
+                        authorization.serverURL,
+                        authorization.accessToken,
+                        resolution,
+                        operation = CloudPostAuthorizationOperation.STEP_UP,
+                    )
+                    return@withContext PostAuthorizationCompletion(
+                        recoveryKit = recoveryKit,
+                        needsLibrarySelection = false,
+                    )
+                }
+                val existingSpace = configuration.takeIf {
+                    it.serverURL == authorization.serverURL
+                }?.spaceID?.takeIf(String::isNotBlank)
+                val candidates = client.personalSpaceCandidates(
+                    authorization.serverURL,
+                    authorization.accessToken,
+                )
+                val resolution = automaticPersonalSpace(candidates, existingSpace)
+                    ?: if (candidates.isEmpty()) {
+                        client.createPersonalSpace(
+                            authorization.serverURL,
+                            authorization.accessToken,
+                        )
+                    } else if (candidates.none(HttpSyncClient.SpaceCandidate::canWrite)) {
+                        throw SyncFailure("read_only_library")
+                    } else {
                         val pending = PendingLibrarySelection(
                             serverURL = authorization.serverURL,
-                            choices = listOf(choice),
-                            previousLibraryID = libraryID(),
+                            choices = candidates.map {
+                                CloudLibraryChoice(
+                                    spaceID = it.spaceID,
+                                    serverInstanceID = it.serverInstanceID,
+                                    role = it.role,
+                                    scopeBinding = it.scopeBinding,
+                                )
+                            },
+                            previousLibraryID = if (authorization.accountChange) {
+                                libraryID()
+                            } else {
+                                null
+                            },
                             usesPendingAuthorization = true,
-                            operation = CloudPostAuthorizationOperation.CHANGE_ACCOUNT,
+                            operation = if (authorization.accountChange) {
+                                CloudPostAuthorizationOperation.CHANGE_ACCOUNT
+                            } else {
+                                CloudPostAuthorizationOperation.SIGN_IN
+                            },
                         )
                         store.write(PENDING_SPACE_SELECTION, pending.toJSON())
                         pendingLibrarySelection = pending
@@ -528,69 +517,307 @@ class SnippetRepository(
                             needsLibrarySelection = true,
                         )
                     }
-                    val recoveryKit = completeResolvedAuthorization(
-                            authorization.serverURL,
-                            authorization.accessToken,
-                            resolution,
-                            operation = if (authorization.accountChange) {
-                                CloudPostAuthorizationOperation.CHANGE_ACCOUNT
-                            } else {
-                                CloudPostAuthorizationOperation.SIGN_IN
-                            },
+                if (authorization.accountChange && (
+                        configuration.serverURL != authorization.serverURL ||
+                            !configuration.spaceID.equals(
+                                resolution.spaceID,
+                                ignoreCase = true,
+                            ) ||
+                            !configuration.serverInstanceID.equals(
+                                resolution.serverInstanceID,
+                                ignoreCase = true,
+                            )
+                        )) {
+                    val choice = candidates.firstOrNull {
+                        it.spaceID.equals(resolution.spaceID, ignoreCase = true)
+                    }?.let {
+                        CloudLibraryChoice(
+                            it.spaceID, it.serverInstanceID, it.role, it.scopeBinding,
                         )
-                    PostAuthorizationCompletion(
-                        recoveryKit = recoveryKit,
-                        needsLibrarySelection = false,
+                    } ?: CloudLibraryChoice(
+                        resolution.spaceID,
+                        resolution.serverInstanceID,
+                        resolution.role,
+                        resolution.scopeBinding,
+                    )
+                    val pending = PendingLibrarySelection(
+                        serverURL = authorization.serverURL,
+                        choices = listOf(choice),
+                        previousLibraryID = libraryID(),
+                        usesPendingAuthorization = true,
+                        operation = CloudPostAuthorizationOperation.CHANGE_ACCOUNT,
+                    )
+                    store.write(PENDING_SPACE_SELECTION, pending.toJSON())
+                    pendingLibrarySelection = pending
+                    return@withContext PostAuthorizationCompletion(
+                        recoveryKit = null,
+                        needsLibrarySelection = true,
                     )
                 }
-                if (completion.needsLibrarySelection) {
-                    publish(errorCode = "space_selection_required")
-                    CloudSignInCompletion(succeeded = false, needsLibrarySelection = true)
-                } else {
-                    publish(label = "Account connected")
-                    CloudSignInCompletion(
-                        succeeded = true,
-                        recoveryKit = completion.recoveryKit,
+                val recoveryKit = completeResolvedAuthorization(
+                        authorization.serverURL,
+                        authorization.accessToken,
+                        resolution,
+                        operation = if (authorization.accountChange) {
+                            CloudPostAuthorizationOperation.CHANGE_ACCOUNT
+                        } else {
+                            CloudPostAuthorizationOperation.SIGN_IN
+                        },
                     )
+                PostAuthorizationCompletion(
+                    recoveryKit = recoveryKit,
+                    needsLibrarySelection = false,
+                )
+            }
+            if (completion.needsLibrarySelection) {
+                publish(errorCode = "space_selection_required")
+                CloudSignInCompletion(succeeded = false, needsLibrarySelection = true,
+                    accountKey = retainedAccountKey(includePending = true))
+            } else {
+                publish(label = "Account connected")
+                CloudSignInCompletion(
+                    succeeded = true,
+                    recoveryKit = completion.recoveryKit,
+                    accountKey = retainedAccountKey(includePending = false),
+                )
+            }
+        } catch (error: CloudAuthFailure) {
+            if (resume && !receivedAuthorization) cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+            val cleanupFailure = if (!receivedAuthorization &&
+                !authenticator.hasPendingCredentialCleanup()) {
+                null
+            } else if (rejectResumeCandidate) {
+                discardRejectedResumeCandidate()
+            } else {
+                discardCandidateAfterAuthorizationFailure()
+            }
+            val code = cleanupFailure ?: if (receivedAuthorization) postAuthorizationError(error.code) else error.code
+            publish(errorCode = code)
+            CloudSignInCompletion(succeeded = false, retryAfterSeconds = error.retryAfterSeconds,
+                errorCode = code, accountKey = retainedAccountKey(includePending = false))
+        } catch (error: SyncFailure) {
+            if (resume && !receivedAuthorization) cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+            val cleanupFailure = if (!receivedAuthorization &&
+                !authenticator.hasPendingCredentialCleanup()) {
+                null
+            } else if (rejectResumeCandidate) {
+                discardRejectedResumeCandidate()
+            } else {
+                discardCandidateAfterAuthorizationFailure()
+            }
+            publish(errorCode = cleanupFailure ?: postAuthorizationError(error.code))
+            CloudSignInCompletion(succeeded = false, errorCode = cleanupFailure ?: postAuthorizationError(error.code),
+                accountKey = retainedAccountKey(includePending = false))
+        } catch (_: Exception) {
+            if (resume && !receivedAuthorization) cloudKeyStatus = CloudKeyStatus.SETUP_INTERRUPTED
+            val cleanupFailure = if (!receivedAuthorization &&
+                !authenticator.hasPendingCredentialCleanup()) {
+                null
+            } else if (rejectResumeCandidate) {
+                discardRejectedResumeCandidate()
+            } else {
+                discardCandidateAfterAuthorizationFailure()
+            }
+            publish(errorCode = cleanupFailure ?: postAuthorizationError("sign_in_failed"))
+            CloudSignInCompletion(succeeded = false, errorCode = cleanupFailure ?: postAuthorizationError("sign_in_failed"),
+                accountKey = retainedAccountKey(includePending = false))
+        }
+    }
+
+    /**
+     * Called only after device-owner authentication, exactly like recovery-kit disclosure.
+     * The key is returned once to the current Settings composition and is never placed in
+     * the process-wide StateFlow.
+     */
+    internal suspend fun revealCloudAccountKey(): String? {
+        initialization.await()
+        if (!snippetsCloudEnabled) return null
+        return mutex.withLock {
+            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            try {
+                val accountKey = withContext(Dispatchers.IO) {
+                    if (!cloudSessionAvailable || configuration.serverURL.isBlank()) {
+                        throw CloudAuthFailure("sign_in_required")
+                    }
+                    authenticator.currentAccountKey(configuration.serverURL)
                 }
+                publish()
+                accountKey
             } catch (error: CloudAuthFailure) {
-                val cleanupFailure = if (!receivedAuthorization &&
-                    !authenticator.hasPendingCredentialCleanup()) {
-                    null
-                } else if (rejectResumeCandidate) {
-                    discardRejectedResumeCandidate()
-                } else {
-                    discardCandidateAfterAuthorizationFailure()
-                }
-                val code = cleanupFailure ?: if (receivedAuthorization) postAuthorizationError(error.code) else error.code
-                publish(errorCode = code)
-                CloudSignInCompletion(succeeded = false, retryAfterSeconds = error.retryAfterSeconds,
-                    errorCode = code)
-            } catch (error: SyncFailure) {
-                val cleanupFailure = if (!receivedAuthorization &&
-                    !authenticator.hasPendingCredentialCleanup()) {
-                    null
-                } else if (rejectResumeCandidate) {
-                    discardRejectedResumeCandidate()
-                } else {
-                    discardCandidateAfterAuthorizationFailure()
-                }
-                publish(errorCode = cleanupFailure ?: postAuthorizationError(error.code))
-                CloudSignInCompletion(succeeded = false, errorCode = cleanupFailure ?: postAuthorizationError(error.code))
+                publish(errorCode = error.code)
+                null
             } catch (_: Exception) {
-                val cleanupFailure = if (!receivedAuthorization &&
-                    !authenticator.hasPendingCredentialCleanup()) {
-                    null
-                } else if (rejectResumeCandidate) {
-                    discardRejectedResumeCandidate()
-                } else {
-                    discardCandidateAfterAuthorizationFailure()
-                }
-                publish(errorCode = cleanupFailure ?: postAuthorizationError("sign_in_failed"))
-                CloudSignInCompletion(succeeded = false, errorCode = cleanupFailure ?: postAuthorizationError("sign_in_failed"))
+                publish(errorCode = "sign_in_required")
+                null
             }
         }
     }
+
+    /** Offers Sign In with Another Device only when discovery advertises ADR 0007. */
+    internal suspend fun refreshDeviceSignInAvailability() {
+        initialization.await()
+        if (!snippetsCloudEnabled || BuildConfig.SNIPPETS_CLOUD_URL.isBlank()) return
+        val available = authenticator.deviceSignInSupported(BuildConfig.SNIPPETS_CLOUD_URL)
+        deviceSignInAvailable = available
+        mutableState.value = mutableState.value.copy(deviceSignInAvailable = available)
+    }
+
+    /**
+     * New device: opens a device request with fresh pairing recipient material and keeps
+     * it, with the request ID and poll token, in the device-bound encrypted store.
+     */
+    internal suspend fun beginDeviceSignIn() {
+        initialization.await()
+        if (!snippetsCloudEnabled) return
+        mutex.withLock {
+            mutableState.value = mutableState.value.copy(isBusy = true, errorCode = null)
+            try {
+                withContext(Dispatchers.IO) {
+                    if (store.read(PENDING_LOCAL_ERASE) != null) completePendingLocalErase()
+                    if (pendingPostAuthorization != null) {
+                        throw CloudAuthFailure("post_authorization_incomplete")
+                    }
+                    if (authenticator.hasSession() || authenticator.hasPendingAuthorization()) {
+                        throw CloudAuthFailure("authorization_state_invalid")
+                    }
+                    val serverURL = pinnedServerURL() ?: throw CloudAuthFailure("cloud_build_not_configured")
+                    val draft = LibraryKeyBootstrap.createPairingDraft()
+                    val created = authenticator.createDeviceRequest(serverURL,
+                        draft.recipientPublicKey, draft.nonce)
+                    val request = LibraryKeyBootstrap.DeviceSignInRequest(
+                        serverURL = serverURL,
+                        requestID = created.requestID,
+                        nonce = draft.nonce,
+                        recipientPublicKey = draft.recipientPublicKey,
+                        expiresAtEpochSeconds = created.expiresAtEpochSeconds,
+                    )
+                    // Round-trip through the strict decoder so only a valid payload is shown.
+                    LibraryKeyBootstrap.DeviceSignInRequest.fromPayload(request.toPayload())
+                    val pending = LibraryKeyBootstrap.PendingDeviceSignIn(draft, request, created.pollToken)
+                    store.write(PENDING_DEVICE_SIGN_IN, pending.toJSON())
+                    pendingDeviceSignIn = pending
+                }
+                publish()
+            } catch (error: CloudAuthFailure) {
+                publish(errorCode = deviceSignInError(error.code))
+            } catch (_: Exception) {
+                publish(errorCode = "device_sign_in_failed")
+            }
+        }
+    }
+
+    /**
+     * Polls the claim endpoint once. An approved claim goes through the same mutex,
+     * journal and commit path as account-key sign-in, then selects the returned library
+     * without a chooser and claims the approved recipient pairing.
+     */
+    internal suspend fun pollDeviceSignIn(): DeviceSignInPoll {
+        initialization.await()
+        if (!snippetsCloudEnabled) return DeviceSignInPoll.Failed("cloud_feature_disabled", null, true)
+        return mutex.withLock {
+            val pending = pendingDeviceSignIn
+                ?: return@withLock DeviceSignInPoll.Failed("device_sign_in_missing", null, true)
+            val request = pending.request
+            if (request.expiresAtEpochSeconds <= Instant.now().epochSecond) {
+                withContext(Dispatchers.IO) { discardDeviceSignIn() }
+                publish(errorCode = "device_sign_in_expired")
+                return@withLock DeviceSignInPoll.Failed("device_sign_in_expired", null, true)
+            }
+            val outcome = try {
+                withContext(Dispatchers.IO) {
+                    authenticator.claimDeviceRequest(request.serverURL, request.requestID,
+                        pending.pollToken, request.expiresAtEpochSeconds)
+                }
+            } catch (error: Exception) {
+                val code = deviceSignInError((error as? CloudAuthFailure)?.code ?: "server_response_invalid")
+                // A grant journaled before a rejected response is retired like any other.
+                val cleanupFailure = if (authenticator.hasPendingCredentialCleanup()) {
+                    discardCandidateAfterAuthorizationFailure()
+                } else null
+                val terminal = code !in DEVICE_CLAIM_TRANSIENT
+                if (terminal) withContext(Dispatchers.IO) { discardDeviceSignIn() }
+                if (terminal || cleanupFailure != null) publish(errorCode = cleanupFailure ?: code)
+                return@withLock DeviceSignInPoll.Failed(cleanupFailure ?: code,
+                    (error as? CloudAuthFailure)?.retryAfterSeconds, terminal)
+            }
+            when (outcome) {
+                CloudAuthenticator.DeviceClaimOutcome.Pending -> DeviceSignInPoll.Pending
+                is CloudAuthenticator.DeviceClaimOutcome.Approved -> {
+                    // The request is final once approved; a crash before the file is removed
+                    // leaves a re-claimable request, which the server allows.
+                    pendingDeviceSignIn = null
+                    val completion = completeCloudAuthorizationLocked(resume = false,
+                        deviceGrant = DeviceSignInGrant(outcome.spaceID, outcome.pairingID,
+                            pending.draft, request)) { outcome.authorization }
+                    withContext(Dispatchers.IO) { store.delete(PENDING_DEVICE_SIGN_IN) }
+                    DeviceSignInPoll.Finished(completion)
+                }
+            }
+        }
+    }
+
+    /** Cancel discards local state only; the server request simply expires. */
+    internal suspend fun cancelDeviceSignIn() = mutate { discardDeviceSignIn() }
+
+    private fun discardDeviceSignIn() {
+        pendingDeviceSignIn = null
+        store.delete(PENDING_DEVICE_SIGN_IN)
+    }
+
+    private fun deviceSignInError(code: String): String = when (code) {
+        "pairing_expired" -> "device_sign_in_expired"
+        "not_found", "conflict" -> "device_sign_in_rejected"
+        else -> code
+    }
+
+    /**
+     * Selects exactly the approved library (failing closed when this account cannot see
+     * it), checks that the server's approved pairing is for this device's own recipient
+     * key and nonce, and commits through the ordinary resolved-authorization path.
+     */
+    private suspend fun completeDeviceApprovedAuthorization(
+        authorization: CloudAuthenticator.CompletedAuthorization,
+        grant: DeviceSignInGrant,
+    ): RecoveryKitPresentation? {
+        val candidate = client.personalSpaceCandidates(authorization.serverURL, authorization.accessToken)
+            .firstOrNull { it.spaceID.equals(grant.spaceID, ignoreCase = true) }
+            ?: throw SyncFailure("device_sign_in_library_missing")
+        val resolution = HttpSyncClient.SpaceResolution(
+            candidate.spaceID, candidate.serverInstanceID, candidate.role, candidate.scopeBinding,
+        )
+        if (!resolution.canWrite) throw SyncFailure("read_only_library")
+        val pairing = client.pairing(authorization.serverURL, resolution.spaceID, grant.pairingID,
+            authorization.accessToken, resolution.serverInstanceID)
+        val now = Instant.now().epochSecond
+        require(pairing.pairingID.equals(grant.pairingID, ignoreCase = true))
+        require(pairing.spaceID.equals(resolution.spaceID, ignoreCase = true))
+        require(pairing.recipientPublicKey.contentEquals(grant.draft.recipientPublicKey))
+        require(pairing.nonce.contentEquals(grant.draft.nonce))
+        require(pairing.authenticationTag == grant.request.confirmationCode)
+        require(pairing.state == "approved" && pairing.algorithm == null && pairing.ciphertext == null)
+        require(pairing.expiresAtEpochSeconds > now - 30 && pairing.expiresAtEpochSeconds <= now + 630)
+        val recipient = LibraryKeyBootstrap.PendingPairing(
+            grant.draft,
+            LibraryKeyBootstrap.PairingInvitation(
+                serverURL = authorization.serverURL,
+                spaceID = resolution.spaceID.lowercase(),
+                pairingID = pairing.pairingID,
+                nonce = pairing.nonce,
+                recipientPublicKey = pairing.recipientPublicKey,
+                expiresAtEpochSeconds = pairing.expiresAtEpochSeconds,
+            ),
+        )
+        return completeResolvedAuthorization(
+            authorization.serverURL,
+            authorization.accessToken,
+            resolution,
+            operation = CloudPostAuthorizationOperation.SIGN_IN,
+            deviceSignInPairing = recipient,
+        )
+    }
+
+    private fun pinnedServerURL(): String? =
+        runCatching { nativeCloudServerURL(BuildConfig.SNIPPETS_CLOUD_URL) }.getOrNull()
 
     internal suspend fun selectCloudLibrary(spaceID: String): CloudSignInCompletion {
         initialization.await()
@@ -755,6 +982,7 @@ class SnippetRepository(
         resolution: HttpSyncClient.SpaceResolution,
         pendingAuthorizationCommit: Boolean = true,
         operation: CloudPostAuthorizationOperation,
+        deviceSignInPairing: LibraryKeyBootstrap.PendingPairing? = null,
     ): RecoveryKitPresentation? {
         if (!resolution.canWrite) throw SyncFailure("read_only_library")
         if (operation != CloudPostAuthorizationOperation.STEP_UP) {
@@ -801,6 +1029,9 @@ class SnippetRepository(
             resetRecoveryVerification()
             cloudKeyStatus = CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
         }
+        // ADR 0007: the approved recipient pairing is durable before the credential commit,
+        // so post-authorization (including a resumed one) claims it instead of minting a key.
+        deviceSignInPairing?.let { store.write(DEVICE_SIGN_IN_PAIRING, it.toJSON()) }
 
         // The exact writable membership has now been revalidated. Commit coordinates
         // before credentials, with a durable marker that startup can finish after any
@@ -1095,6 +1326,26 @@ class SnippetRepository(
     suspend fun checkDevicePairing() = bootstrap {
         val pending = pendingPairing()
         val token = freshPinnedAccessToken()
+        if (!claimApprovedPairing(pending, token)) {
+            cloudKeyStatus = CloudKeyStatus.WAITING_FOR_APPROVAL
+            return@bootstrap
+        }
+        store.delete(PENDING_PAIRING)
+        pairingQRCode = null
+        pairingConfirmationCode = null
+        pairingExpiresAtEpochSeconds = null
+        cloudKeyStatus = CloudKeyStatus.READY
+    }
+
+    /**
+     * The recipient pairing claim. The server's pairing must carry exactly this device's
+     * recipient key and nonce before the envelope is taken and decrypted. Returns false
+     * while the pairing is still pending.
+     */
+    private fun claimApprovedPairing(
+        pending: LibraryKeyBootstrap.PendingPairing,
+        token: String,
+    ): Boolean {
         val status = client.pairing(
             configuration.serverURL,
             configuration.spaceID,
@@ -1111,10 +1362,7 @@ class SnippetRepository(
         )
         require(status.authenticationTag == pending.invitation.confirmationCode)
         require(status.algorithm == null && status.ciphertext == null)
-        if (status.state == "pending") {
-            cloudKeyStatus = CloudKeyStatus.WAITING_FOR_APPROVAL
-            return@bootstrap
-        }
+        if (status.state == "pending") return false
         val taken = client.takeApprovedPairing(
             configuration.serverURL,
             configuration.spaceID,
@@ -1137,11 +1385,7 @@ class SnippetRepository(
         val bundle = LibraryKeyBootstrap.openPairedEnvelope(pending, ciphertext)
         client.verifyAuthority(configuration.serverURL, configuration.spaceID, token, requireServerInstanceID(), bundle)
         installCloudKey(bundle)
-        store.delete(PENDING_PAIRING)
-        pairingQRCode = null
-        pairingConfirmationCode = null
-        pairingExpiresAtEpochSeconds = null
-        cloudKeyStatus = CloudKeyStatus.READY
+        return true
     }
 
     suspend fun cancelDevicePairing() = bootstrap {
@@ -1162,9 +1406,17 @@ class SnippetRepository(
         cloudKeyStatus = CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
     }
 
-    /** Validates a scanned QR against the server before any approval is offered. */
+    /**
+     * Validates a scanned or pasted invitation before any approval is offered. A pairing
+     * invitation is checked against the server first; an ADR 0007 device sign-in request
+     * is validated locally and makes no network call until owner authentication.
+     */
     suspend fun preparePairingApproval(qrPayload: String) = bootstrap {
         require(hasBoundKey())
+        if (LibraryKeyBootstrap.DeviceSignInRequest.isDeviceSignInPayload(qrPayload)) {
+            prepareDeviceSignInApproval(qrPayload.trim())
+            return@bootstrap
+        }
         val invitation = LibraryKeyBootstrap.PairingInvitation.fromQRPayload(qrPayload.trim())
         require(invitation.serverURL == configuration.serverURL)
         require(invitation.spaceID.equals(configuration.spaceID, ignoreCase = true))
@@ -1195,8 +1447,24 @@ class SnippetRepository(
         }
         require(serverPairing.state == "pending")
         require(serverPairing.expiresAtEpochSeconds == invitation.expiresAtEpochSeconds)
+        store.delete(PENDING_DEVICE_APPROVAL)
         store.write(PENDING_APPROVAL, invitation.toQRPayload())
         approvalConfirmationCode = invitation.confirmationCode
+        approvalSignsInDevice = false
+        cloudKeyStatus = CloudKeyStatus.APPROVAL_READY
+    }
+
+    private fun prepareDeviceSignInApproval(payload: String) {
+        requireSignedInCoordinates()
+        val request = LibraryKeyBootstrap.DeviceSignInRequest.fromPayload(payload)
+        if (request.serverURL != pinnedServerURL() || request.serverURL != configuration.serverURL) {
+            throw SyncFailure("device_sign_in_wrong_server")
+        }
+        store.delete(PENDING_APPROVAL)
+        store.write(PENDING_DEVICE_APPROVAL,
+            LibraryKeyBootstrap.PendingDeviceApproval(request, pairing = null).toJSON())
+        approvalConfirmationCode = request.confirmationCode
+        approvalSignsInDevice = true
         cloudKeyStatus = CloudKeyStatus.APPROVAL_READY
     }
 
@@ -1205,6 +1473,8 @@ class SnippetRepository(
 
     suspend fun cancelPairingApproval() = bootstrap {
         store.delete(PENDING_APPROVAL)
+        store.delete(PENDING_DEVICE_APPROVAL)
+        approvalSignsInDevice = false
         approvalConfirmationCode = null
         cloudKeyStatus = if (hasBoundKey()) CloudKeyStatus.READY
         else CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
@@ -1487,6 +1757,11 @@ class SnippetRepository(
     }
 
     private fun finishPostAuthorization(accessToken: String, localAuthorized: Boolean = false): RecoveryKitPresentation? {
+        store.read(PENDING_DEVICE_APPROVAL)?.let { raw ->
+            if (!localAuthorized) { cloudKeyStatus = CloudKeyStatus.APPROVAL_READY; return null }
+            finishDeviceSignInApproval(raw, accessToken)
+            return null
+        }
         store.read(PENDING_APPROVAL)?.let { raw ->
             if (!localAuthorized) { cloudKeyStatus = CloudKeyStatus.APPROVAL_READY; return null }
             finishPendingApproval(raw, accessToken)
@@ -1510,6 +1785,13 @@ class SnippetRepository(
                 }
                 return null
             }
+        }
+
+        store.read(DEVICE_SIGN_IN_PAIRING)?.let { raw ->
+            if (!hasBoundKey()) {
+                claimDeviceSignInPairing(raw, accessToken)?.let { return null }
+            }
+            store.delete(DEVICE_SIGN_IN_PAIRING)
         }
 
         if (hasBoundKey()) {
@@ -1570,8 +1852,21 @@ class SnippetRepository(
     }
 
     private fun finishPendingApproval(raw: String, accessToken: String) {
+        approvePairingInvitation(LibraryKeyBootstrap.PairingInvitation.fromQRPayload(raw), accessToken)
+        store.delete(PENDING_APPROVAL)
+        approvalConfirmationCode = null
+        cloudKeyStatus = CloudKeyStatus.READY
+    }
+
+    /**
+     * Seals this device's library key to the invitation's recipient through the library
+     * challenge/proof path. Idempotent: an already approved pairing (lost response) is done.
+     */
+    private fun approvePairingInvitation(
+        invitation: LibraryKeyBootstrap.PairingInvitation,
+        accessToken: String,
+    ) {
         require(hasBoundKey())
-        val invitation = LibraryKeyBootstrap.PairingInvitation.fromQRPayload(raw)
         require(invitation.serverURL == configuration.serverURL)
         require(invitation.spaceID.equals(configuration.spaceID, ignoreCase = true))
         val serverPairing = client.pairing(
@@ -1593,9 +1888,6 @@ class SnippetRepository(
         if (serverPairing.state == "approved") {
             // The approval may have committed even when its success response was lost.
             // The recipient remains the only party able to consume and decrypt it.
-            store.delete(PENDING_APPROVAL)
-            approvalConfirmationCode = null
-            cloudKeyStatus = CloudKeyStatus.READY
             return
         }
         require(serverPairing.state == "pending")
@@ -1623,9 +1915,116 @@ class SnippetRepository(
         require(approved.state == "approved")
         require(approved.authenticationTag == invitation.confirmationCode)
         require(approved.algorithm == null && approved.ciphertext == null)
-        store.delete(PENDING_APPROVAL)
+    }
+
+    /**
+     * ADR 0007 approving device, after fresh device-owner authentication: create a pairing
+     * for exactly the request's key and nonce, approve it through the existing proof and
+     * envelope path, then bind the request to this account.
+     */
+    private fun finishDeviceSignInApproval(raw: String, accessToken: String) {
+        require(hasBoundKey())
+        var pending = LibraryKeyBootstrap.PendingDeviceApproval.fromJSON(raw)
+        val request = pending.request
+        if (request.serverURL != pinnedServerURL() || request.serverURL != configuration.serverURL) {
+            throw SyncFailure("device_sign_in_wrong_server")
+        }
+        try {
+            val invitation = pending.pairing ?: run {
+                val now = Instant.now().epochSecond
+                if (request.expiresAtEpochSeconds <= now) throw SyncFailure("pairing_expired")
+                val created = client.createPairing(
+                    configuration.serverURL,
+                    configuration.spaceID,
+                    accessToken,
+                    request.recipientPublicKey,
+                    request.nonce,
+                    requireServerInstanceID(),
+                    LibraryKeyBootstrap.deviceSignInPairingSeconds(request.expiresAtEpochSeconds, now),
+                )
+                validatePairing(created, created.pairingID, request.recipientPublicKey, request.nonce)
+                require(created.state == "pending")
+                require(created.algorithm == null && created.ciphertext == null)
+                require(created.authenticationTag == request.confirmationCode)
+                LibraryKeyBootstrap.PairingInvitation(
+                    serverURL = configuration.serverURL,
+                    spaceID = configuration.spaceID.lowercase(),
+                    pairingID = created.pairingID,
+                    nonce = created.nonce,
+                    recipientPublicKey = created.recipientPublicKey,
+                    expiresAtEpochSeconds = created.expiresAtEpochSeconds,
+                ).also { invitation ->
+                    // Recorded before approval: a retry reuses this pairing instead of another.
+                    pending = LibraryKeyBootstrap.PendingDeviceApproval(request, invitation)
+                    store.write(PENDING_DEVICE_APPROVAL, pending.toJSON())
+                }
+            }
+            approvePairingInvitation(invitation, accessToken)
+            approveDeviceSignInRequest(request, invitation, accessToken)
+        } catch (failure: SyncFailure) {
+            val terminal = when (failure.code) {
+                "pairing_expired" -> "device_sign_in_expired"
+                "not_found", "conflict", "forbidden" -> "device_sign_in_rejected"
+                else -> null
+            } ?: throw failure
+            // A final answer from the server: nothing more can be done with this request.
+            endDeviceSignInApproval()
+            throw SyncFailure(terminal)
+        }
+        endDeviceSignInApproval()
+        notice = DEVICE_SIGN_IN_APPROVED_COPY
+    }
+
+    /** Idempotent bind; retried on transport failure as ADR 0007 requires. */
+    private fun approveDeviceSignInRequest(
+        request: LibraryKeyBootstrap.DeviceSignInRequest,
+        invitation: LibraryKeyBootstrap.PairingInvitation,
+        accessToken: String,
+    ) {
+        var attempt = 0
+        while (true) {
+            try {
+                client.approveDeviceSignInRequest(configuration.serverURL, request.requestID,
+                    invitation.spaceID, invitation.pairingID, accessToken)
+                return
+            } catch (failure: java.io.IOException) {
+                attempt += 1
+                if (attempt >= DEVICE_APPROVAL_ATTEMPTS) throw failure
+                Thread.sleep(1_000L shl (attempt - 1))
+            }
+        }
+    }
+
+    private fun endDeviceSignInApproval() {
+        store.delete(PENDING_DEVICE_APPROVAL)
         approvalConfirmationCode = null
+        approvalSignsInDevice = false
+        cloudKeyStatus = if (hasBoundKey()) CloudKeyStatus.READY
+        else CloudKeyStatus.NEEDS_TRUSTED_DEVICE_OR_RECOVERY
+    }
+
+    /**
+     * New device: claims the approved recipient pairing recorded by device sign-in.
+     * Returns null when the recorded pairing is unusable, so the caller falls back to the
+     * ordinary trusted-device or recovery path instead of minting a library key.
+     */
+    private fun claimDeviceSignInPairing(raw: String, accessToken: String): Unit? {
+        val pending = runCatching { LibraryKeyBootstrap.PendingPairing.fromJSON(raw) }.getOrNull()
+            ?.takeIf {
+                it.invitation.serverURL == configuration.serverURL &&
+                    it.invitation.spaceID.equals(configuration.spaceID, ignoreCase = true)
+            } ?: return null
+        val claimed = try {
+            claimApprovedPairing(pending, accessToken)
+        } catch (error: IllegalArgumentException) {
+            // A pairing that is not exactly this device's must never be decrypted or retried.
+            store.delete(DEVICE_SIGN_IN_PAIRING)
+            throw SyncFailure("secure_setup_failed")
+        }
+        if (!claimed) throw SyncFailure("pairing_missing")
+        store.delete(DEVICE_SIGN_IN_PAIRING)
         cloudKeyStatus = CloudKeyStatus.READY
+        return Unit
     }
 
     private fun finishPendingRecovery(
@@ -1859,6 +2258,8 @@ class SnippetRepository(
         listOf(
             PENDING_PAIRING,
             PENDING_APPROVAL,
+            PENDING_DEVICE_APPROVAL,
+            DEVICE_SIGN_IN_PAIRING,
             PENDING_RECOVERY,
             RECOVERY_PRESENTATION,
         ).forEach(store::delete)
@@ -1866,6 +2267,7 @@ class SnippetRepository(
         pairingConfirmationCode = null
         pairingExpiresAtEpochSeconds = null
         approvalConfirmationCode = null
+        approvalSignsInDevice = false
     }
 
     /**
@@ -1889,6 +2291,8 @@ class SnippetRepository(
         store.delete(PENDING_SPACE_SELECTION)
         pendingLibrarySelection = null
 
+        store.delete(PENDING_DEVICE_SIGN_IN)
+        pendingDeviceSignIn = null
         authenticator.forgetLocalSession()
         cloudSessionAvailable = false
 
@@ -1971,7 +2375,14 @@ class SnippetRepository(
             librarySwitchFromID = pendingLibrarySelection?.previousLibraryID,
             recoveryKitStatus = recoveryVerificationState.status,
             hasPendingRecoveryKit = store.read(RECOVERY_PRESENTATION) != null,
-            accountDisplayName = authenticator.accountDisplayName(),
+            accountID = authenticator.accountIDDisplay(),
+            accountKeyAvailable = authenticator.hasAccountKey(),
+            deviceSignIn = pendingDeviceSignIn?.request?.let {
+                DeviceSignInPresentation(it.toPayload(), it.confirmationCode, it.expiresAtEpochSeconds)
+            },
+            deviceSignInAvailable = deviceSignInAvailable,
+            approvalSignsInDevice = approvalSignsInDevice,
+            notice = notice.also { notice = null },
             hasLibraryKey = hasBoundKey(),
             hasCloudSession = cloudSessionAvailable,
             setupStage = stage)
@@ -1997,6 +2408,15 @@ class SnippetRepository(
         return KeyBundle(
             key = ByteArray(32).also(random::nextBytes).base64(),
             salt = ByteArray(32).also(random::nextBytes).base64())
+    }
+
+    private class DeviceSignInGrant(
+        val spaceID: String,
+        val pairingID: String,
+        val draft: LibraryKeyBootstrap.PairingDraft,
+        val request: LibraryKeyBootstrap.DeviceSignInRequest,
+    ) {
+        override fun toString(): String = "DeviceSignInGrant(<redacted>)"
     }
 
     private data class PendingRecoveryUpload(
@@ -2139,6 +2559,15 @@ class SnippetRepository(
         private const val KEY_BINDING = "key-binding.enc"
         private const val PENDING_PAIRING = "pending-pairing.enc"
         private const val PENDING_APPROVAL = "pending-approval.enc"
+        // ADR 0007: approver state, new-device request (recipient key + poll token), and the
+        // new device's approved recipient pairing awaiting claim after the session commit.
+        private const val PENDING_DEVICE_APPROVAL = "pending-device-approval.enc"
+        private const val PENDING_DEVICE_SIGN_IN = "pending-device-sign-in.enc"
+        private const val DEVICE_SIGN_IN_PAIRING = "device-sign-in-pairing.enc"
+        private const val DEVICE_APPROVAL_ATTEMPTS = 3
+        /** Claim failures that keep the request for the next poll (with backoff). */
+        private val DEVICE_CLAIM_TRANSIENT = setOf("server_unavailable", "dependency_unavailable",
+            "rate_limited", "server_request_failed")
         private const val PENDING_RECOVERY = "pending-recovery.enc"
         private const val RECOVERY_PRESENTATION = "recovery-presentation.enc"
         private const val PENDING_SPACE_SELECTION = "pending-space-selection.enc"

@@ -211,7 +211,7 @@ fn install_account(s: &mut Setup) {
         let mut archive = auth_store::Archive::load(o)?;
         let lease = archive.begin(Replacement::Interactive, deployment)?;
         archive.save(o)?;
-        let grant = cloud::IssuedGrant::fixture(br#"{"access_token":"public-handover-access","refresh_token":"public-handover-refresh","expires_in":300,"token_type":"Bearer","account":{"id":"public-handover-account","email":"owner@example.test"}}"#).unwrap();
+        let grant = cloud::IssuedGrant::fixture_signed_in(br#"{"access_token":"public-handover-access","refresh_token":"public-handover-refresh","expires_in":300,"token_type":"Bearer","account":{"id":"5e1f0c2a-7b3d-4e8f-9a6b-c4d2e0f1a3b5"}}"#, "7KQF9M2XR4TDH8WBZN3CP6YE1AQ7").unwrap();
         let session = grant.accept(|credentials| {
             archive.stage_issued(&lease, credentials).map_err(|_| cloud::Failure::CredentialCommit)?;
             archive.save(o).map_err(|_| cloud::Failure::CredentialCommit)
@@ -246,7 +246,11 @@ fn refreshed_credentials(s: &mut Setup, change_account: bool) {
             );
             session.insert("expiresAt".into(), Value::Int(2500));
             if change_account {
-                session.insert("account".into(), Value::text("public-foreign-account"));
+                // Another fictional native account (UUID identities only).
+                session.insert(
+                    "account".into(),
+                    Value::text("6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d"),
+                );
             }
             o.replace(
                 Slot::Credentials,
@@ -1174,10 +1178,11 @@ fn lost_switch_ui_reply_keeps_durable_ownership_and_allows_a_fresh_worker_resume
                 }
                 Command::Inspect => handover::inspect(&mut s.store)
                     .map(|switching| Reply::Profile {
-                        email: None,
+                        account: None,
                         server: None,
                         interrupted: false,
                         switching,
+                        device: None,
                     })
                     .map_err(AccountFailure::from),
                 Command::PrepareHandoverResume => {

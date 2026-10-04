@@ -159,13 +159,15 @@ class MainActivity : ComponentActivity() {
 
     fun confirmLibraryKeyDisclosure(
         confirmationCode: String? = null,
+        title: String = "Approve encrypted library transfer",
+        subtitle: String? = null,
         onSuccess: () -> Unit,
         onFailure: () -> Unit,
     ) {
         val builder = BiometricPrompt.Builder(this)
-            .setTitle("Approve encrypted library transfer")
+            .setTitle(title)
             .setSubtitle(
-                confirmationCode?.let { "Confirm code $it before adding this device" }
+                subtitle ?: confirmationCode?.let { "Confirm code $it before adding this device" }
                     ?: "Confirm this security-sensitive change",
             )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -1169,6 +1171,12 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
     // Intentionally not saveable: leaving Settings or backgrounding the activity
     // destroys this disclosed copy and the durable kit remains biometric-locked.
     var recoveryPresentation by remember { mutableStateOf<RecoveryKitPresentation?>(null) }
+    // Never saveable either. Unlike the recovery kit, a shown account key survives a pause
+    // because saving it means switching to a password manager; FLAG_SECURE still keeps it
+    // out of screenshots and Recents, and it is dropped when this screen is disposed.
+    var accountKeyPresentation by remember { mutableStateOf<AccountKeyPresentation?>(null) }
+    // A recovery kit issued while creating an account waits until the key is acknowledged.
+    var recoveryAfterAccountKey by remember { mutableStateOf<RecoveryKitPresentation?>(null) }
     DisposableEffect(activity) {
         // Settings can contain a recovery secret. Keep the whole window out of
         // screenshots and recents until this composition (and its secret state) dies.
@@ -1176,6 +1184,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
         val observer = object : DefaultLifecycleObserver {
             override fun onPause(owner: LifecycleOwner) {
                 recoveryPresentation = null
+                recoveryAfterAccountKey = null
                 recoveryCode = ""
                 verifyingRecoveryKit = false
                 recoveryVerificationInput = ""
@@ -1185,6 +1194,8 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
         onDispose {
             activity?.lifecycle?.removeObserver(observer)
             recoveryPresentation = null
+            recoveryAfterAccountKey = null
+            accountKeyPresentation = null
             recoveryCode = ""
             recoveryVerificationInput = ""
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -1194,23 +1205,82 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
         repository.isCloudSignedIn()
     }
     val setupInterrupted = state.cloudKeyStatus == CloudKeyStatus.SETUP_INTERRUPTED
-    var emailSignInMode by remember { mutableStateOf<NativeCloudSignInMode?>(null) }
-    emailSignInMode?.let { mode ->
+    var authRequest by remember { mutableStateOf<NativeCloudAuthRequest?>(null) }
+    authRequest?.let { request ->
+        val chooseAccount = request.mode == NativeCloudSignInMode.CHANGE_ACCOUNT
         NativeCloudSignInDialog(
-            start = { email ->
-                if (mode == NativeCloudSignInMode.RESUME) repository.beginResumeCloudSetupSignIn(email)
-                else repository.beginCloudSignIn(BuildConfig.SNIPPETS_CLOUD_URL, email,
-                    chooseAccount = mode == NativeCloudSignInMode.CHANGE_ACCOUNT)
+            // A new account cannot own the library whose interrupted setup is resumed.
+            action = if (request.mode == NativeCloudSignInMode.RESUME) {
+                NativeCloudAuthAction.SIGN_IN
+            } else {
+                request.action
             },
-            verify = repository::completeCloudSignIn,
-            onEditEmail = repository::cancelCloudEmailSignIn,
-            onDismiss = {
-                repository.cancelCloudEmailSignIn()
-                emailSignInMode = null
+            createAccount = {
+                repository.createCloudAccount(BuildConfig.SNIPPETS_CLOUD_URL, chooseAccount)
             },
+            signIn = { accountKey ->
+                if (request.mode == NativeCloudSignInMode.RESUME) {
+                    repository.resumeCloudSetupWithAccountKey(accountKey)
+                } else {
+                    repository.signInWithAccountKey(BuildConfig.SNIPPETS_CLOUD_URL, accountKey,
+                        chooseAccount = chooseAccount)
+                }
+            },
+            onDismiss = { authRequest = null },
             onComplete = { completion ->
-                emailSignInMode = null
+                authRequest = null
+                val createdKey = completion.accountKey
+                if (createdKey != null) {
+                    accountKeyPresentation = AccountKeyPresentation(createdKey,
+                        requiresAcknowledgement = true)
+                    recoveryAfterAccountKey = completion.recoveryKit
+                } else {
+                    completion.recoveryKit?.let { recoveryPresentation = it }
+                }
+            },
+        )
+    }
+    // A device signed in by another device has no account key to show (ADR 0007).
+    var showDeviceSignedInExplanation by remember { mutableStateOf(false) }
+    if (showDeviceSignedInExplanation) {
+        AlertDialog(
+            onDismissRequest = { showDeviceSignedInExplanation = false },
+            title = { Text("Account Key") },
+            text = { Text(DEVICE_SIGNED_IN_ACCOUNT_KEY_COPY) },
+            confirmButton = {
+                TextButton(onClick = { showDeviceSignedInExplanation = false }) { Text("OK") }
+            },
+        )
+    }
+    // Held until the user leaves Settings; the repository publishes it only once.
+    var approvalNotice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.notice) { state.notice?.let { approvalNotice = it } }
+    LaunchedEffect(signedIn, setupInterrupted, cloudConfigured) {
+        if (cloudConfigured && !signedIn && !setupInterrupted) {
+            repository.refreshDeviceSignInAvailability()
+        }
+    }
+    state.deviceSignIn?.let { presentation ->
+        NativeCloudDeviceSignInDialog(
+            presentation = presentation,
+            poll = repository::pollDeviceSignIn,
+            onCopy = { copySensitiveText(context, it, label = "Snippets device sign-in request") },
+            onCancel = { scope.launch { repository.cancelDeviceSignIn() } },
+            onFinished = { completion ->
                 completion.recoveryKit?.let { recoveryPresentation = it }
+            },
+        )
+    }
+    accountKeyPresentation?.let { presentation ->
+        NativeCloudAccountKeyDialog(
+            presentation = presentation,
+            onCopy = { copySensitiveText(context, it, label = "Snippets account key") },
+            onDone = {
+                accountKeyPresentation = null
+                if (presentation.requiresAcknowledgement) {
+                    recoveryAfterAccountKey?.let { recoveryPresentation = it }
+                }
+                recoveryAfterAccountKey = null
             },
         )
     }
@@ -1260,7 +1330,12 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
         )
     }
 
-    fun authenticateThen(confirmationCode: String? = null, operation: () -> Unit) {
+    fun authenticateThen(
+        confirmationCode: String? = null,
+        title: String = "Approve encrypted library transfer",
+        subtitle: String? = null,
+        operation: () -> Unit,
+    ) {
         val authenticationHost = activity
         if (authenticationHost == null) {
             scannerFailed = true
@@ -1268,12 +1343,15 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
         }
         authenticationHost.confirmLibraryKeyDisclosure(
             confirmationCode = confirmationCode,
+            title = title,
+            subtitle = subtitle,
             onSuccess = operation,
             onFailure = { scannerFailed = true },
         )
     }
 
-    if (state.libraryChoices.isNotEmpty()) {
+    // A newly created key is acknowledged before any library chooser appears.
+    if (state.libraryChoices.isNotEmpty() && accountKeyPresentation == null) {
         AlertDialog(
             onDismissRequest = {
                 if (!state.isBusy) {
@@ -1350,12 +1428,24 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
             confirmButton = {
                 Button(onClick = {
                     showChangeAccountConfirmation = false
-                    emailSignInMode = NativeCloudSignInMode.CHANGE_ACCOUNT
-                }) { Text("Choose another account") }
+                    authRequest = NativeCloudAuthRequest(
+                        NativeCloudSignInMode.CHANGE_ACCOUNT,
+                        NativeCloudAuthAction.SIGN_IN,
+                    )
+                }) { Text("Sign In with Account Key") }
             },
             dismissButton = {
-                TextButton(onClick = { showChangeAccountConfirmation = false }) {
-                    Text("Cancel")
+                Row {
+                    TextButton(onClick = { showChangeAccountConfirmation = false }) {
+                        Text("Cancel")
+                    }
+                    TextButton(onClick = {
+                        showChangeAccountConfirmation = false
+                        authRequest = NativeCloudAuthRequest(
+                            NativeCloudSignInMode.CHANGE_ACCOUNT,
+                            NativeCloudAuthAction.CREATE_ACCOUNT,
+                        )
+                    }) { Text("Create Account") }
                 }
             },
         )
@@ -1368,7 +1458,8 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
             text = {
                 Text(
                     "This removes this device’s Snippets Cloud connection and its access " +
-                        "to open the library. Your cloud library is not deleted. To reconnect, " +
+                        "to open the library. Your cloud library is not deleted. " +
+                        "You'll need your account key to sign in again. To reconnect, " +
                         "you will need an approved device or your recovery kit.\n\n" +
                         if (disconnectBlockedForRecovery(state.cloudKeyStatus) ||
                             state.recoveryKitStatus == RecoveryKitStatus.REPLACEMENT_IN_PROGRESS) {
@@ -1469,9 +1560,10 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
             SettingsCard(title = "Account") {
                 Text(
                     if (signedIn || setupInterrupted) {
-                        "${state.accountDisplayName}\nLibrary ID ${state.libraryID ?: "—"} · Used for support"
+                        (state.accountID?.let { "Account ID $it" } ?: "Snippets Cloud account") +
+                            "\nLibrary ID ${state.libraryID ?: "—"} · Used for support"
                     }
-                    else "Sign in with your email address and a one-time code.",
+                    else "Create an account, or sign in with the account key you saved.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (!cloudConfigured) {
@@ -1481,31 +1573,77 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                Button(
-                    enabled = !state.isBusy && cloudConfigured,
-                    onClick = {
-                        if (setupInterrupted) {
-                            scope.launch {
-                                if (signedIn) {
-                                    repository.resumeCloudSetup()?.let {
-                                        recoveryPresentation = it
+                if (setupInterrupted || signedIn) {
+                    Button(
+                        enabled = !state.isBusy && cloudConfigured,
+                        onClick = {
+                            if (setupInterrupted) {
+                                scope.launch {
+                                    if (signedIn) {
+                                        repository.resumeCloudSetup()?.let {
+                                            recoveryPresentation = it
+                                        }
+                                    } else {
+                                        authRequest = NativeCloudAuthRequest(
+                                            NativeCloudSignInMode.RESUME,
+                                            NativeCloudAuthAction.SIGN_IN,
+                                        )
                                     }
-                                } else {
-                                    emailSignInMode = NativeCloudSignInMode.RESUME
+                                }
+                            } else {
+                                showChangeAccountConfirmation = true
+                            }
+                        },
+                    ) { Text(if (setupInterrupted) "Resume setup" else "Change account") }
+                } else {
+                    Button(
+                        enabled = !state.isBusy && cloudConfigured,
+                        onClick = {
+                            authRequest = NativeCloudAuthRequest(
+                                NativeCloudSignInMode.SIGN_IN,
+                                NativeCloudAuthAction.CREATE_ACCOUNT,
+                            )
+                        },
+                    ) { Text("Create Account") }
+                    OutlinedButton(
+                        enabled = !state.isBusy && cloudConfigured,
+                        onClick = {
+                            authRequest = NativeCloudAuthRequest(
+                                NativeCloudSignInMode.SIGN_IN,
+                                NativeCloudAuthAction.SIGN_IN,
+                            )
+                        },
+                    ) { Text("Sign In with Account Key") }
+                    // Offered only after discovery advertised `native-device-sign-in-v1`.
+                    if (state.deviceSignInAvailable) {
+                        OutlinedButton(
+                            enabled = !state.isBusy && cloudConfigured,
+                            onClick = { scope.launch { repository.beginDeviceSignIn() } },
+                        ) { Text("Sign In with Another Device") }
+                    }
+                }
+                if ((signedIn || setupInterrupted) && state.hasCloudSession) {
+                    OutlinedButton(
+                        enabled = !state.isBusy,
+                        onClick = {
+                            if (!state.accountKeyAvailable) {
+                                showDeviceSignedInExplanation = true
+                                return@OutlinedButton
+                            }
+                            // The same device-owner gate that protects recovery-kit disclosure.
+                            authenticateThen(
+                                title = "Show account key",
+                                subtitle = "Confirm it's you to show your Snippets Cloud account key",
+                            ) {
+                                scope.launch {
+                                    repository.revealCloudAccountKey()?.let {
+                                        accountKeyPresentation = AccountKeyPresentation(it,
+                                            requiresAcknowledgement = false)
+                                    }
                                 }
                             }
-                        } else if (signedIn) {
-                            showChangeAccountConfirmation = true
-                        } else {
-                            emailSignInMode = NativeCloudSignInMode.SIGN_IN
-                        }
-                    },
-                ) {
-                    Text(when {
-                        setupInterrupted -> "Resume setup"
-                        signedIn -> "Change account"
-                        else -> "Sign in to Snippets Cloud"
-                    })
+                        },
+                    ) { Text("Show Account Key") }
                 }
                 if (signedIn) {
                     OutlinedButton(
@@ -1709,7 +1847,11 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     }
 
                     CloudKeyStatus.APPROVAL_READY -> {
-                        Text("Add this device to your encrypted library?")
+                        // Shown before any network call for a device sign-in request.
+                        Text(
+                            if (state.approvalSignsInDevice) DEVICE_SIGN_IN_APPROVAL_COPY
+                            else "Add this device to your encrypted library?",
+                        )
                         state.approvalConfirmationCode?.let {
                             Text("Check code: $it", style = MaterialTheme.typography.titleMedium)
                         }
@@ -1764,10 +1906,28 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                                 recoveryStatusCopy(state.recoveryKitStatus),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        approvalNotice?.let {
+                            Text(it, color = MaterialTheme.colorScheme.primary)
+                        }
                         Button(
                             enabled = !state.isBusy,
-                            onClick = { scan(repository::preparePairingApproval) },
+                            onClick = {
+                                approvalNotice = null
+                                scan(repository::preparePairingApproval)
+                            },
                         ) { Text("Scan a new device invitation") }
+                        OutlinedButton(
+                            enabled = !state.isBusy,
+                            onClick = {
+                                approvalNotice = null
+                                val clipboard = context.getSystemService(
+                                    Context.CLIPBOARD_SERVICE,
+                                ) as ClipboardManager
+                                val pasted = clipboard.primaryClip?.getItemAt(0)
+                                    ?.coerceToText(context)?.toString().orEmpty()
+                                scope.launch { repository.preparePairingApproval(pasted) }
+                            },
+                        ) { Text("Paste invitation") }
                         OutlinedButton(
                             enabled = !state.isBusy,
                             onClick = {
@@ -1792,8 +1952,14 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
                     Text(error.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     when (error.action) {
                         CloudErrorAction.SIGN_IN -> Button(onClick = {
-                            emailSignInMode = if (state.cloudKeyStatus == CloudKeyStatus.SETUP_INTERRUPTED)
-                                NativeCloudSignInMode.RESUME else NativeCloudSignInMode.SIGN_IN
+                            authRequest = NativeCloudAuthRequest(
+                                if (state.cloudKeyStatus == CloudKeyStatus.SETUP_INTERRUPTED) {
+                                    NativeCloudSignInMode.RESUME
+                                } else {
+                                    NativeCloudSignInMode.SIGN_IN
+                                },
+                                NativeCloudAuthAction.SIGN_IN,
+                            )
                         }) { Text(error.actionTitle) }
                         CloudErrorAction.RECOVER_LIBRARY -> Button(onClick = {
                             scan(repository::restoreWithRecoveryKit)
@@ -1826,7 +1992,7 @@ private fun CloudAccountScreen(repository: SnippetRepository, state: LibraryStat
 }
 
 @Composable
-private fun SnippetsQRCode(payload: String, description: String) {
+internal fun SnippetsQRCode(payload: String, description: String) {
     val image = remember(payload) { qrBitmap(payload) }
     Image(
         bitmap = image.asImageBitmap(),
@@ -1907,6 +2073,44 @@ internal fun cloudErrorPresentation(
             CloudErrorAction.SIGN_IN,
             "Continue sign-in",
         )
+    "device_sign_in_expired" -> CloudErrorPresentation(
+        "Sign-in request expired",
+        "Nothing was signed in. Start again on the new device and approve it within ten minutes.",
+    )
+    "device_sign_in_rejected" -> CloudErrorPresentation(
+        "Sign-in request not accepted",
+        "The request was already used or no longer exists. Nothing was changed. Start again on the new device.",
+    )
+    "device_sign_in_unavailable" -> CloudErrorPresentation(
+        "Sign in with another device is unavailable",
+        "This server doesn't offer it. Sign in with your account key instead.",
+        CloudErrorAction.SIGN_IN,
+        "Sign In with Account Key",
+    )
+    "device_sign_in_wrong_server" -> CloudErrorPresentation(
+        "This request is for another server",
+        "The new device uses a different Snippets Cloud server. Nothing was sent.",
+    )
+    "device_sign_in_library_missing" -> CloudErrorPresentation(
+        "Library unavailable",
+        "The approved library isn't available to this account. Nothing was changed on this device.",
+    )
+    "device_sign_in_failed" -> CloudErrorPresentation(
+        "Couldn't start sign-in",
+        "Check your connection and try again, or sign in with your account key.",
+    )
+    "invalid_account_key" -> CloudErrorPresentation(
+        "Account key not accepted",
+        "That account key wasn't accepted. Check it and try again.",
+        CloudErrorAction.SIGN_IN,
+        "Sign In with Account Key",
+    )
+    "account_key_malformed" -> CloudErrorPresentation(
+        "Check the account key",
+        "This isn't a valid account key. Check it for typos.",
+        CloudErrorAction.SIGN_IN,
+        "Sign In with Account Key",
+    )
     "reauthentication_required" -> CloudErrorPresentation(
         "Confirm this security change",
         "Your snippets are safe. Sign in again to continue.",
@@ -2063,9 +2267,13 @@ private fun shareRecoveryKit(context: Context, kit: RecoveryKitPresentation) {
 }
 
 @SuppressLint("InlinedApi")
-private fun copySensitiveText(context: Context, value: String) {
+private fun copySensitiveText(
+    context: Context,
+    value: String,
+    label: String = "Snippets recovery code",
+) {
     val marker = UUID.randomUUID().toString()
-    val clip = ClipData.newPlainText("Snippets recovery code", value)
+    val clip = ClipData.newPlainText(label, value)
     clip.description.extras = PersistableBundle().apply {
         putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
         putString("com.khm.snippets.clipboard.marker", marker)

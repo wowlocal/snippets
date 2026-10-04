@@ -138,10 +138,24 @@ fn cloud_failure_codes_are_stable_and_discard_server_retry_payloads() {
         (F::InvalidCredential, 3),
         (
             F::Server {
-                code: C::InvalidEmail,
+                code: C::InvalidAccountKey,
                 retry_after: Some(u32::MAX),
             },
-            101,
+            120,
+        ),
+        (
+            F::Server {
+                code: C::InvalidRequest,
+                retry_after: None,
+            },
+            105,
+        ),
+        (
+            F::Server {
+                code: C::InternalError,
+                retry_after: None,
+            },
+            119,
         ),
         (
             F::Server {
