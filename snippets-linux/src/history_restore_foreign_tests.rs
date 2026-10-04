@@ -44,7 +44,9 @@ fn unlock_current(s: &Setup, doc: &Document) -> Vault {
     vault
 }
 fn saved(queued: bool) -> Saved {
-    let mut s = setup();
+    saved_with_setup(queued, setup())
+}
+fn saved_with_setup(queued: bool, mut s: Setup) -> Saved {
     let library = Library::open(s.temp.path().into()).unwrap();
     let old = document();
     std::fs::create_dir(s.temp.path().join("Vault")).unwrap();

@@ -1837,7 +1837,7 @@ specific defect.
 | Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
 | Durable recovery | Interrupted switching/first-key setup and switch-candidate pairing, including retained offline completion/cancellation. Core crash cuts, several native restoration cuts and an actual SIGKILL followed by fresh-process offline completion after the ordinary write already pass. The same gate now includes a historical missing-header archive and native old-JSON selection, with that source file removed before completion. |
-| Remaining conflict and history decisions | Unknown pending raw-child intent, local-absence source review and unrelated ambiguous packets; native history retirement and unused-file cleanup. Existing current/nested/prior-confirmed combinations pass. |
+| Remaining conflict decisions | Unknown pending raw-child intent, local-absence source review and unrelated ambiguous packets. Existing current/nested/prior-confirmed combinations and native history retirement/unused-file cleanup pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 | Installed full restoration | All five source combinations pass in native harnesses using the actual host portal. This checkpoint checks only production chooser cancellation in the installed app, not complete restoration there. |
@@ -1982,3 +1982,46 @@ before SIGKILL, and again after each fresh native stage; it counts even refused
 offline requests. The independent GTK
 path-bar cancellation blocker remains unresolved; no wait or suppression is a fix.
 The installed app and prepared user test archive remain unchanged.
+
+
+## Native history removal and recovery-file cleanup (2026-10-04)
+
+The existing native history-panel fixture now completes the already listed
+removal/cleanup gate through the production worker and mapped controls. Its public
+private-keyring fixture uses an authentic completed library switch with no unfinished
+old capabilities. Existing assertions still hide cleanup when there is no active
+key, validated creation history is unavailable or maintenance already needs finishing.
+
+Both destructive reviews default to Cancel and explain the possible loss of the
+only recovery copy. Cancel preserves all files and protected slots. Cancelling the
+filled cleanup PAM prompt also clears its field without deleting anything. Fresh
+private PAM approval removes exactly the reviewed unused encrypted pair; the saved
+history pair and a new pair created after the review remain byte-for-byte intact.
+A separate removal review and fresh-purpose PAM approval remove only the completed
+switch entry and its referenced pair. The new unreviewed pair remains.
+
+Primary JSON, vault and encrypted checkpoint bytes, current keys and twelve
+protected capability slots are unchanged. Durable maintenance is cleared, readers
+remain available and the real HTTP counter stays at zero. The owned account worker
+is observed alive and then terminal before a fresh native process opens the real
+history panel. That process confirms no saved switch and the exact retained files;
+its inspection makes no further file or protected-history changes.
+
+```sh
+bash snippets-linux/tests/account-live.sh /path/to/library-test-binary --history-maintenance
+```
+
+This option routes the existing ignored panel test; the native count stays 1,140.
+The runner uses temporary data/config/cache, a private native keyring and private
+PAM, with fatal GTK warnings. The passing cycle contains no criticals. Eighteen
+existing owner tests also cover stale/linked files, cancelled or wrong-purpose
+permits and durable cleanup/removal boundaries. The existing legacy file-source
+test also passes after the shared fixture refactor. This is native harness evidence
+for a completed switch, not physical input or installed full restoration.
+
+The initial fixture retained unfinished old capabilities, so production correctly
+hid removal. Those failed runs are retained separately; preparing the terminal
+fixture through the real switch owner resolves the test failure without altering
+product safeguards or adding a wait. The independent GTK chooser cancellation
+blocker remains open. The finite board is narrowed, and the installed app and
+prepared rebased user test archive are unchanged.

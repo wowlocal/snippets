@@ -8,12 +8,37 @@ use crate::{
 };
 
 #[test]
-#[ignore = "defect-only installed chooser fixture; invoke tests/chooser-cancel.sh"]
+#[ignore = "private native history seeder; invoke tests/chooser-cancel.sh or tests/account-live.sh --history-maintenance"]
 fn prepare_installed_chooser_cancel_fixture() {
     let root = std::path::PathBuf::from(std::env::var_os("SNIPPETS_SECRET_TEST_ROOT").unwrap());
-    let _saved = prepare_private_native_history(&root);
+    let _saved = if std::env::var_os("SNIPPETS_HISTORY_MAINTENANCE_SEED").is_some() {
+        assert_eq!(
+            std::env::var("SNIPPETS_HISTORY_MAINTENANCE_SEED").as_deref(),
+            Ok("terminal")
+        );
+        let mut setup = setup();
+        // Unfinished old capabilities must remain protected. This maintenance
+        // fixture instead starts an authentic switch with none of those intents.
+        setup
+            .store
+            .transaction(|owner| {
+                for slot in [
+                    Slot::PairingRecipient,
+                    Slot::SpaceCreation,
+                    Slot::KeyMutation,
+                ] {
+                    let before = owner.read(slot)?;
+                    owner.replace(slot, before.as_deref().map(Vec::as_slice), None)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        copy_private_native_history(&root, saved_with_setup(false, setup))
+    } else {
+        prepare_private_native_history(&root)
+    };
     println!(
-        "Public installed chooser fixture: one authentic encrypted saved switch, current foreign vault, private native keyring; no network or restoration authorization."
+        "Public native history fixture: one authentic encrypted saved switch, current foreign vault, private native keyring; no network or restoration authorization."
     );
 }
 

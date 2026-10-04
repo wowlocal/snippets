@@ -37,7 +37,7 @@ if [[ ${1:-} == --in-bus ]]; then
 fi
 if [[ $# -lt 1 || $# -gt 2 || ! -x $1 || -z ${XDG_RUNTIME_DIR:-} ||
       -z ${HYPRLAND_INSTANCE_SIGNATURE:-} || -z ${WAYLAND_DISPLAY:-} ]]; then
-  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--creation|--switch|--restoration|--secure-restoration|--foreign-restoration|--file-restoration|--backup-file-restoration|--mixed-retained-restoration|--mixed-files-restoration|--mixed-backup-restoration|--portal-chooser|--portal-file-restoration|--portal-backup-file-restoration|--portal-mixed-retained-restoration|--portal-mixed-files-restoration|--portal-mixed-backup-restoration|--restore-cancel-consent|--restore-cancel-baseline|--restore-finish-ordinary|--restore-process-ordinary|--restore-finish-vault|--pairing|--recovery-reconcile|--recovery-retry|--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete|--nested-review-keep|--nested-review-delete|--nested-journal-keep|--nested-journal-delete|--prior-child-keep-parent-keep|--prior-child-keep-parent-delete|--prior-child-delete-parent-keep|--prior-child-delete-parent-delete] (in the unlocked desktop session)' >&2
+  printf '%s\n' 'Usage: account-live.sh /path/to/library-test-binary [--creation|--switch|--restoration|--secure-restoration|--foreign-restoration|--file-restoration|--backup-file-restoration|--mixed-retained-restoration|--mixed-files-restoration|--mixed-backup-restoration|--portal-chooser|--portal-file-restoration|--portal-backup-file-restoration|--portal-mixed-retained-restoration|--portal-mixed-files-restoration|--portal-mixed-backup-restoration|--restore-cancel-consent|--restore-cancel-baseline|--restore-finish-ordinary|--restore-process-ordinary|--history-maintenance|--restore-finish-vault|--pairing|--recovery-reconcile|--recovery-retry|--automatic-sync|--automatic-reader|--vault-sync|--sync-review|--current-review-keep|--current-review-delete|--nested-review-keep|--nested-review-delete|--nested-journal-keep|--nested-journal-delete|--prior-child-keep-parent-keep|--prior-child-keep-parent-delete|--prior-child-delete-parent-keep|--prior-child-delete-parent-delete] (in the unlocked desktop session)' >&2
   exit 2
 fi
 portal_mode=false
@@ -64,6 +64,7 @@ case ${2:-} in
   --restore-cancel-baseline) test_name=account_ui::live_tests::secure_restoration_live::live_restoration_cancel_after_baseline ;;
   --restore-finish-ordinary) test_name=account_ui::live_tests::secure_restoration_live::live_restoration_finish_after_ordinary ;;
   --restore-process-ordinary) test_name=key_store::handover::tests::restoration::foreign::desktop_workflow::process_death::native_restoration_process_kill_and_offline_resume ;;
+  --history-maintenance) test_name=account_ui::history_view::tests::native_history_cleanup_controls_respect_saved_consent_and_empty_key_state ;;
   --restore-finish-vault) test_name=account_ui::live_tests::secure_restoration_live::live_restoration_finish_after_vault ;;
   --pairing) test_name=account_ui::live_tests::pairing::live_device_pairing_and_signed_approval_restart ;;
   --recovery-reconcile) test_name=account_ui::live_tests::recovery_mutation::live_recovery_replacement_reconciles_lost_reply ;;

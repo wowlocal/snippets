@@ -5561,3 +5561,45 @@ the independently reproduced path-bar cancellation defect.
 The finite seven-group board is narrowed, with installed full restoration and the
 other named recovery gaps still open. Installed executables and the prepared
 rebased user test archive are unchanged. Stay Awake and its timer are preserved.
+
+
+### Native history retirement and scoped recovery cleanup (2026-10-04)
+
+The existing ignored history-panel test is extended in place through the actual
+account worker, native keyring and mapped production controls. The test count stays
+1,140. `tests/account-live.sh --history-maintenance` routes that same gate. Its seeder
+uses the real public foreign-vault switch fixture with no unfinished previous
+pairing/creation/signed-action intent before the switch is reviewed and committed.
+The default restoration/installed-chooser seed remains unchanged. The earlier
+empty-key, unavailable-creation-history and pending-maintenance UI assertions remain.
+
+Real destructive removal/cleanup notices explain the possible unique recovery-copy
+loss and keep default/close Cancel. Both review cancellations preserve exact files
+and protected history. Filled cleanup PAM Cancel clears its field and preserves the
+same state. Fresh private PAM cleanup removes precisely the reviewed unreferenced
+encrypted pair, preserving saved-history images and a new pair created after the
+review. Separate native removal review and fresh-purpose private PAM retire only
+the completed switch entry and its referenced pair; the late pair remains.
+
+Exact ordinary/vault/checkpoint bytes and twelve current credential/key/capability
+slots remain unchanged. Durable maintenance is absent, readers remain ready and the
+actual offline fixture counts zero HTTP attempts. The account worker is observed
+live, then terminal via its Linux task name before a new process opens real history.
+That process verifies the empty switch history and exact late files without further
+archive/file writes. No prior worker memory is used for the persisted-state check.
+
+Serial format, runner syntax, all-target Clippy, Release harness, full native cycle
+under fatal warnings, eighteen existing history owner tests, the existing legacy
+file-source restoration test and Release binaries pass on 322 frozen native inputs. The failed initial fixture included unfinished previous capabilities;
+production correctly hid removal. Source-bound failed logs remain separate. The
+fixture now prepares a truly eligible terminal switch instead of relaxing product
+admission or adding a wait. Test-only missing-response assertions now report the
+expected public button label and caller, so fixture failures identify their owner.
+No production runtime behavior changes or new acceptance permutations are added.
+
+This closes the previously listed native terminal-switch retirement/unused-file
+cleanup gate. It is not an installed full-restoration, host PAM/keyring, physical
+input or additional crash-cut claim. The finite seven-group board is narrowed;
+other named gaps and the independent GTK chooser cancellation defect remain open.
+Installed executables and the prepared rebased user test archive are unchanged.
+Stay Awake and its scheduled restoration are preserved.

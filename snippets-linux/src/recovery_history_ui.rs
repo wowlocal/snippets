@@ -487,8 +487,12 @@ mod tests {
         None
     }
     #[test]
-    #[ignore = "requires a graphical display; public catalogue and callbacks only, no keyring/PAM/network or file removal"]
+    #[ignore = "explicit native history removal/cleanup on public private-keyring/private-PAM fixtures; invoke tests/account-live.sh --history-maintenance"]
     fn native_history_cleanup_controls_respect_saved_consent_and_empty_key_state() {
+        if std::env::var_os("SNIPPETS_HISTORY_INSPECT_ONLY").is_some() {
+            crate::account_ui::live_tests::history_maintenance::run();
+            return;
+        }
         adw::init().expect("graphical display");
         let mut history = Catalog::default();
         let calls = Rc::new(Cell::new(0));
@@ -539,5 +543,6 @@ mod tests {
         let panel = content_for(&history);
         assert!(button(panel.upcast_ref(), "Review Cleanup…").is_none());
         assert!(button(panel.upcast_ref(), "Review and Finish…").is_some());
+        crate::account_ui::live_tests::history_maintenance::run();
     }
 }

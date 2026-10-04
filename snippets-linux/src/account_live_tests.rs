@@ -15,6 +15,8 @@ use std::{
 
 #[path = "account_creation_live_tests.rs"]
 mod creation;
+#[path = "account_history_maintenance_live_tests.rs"]
+pub(crate) mod history_maintenance;
 #[path = "account_pairing_live_tests.rs"]
 mod pairing;
 #[path = "account_portal_live_tests.rs"]
@@ -53,6 +55,7 @@ fn until_for(label: &str, limit: Duration, finished: impl Fn() -> bool) {
         pump();
     }
 }
+#[track_caller]
 fn button(root: &gtk::Widget, label: &str) -> gtk::Button {
     let mut widgets = vec![root.clone()];
     while let Some(widget) = widgets.pop() {
@@ -67,7 +70,7 @@ fn button(root: &gtk::Widget, label: &str) -> gtk::Button {
             widgets.push(widget);
         }
     }
-    panic!("native account response missing");
+    panic!("native account response missing: {label}");
 }
 #[track_caller]
 fn press(root: &gtk::Widget, label: &str) {
