@@ -6,7 +6,7 @@ final class TagTokenField: UIView, UITextFieldDelegate {
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private let textField = BackspaceTextField()
-    private var tags: [String] = []
+    private(set) var tags: [String] = []
     private var availableTags: [String] = []
     private var completionButtons: [UIButton] = []
     private var isUpdating = false

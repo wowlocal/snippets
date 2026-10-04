@@ -427,10 +427,7 @@ final class MainSplitViewController: UISplitViewController {
         if let selectedSnippetID,
            environment.store.snippetForDisplay(id: selectedSnippetID) != nil {
             guard change.affects(selectedSnippetID) else { return }
-            editorController.bind(
-                to: selectedSnippetID,
-                preserveFirstResponder: source == .local,
-                diagnosticReason: .storeRefresh(source))
+            editorController.refreshFromStore(id: selectedSnippetID, source: source)
         } else {
             selectInitialSnippetIfNeeded()
         }

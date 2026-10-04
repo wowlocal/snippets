@@ -727,6 +727,64 @@ final class SecureSnippetTextView: UITextView {
         setNeedsDisplay()
     }
 
+    /// Shows a newer body for the ordinary snippet already bound here, without the
+    /// teardown in `bindOrdinaryText`. Sync publishes the snippet being edited each
+    /// time CloudKit returns this device's own upload; replacing the storage then
+    /// moved the caret to the end while the user was typing. Identical text is left
+    /// untouched, and a merged remote edit keeps the selection with the text around
+    /// it. Returns false unless the view is plainly ordinary, so the caller can fall
+    /// back to a full bind.
+    @discardableResult
+    func refreshOrdinaryText(_ ordinaryText: String) -> Bool {
+        guard !isSecureContentMode, secureCapturePhase == .ordinary else { return false }
+        let current = (text ?? "") as NSString
+        let replacement = ordinaryText as NSString
+        guard !current.isEqual(to: ordinaryText) else { return true }
+        let selection = Self.selection(selectedRange, mappedFrom: current, to: replacement)
+        text = ordinaryText
+        selectedRange = selection
+        return true
+    }
+
+    /// Maps a UTF-16 selection across a single contiguous replacement: offsets in the
+    /// shared prefix stay put, offsets in the shared suffix move by the length delta,
+    /// and anything inside the replaced span lands at its end.
+    static func selection(
+        _ selection: NSRange,
+        mappedFrom old: NSString,
+        to new: NSString
+    ) -> NSRange {
+        let shorter = min(old.length, new.length)
+        var prefix = 0
+        while prefix < shorter, old.character(at: prefix) == new.character(at: prefix) {
+            prefix += 1
+        }
+        var suffix = 0
+        while suffix < shorter - prefix,
+              old.character(at: old.length - 1 - suffix)
+                == new.character(at: new.length - 1 - suffix) {
+            suffix += 1
+        }
+        func map(_ offset: Int) -> Int {
+            let mapped: Int
+            if offset <= prefix {
+                mapped = offset
+            } else if offset >= old.length - suffix {
+                mapped = offset - old.length + new.length
+            } else {
+                mapped = new.length - suffix
+            }
+            let clamped = min(max(mapped, 0), new.length)
+            guard clamped < new.length else { return clamped }
+            // Never leave the caret inside a composed character sequence.
+            let sequence = new.rangeOfComposedCharacterSequence(at: clamped)
+            return sequence.location == clamped ? clamped : NSMaxRange(sequence)
+        }
+        let start = map(selection.location)
+        let end = max(start, map(NSMaxRange(selection)))
+        return NSRange(location: start, length: end - start)
+    }
+
     /// Plaintext may enter UITextView storage only in an inactive scene with a
     /// healthy, already-attached protected renderer.
     var canAcceptSecurePlaintext: Bool {
