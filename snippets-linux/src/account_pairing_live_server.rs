@@ -22,12 +22,14 @@ pub(in super::super) struct State {
     lost_reply: bool,
 }
 struct Invitation {
+    scope: Value,
     public: [u8; 65],
     nonce: [u8; 32],
     expires: i64,
     ciphertext: Option<String>,
 }
 struct Challenge {
+    scope: Value,
     action: Action,
     hash: String,
     nonce: [u8; 32],
@@ -104,7 +106,7 @@ fn reply(id: uuid::Uuid, v: &Invitation) -> Value {
         .iter()
         .map(|b| alphabet[(b & 31) as usize] as char)
         .collect();
-    json!({"scope":scope(),"pairing":{"pairingId":id,"recipientPublicKey":STANDARD.encode(v.public),
+    json!({"scope":v.scope,"pairing":{"pairingId":id,"recipientPublicKey":STANDARD.encode(v.public),
         "nonce":STANDARD.encode(v.nonce),"authenticationTag":tag,
         "state":if v.ciphertext.is_some(){"approved"}else{"pending"},
         "expiresAt":chrono::DateTime::from_timestamp(v.expires,0).unwrap().to_rfc3339()}})
@@ -115,12 +117,14 @@ fn verified(
     public: &Value,
     action: Action,
     hash: &str,
+    response_scope: &Value,
     now: i64,
 ) -> bool {
     let proof = &body["proof"];
     assert!(proof.as_object().unwrap().len() == 2);
     let id = uuid::Uuid::parse_str(proof["challengeId"].as_str().unwrap()).unwrap();
     let challenge = state.challenges.get_mut(&id).unwrap();
+    assert!(challenge.scope == *response_scope);
     assert!(challenge.action == action && challenge.hash == hash && challenge.expires > now);
     let public = bytes(public);
     let signature = ed25519_dalek::Signature::from_bytes(&bytes(&proof["signature"]));
@@ -140,11 +144,11 @@ fn verified(
 }
 pub(super) fn respond(
     request: Request,
-    _server: &ServerURL,
     owner: &mut super::State,
+    base: &str,
+    response_scope: &Value,
 ) -> (u16, Value) {
     let state = owner.pairing.as_mut().unwrap();
-    let base = format!("/v2/spaces/{}", uuid::Uuid::from_u128(2));
     let now = chrono::Utc::now().timestamp();
     if request.path == format!("{base}/pairings") {
         assert!(request.method == "POST");
@@ -156,6 +160,7 @@ pub(super) fn respond(
         state.creates += 1;
         let id = uuid::Uuid::from_u128(600 + state.creates as u128);
         let invitation = Invitation {
+            scope: response_scope.clone(),
             public,
             nonce: bytes(&request.body["nonce"]),
             expires: now + 300,
@@ -167,7 +172,7 @@ pub(super) fn respond(
     }
     if request.path == format!("{base}/key-challenges") {
         assert!(request.method == "POST" && request.body.as_object().unwrap().len() == 4);
-        assert!(request.body["expectedScope"] == scope() && request.body["keyEpoch"] == 1);
+        assert!(request.body["expectedScope"] == *response_scope && request.body["keyEpoch"] == 1);
         assert!(owner.public.is_some());
         let action = match request.body["action"].as_str().unwrap() {
             "approve_pairing" => Action::Approval,
@@ -180,7 +185,7 @@ pub(super) fn respond(
             Sha256::digest(format!("public-native-pairing-challenge-{id}").as_bytes()).into();
         let expires = now + 300;
         let hash = request.body["requestHash"].as_str().unwrap().to_owned();
-        let response = json!({"scope":scope(),"challenge":{"challengeId":id,"action":request.body["action"],
+        let response = json!({"scope":response_scope,"challenge":{"challengeId":id,"action":request.body["action"],
             "keyEpoch":1,"requestHash":hash,"nonce":STANDARD.encode(nonce),
             "expiresAt":chrono::DateTime::from_timestamp(expires,0).unwrap().to_rfc3339()}});
         assert!(
@@ -189,6 +194,7 @@ pub(super) fn respond(
                 .insert(
                     id,
                     Challenge {
+                        scope: response_scope.clone(),
                         action,
                         hash,
                         nonce,
@@ -225,6 +231,7 @@ pub(super) fn respond(
             owner.public.as_ref().unwrap(),
             Action::Recovery,
             &hash,
+            response_scope,
             now,
         );
         if replay {
@@ -243,7 +250,7 @@ pub(super) fn respond(
         }
         state.recovery_posts += 1;
         state.lost_reply = std::mem::take(&mut state.lose_recovery);
-        return (200, recovery(owner, &scope()));
+        return (200, recovery(owner, response_scope));
     }
     let path = request
         .path
@@ -253,6 +260,7 @@ pub(super) fn respond(
     let id = uuid::Uuid::parse_str(parts.next().unwrap()).unwrap();
     let operation = parts.next();
     assert!(parts.next().is_none());
+    assert!(state.invitations.get(&id).unwrap().scope == *response_scope);
     if request.method == "DELETE" {
         assert!(operation.is_none() && request.body.is_null());
         assert!(state.invitations.remove(&id).is_some());
@@ -272,7 +280,7 @@ pub(super) fn respond(
             state.claims += 1;
             (
                 200,
-                json!({"scope":scope(),"pairingId":id,"algorithm":bootstrap::PAIRING_ALGORITHM,"ciphertext":ciphertext}),
+                json!({"scope":response_scope,"pairingId":id,"algorithm":bootstrap::PAIRING_ALGORITHM,"ciphertext":ciphertext}),
             )
         }
         Some("approval") => {
@@ -298,6 +306,7 @@ pub(super) fn respond(
                 owner.public.as_ref().unwrap(),
                 Action::Approval,
                 &hash,
+                response_scope,
                 now,
             );
             let invitation = state.invitations.get_mut(&id).unwrap();

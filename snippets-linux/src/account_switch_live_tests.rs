@@ -2,7 +2,7 @@
 use super::*;
 use crate::{crypto::RootKey, journal::Checkpoint, key_store::history};
 
-fn active(root: &Path) -> Vec<Option<Zeroizing<Vec<u8>>>> {
+pub(super) fn active(root: &Path) -> Vec<Option<Zeroizing<Vec<u8>>>> {
     [
         Slot::LibraryKey,
         Slot::Bootstrap,
@@ -16,7 +16,7 @@ fn active(root: &Path) -> Vec<Option<Zeroizing<Vec<u8>>>> {
     .collect()
 }
 #[track_caller]
-fn review(
+pub(super) fn review(
     window: &Rc<AccountWindow>,
     label: &str,
     heading: &str,
@@ -52,7 +52,7 @@ fn switch_review(window: &Rc<AccountWindow>) -> adw::AlertDialog {
     assert!(dialog.body().contains("Use a key saved on this computer"));
     dialog
 }
-fn password(window: &Rc<AccountWindow>) -> (adw::AlertDialog, gtk::PasswordEntry) {
+pub(super) fn password(window: &Rc<AccountWindow>) -> (adw::AlertDialog, gtk::PasswordEntry) {
     let dialog = switch_review(window);
     press(dialog.upcast_ref(), "Switch Library");
     until("native switch password confirmation did not map", || {
@@ -71,7 +71,7 @@ fn password(window: &Rc<AccountWindow>) -> (adw::AlertDialog, gtk::PasswordEntry
     assert!(!entry.shows_peek_icon());
     (dialog, entry)
 }
-fn finished(window: &Rc<AccountWindow>, entry: Option<&gtk::PasswordEntry>) {
+pub(super) fn finished(window: &Rc<AccountWindow>, entry: Option<&gtk::PasswordEntry>) {
     wait_work(window);
     assert!(window.snapshot_dialog.borrow().is_none() && window.password_dialog.borrow().is_none());
     if let Some(entry) = entry {

@@ -111,6 +111,17 @@ impl State {
         assert!(self.requests == 0 && self.creation.is_none());
         self.creation = Some(Creation::default());
     }
+    pub fn enable_creation_with_existing_library(&mut self) {
+        let existing = space(self);
+        self.enable_creation();
+        // This is the peer's already exposed library, not a client creation
+        // receipt. Requests may never use the nil idempotency sentinel.
+        self.creation
+            .as_mut()
+            .unwrap()
+            .spaces
+            .push((uuid::Uuid::nil(), existing));
+    }
     pub fn lose_next_creation_reply(&mut self) {
         self.creation.as_mut().unwrap().lose_reply = true;
     }
@@ -320,13 +331,6 @@ fn respond(request: Request, server: &ServerURL, state: &mut State) -> (u16, Val
     } else {
         assert!(*token == format!("Bearer public-native-access-{}", state.grants));
     }
-    if state.pairing.is_some()
-        && (request.path.contains("/pairings")
-            || request.path.ends_with("/key-challenges")
-            || (request.method == "PUT" && request.path.ends_with("/recovery-envelope")))
-    {
-        return pairing::respond(request, server, state);
-    }
     if request.path == "/v2/spaces" {
         if let Some(creation) = state.creation.as_mut() {
             if request.method == "POST" {
@@ -412,6 +416,13 @@ fn respond_library(
     base: &str,
     response_scope: &Value,
 ) -> (u16, Value) {
+    if state.pairing.is_some()
+        && (request.path.contains("/pairings")
+            || request.path.ends_with("/key-challenges")
+            || (request.method == "PUT" && request.path.ends_with("/recovery-envelope")))
+    {
+        return pairing::respond(request, state, base, response_scope);
+    }
     if request.path == base {
         assert!(request.method == "GET");
         let mut value = space(state);

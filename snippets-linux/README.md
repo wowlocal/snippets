@@ -1839,7 +1839,7 @@ specific defect.
 | --- | --- |
 | Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
-| Durable recovery | Other interrupted switching/first-key setup and switch-candidate pairing remain. Fresh native workers finish the exact published switch or cancel the exact unpublished switch offline with fresh PAM and no HTTP. The current primary/vault/checkpoint bytes and saved capabilities stay intact; reconnect/selection is required before sync. Native first-key setup also resumes an accepted-but-lost TLS reply with the original capability and no repeat POST. Core crash cuts, native restoration cuts and actual SIGKILL/offline restoration already pass, including a historical missing-header archive and native old-JSON selection with the source file removed before completion. |
+| Durable recovery | Other interrupted switching/first-key setup remains. Native candidate pairing from an independent trusted B installation preserves active A, restarts the invitation and retains the received B key until a separate PAM-authorized switch. Published-switch offline finish, unpublished-switch offline cancellation and first-key lost-response continuation pass. Native restoration cuts, SIGKILL/offline restoration and the historical missing-header file case also pass. |
 | Remaining conflict decisions | Unrelated ambiguous packets. Native local-absence secure source Keep/Delete, Unknown pending raw-child Keep/Delete before parent Keep, existing current/nested/prior-confirmed combinations and native history retirement/unused-file cleanup pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
@@ -2244,3 +2244,45 @@ cancellation; other interruption/candidate-pairing gates remain. The independent
 GTK chooser cancellation defect and other six groups retain their status.
 The user archive is refreshed from the clean rebased checkpoint; the existing
 installation, user data and scheduled Stay Awake restoration remain untouched.
+
+## Native switch-candidate pairing (2026-10-05)
+
+The existing `--pairing` cycle now completes the already listed candidate-pairing
+gate after its original two-installation approval/restart/sync assertions. Actual
+native creation and first-key setup establish A beside the pre-existing B. Fresh
+PAM disclosure supplies A's public-fixture recovery code to a fresh installation
+through its real Recover Library Key input. It receives A through actual HTTPS
+and sync, with no B key, pairing recipient or account-review history. No active
+key, candidate, permit, source image or journal is written by the test helper.
+
+That A installation selects B and maps Get Selected Library Key. Its public
+invitation can be polled and cancelled without changing active A or any data-plane
+facts. A new invitation survives the observed terminal old worker and a fresh
+worker's reconnect. The independent trusted B installation compares the code and
+authorizes its actual signed challenge through private native PAM. The peer
+checks the action/hash/signature and exact library scope; invitation cancellation,
+lookup, claim and approval are all scoped to the requested library.
+
+Check Approval decrypts and retains B only in PairingCandidate. A's active slots,
+primary/vault/checkpoint bytes, trusted B key/files and fetch/batch counts stay
+exact. Default switch Cancel preserves that candidate. Separate fresh PAM
+switches to the exact trusted B key, keeps the ordinary/vault files and records A
+in protected recovery history; B's checkpoint has no A cursor, confirmations or
+outbound batch. Only subsequent explicit Sync reads/writes B, preserving A's
+original encrypted server record and carrying the expected content under B's key.
+
+Format, shell syntax, all-target Clippy, Release harness/binaries, twenty-one
+existing candidate tests and thirty-one creation regressions pass on 324 frozen
+inputs. The complete extended pairing cycle and existing recovery-reconciliation
+cycle pass under fatal warnings without GTK criticals. Count remains 1,141;
+there is no new test, runner option, acceptance matrix, production policy or wait.
+Earlier successful compile/live evidence is retained separately before the final
+peer cancellation-scope audit. One subsequent run failed in the original ordinary
+pairing test at Check Approval activation after focus returned; foreground
+polling may already own or complete that same claim. Its source, log and gate receipt are retained and
+excluded from successful evidence. The fixture now observes the actual in-flight
+operation or already-completed claim before requesting a manual check, then
+keeps the exact one-claim/key-installation assertions; there is no fixed delay. The finite durable row removes candidate pairing;
+other named gates and the independent GTK cancellation defect remain open.
+The user archive is refreshed from the clean rebased checkpoint; existing
+installation, user data and the Stay Awake restoration timer are preserved.
