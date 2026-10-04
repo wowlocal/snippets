@@ -64,9 +64,15 @@ fn creation_entries(root: &Path) -> usize {
 #[test]
 #[ignore = "explicit native creation GTK/HTTPS/keyring acceptance; invoke tests/account-live.sh with --creation"]
 fn live_library_creation_retains_receipts_and_current_library() {
-    run(false);
+    run(Followup::Creation);
 }
-pub(super) fn run(complete_switch: bool) {
+#[derive(Clone, Copy)]
+pub(super) enum Followup {
+    Creation,
+    Switch,
+    Restoration,
+}
+pub(super) fn run(followup: Followup) {
     let root = isolated_root();
     let fixture = server::Fixture::new();
     fixture.state.lock().unwrap().enable_creation();
@@ -217,8 +223,17 @@ pub(super) fn run(complete_switch: bool) {
     assert!(fs::metadata(&root).unwrap().permissions().mode() & 0o777 == 0o700);
     assert!(!root.join("automatic-sync.json").exists());
     assert!(CloudClient::discover(fixture.server.clone()).is_err());
-    if complete_switch {
+    if matches!(followup, Followup::Switch | Followup::Restoration) {
         super::switching::run(&window, &app, &parent, &root, &fixture, &pam, &local);
+    }
+    if matches!(followup, Followup::Restoration) {
+        let restored = make_window(&app, &parent, &root, &fixture, &pam);
+        let restored_stop = Stop(restored.clone());
+        super::restoration_live::run(&restored, &app, &parent, &root, &fixture, &pam, &local);
+        until("final restoration worker did not drain", || {
+            restored.prepare_quit()
+        });
+        drop(restored_stop);
     }
     until("final creation worker did not drain", || {
         window.prepare_quit()

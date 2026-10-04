@@ -542,7 +542,15 @@ library. A completed switch keeps local records, resets the target sync checkpoi
 and retains the original library in protected recovery history. Only explicit
 **Sync Now** uploads records under the target key. Reopening reconnects to the
 selected library; switching back uses its saved original key without new key setup.
-Interrupted-switch completion/cancellation and restoration remain separate checks.
+Ordinary saved-history restoration also passes native acceptance. The saved and
+current libraries appear separately in review. Cancel, focus loss, incorrect
+computer-password authorization and a stale local edit preserve current files
+and keys. Fresh authorization restores the selected fields, keeps the current
+version as a disabled copy and retains unrelated records. Current cloud CAS/feed
+facts stay intact. A new worker reconnects explicitly before encrypted sync;
+the preserved copy is sent before the restored source. Protected, mixed-vault,
+foreign-vault and interrupted restoration, plus interrupted switching, remain
+separate checks.
 
 **Library Creation Receipts** in Library Recovery History shows the retained
 requests and completed receipts without reading account credentials. Use
@@ -691,7 +699,8 @@ journal-only C1 source Keep/Delete also pass with retained child seals and
 separate originals. Prior-confirmed cloud-child Keep/Delete before parent
 Keep/Delete also passes all four native combinations with actual saved CAS.
 Unknown pending raw-child decisions, local-absence source review, unrelated
-ambiguous packets, switch-candidate pairing, interrupted switching and restoration
+ambiguous packets, switch-candidate pairing, interrupted switching and protected,
+mixed-vault, foreign-vault or interrupted restoration
 remain under live acceptance. Native recipient pairing and signed approval/recovery
 replacement now pass, including retained-request restart. The native
 interrupted-startup recovery fixture passes with temporary
@@ -719,8 +728,10 @@ a lost HTTPS reply and exact signed-request replay after restart. Recovery-code
 replacement also passes: after a lost acknowledgement, a new worker either verifies
 the exact retained envelope or obtains fresh authorization to resend the original
 proof. The old code cannot open the new envelope; the new code restores the same
-library key and synchronized record. Candidate pairing for switching, interrupted
-switching and library restoration remain under acceptance.
+library key and synchronized record. Ordinary saved-history restoration now also
+passes, including current-version preservation and explicit reconnect/sync.
+Candidate pairing for switching, interrupted switching and protected, mixed-vault,
+foreign-vault or interrupted library restoration remain under acceptance.
 
 ## Secure Snippets
 
@@ -1206,8 +1217,11 @@ halt and in-flight-disable checks. Reviewed switching to a separately keyed
 library and back passes too. Two-installation pairing and signed device approval
 pass with retained-request restart. Recovery replacement passes both exact-envelope
 reconciliation and freshly authorized original-proof replay after restart, followed
-by same-key recovery and encrypted synchronization. Candidate pairing for switching,
-interrupted switching and restoration remain under review.
+by same-key recovery and encrypted synchronization. Ordinary saved-history
+restoration also passes current-version/unrelated-record preservation, current
+CAS/feed retention, new-worker reconnect and encrypted dependency ordering.
+Candidate pairing for switching, interrupted switching and protected, mixed-vault,
+foreign-vault or interrupted restoration remain under review.
 All three globally assigned actions, visible tray-menu selection/focus and re-registration
 with a restarted Omarchy host pass; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
@@ -1257,6 +1271,9 @@ bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary 
 # Complete reviewed switch, independent target key setup, protected history,
 # explicit encrypted sync, new-worker reconnect and return using the saved key.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --switch
+# Selected ordinary saved-history restoration: safe-default review, fresh PAM,
+# stale-primary refusal, current-version preservation and explicit encrypted sync.
+bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --restoration
 # Two private native installations: retained public invitation, compare-code gate,
 # fresh PAM approval, original signed-request replay and claimed-key encrypted sync.
 bash snippets-linux/tests/account-live.sh /absolute/path/to/library-test-binary --pairing

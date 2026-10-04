@@ -18,6 +18,8 @@ mod creation;
 mod pairing;
 #[path = "account_recovery_mutation_live_tests.rs"]
 mod recovery_mutation;
+#[path = "account_restoration_live_tests.rs"]
+mod restoration_live;
 #[path = "account_live_server.rs"]
 mod server;
 #[path = "account_switch_live_tests.rs"]

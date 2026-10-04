@@ -79,7 +79,7 @@ fn finished(window: &Rc<AccountWindow>, entry: Option<&gtk::PasswordEntry>) {
     }
     assert!(window.worker.can_quit());
 }
-fn checkpoint_and_history(root: &Path) -> (Checkpoint, history::Catalog) {
+pub(super) fn checkpoint_and_history(root: &Path) -> (Checkpoint, history::Catalog) {
     let root = root.to_owned();
     let (sender, receiver) = mpsc::channel();
     let worker = thread::spawn(move || {
@@ -109,7 +109,7 @@ fn checkpoint_and_history(root: &Path) -> (Checkpoint, history::Catalog) {
 #[test]
 #[ignore = "explicit native two-library GTK/HTTPS/private-keyring/private-PAM acceptance; invoke tests/account-live.sh with --switch"]
 fn live_reviewed_library_switch_keeps_source_history_and_reconnects() {
-    creation::run(true);
+    creation::run(creation::Followup::Switch);
 }
 pub(super) fn run(
     window: &Rc<AccountWindow>,
