@@ -57,6 +57,45 @@ To reduce false negatives in Chromium/Electron:
 - We cache primed PIDs to avoid unnecessary repeated writes.
 - If focused element lookup fails, we retry once with forced priming.
 
+### WebKit publishes focus lazily
+
+`WKWebView` builds its accessibility tree only after the first AX message reaches that
+view. Until then the host application answers `AXFocusedUIElement` with
+`kAXErrorNoValue` (-25212), even though a web field already has keyboard focus. Priming
+does not help: WebKit reports `AXManualAccessibility` as unsupported (-25205), and the
+immediate retry above gets -25212 again. On macOS 27 focus appeared 13–20 ms after the
+first message for a login-sized page and about 160 ms for a 24,000-element page. Each
+new web view starts unpublished, even when an earlier one in the same process is awake;
+navigation inside an awake view stays published.
+
+Before the fix, the first Secure Paste into a newly opened embedded login view (for
+example a launcher's Battle.net sign-in window) logged `secure_paste` `capture` with
+`outcome=clipboard`, `reason=no_text_field`, `target=unresolved`. The picker therefore
+opened in Copy mode and refused the secure snippet, and the second attempt worked
+because the first one had woken WebKit.
+
+Explicit Secure Paste and clipboard-history capture now poll `AXFocusedUIElement` while,
+and only while, the answer is -25212: about 250 ms of increasing delays within the same
+400 ms capture budget (`LazyAccessibilityFocus` in `AXMessagingBudget.swift`). Any other
+answer is conclusive. The wait starts only when the host also reports a focused window.
+AppKit answers with the window itself when no control has focus, and an application
+without a window answers -25212 to both attributes, so neither case is delayed. A host
+with its own accessibility implementation can report a focused window and no focused
+element permanently. An unpublished `WKWebView` has no distinguishing AX signature (it is
+absent from the tree, and its container answers -25212 to `AXChildren` like an image), so
+such a host is recognized by behavior instead. When every read through one complete wait
+answers -25212, that process (PID plus launch date) is not waited for again. A wait cut
+short by the budget or by another error does not mark it. Keystroke paths never wait.
+The capture event's `attempts` counts these reads.
+
+`bash scripts/test-secure-paste-cold-web-focus.sh` is an opt-in GUI regression check.
+It opens synthetic `WKWebView` windows, including a second web view and a large page,
+and verifies that the shipping wait finds the focused field that the old immediate
+retry missed. It also checks that a window without a focused control and an application
+without a window fall through without waiting, and that a host which never publishes
+focus completes one wait within the capture budget so it can be remembered. It posts no input and reads no values. Run it from an
+Accessibility-authorized terminal.
+
 Implemented in:
 
 - `primeAccessibilityIfNeeded(for:force:)` in the engine.
@@ -644,6 +683,7 @@ When changing detection logic, keep these invariants:
 - Do not rely on AX role alone.
 - Keep nested-focus and parent-chain checks.
 - Keep Chromium/Electron priming + retry.
+- Keep the bounded wait for WebKit's lazily published focus in explicit capture only.
 - Keep panel anchor stable for one suggestion session.
 - Keep dual coordinate conversion fallback.
 - Restore only a pasteboard we still own (`changeCount` check), after pre-dispatch failure or a
