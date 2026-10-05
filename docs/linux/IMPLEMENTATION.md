@@ -449,11 +449,26 @@ no snippet bodies, names or general key stream enter those records. Original
 binaries are restored after each diagnostic run. Restarting a service, changing
 instrumentation or fixing an observer is not claimed as an application repair.
 
-The requested three-hour Stay Awake interval ended at 13:40:17 Minsk, and the
-session subsequently locked. Graphical acceptance of this capability candidate is
-pending unlock. The Chromium failure, independent missing virtual pointer-button
-delivery and the original normal/physical-input gate remain open. The other finite
-evidence groups and the user's cloud/GTK-race deferral retain their scope.
+The requested three-hour Stay Awake interval ended at 13:40:17 Minsk. After the
+user unlocked the session, the capability-change addon was installed with unchanged
+library/preference metadata and one stock Fcitx restart. Actual installed exact
+expansion and visible partial-query panels pass in GTK, default Wayland Chromium
+and Ghostty. Full Ctrl+N/P and Shift+Tab selection, saved Open/Picker/Capture
+shortcuts and accessible history collection/Copy/opt-out/restart/Clear pass on
+the same four artifact hashes. The screenshots show Fcitx's native Linux theme;
+the macOS backslash/caret/keyboard behavior is covered, but glass-panel visual
+equivalence is not claimed.
+
+Three cold Chromium first fields finish with the exact 45-byte public body,
+retained receiver focus and no composition within the original eight-second
+deadline. No added wait, retry or instrumentation is used. Those successes do
+not identify or prove a repair of the earlier intermittent failure; its original
+12-byte missing-backslash evidence is preserved. The normal primary is restored
+with existing expansion/panel consent and three global actions. The user's new
+four-hour Stay Awake request restores idle at 18:21:31 Minsk. The Chromium cause,
+independent virtual pointer-button delivery and normal/physical-input gate remain
+open. The other finite evidence groups and cloud/GTK-race deferral retain their
+scope. Source-bound candidate packaging preserves these limitations.
 
 ### Completion audit, 2026-10-03
 
