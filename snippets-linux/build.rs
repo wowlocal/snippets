@@ -21,6 +21,11 @@ fn main() {
             .cargo_metadata(false)
             .probe("pangocairo")
             .expect("Pango/Cairo development files are required");
+        let json_panel = pkg_config::Config::new()
+            .cargo_metadata(false)
+            .atleast_version("0.14")
+            .probe("json-c")
+            .expect("json-c development files are required");
         for (mode, name) in [
             (
                 "client-header",
@@ -58,6 +63,48 @@ fn main() {
                 .expect("C compiler required")
                 .success()
         );
+        let mut fallback_protocols = Vec::new();
+        for (xml, stem) in [
+            ("wlr-layer-shell-v1.xml", "snippets-fcitx-layer"),
+            ("xdg-shell.xml", "snippets-fcitx-xdg"),
+        ] {
+            for (mode, suffix) in [
+                ("client-header", "protocol.h"),
+                ("private-code", "protocol.c"),
+            ] {
+                assert!(
+                    std::process::Command::new("wayland-scanner")
+                        .arg(mode)
+                        .arg(format!("data/{xml}"))
+                        .arg(addon_output.join(format!("{stem}-{suffix}")))
+                        .status()
+                        .expect("wayland-scanner required")
+                        .success()
+                );
+            }
+            let object = addon_output.join(format!("{stem}.o"));
+            assert!(
+                cc::Build::new()
+                    .get_compiler()
+                    .to_command()
+                    .args([
+                        "-c",
+                        "-fPIC",
+                        "-fvisibility=hidden",
+                        "-Wall",
+                        "-Wextra",
+                        "-Werror"
+                    ])
+                    .arg(addon_output.join(format!("{stem}-protocol.c")))
+                    .arg("-o")
+                    .arg(&object)
+                    .status()
+                    .expect("C compiler required")
+                    .success()
+            );
+            fallback_protocols.push(object);
+            println!("cargo:rerun-if-changed=data/{xml}");
+        }
         let mut addon = cc::Build::new().cpp(true).get_compiler().to_command();
         addon
             .args([
@@ -72,7 +119,11 @@ fn main() {
                 "-o",
             ])
             .arg(&addon_library);
-        addon.arg(&panel_protocol).arg("-I").arg(&addon_output);
+        addon
+            .arg(&panel_protocol)
+            .args(&fallback_protocols)
+            .arg("-I")
+            .arg(&addon_output);
         addon.arg(format!(
             "-DSNIPPETS_FCITX_INTERFACE_SDK=\"{}\"",
             fcitx.version
@@ -83,6 +134,7 @@ fn main() {
             .chain(&module.include_paths)
             .chain(&wayland_panel.include_paths)
             .chain(&pango_panel.include_paths)
+            .chain(&json_panel.include_paths)
         {
             addon.arg("-I").arg(include);
         }
@@ -91,6 +143,7 @@ fn main() {
             .iter()
             .chain(&wayland_panel.link_paths)
             .chain(&pango_panel.link_paths)
+            .chain(&json_panel.link_paths)
         {
             addon.arg("-L").arg(directory);
         }
@@ -99,6 +152,7 @@ fn main() {
             .iter()
             .chain(&wayland_panel.libs)
             .chain(&pango_panel.libs)
+            .chain(&json_panel.libs)
         {
             addon.arg(format!("-l{library}"));
         }
@@ -119,6 +173,7 @@ fn main() {
         .expect("Copy installable Fcitx addon");
         println!("cargo:rerun-if-changed=src/inline_fcitx.cpp");
         println!("cargo:rerun-if-changed=src/inline_fcitx_popup.h");
+        println!("cargo:rerun-if-changed=src/inline_fcitx_anchor.h");
         println!("cargo:rerun-if-changed=src/fcitx-5.1.22/waylandim_public.h");
         println!("cargo:rerun-if-changed=src/fcitx-5.1.22/zwp_input_method_v2.h");
         println!("cargo:rerun-if-changed=data/input-method-v2.xml");
@@ -136,7 +191,11 @@ fn main() {
                 "-o",
             ])
             .arg(&state_fixture);
-        fixture.arg(&panel_protocol).arg("-I").arg(&addon_output);
+        fixture
+            .arg(&panel_protocol)
+            .args(&fallback_protocols)
+            .arg("-I")
+            .arg(&addon_output);
         fixture.arg(format!(
             "-DSNIPPETS_FCITX_INTERFACE_SDK=\"{}\"",
             fcitx.version
@@ -147,6 +206,7 @@ fn main() {
             .chain(&module.include_paths)
             .chain(&wayland_panel.include_paths)
             .chain(&pango_panel.include_paths)
+            .chain(&json_panel.include_paths)
         {
             fixture.arg("-I").arg(include);
         }
@@ -155,6 +215,7 @@ fn main() {
             .iter()
             .chain(&wayland_panel.link_paths)
             .chain(&pango_panel.link_paths)
+            .chain(&json_panel.link_paths)
         {
             fixture.arg("-L").arg(directory);
         }
@@ -163,6 +224,7 @@ fn main() {
             .iter()
             .chain(&wayland_panel.libs)
             .chain(&pango_panel.libs)
+            .chain(&json_panel.libs)
         {
             fixture.arg(format!("-l{library}"));
         }

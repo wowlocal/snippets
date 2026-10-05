@@ -277,11 +277,12 @@ private:
       Window *window;
       wl_output *proxy;
       int scale = 1;
+      std::string name;
       Output(Window *parent, wl_registry *registry, uint32_t name,
              uint32_t version)
           : window(parent),
             proxy(static_cast<wl_output *>(wl_registry_bind(
-                registry, name, &wl_output_interface, std::min(version, 2u)))) {
+                registry, name, &wl_output_interface, std::min(version, 4u)))) {
         static const wl_output_listener listener = {
             geometry, mode, done, scaling, outputName, description};
         wl_output_add_listener(proxy, &listener, this);
@@ -295,7 +296,10 @@ private:
       static void mode(void *, wl_output *, uint32_t, int32_t, int32_t,
                        int32_t) {}
       static void done(void *, wl_output *) {}
-      static void outputName(void *, wl_output *, const char *) {}
+      static void outputName(void *data, wl_output *, const char *name) {
+        if (name && std::strlen(name) <= 128)
+          static_cast<Output *>(data)->name = name;
+      }
       static void description(void *, wl_output *, const char *) {}
       static void scaling(void *data, wl_output *, int32_t value) {
         auto *self = static_cast<Output *>(data);
@@ -411,6 +415,11 @@ private:
     uint32_t compositorName = 0, shmName = 0;
     wl_surface *surface = nullptr;
     zwp_input_popup_surface_v2 *role = nullptr;
+    zwlr_layer_shell_v1 *layerShell = nullptr;
+    zwlr_layer_surface_v1 *layer = nullptr;
+    uint32_t layerShellName = 0;
+    bool layerReady = false;
+    std::optional<MouseAnchor> mouseAnchor;
     std::map<uint32_t, std::unique_ptr<Output>> outputs;
     std::map<uint32_t, std::unique_ptr<Seat>> seats;
     std::vector<std::unique_ptr<Buffer>> buffers;
@@ -433,6 +442,8 @@ private:
       hide();
       seats.clear();
       outputs.clear();
+      dispose<zwlr_layer_shell_v1, zwlr_layer_shell_v1_destroy>(layerShell,
+                                                                connected);
       dispose<wl_shm, wl_shm_destroy>(shm, connected);
       dispose<wl_compositor, wl_compositor_destroy>(compositor, connected);
       dispose<wl_registry, wl_registry_destroy>(registry, connected);
@@ -448,6 +459,11 @@ private:
         self->shm = static_cast<wl_shm *>(
             wl_registry_bind(registry, name, &wl_shm_interface, 1));
         self->shmName = name;
+      } else if (!std::strcmp(interface, "zwlr_layer_shell_v1") &&
+                 !self->layerShell && version >= 3) {
+        self->layerShell = static_cast<zwlr_layer_shell_v1 *>(wl_registry_bind(
+            registry, name, &zwlr_layer_shell_v1_interface, 3));
+        self->layerShellName = name;
       } else if (!std::strcmp(interface, "wl_output"))
         self->outputs[name] =
             std::make_unique<Output>(self, registry, name, version);
@@ -456,20 +472,35 @@ private:
     }
     static void removed(void *data, wl_registry *, uint32_t name) {
       auto *self = static_cast<Window *>(data);
+      auto output = self->outputs.find(name);
+      if (self->mouseAnchor && output != self->outputs.end() &&
+          output->second->name == self->mouseAnchor->output)
+        self->fallback();
       self->outputs.erase(name);
       self->seats.erase(name);
       self->updateScale();
-      if (name == self->compositorName || name == self->shmName) {
+      if (name == self->compositorName || name == self->shmName ||
+          name == self->layerShellName) {
         self->hide();
         if (name == self->compositorName)
           dispose<wl_compositor, wl_compositor_destroy>(self->compositor,
                                                         self->connected);
-        else
+        else if (name == self->shmName)
           dispose<wl_shm, wl_shm_destroy>(self->shm, self->connected);
+        else
+          dispose<zwlr_layer_shell_v1, zwlr_layer_shell_v1_destroy>(
+              self->layerShell, self->connected);
       }
     }
     void updateScale() {
       int value = preferred;
+      if (!value && mouseAnchor) {
+        for (const auto &[name, output] : outputs) {
+          (void)name;
+          if (output->name == mouseAnchor->output)
+            value = output->scale;
+        }
+      }
       if (!value) {
         value = 1;
         for (const auto &[name, output] : outputs) {
@@ -482,6 +513,25 @@ private:
         redraw();
       }
     }
+    void destroySurface() {
+      if (surface && connected) {
+        wl_surface_attach(surface, nullptr, 0, 0);
+        wl_surface_commit(surface);
+      }
+      dispose<zwp_input_popup_surface_v2, zwp_input_popup_surface_v2_destroy>(
+          role, connected);
+      dispose<zwlr_layer_surface_v1, zwlr_layer_surface_v1_destroy>(layer,
+                                                                    connected);
+      dispose<wl_surface, wl_surface_destroy>(surface, connected);
+      frames.clear();
+      buffers.clear();
+      layerReady = false;
+      presented = 0;
+      for (auto &[name, seat] : seats) {
+        (void)name;
+        seat->entered = false;
+      }
+    }
     void hide() {
       context.unwatch();
       select = {};
@@ -491,23 +541,71 @@ private:
       presented = 0;
       pending = false;
       ++generation;
-      for (auto &[name, seat] : seats) {
-        (void)name;
-        seat->entered = false;
-      }
-      if (surface && connected) {
-        wl_surface_attach(surface, nullptr, 0, 0);
-        wl_surface_commit(surface);
-      }
-      dispose<zwp_input_popup_surface_v2, zwp_input_popup_surface_v2_destroy>(
-          role, connected);
-      dispose<wl_surface, wl_surface_destroy>(surface, connected);
-      frames.clear();
-      buffers.clear();
+      destroySurface();
+      mouseAnchor.reset();
       preferred = 0;
     }
-    static void rectangle(void *, zwp_input_popup_surface_v2 *, int32_t,
-                          int32_t, int32_t, int32_t) {}
+    static void rectangle(void *data, zwp_input_popup_surface_v2 *, int32_t,
+                          int32_t, int32_t width, int32_t height) {
+      auto *self = static_cast<Window *>(data);
+      if (!width && !height && !self->layer &&
+          publicField(self->context.get()) && !self->mouseFallback())
+        self->fallback();
+    }
+    static void layerConfigured(void *data, zwlr_layer_surface_v1 *role,
+                                uint32_t serial, uint32_t, uint32_t) {
+      auto *self = static_cast<Window *>(data);
+      zwlr_layer_surface_v1_ack_configure(role, serial);
+      self->layerReady = true;
+      self->redraw();
+    }
+    static void layerClosed(void *data, zwlr_layer_surface_v1 *) {
+      static_cast<Window *>(data)->fallback();
+    }
+    bool mouseFallback() {
+      if (!layerShell || !connected)
+        return false;
+      auto anchor = MouseAnchor::capture();
+      if (!anchor)
+        return false;
+      auto found =
+          std::find_if(outputs.begin(), outputs.end(), [&](const auto &entry) {
+            return entry.second->name == anchor->output;
+          });
+      if (found == outputs.end())
+        return false;
+      auto image = MacPopupManager::raster(rows, selected, palette,
+                                           found->second->scale, hovered);
+      auto origin =
+          image ? anchor->origin(image->width, image->height) : std::nullopt;
+      if (!origin)
+        return false;
+      destroySurface();
+      mouseAnchor = std::move(anchor);
+      scale = found->second->scale;
+      surface = wl_compositor_create_surface(compositor);
+      static const wl_surface_listener listener = {
+          entered, left, preferredScale, preferredTransform};
+      wl_surface_add_listener(surface, &listener, this);
+      layer = zwlr_layer_shell_v1_get_layer_surface(
+          layerShell, surface, found->second->proxy,
+          ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "snippets-suggestions");
+      static const zwlr_layer_surface_v1_listener layerListener = {
+          layerConfigured, layerClosed};
+      zwlr_layer_surface_v1_add_listener(layer, &layerListener, this);
+      zwlr_layer_surface_v1_set_keyboard_interactivity(
+          layer, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+      zwlr_layer_surface_v1_set_exclusive_zone(layer, -1);
+      zwlr_layer_surface_v1_set_anchor(layer,
+                                       ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+                                           ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT);
+      zwlr_layer_surface_v1_set_size(layer, image->width, image->height);
+      zwlr_layer_surface_v1_set_margin(layer, origin->second, 0, 0,
+                                       origin->first);
+      wl_surface_commit(surface);
+      wl_display_flush(display);
+      return true;
+    }
     static void entered(void *, wl_surface *, wl_output *) {}
     static void left(void *, wl_surface *, wl_output *) {}
     static void preferredTransform(void *, wl_surface *, uint32_t) {}
@@ -535,7 +633,7 @@ private:
             rectangle};
         zwp_input_popup_surface_v2_add_listener(role, &popupListener, this);
       }
-      return surface && role;
+      return surface && (role || layer);
     }
     void hover(int index) {
       if (hovered != index) {
@@ -582,6 +680,8 @@ private:
     bool draw() {
       if (!surface || !connected)
         return false;
+      if (layer && !layerReady)
+        return true;
       std::erase_if(buffers,
                     [](const auto &buffer) { return buffer->released; });
       std::erase_if(frames, [](const auto &frame) { return frame->done; });
@@ -597,6 +697,16 @@ private:
           MacPopupManager::raster(rows, selected, palette, scale, hovered);
       if (!image)
         return false;
+      if (layer) {
+        auto origin = mouseAnchor
+                          ? mouseAnchor->origin(image->width, image->height)
+                          : std::nullopt;
+        if (!origin)
+          return false;
+        zwlr_layer_surface_v1_set_size(layer, image->width, image->height);
+        zwlr_layer_surface_v1_set_margin(layer, origin->second, 0, 0,
+                                         origin->first);
+      }
       auto buffer = std::make_unique<Buffer>(connected);
       buffer->available = [this] {
         if (pending)

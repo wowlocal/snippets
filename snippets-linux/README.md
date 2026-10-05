@@ -41,7 +41,7 @@ omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland w
 ```
 
 Requirements: Rust 1.92+, GTK 4.12+, libadwaita 1.5+, ICU, libsecret 0.21+, Linux-PAM,
-libqrencode 4.1+, Fcitx5 5.1+, Wayland, libxkbcommon, Cairo/Pango and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
+libqrencode 4.1+, Fcitx5 5.1+, Wayland, libxkbcommon, Cairo/Pango, json-c and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
 are locked in `Cargo.lock`. Source builds normally use the installed native GTK.
 The latest user-test candidate includes GTK 4.22.4 and libadwaita 1.9.3 with the
 verified fallback-cancellation and alert-heading measurement repairs as app-local
@@ -1088,9 +1088,42 @@ The first visual-fixture attempt expected 45 bytes while selecting a different
 28-byte record; its screenshot and terminal count establish correct insertion of
 the selected record. Correcting the private fixture's ranking makes the existing
 receiver check coherent; product code, waits and deadlines are unchanged.
-Ghostty still supplies a popup position that overlaps its first input line.
+The qualified earlier renderer overlaps Ghostty's first input line when its receiving toolkit supplies no caret geometry.
 Compositor glass-material equivalence and the earlier cold first-field repair
 remain unproven. Cloud and GTK race work stays deferred.
+
+The Omarchy renderer now follows the Mac mouse fallback when the compositor's
+caret rectangle has zero width and height. GTK and Chromium continue using the
+input-method popup at their reported caret. Ghostty instead uses a Snippets-owned
+layer surface with keyboard interactivity disabled. The pointer is captured once
+for that presentation, and filtering cannot make the panel follow subsequent
+mouse movement. The panel is clamped to the pointer's output and its reserved
+edges; rotated and fractionally scaled output geometry is handled explicitly.
+This is a missing-geometry fallback, not a precise Ghostty caret measurement.
+
+Two read-only Omarchy IPC requests share a 75 ms deadline, run only for missing
+geometry, and retain no compositor reply beyond the current presentation. There
+is no command subprocess, input replay, added observation delay, global theme
+change or compositor rule. If the output or protocol is unavailable, the normal
+Fcitx panel remains the fallback. The layer is configured through Wayland events
+and releases its role on focus loss, reset or connection shutdown. Four native
+placement checks cover screen-edge clamping, changing panel height, rotation,
+fractional scale and malformed coordinates. The protocol XML, licenses and
+source hashes accompany the installer and test archive.
+
+The existing private Ghostty receiver confirms the first line remains visible,
+the captured panel origin stays unchanged after moving the mouse and filtering,
+and keyboard acceptance delivers the exact 45-byte library body while preserving
+receiver focus. A targeted virtual pointer click on that fallback layer does
+not deliver the body; its cause and physical-pointer behavior remain unconfirmed.
+The older caret-popup pointer result does not qualify this different role.
+The direct-expansion receiver gate reproduces the earlier first-field Chromium
+failure on this candidate: 12 keyword letters remain without the backslash or
+expanded body, while field focus is preserved. The candidate therefore fails
+core qualification; the installed addon is restored to `8143b06`. A passing
+panel selection case is not evidence that exact inline expansion is repaired.
+Full glass-material equivalence also remains unproven. These are qualification limits, not successes inferred from a
+longer wait or a service restart.
 
 ### Insert saved secure text
 

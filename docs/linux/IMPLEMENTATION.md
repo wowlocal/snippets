@@ -6575,3 +6575,33 @@ Scheduled idle restoration succeeded at 09:00 Minsk. The already running normal
 bus, keyring and XDG roots. No user library contents or credentials are read.
 The current archive and its exact clean-source receipt are recorded separately
 in `target/user-testing/latest.json`. The same five acceptance groups remain open.
+
+
+The Mac-style Fcitx renderer handles the confirmed missing-geometry case in
+Ghostty through a nonactivating mouse-anchored Wayland layer. GTK and Chromium
+still use their real compositor-provided caret rectangles. The captured pointer
+anchor stays fixed while typing or moving the mouse, with bounds derived from
+its output, scale, transform and reserved edges. The read-only IPC exchange has
+one 75 ms deadline and creates no subprocess or persistent record. Keyboard
+acceptance and receiver focus pass in the same existing three receiver cases;
+four native geometry checks cover clamping, resizing, transformed output and
+malformed input. The local row protocol remains SNI3.
+
+A targeted click on the Ghostty fallback layer still does not insert. Numeric
+prototype events distinguish pointer entry/capability changes from successful
+button delivery; they do not establish a cause or qualify a repair. Prototype
+changes to pointer lifetime, protocol version and input region were not adopted.
+The shipping native handler and existing caret-popup pointer result retain their
+own scopes. Physical pointer behavior and the earlier independent GTK virtual
+button failure remain in the normal input/focus acceptance group. No added wait
+is treated as an implementation fix, and cloud/chooser race work stays deferred.
+
+
+The current Release candidate passes 43 serial inline tests and the existing
+panel-selection receivers, including the captured Ghostty mouse anchor and exact
+45-byte keyboard insertion. The subsequent direct-expansion Chromium receiver
+fails: the final focused field contains 12 letters without the backslash or body.
+That preserves a fresh observation of the earlier core defect, not a qualified
+repair. The live gate stops, retains the failed receipt, and restores the
+installed `8143b06` addon. The candidate is checkpointed for review; the verified
+user-testing archive is not silently replaced with a failed-core candidate.

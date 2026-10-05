@@ -2,8 +2,14 @@
 // No surrounding text or general key stream is sent to Snippets.
 #include "fcitx-5.1.22/waylandim_public.h"
 #include "fcitx-5.1.22/zwp_input_method_v2.h"
+// The upstream XML names its C argument "namespace". Keep the unmodified
+// protocol and restrict the C++ keyword alias to this generated C header.
+#define namespace namespace_name
+#include "snippets-fcitx-layer-protocol.h"
+#undef namespace
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -22,8 +28,10 @@
 #include <fcitx/text.h>
 #include <fcntl.h>
 #include <functional>
+#include <json-c/json.h>
 #include <map>
 #include <memory>
+#include <optional>
 #include <pango/pangocairo.h>
 #include <poll.h>
 #include <set>
@@ -141,6 +149,7 @@ bool publicField(InputContext *ic) {
             CapabilityFlag::Disable))
               .toInteger();
 }
+#include "inline_fcitx_anchor.h"
 struct Row {
   std::string name, keyword;
   std::array<unsigned char, 16> identity{};

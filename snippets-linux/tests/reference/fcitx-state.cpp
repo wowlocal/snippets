@@ -95,6 +95,30 @@ struct CoreFixture {
     decoded.clear();
     assert(!rowMetadata(encoded, decoded, palette));
   }
+  static void mousePlacement() {
+    auto *pointer = json_tokener_parse(R"({"x":-10,"y":900})");
+    auto *monitors = json_tokener_parse(
+        R"([{"name":"PUBLIC-1","x":-1920,"y":0,"width":3840,"height":2160,"scale":2,"transform":0,"reserved":[10,30,20,40]}])");
+    auto anchor = MouseAnchor::decode(pointer, monitors);
+    assert(anchor && anchor->x == 1910 && anchor->y == 900);
+    auto origin = anchor->origin(336, 200);
+    assert(origin && origin->first == 1564 && origin->second == 696);
+    assert(!anchor->origin(2000, 200));
+    // Filtering changes the panel height, never the captured mouse position.
+    origin = anchor->origin(336, 70);
+    assert(origin && origin->first == 1564 && origin->second == 904);
+    json_object_put(pointer);
+    json_object_put(monitors);
+    pointer = json_tokener_parse(R"({"x":300,"y":100})");
+    monitors = json_tokener_parse(
+        R"([{"name":"PUBLIC-2","x":0,"y":0,"width":1920,"height":1080,"scale":1.5,"transform":1,"reserved":[0,0,0,0]}])");
+    anchor = MouseAnchor::decode(pointer, monitors);
+    assert(anchor && anchor->right == 720 && anchor->bottom == 1280);
+    json_object_object_add(pointer, "x", json_object_new_string("invalid"));
+    assert(!MouseAnchor::decode(pointer, monitors));
+    json_object_put(pointer);
+    json_object_put(monitors);
+  }
   static void selection(Instance &instance) {
     PublicContext context(instance.inputContextManager());
     context.focusIn();
@@ -241,6 +265,7 @@ int main() {
   CoreFixture::invalidMetadata(instance, false);
   CoreFixture::invalidMetadata(instance, true);
   CoreFixture::presentation();
+  CoreFixture::mousePlacement();
   std::puts("state fixture: 8 modifier, 6 capability, 6 selection/protocol and "
-            "2 panel checks passed");
+            "2 panel and 4 mouse placement checks passed");
 }

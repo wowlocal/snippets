@@ -1,0 +1,6 @@
+{
+  "source": "https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/1.49/stable/xdg-shell/xdg-shell.xml",
+  "sha256": "7ba7f9c8473deee674cb1f154a18abd0bb0cc072604fc055b0c15e459fc4c7df",
+  "license": "embedded MIT copyright and license",
+  "purpose": "hidden interface definitions referenced by the layer-shell protocol"
+}

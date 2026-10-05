@@ -1,0 +1,6 @@
+{
+  "source": "https://raw.githubusercontent.com/swaywm/wlr-protocols/master/unstable/wlr-layer-shell-unstable-v1.xml",
+  "sha256": "996b8c66e1c2276c443336d4cb174634e8e5948823779042f244930525b79cc2",
+  "license": "embedded copyright and permissive license; retain in source distributions",
+  "interface_version": 4
+}

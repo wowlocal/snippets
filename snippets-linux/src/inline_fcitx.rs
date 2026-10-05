@@ -463,7 +463,7 @@ mod tests {
         assert!(result.status.success(), "native Fcitx state fixture failed");
         assert_eq!(
             result.stdout,
-            b"state fixture: 8 modifier, 6 capability, 6 selection/protocol and 2 panel checks passed\n"
+            b"state fixture: 8 modifier, 6 capability, 6 selection/protocol and 2 panel and 4 mouse placement checks passed\n"
         );
     }
     #[test]
