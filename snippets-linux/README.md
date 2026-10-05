@@ -9,32 +9,36 @@ and an encrypted vault workspace; [the full desktop port remains in development]
 ## Core qualification, 2026-10-05
 
 Core functionality takes priority over further sync and race-condition work.
-The installed `0c125c28` user-test build was exercised with its actual executable
-and bundled libraries, a separate session bus and a public temporary library.
 
 | Feature | Current result |
 | --- | --- |
 | Global shortcuts | Saved Super+Alt+N/P/C bindings pass Open, targeted Picker/Return and Capture through native virtual-keyboard events. Picker returns focus and restores the previous clipboard. Physical hardware input is not established by these events. |
-| Clipboard history | Actual installed UI consent, collection while its window is closed, accessible retained row and pointer selection, literal Copy, opt-out, process restart and Clear pass with an isolated real keyring. User library data and prior ordinary clipboard text are preserved. |
-| Inline expansion and suggestions | **Blocked in the normal input setup.** Omarchy's running `omarchy-fcitx5.service` occupies the input-method seat. With that service temporarily stopped, exact expansion and the visible caret popup/Return selection pass in GTK. Default Wayland Chromium and Ghostty retain the literal keyword and report no compatible field. The service is restored after every test. |
+| Clipboard history | Installed UI consent, collection while its window is closed, retained row and pointer selection, literal Copy, opt-out, process restart and Clear pass with an isolated real keyring. User library data and prior ordinary clipboard text are preserved. |
+| Inline expansion and suggestions | The updated native candidate integrates with Fcitx instead of competing for its input-method seat. The actual user-prefix GUI and addon expand real library records in GTK, default native Wayland Chromium and Ghostty with the stock Omarchy Fcitx service running. A single `\` opens the caret panel; Down and Return insert the selected actual record without moving receiver focus. |
 
-The macOS reference shows suggestions on `\` in a focused text field, then
-supports keyboard selection in a floating panel. That behavior is required for
-the Linux core; the GTK-only popup pass does not establish it in everyday apps.
-The current Linux UI also requires **Enable Suggestions…** separately from
-**Enable Expansion…**. Inline integration is the next core task. Further sync
-and chooser-race work is deferred until these core paths work in the intended apps.
+The panel follows the Mac interaction: up to eight ordinary names with keywords
+on the next line, typing `\` to open, arrows or Ctrl+N/P to select, Return/Tab to
+insert, Escape to dismiss. New explicit **Enable Expansion…** consent enables
+suggestions in the same action. Existing preferences are preserved, including
+legacy exact-only consent. The native Fcitx UI supplies the desktop theme.
+
+The original `0c125c28` receiving-app failures remain recorded. A first browser
+observation in the new integration also failed; an unchanged repeat passed. That
+initial result is retained as unclassified, not claimed fixed by retrying or by
+waiting longer. Further sync and chooser-race work stays deferred. The current
+compositor is still in Safe Mode using the user's unchanged profile; physical
+input and a fresh normal session remain separate checks.
 
 ## Build and install
 
 On Omarchy, install missing build and native runtime packages:
 
 ```sh
-omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode wayland wayland-protocols libxkbcommon pkgconf base-devel
+omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols libxkbcommon pkgconf base-devel
 ```
 
 Requirements: Rust 1.92+, GTK 4.12+, libadwaita 1.5+, ICU, libsecret 0.21+, Linux-PAM,
-libqrencode 4.1+, Wayland, libxkbcommon, Cairo/Pango and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
+libqrencode 4.1+, Fcitx5 5.1+, Wayland, libxkbcommon, Cairo/Pango and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
 are locked in `Cargo.lock`. Source builds normally use the installed native GTK.
 The latest user-test candidate includes GTK 4.22.4 and libadwaita 1.9.3 with the
 verified fallback-cancellation and alert-heading measurement repairs as app-local
@@ -954,55 +958,50 @@ saved-history restoration flow described above.
 
 ### Inline expansion
 
-Open **Inline Expansion…** from the app menu and choose **Enable Expansion…**.
-The confirmation explains which nearby text Snippets reads. Expansion is disabled
-by default; the setting belongs to this library. The window shows whether the
-handler is waiting for an unlocked desktop, a compatible field, or a connection.
-**Disable Expansion** immediately cancels its worker. **Retry Connection** starts
-a fresh connection after the previous worker finishes.
+Install with `scripts/install-linux.sh`, then restart Fcitx once to load the
+Snippets addon. Open **Inline Expansion…** and choose **Enable Expansion…**.
+Its Cancel-default confirmation also enables the caret suggestion panel.
+Expansion remains disabled by default and belongs to this library. Existing
+exact-only consent is not silently upgraded; **Enable Suggestions…** is available
+for those installations. **Disable Expansion** revokes the worker immediately.
 
-Type `\keyword` in a compatible public field. Only a newly extended, unique
-enabled ordinary keyword expands; enabled longer prefixes or duplicate keywords
-prevent replacement. Initial activation establishes a baseline. Password, PIN,
-sensitive, selected and unrecognized fields are excluded. The compositor must
-support input-method-v2 and have an unused input-method seat; Snippets does not
-evict another input method. Some applications do not provide the required
-surrounding-text updates. Exact-only expansion does not grab the hardware keyboard.
+Type `\` in a public text field to see up to eight ordinary names and keywords.
+Names and keywords use fuzzy matching and a frozen local usage ranking. Use ↑/↓
+or Ctrl+N/P to move, Return/Tab to insert, Shift+Tab to move backward, and Escape
+to dismiss while retaining the literal query. Typing an enabled unique exact
+keyword expands automatically; duplicate keywords and enabled longer prefixes
+prevent that automatic expansion. Secure snippets use the authenticated picker.
 
-Choose **Enable Suggestions…** separately to show up to eight ordinary names and
-keywords near the caret after `\`. Prefix and fuzzy name/keyword matches use
-matched-letter highlights, pins and a frozen local usage ranking. Use ↑/↓ or
-Ctrl+N/P to move, Return/Tab to insert, Shift+Tab to move backward, and Escape
-to dismiss the current trigger. Secure entries never enter this popup. A selected
-entry is reread before preparing the same echo-confirmed replacement.
+The small native Fcitx addon owns only the backslash-started preedit. The Rust
+worker owns consent, ordinary-library access, matching, current-record validation,
+placeholder resolution and usage accounting. Fcitx places the native candidate
+panel at the caret and commits directly to its receiving input context without
+activating a Snippets window or changing the clipboard. Snippets does not claim
+a second input-method seat, need surrounding-text updates, or forward a general
+keyboard stream to the app. The addon excludes password/sensitive/disabled input
+contexts and resets its query on focus/reset/capability changes. Snippets windows
+are excluded by the receiving-window guard.
 
-Suggestions use the compositor's native input-popup surface without switching
-to a Snippets window. While visible, the popup temporarily grabs the keyboard
-and forwards other raw keys and modifiers through a virtual keyboard on the
-same verified connection, using the compositor-provided XKB map. Stale rows
-cannot authorize selection. **Disable Suggestions** releases this owner before
-returning to exact-only expansion. Legacy expansion consent leaves suggestions
-disabled; enabling them has its own Cancel-default confirmation.
+IPC uses a bounded, private runtime socket with reciprocal process authentication:
+the app accepts the installed Fcitx executable, and the addon accepts the exact GUI
+next to its installed library. Queries, bodies and surrounding text are never
+logged or persisted by this bridge. Candidate rows contain only ordinary metadata.
+Selection rereads the saved record, refuses modified/removed choices and checks
+consent, observable session state and the original receiving window before delivery.
+`{clipboard}` reads a plain-text selection only when requested, with a short deadline;
+resolved output is capped at 256 KiB. Failed/interrupted requests are not retried.
 
-
-Replacement uses native UTF-8 text commits without changing the clipboard.
-`{clipboard}` reads only a requested plain-text selection, bounded to 256 KiB and
-two seconds; placeholders render once. Output also fits 256 KiB and is sent in
-bounded chunks, each followed by a confirming field update. Snippets checks the
-saved record and destination and stops on detected cancellation, lock, changed
-files or uncertain acceptance. An interruption may leave a prefix. Focus checks
-cannot make replacement atomic on Hyprland; text can reach another field during
-a focus race. Check the destination before retrying. Interrupted text is never
-retried automatically. Snippets windows are excluded from this path.
-
-The native bridge, popup renderer, raw-key passthrough, selected-entry guards and
-private protocol exchanges are verified in isolation. Popup buffers and queued
-keys are bounded. The unrestricted Omarchy session also passes peer authentication,
-native settings and three independent GTK receiving-field checks: exact keyword
-expansion, suggestion selection with Return and replacement containing another
-keyword without recursive expansion. These use native injected keys; compatibility
-with other receiving applications and physical keyboard assignments remains a
-separate check. Secure snippets use the separate authenticated picker insertion.
+Current temporary-prefix and actual user-prefix live checks use the installed
+GUI/addon, private D-Bus/public libraries and native virtual-keyboard events.
+With the stock Fcitx service continuously running, exact expansion and visible
+partial-query panels with Return insertion pass in GTK, default Wayland Chromium
+and Ghostty. The separate two-record arrow-selection case preserves GTK receiver
+focus. Saved shortcuts and the installed clipboard-history UI also pass on this
+same new executable. The earlier
+direct Wayland backend and its protocol/echo tests remain as a fallback on systems
+without Fcitx; those historical checks do not qualify the new Fcitx backend.
+Physical input, normal-session qualification and first receiving-field activation
+remain under review; the first unclassified Chromium observation is retained.
 
 ### Insert saved secure text
 

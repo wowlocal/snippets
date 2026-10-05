@@ -220,7 +220,7 @@ impl Service {
             this.dialog.borrow_mut().take();
             let result =
                 if response == "enable" && settings.window.is_active() && !this.quitting.get() {
-                    Preference::read(&this.root).and_then(|_| Preference::write(&this.root, true))
+                    Preference::enable_with_suggestions(&this.root)
                 } else {
                     this.busy.set(false);
                     this.refresh();
@@ -230,6 +230,7 @@ impl Service {
                 Ok(()) => {
                     this.error.set(None);
                     this.enabled.set(true);
+                    this.suggestions.set(true);
                     this.restart_pending.set(true);
                 }
                 Err(error) => this.error.set(Some(error.0)),
@@ -387,7 +388,7 @@ impl Service {
 }
 fn enable_dialog() -> adw::AlertDialog {
     let dialog = adw::AlertDialog::builder().heading("Enable Inline Expansion?")
-        .body("Snippets will read nearby text in compatible fields to expand enabled ordinary keywords. A {clipboard} placeholder reads the current text clipboard only when requested by that snippet. Password and sensitive fields are excluded. A focus change can interrupt replacement or route text to another field; check the destination before retrying. Another active input method can prevent expansion.").build();
+        .body("Typing \\ opens ordinary snippet names and keywords at the text cursor. Use ↑/↓ or Ctrl+N/P to select, Return or Tab to insert, and Escape to dismiss. Snippets processes the query you type after \\ through Fcitx. A {clipboard} placeholder reads the current text clipboard only when requested by that snippet. Secure snippets, password and sensitive fields are excluded.").build();
     dialog.add_responses(&[("cancel", "Cancel"), ("enable", "Enable Expansion")]);
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");
@@ -396,7 +397,7 @@ fn enable_dialog() -> adw::AlertDialog {
 }
 fn suggestions_dialog() -> adw::AlertDialog {
     let dialog = adw::AlertDialog::builder().heading("Enable Inline Suggestions?")
-        .body("Typing \\ opens ordinary snippet names and keywords near the text cursor. Use ↑/↓ or Ctrl+N/P to select, Return or Tab to insert, and Escape to dismiss. While the popup is visible, Snippets temporarily receives keyboard events and forwards other keys to the focused application. A focus change can interrupt input or replacement. Secure snippets and password fields are excluded. This requires a compatible Wayland compositor.").build();
+        .body("Typing \\ opens ordinary snippet names and keywords at the text cursor through Fcitx. Use ↑/↓ or Ctrl+N/P to select, Return or Tab to insert, and Escape to dismiss. Secure snippets, password and sensitive fields are excluded.").build();
     dialog.add_responses(&[("cancel", "Cancel"), ("enable", "Enable Suggestions")]);
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");

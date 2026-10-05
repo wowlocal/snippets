@@ -17,9 +17,9 @@ while [[ $# -gt 0 ]]; do
 done
 cd -- "$TASK_REPO_ROOT"
 
-if ! pkg-config --atleast-version=4.12 gtk4 || ! pkg-config --atleast-version=1.5 libadwaita-1 || ! pkg-config --exists icu-i18n || ! pkg-config --atleast-version=0.21 libsecret-1 || ! pkg-config --exists pam || ! pkg-config --atleast-version=4.1 libqrencode || ! pkg-config --exists wayland-client wayland-protocols || ! command -v wayland-scanner >/dev/null; then
-  echo 'Requires GTK >= 4.12, libadwaita >= 1.5, ICU, libsecret >= 0.21, Linux-PAM, libqrencode >= 4.1, Wayland, and wayland-protocols.' >&2
-  echo 'On Omarchy: omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode wayland wayland-protocols pkgconf base-devel' >&2
+if ! pkg-config --atleast-version=4.12 gtk4 || ! pkg-config --atleast-version=1.5 libadwaita-1 || ! pkg-config --exists icu-i18n || ! pkg-config --atleast-version=0.21 libsecret-1 || ! pkg-config --exists pam || ! pkg-config --atleast-version=4.1 libqrencode || ! pkg-config --atleast-version=5.1 Fcitx5Core || ! pkg-config --exists wayland-client wayland-protocols || ! command -v wayland-scanner >/dev/null; then
+  echo 'Requires GTK >= 4.12, libadwaita >= 1.5, ICU, libsecret >= 0.21, Linux-PAM, libqrencode >= 4.1, Fcitx5 >= 5.1, Wayland, and wayland-protocols.' >&2
+  echo 'On Omarchy: omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols pkgconf base-devel' >&2
   exit 1
 fi
 if $TASK_BUILD; then
@@ -28,6 +28,7 @@ if $TASK_BUILD; then
 fi
 TASK_TARGET_ROOT=${CARGO_TARGET_DIR:-$TASK_REPO_ROOT/snippets-linux/target}
 [[ $TASK_TARGET_ROOT = /* ]] || TASK_TARGET_ROOT=$TASK_REPO_ROOT/$TASK_TARGET_ROOT
+[[ -f "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" && ! -L "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" ]] || { echo 'Release Fcitx addon is missing; rebuild Snippets.' >&2; exit 1; }
 for TASK_BINARY in snippets snippets-cli snippets-owner-auth; do
   [[ -x "$TASK_TARGET_ROOT/release/$TASK_BINARY" ]] || { echo 'Release executables are missing; run the installer without --no-build.' >&2; exit 1; }
 done
@@ -99,6 +100,7 @@ if [[ -n $TASK_GTK_RUNTIME ]]; then
   verify_gtk_runtime "$TASK_GTK_DESTINATION" "$TASK_GTK_RUNTIME"
 fi
 install_atomic "$TASK_TARGET_ROOT/release/snippets-owner-auth" "$TASK_DESTINATION/snippets-owner-auth" 755
+install_atomic "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" "$TASK_DESTINATION/libsnippets-fcitx.so" 755
 for TASK_BINARY in snippets snippets-cli; do
   install_atomic "$TASK_TARGET_ROOT/release/$TASK_BINARY" "$TASK_DESTINATION/$TASK_BINARY" 755
   mkdir -p -- "$TASK_INSTALL_PREFIX/bin"
@@ -107,6 +109,21 @@ for TASK_BINARY in snippets snippets-cli; do
   mv -fT -- "$TASK_LINK/$TASK_BINARY" "$TASK_INSTALL_PREFIX/bin/$TASK_BINARY"
   rmdir -- "$TASK_LINK"
 done
+TASK_ADDON_METADATA=$(mktemp)
+trap 'rm -f -- "$TASK_ADDON_METADATA"' EXIT
+cat > "$TASK_ADDON_METADATA" <<EOF
+[Addon]
+Name=Snippets
+Type=SharedLibrary
+Library=$TASK_DESTINATION/libsnippets-fcitx
+Category=Module
+Version=0.1.0
+OnDemand=False
+Configurable=False
+[Dependencies]
+0=core:5.1.0
+EOF
+install_atomic "$TASK_ADDON_METADATA" "$TASK_INSTALL_PREFIX/share/fcitx5/addon/snippets.conf" 644
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/com.khm.snippets.linux.desktop" "$TASK_INSTALL_PREFIX/share/applications/com.khm.snippets.linux.desktop" 644
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/com.khm.snippets.linux.metainfo.xml" "$TASK_INSTALL_PREFIX/share/metainfo/com.khm.snippets.linux.metainfo.xml" 644
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/snippets-icon.png" "$TASK_INSTALL_PREFIX/share/icons/hicolor/256x256/apps/com.khm.snippets.linux.png" 644
@@ -114,3 +131,4 @@ if command -v update-desktop-database >/dev/null; then
   update-desktop-database "$TASK_INSTALL_PREFIX/share/applications"
 fi
 printf 'Installed Snippets. Run: %q\n' "$TASK_INSTALL_PREFIX/bin/snippets"
+echo 'Restart Fcitx once after installation to load the Snippets addon. Expansion remains opt-in in Snippets Settings.'

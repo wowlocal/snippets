@@ -1,6 +1,53 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=SNIPPETS_GTK_RUNTIME_DIR");
     if std::env::var_os("CARGO_FEATURE_DESKTOP").is_some() {
+        let fcitx = pkg_config::Config::new()
+            .cargo_metadata(false)
+            .atleast_version("5.1")
+            .probe("Fcitx5Core")
+            .expect("Fcitx5 development files are required for inline expansion");
+        let addon_output =
+            std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output directory"));
+        let addon_library = addon_output.join("libsnippets-fcitx.so");
+        let mut addon = cc::Build::new().cpp(true).get_compiler().to_command();
+        addon
+            .args([
+                "-std=c++20",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-fPIC",
+                "-shared",
+                "src/inline_fcitx.cpp",
+                "-o",
+            ])
+            .arg(&addon_library);
+        for include in fcitx.include_paths {
+            addon.arg("-I").arg(include);
+        }
+        for directory in fcitx.link_paths {
+            addon.arg("-L").arg(directory);
+        }
+        for library in fcitx.libs {
+            addon.arg(format!("-l{library}"));
+        }
+        addon.arg("-ldl");
+        assert!(
+            addon.status().expect("C++ compiler required").success(),
+            "Fcitx addon build failed"
+        );
+        // Installable transport sits next to the GUI it authenticates by inode.
+        std::fs::copy(
+            &addon_library,
+            addon_output
+                .ancestors()
+                .nth(3)
+                .expect("Cargo profile directory")
+                .join("libsnippets-fcitx.so"),
+        )
+        .expect("Copy installable Fcitx addon");
+        println!("cargo:rerun-if-changed=src/inline_fcitx.cpp");
         if let Some(directory) = std::env::var_os("SNIPPETS_GTK_RUNTIME_DIR") {
             let directory = directory
                 .to_str()

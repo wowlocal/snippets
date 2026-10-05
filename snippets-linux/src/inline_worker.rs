@@ -18,6 +18,9 @@ use std::{
 const STOPPED: Error = Error("Inline expansion stopped. Check the text field before trying again.");
 const CLIPBOARD: Error =
     Error("The clipboard placeholder could not be read safely within its size and time limits.");
+#[cfg(feature = "desktop")]
+#[path = "inline_fcitx.rs"]
+mod fcitx;
 #[cfg(test)]
 #[path = "inline_live_tests.rs"]
 mod live_tests;
@@ -98,6 +101,17 @@ mod tests {
         assert!(!disabled.enabled && disabled.suggestions);
         Preference::write_suggestions(root, false).unwrap();
         assert!(!Preference::read(root).unwrap().suggestions);
+    }
+    #[test]
+    fn explicit_new_consent_enables_the_panel_without_migrating_legacy_consent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        assert!(!Preference::read(root).unwrap().enabled);
+        Preference::enable_with_suggestions(root).unwrap();
+        let enabled = Preference::read(root).unwrap();
+        assert!(enabled.enabled && enabled.suggestions);
+        Preference::write(root, false).unwrap();
+        assert!(!Preference::read(root).unwrap().enabled);
     }
     #[test]
     fn locked_worker_never_connects_and_explicit_stop_or_revocation_joins() {
@@ -194,6 +208,10 @@ impl Preference {
             .map_err(|_| Error("Inline expansion settings could not be saved."))?;
         model::atomic_write(&root.join("inline-expansion.json"), &bytes)
     }
+    pub fn enable_with_suggestions(root: &Path) -> Result<()> {
+        Self::read(root)?;
+        Self::write_value(root, true, true)
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Status {
@@ -202,6 +220,7 @@ pub(crate) enum Status {
     Listening,
     Stopped,
     Unavailable,
+    WaitingForFcitx,
 }
 impl Status {
     pub fn text(self) -> &'static str {
@@ -211,7 +230,10 @@ impl Status {
             Self::Listening => "Expanding enabled ordinary keywords in this text field.",
             Self::Stopped => "Expansion stopped; check the text field before trying again.",
             Self::Unavailable => {
-                "Inline expansion could not connect. Close another active input method and retry. This desktop may be unsupported."
+                "Inline expansion could not connect. Check that Fcitx and the Snippets addon are installed, then retry."
+            }
+            Self::WaitingForFcitx => {
+                "Enabled; waiting for the Snippets Fcitx addon. Restart Fcitx after installing Snippets."
             }
         }
     }
@@ -370,6 +392,11 @@ fn run(
     sender: mpsc::SyncSender<Status>,
     usage: Option<crate::usage_store::Handle>,
 ) {
+    #[cfg(feature = "desktop")]
+    if Path::new("/usr/bin/fcitx5").is_file() {
+        fcitx::run(root, witness, stop, sender, usage);
+        return;
+    }
     let library = match Library::prepare(root.clone()) {
         Ok(library) => library,
         Err(_) => {

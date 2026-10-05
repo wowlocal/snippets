@@ -266,7 +266,7 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; current native toggle smoke and combined private-keyring/verified-HTTPS/GTK writer/reader checks pass: transient backoff, actual hidden-window timer exchange, protected-consent startup in a new worker, in-flight disable preserving primary/checkpoint bytes, opt-out restart without HTTP and changed-membership halt; generated-service primary startup passes in the live user manager; full new sign-in, automatic secure/review workflows and protected-conflict preservation remain separate |
 | Cloud library creation | Explicit native create/resume/open and create-another actions; bounded retained intents; one-use confirmation binds account session and existing protected state; original idempotency key retained before POST | Twenty-four fault/restart/schema/expiry tests plus bootstrap admission and reviewed-switch integration; mapped native GTK/keyring/verified-HTTPS creation passes Cancel/focus refusal, lost response and same-request restart, explicit key setup/sync, separate second-library creation and fresh-worker review gating; exact active keys/checkpoint and both receipts are preserved |
 | Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, current v1 conflict-owned absence/deletion crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; ordinary native automatic receiving/sending now passes against verified HTTPS with a real private keyring; manual and fresh vault passphrase/recovery exchange also pass; retained secure CAS preservation and basic cloud Keep/Delete also pass; mapped missing-snapshot resumption preserves acknowledged ordinary/protected records and previous merge ancestors after real cursor rejection; flat current secure v1 source deletion and acknowledged-copy repair pass with retained source packets and actual new CAS; native two-library reviewed switching, fresh-worker reconnect and return using the exact retained source key pass; ordinary native saved-history restoration passes current-version/unrelated preservation, exact current CAS/feed retention, fresh-worker reconnect and preserved-copy-before-source delivery; native unrelated lost-reply packets, published-switch offline finish, unpublished-switch offline cancellation, mixed/foreign-vault restoration and actual SIGKILL/offline restoration pass; other already listed interrupted switching/first-key work remains a separate live scope; native same-vault protected restoration passes stale ciphertext refusal, exact current CAS/feed, both current-version copies, unchanged unrelated records and authenticated dependency-ordered sync after restart; all four nested physical/journal-only secure C1 cloud-source Keep/Delete cases now pass with unchanged child seals, separate immutable C0/D0 and actual CAS ordering; prior-confirmed cloud-child Keep/Delete before either raw parent choice passes all four native combinations; Unknown pending raw-child Keep/Delete before parent Keep now passes with fresh independent credentials and actual copy-before-source CAS; native local-absence secure source Keep/Delete passes with fresh review and actual CAS; unrelated lost-reply packets also pass beside native local-absence Keep/Delete |
-| Inline expansion | Native input-method-v2 owner, separate opt-in fuzzy input-popup with keyboard navigation and raw passthrough, conditional bounded clipboard read and move-only chunked replacement | **Core blocker confirmed on 2026-10-05:** the normal Omarchy Fcitx owner prevents connection; temporarily releasing that seat admits GTK exact/popup/Return checks, but default Wayland Chromium and Ghostty retain literal triggers. Earlier isolated protocol and GTK checks do not establish everyday-app functionality. |
+| Inline expansion | Rust ordinary-only worker with an authenticated native Fcitx addon, backslash-started preedit and caret candidates, keyboard selection, conditional clipboard resolution and fresh-record delivery | Updated actual user-prefix GUI/addon expand actual records in GTK, default native Wayland Chromium and Ghostty with the stock Fcitx service running. A single backslash shows two-line names/keywords; arrow/Return selection preserves receiver focus. New explicit enable consent includes suggestions. Original direct-seat failures and one initial unclassified browser observation remain recorded; physical input and a normal compositor session are pending. |
 | Encrypted backup | Portable encrypted-backup export/import and recovery wired to GTK; independent all-layer codec verification | Actual native Save/Open portal, credentials/confirmation cancellation and matching/new-vault restoration pass with Debug and Release harnesses; Apple-app exchange remains unverified |
 | Clipboard history | Explicit opt-in GTK view, separate local AES-GCM image/key, bounded seven-day retention/search/delete/clear, read-only Wayland data-control worker, foreground exclusions and sensitivity/internal markers, revocable acquisition and quit barriers | Core/worker/privacy, private libwayland-server and native disabled-history controls pass; real Omarchy collection with a separate C/GTK owner and private native keyring verifies consent cancellation, initial-offer exclusion, collection with the view closed, encrypted viewing/search/copy, sensitivity/internal skips, opt-out barriers and confirmed deletion/clear without changing the current clipboard |
 | Persistent diagnostics | One primary-process Rust backend, typed inert core facade, bounded private JSONL retention, safe native system mirror and searchable Settings export/delete with plaintext review | Privacy/schema, file and directory replacement, stale/linked destination, rollover/quota/age, corruption, torn-final-line, duplicate-sequence, deletion and queue/shutdown tests pass; native cancellation controls pass; a real release primary writes private records and mirrors the exact sanitized records to the system journal; full export/delete interaction remains under live review |
@@ -321,6 +321,57 @@ claim that receiving-app compatibility was only unverified. The current two-step
 Linux suggestion consent also differs from the Mac interaction. Core integration
 and the requested visible panel behavior take priority; the sync and GTK chooser
 evidence remains recorded without further work on those areas.
+
+### Native Fcitx core integration, 2026-10-05
+
+The new backend resolves the identified competing-seat and surrounding-text
+limitations by using a module inside Fcitx. The Rust application remains the
+ordinary-library authority. `inline_fcitx.cpp` contains only the bounded native
+input context/candidate transport; `inline_fcitx.rs` owns matching, consent,
+session/window guards, rereading choices, placeholders and usage acknowledgments.
+Secure bodies never enter this path. IPC is a private runtime socket with reciprocal
+executable-inode authentication and bounded frames. The addon stays dormant when
+no opted-in worker exists. It does not log or persist query/body data.
+
+The installer supplies the addon beside the GUI it authenticates and an additive
+Fcitx module manifest. Fcitx needs one restart to load that manifest. Normal system
+input-method configuration is retained. New manual expansion consent enables the
+suggestion panel in the same Cancel-default confirmation; absent preferences stay
+disabled and legacy exact-only settings remain unchanged until explicit consent.
+The panel has up to eight ordinary names and keywords on separate lines and
+retains the receiving app's focus. Fcitx supplies caret placement and native theme.
+
+Temporary-prefix installation and actual GUI/addon checks pass exact expansion in
+GTK, default Wayland Chromium and Ghostty, without extra browser IME flags. Single
+backslash, visible candidates, Down selection and Return insertion pass with two
+real public library records. Source inputs are frozen during each native run.
+An initial browser observation failed before an unchanged repeat passed; its cause
+is unclassified and it is not claimed repaired by waiting or retrying. A first panel
+controller expected the wrong ranked row; the screenshot established that Down
+correctly selected the other row, and the corrected literal assertion passed.
+The transport was subsequently simplified to avoid a duplicate initial query and
+per-socket-fragment compositor queries; receiving-window checks remain at complete
+request and publication boundaries. No deadlines were increased.
+
+The same GUI/addon are now installed in the normal user prefix. All four artifact
+hashes and the immutable GTK/adwaita runtime match the checked build. Library and
+preference metadata are preserved during installation. The additive module is
+loaded by one restart of the stock managed Fcitx service, with no configuration
+replacement. Further receiving-app checks leave that service running: exact
+expansion, visible partial-query panels and Return insertion pass in GTK, default
+Wayland Chromium and Ghostty. The screenshots were inspected. Saved Open/Picker/
+Capture bindings and the full installed history consent/background/view/Copy/
+opt-out/restart/Clear case pass again on this same executable, using public
+libraries and an isolated keyring. The previous clipboard and focus are restored.
+
+The current code passes desktop/headless all-target Clippy and 41 inline tests
+with native tests serialized (five display/live cases ignored in that unit run).
+One initial parallel run hit an existing busy-library refusal in the historical
+chunk-delivery test; it is retained separately and not claimed fixed by this work.
+
+The original core qualification above remains evidence for its original binary.
+Further cloud-sync and GTK-race work is deferred. Native keyboard injection does
+not prove hardware input, and Safe Mode does not establish a fresh normal session.
 
 ### Completion audit, 2026-10-03
 

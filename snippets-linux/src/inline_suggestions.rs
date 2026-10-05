@@ -29,7 +29,7 @@ pub struct Choice {
     entries: Vec<Snippet>,
     selected: usize,
 }
-pub(super) fn matches(snippet: &Snippet, query: &str) -> bool {
+pub(crate) fn matches(snippet: &Snippet, query: &str) -> bool {
     if !snippet.is_enabled || snippet.keyword.is_empty() {
         return false;
     }
@@ -169,7 +169,7 @@ pub fn command(symbol: u32, modifiers: u32) -> Option<Command> {
 #[cfg(test)]
 #[path = "inline_suggestions_tests.rs"]
 mod tests;
-fn bounded(value: &str, bytes: usize) -> String {
+pub(crate) fn bounded(value: &str, bytes: usize) -> String {
     let mut text = String::new();
     for g in value.graphemes(true) {
         if text.len() + g.len() > bytes {
