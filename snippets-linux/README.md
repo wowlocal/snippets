@@ -13,7 +13,7 @@ Core functionality takes priority over further sync and race-condition work.
 | Feature | Current result |
 | --- | --- |
 | Global shortcuts | Saved Super+Alt+N/P/C bindings pass Open, targeted Picker/Return and Capture through native virtual-keyboard events. Picker returns focus and restores the previous clipboard. Physical hardware input is not established by these events. |
-| Clipboard history | Installed UI consent, collection while its window is closed, retained row and pointer selection, literal Copy, opt-out, process restart and Clear pass with an isolated real keyring. User library data and prior ordinary clipboard text are preserved. |
+| Clipboard history | Installed UI consent, collection while its window is closed, accessible row selection, literal Copy, opt-out, process restart and Clear pass with an isolated real keyring. Virtual pointer buttons also fail on an independent GTK control; physical pointer input remains unverified. User library data and prior ordinary clipboard text are preserved. |
 | Inline expansion and suggestions | The updated native candidate integrates with Fcitx instead of competing for its input-method seat. The actual user-prefix GUI and addon expand real library records in GTK, default native Wayland Chromium and Ghostty with the stock Omarchy Fcitx service running. A single `\` opens the caret panel; Down and Return insert the selected actual record without moving receiver focus. |
 
 The panel follows the Mac interaction: up to eight ordinary names with keywords
@@ -1050,6 +1050,19 @@ this selection, without logging or addon persistence. Old row-protocol peers are
 rejected before taking input. Six native selection/protocol checks and the
 previous modifier/capability checks pass; 43 inline tests pass with four existing
 live cases ignored in this unit filter. No observation delay changed.
+
+An isolated Mac-style renderer prototype now draws its own rounded caret panel
+through the existing Fcitx connection and per-context UI callback. The unchanged
+installed GUI supplies real library rows; Return inserts the exact body in GTK,
+default Wayland Chromium and Ghostty without changing receiver focus. A discovered
+2x-display blur is addressed in the prototype by rendering a matching pixel
+buffer, with unchanged logical pane dimensions. Source, screenshots and numeric
+scale observations have their own prototype receipts. These results do not
+qualify a product renderer: the installed addon and user-test archive remain
+`2dd9d6b`. Product lifecycle/fallback, palette, tags, match highlights, wrapped
+titles, pointer selection and Ghostty caret overlap remain panel work. The
+earlier cold first-field failure still has no confirmed repair. No global theme
+or compositor settings change is required by the demonstrated rendering path.
 
 ### Insert saved secure text
 

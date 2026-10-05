@@ -508,6 +508,46 @@ requirement. It does not identify the original intermittent missing-backslash
 failure. Fcitx still supplies panel appearance; visual equivalence to the Mac
 glass surface remains unfinished. Cloud/GTK-race work stays deferred.
 
+### Mac panel rendering on the existing Fcitx connection, 2026-10-05
+
+An isolated renderer prototype establishes that Snippets can supply its own
+caret surface without changing the global input theme or taking another
+input-method seat. It uses the public per-context input-panel callback and
+Wayland connection callbacks, plus Fcitx's
+[versioned input-method accessor](https://raw.githubusercontent.com/fcitx/fcitx5/5.1.22/src/frontend/waylandim/waylandim_public.h).
+The borrowed wrapper conversion comes from the exact
+[5.1.22 interface declaration](https://raw.githubusercontent.com/fcitx/fcitx5/5.1.22/src/lib/fcitx-wayland/input-method-v2/zwp_input_method_v2.h);
+the prototype refuses this path on another runtime version. It creates only its
+own registry, surface, popup role and shared-memory buffers on that connection.
+It does not replace listeners or ownership on the existing input method.
+
+The Mac source supplies the initial geometry: a 320-point pane, radius 18,
+46-point rows, four-point row spacing, six-point selection inset, radius 12,
+13-point ordinary titles and 11-point monospaced keywords without a backslash.
+Owned GTK, default Wayland Chromium and Ghostty fields show that surface and
+receive the exact 45-byte real library body through Return, retaining focus.
+These checks reuse the existing receiver scenario and unchanged installed GUI;
+the temporary addon is a prototype, not a newly qualified product release.
+
+The initial prototype visibly blurred text on the host's 2x display. Binding
+version 6 alone did not produce a preferred-scale event on this popup. Observing
+the advertised output scale and rendering a matching buffer changes the buffer
+from 336x70 to 672x140 pixels while keeping the logical dimensions. Closed numeric
+buffer observations and receiver screenshots establish the change; the same
+three receiver checks still pass. No added wait is presented as a repair.
+
+The exact prototype source, upstream header receipts, screenshots and aggregate
+results are retained in the ignored `target/live-omarchy-acceptance/core-functionality/mac-panel-prototype/`
+evidence archive. The prototype addon hash is `801dbcb9`; the archive hash is
+`fa106135`. Native product inputs remain the same 332 files. Every test restores
+the qualified `2dd9d6b` addon, normal primary, consent and three global actions.
+The user-test archive is unchanged. Product integration, lifecycle/fallback,
+palette, tags, match highlights, wrapped rows and pointer selection remain.
+Ghostty's popup also overlaps the first input line, including with the existing
+Fcitx panel, so caret placement remains an explicit part of the panel work.
+Mac visual equivalence and repair of the earlier cold first-field failure are
+not established. The finite acceptance board and cloud/race deferral retain scope.
+
 ### Completion audit, 2026-10-03
 
 Source review at `95c0190` found obsolete unfinished labels for current v1
