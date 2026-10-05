@@ -6,6 +6,25 @@ that regenerate checked-in reference fixtures or rebuild an optional patched GTK
 dependency with upstream Meson tools. The client handles ordinary local entries
 and an encrypted vault workspace; [the full desktop port remains in development](../docs/linux/IMPLEMENTATION.md).
 
+## Core qualification, 2026-10-05
+
+Core functionality takes priority over further sync and race-condition work.
+The installed `0c125c28` user-test build was exercised with its actual executable
+and bundled libraries, a separate session bus and a public temporary library.
+
+| Feature | Current result |
+| --- | --- |
+| Global shortcuts | Saved Super+Alt+N/P/C bindings pass Open, targeted Picker/Return and Capture through native virtual-keyboard events. Picker returns focus and restores the previous clipboard. Physical hardware input is not established by these events. |
+| Clipboard history | Actual installed UI consent, collection while its window is closed, accessible retained row and pointer selection, literal Copy, opt-out, process restart and Clear pass with an isolated real keyring. User library data and prior ordinary clipboard text are preserved. |
+| Inline expansion and suggestions | **Blocked in the normal input setup.** Omarchy's running `omarchy-fcitx5.service` occupies the input-method seat. With that service temporarily stopped, exact expansion and the visible caret popup/Return selection pass in GTK. Default Wayland Chromium and Ghostty retain the literal keyword and report no compatible field. The service is restored after every test. |
+
+The macOS reference shows suggestions on `\` in a focused text field, then
+supports keyboard selection in a floating panel. That behavior is required for
+the Linux core; the GTK-only popup pass does not establish it in everyday apps.
+The current Linux UI also requires **Enable Suggestions…** separately from
+**Enable Expansion…**. Inline integration is the next core task. Further sync
+and chooser-race work is deferred until these core paths work in the intended apps.
+
 ## Build and install
 
 On Omarchy, install missing build and native runtime packages:

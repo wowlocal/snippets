@@ -266,10 +266,61 @@ keywords, including during imports and undo. Tests use temporary directories.
 | Automatic synchronization | Explicit per-library toggle, exact protected account/deployment/library pins, primary-process startup, foreground/local-edit wakes, bounded cycles, transient backoff and immediate cancellation/quit admission fencing | Twenty new isolated tests cover consent privacy, stale/missing targets, every binding dimension, cancellation, request priority, backup recovery, checked refresh/key verification and receipt retention; current native toggle smoke and combined private-keyring/verified-HTTPS/GTK writer/reader checks pass: transient backoff, actual hidden-window timer exchange, protected-consent startup in a new worker, in-flight disable preserving primary/checkpoint bytes, opt-out restart without HTTP and changed-membership halt; generated-service primary startup passes in the live user manager; full new sign-in, automatic secure/review workflows and protected-conflict preservation remain separate |
 | Cloud library creation | Explicit native create/resume/open and create-another actions; bounded retained intents; one-use confirmation binds account session and existing protected state; original idempotency key retained before POST | Twenty-four fault/restart/schema/expiry tests plus bootstrap admission and reviewed-switch integration; mapped native GTK/keyring/verified-HTTPS creation passes Cancel/focus refusal, lost response and same-request restart, explicit key setup/sync, separate second-library creation and fresh-worker review gating; exact active keys/checkpoint and both receipts are preserved |
 | Sync merge and journal | Three-way fields/tags, deterministic disabled copies, authenticated secure v1 materialization, exact offers/ciphertext/CAS, durable partial receipts, nested dependency ordering and connected batch grouping, lossless projection, encrypted two-file recovery, ordered inbound pages/cursors, journal-first missing-snapshot resume, exact-version deletion permissions, bounded bidirectional coordination and retained reviewed library switching/restoration | Merge, projection, secure-copy apply, nested original/edited-copy groups, inbound/outbound, bidirectional cycles, snapshot-review, current v1 conflict-owned absence/deletion crash recovery, saved-state restoration and switch authorization/cancellation/offline completion tests pass; ordinary native automatic receiving/sending now passes against verified HTTPS with a real private keyring; manual and fresh vault passphrase/recovery exchange also pass; retained secure CAS preservation and basic cloud Keep/Delete also pass; mapped missing-snapshot resumption preserves acknowledged ordinary/protected records and previous merge ancestors after real cursor rejection; flat current secure v1 source deletion and acknowledged-copy repair pass with retained source packets and actual new CAS; native two-library reviewed switching, fresh-worker reconnect and return using the exact retained source key pass; ordinary native saved-history restoration passes current-version/unrelated preservation, exact current CAS/feed retention, fresh-worker reconnect and preserved-copy-before-source delivery; native unrelated lost-reply packets, published-switch offline finish, unpublished-switch offline cancellation, mixed/foreign-vault restoration and actual SIGKILL/offline restoration pass; other already listed interrupted switching/first-key work remains a separate live scope; native same-vault protected restoration passes stale ciphertext refusal, exact current CAS/feed, both current-version copies, unchanged unrelated records and authenticated dependency-ordered sync after restart; all four nested physical/journal-only secure C1 cloud-source Keep/Delete cases now pass with unchanged child seals, separate immutable C0/D0 and actual CAS ordering; prior-confirmed cloud-child Keep/Delete before either raw parent choice passes all four native combinations; Unknown pending raw-child Keep/Delete before parent Keep now passes with fresh independent credentials and actual copy-before-source CAS; native local-absence secure source Keep/Delete passes with fresh review and actual CAS; unrelated lost-reply packets also pass beside native local-absence Keep/Delete |
-| Inline expansion | Native input-method-v2 owner, separate opt-in fuzzy input-popup with keyboard navigation and raw passthrough, conditional bounded clipboard read and move-only chunked replacement | Core, native pixels/FD/protocol and controller checks cover selection, dismissal, legacy consent, frozen ranking, queue/buffer bounds, UTF-8, field/file changes, cancellation and full 256 KiB output; real peer credentials, native settings and independent GTK exact/suggestion/echo receiving-field checks pass; other application compatibility remains under review |
+| Inline expansion | Native input-method-v2 owner, separate opt-in fuzzy input-popup with keyboard navigation and raw passthrough, conditional bounded clipboard read and move-only chunked replacement | **Core blocker confirmed on 2026-10-05:** the normal Omarchy Fcitx owner prevents connection; temporarily releasing that seat admits GTK exact/popup/Return checks, but default Wayland Chromium and Ghostty retain literal triggers. Earlier isolated protocol and GTK checks do not establish everyday-app functionality. |
 | Encrypted backup | Portable encrypted-backup export/import and recovery wired to GTK; independent all-layer codec verification | Actual native Save/Open portal, credentials/confirmation cancellation and matching/new-vault restoration pass with Debug and Release harnesses; Apple-app exchange remains unverified |
 | Clipboard history | Explicit opt-in GTK view, separate local AES-GCM image/key, bounded seven-day retention/search/delete/clear, read-only Wayland data-control worker, foreground exclusions and sensitivity/internal markers, revocable acquisition and quit barriers | Core/worker/privacy, private libwayland-server and native disabled-history controls pass; real Omarchy collection with a separate C/GTK owner and private native keyring verifies consent cancellation, initial-offer exclusion, collection with the view closed, encrypted viewing/search/copy, sensitivity/internal skips, opt-out barriers and confirmed deletion/clear without changing the current clipboard |
 | Persistent diagnostics | One primary-process Rust backend, typed inert core facade, bounded private JSONL retention, safe native system mirror and searchable Settings export/delete with plaintext review | Privacy/schema, file and directory replacement, stale/linked destination, rollover/quota/age, corruption, torn-final-line, duplicate-sequence, deletion and queue/shutdown tests pass; native cancellation controls pass; a real release primary writes private records and mirrors the exact sanitized records to the system journal; full export/delete interaction remains under live review |
+
+### Core-first live qualification, 2026-10-05
+
+The user explicitly deferred further race-condition and cloud-sync work until the
+core works. The required inline UX follows the macOS reference: typing `\` in a
+focused text field presents the caret suggestion panel, with keyboard selection.
+The remaining acceptance scope is unchanged; the checks below exercise its
+already listed receiving-app, saved shortcut and accessibility boundaries.
+
+The qualified `0c125c28` archive is now installed in the normal user prefix through
+the existing atomic installer. All three binary hashes and all eleven runtime
+files match the qualified archive. Installation compares only user-data metadata
+in memory; no library bodies or credentials were read, and that metadata remained
+unchanged. These core runs use that installed GUI (SHA-256 starting `a4b9dc8d`),
+its actual relative-RUNPATH GTK/libadwaita providers, a private D-Bus and temporary
+public library. The 329 native source inputs remain unchanged across the runs.
+
+Saved Super+Alt+N/P/C assignments now pass the complete Open, Picker and Capture
+path. Native virtual-keyboard events activate the actual saved bindings. Picker
+and Return deliver the public fixture to an independent receiving field, return
+its focus and restore the previous clipboard; Capture adds only its public fixture
+and preserves the original test record. Hardware key presses are not implied.
+The three user assignments remain available after testing; the other bindings
+and a clean compositor configuration are preserved. The compositor is still
+running in Safe Mode with its recovery file forwarding the existing user profile.
+
+The actual installed history UI passes native enable confirmation, ignored initial
+selection, collection while its window is closed, private encrypted storage,
+accessible row rendering, pointer selection and literal Copy. Opt-out retains
+the copy, a new process can decrypt it, and Clear removes the private history
+without changing the current public selection. An isolated real GNOME Keyring
+serves this fixture. Previous ordinary clipboard text is restored from memory.
+This closes the installed accessibility/pointer path exercised here; it does not
+relabel every historical history/privacy case as a new run.
+
+Inline fails with the normal `omarchy-fcitx5.service` running: its input-method
+seat cannot be registered by Snippets. The service uses `Restart=always`, so
+quitting its process is insufficient. Temporarily stopping the service admits
+the installed GTK exact-expansion and visible popup checks. The partial query
+does not insert; native Return inserts the exact selected body and preserves
+receiver focus. The popup image was inspected. The service is restarted in
+cleanup, without editing or disabling its configuration.
+
+Even while that seat is free, default Wayland Chromium and Ghostty retain the
+literal `\nativeinline`; the app reports waiting for a compatible field. Their
+public local-page/terminal readers report only byte counts and match booleans.
+These are concrete core integration blockers, superseding the earlier broad
+claim that receiving-app compatibility was only unverified. The current two-step
+Linux suggestion consent also differs from the Mac interaction. Core integration
+and the requested visible panel behavior take priority; the sync and GTK chooser
+evidence remains recorded without further work on those areas.
 
 ### Completion audit, 2026-10-03
 
