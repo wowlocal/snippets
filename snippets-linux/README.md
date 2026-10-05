@@ -2463,3 +2463,8 @@ desktop/headless and five installed restoration runs remain evidence for their
 recorded artifacts; they are not relabeled as full runs of this UI change.
 The five remaining groups and the independent GTK chooser cancellation defect
 stay open. No waiting or error suppression is a fix for that GTK defect.
+
+The actual updated normal-prefix GUI also passes the unchanged existing fallback
+chooser Cancel case with fatal warnings, parent focus return and exact private
+primary/vault/history preservation. This requalifies that installed cancellation
+case; the Sent -> Lost regression above runs in the native Release harness.
