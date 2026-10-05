@@ -548,6 +548,58 @@ Fcitx panel, so caret placement remains an explicit part of the panel work.
 Mac visual equivalence and repair of the earlier cold first-field failure are
 not established. The finite acceptance board and cloud/race deferral retain scope.
 
+### Deliver Mac-style rows through the product Fcitx addon, 2026-10-05
+
+The product now owns its caret popup through that verified connection path.
+It uses the Mac pane/row geometry, regular 13-point titles, monospaced 11-point
+keywords, two-line wrapping, two fitting tag chips and an overflow chip. Rust
+supplies the sanitized ordinary labels, bounded UTF-8 match ranges, tag count
+and Omarchy RGB palette. Pango draws actual text rather than interpreting markup;
+match tint is adjusted for contrast. The authenticated row protocol is SNI3.
+Old peers are refused before the addon takes the initial backslash; duplicate,
+truncated and invalid UTF-8 span metadata still returns only the typed literal
+in a public context. Bodies remain behind the existing selected insertion request.
+
+The exact upstream wrapper declaration is guarded against both SDK and runtime
+version mismatch before conversion. The normal Fcitx panel remains the fallback
+on unsupported versions/frontends or renderer failure. Optional addon dependencies
+establish unload order; handlers and owned surfaces/buffers are cleared on focus,
+private-state, reset, context destruction and shutdown. Connection-close cleanup
+destroys local proxies without sending requests over the closing display. The
+borrowed input method and its listeners are untouched. Repainting uses released
+buffers and frame callbacks, with at most four outstanding frames and only the
+latest pending layout; no timer or blocking display roundtrip is added.
+Pointer hit areas come from the drawn row layout. A changed, not-yet-presented
+row generation refuses a click; selection resolves the displayed identity again
+in the current public context. No keyboard grab or global input-theme edit is added.
+
+The existing offline real-context fixture also rasterizes the actual Cairo/Pango
+panel at 1x/2x, checks logical/pixel dimensions, wrapped-row geometry and pointer
+hit regions, and rejects a range beginning inside a UTF-8 character. Format,
+installer syntax, desktop/headless all-target Clippy, 43 inline tests and Release
+build pass on 337 frozen native inputs. The installed candidate passes the
+existing three receiver/panel checks, full Ctrl+N/P and Shift+Tab chords, retained
+selection, saved shortcuts and accessible history. Three cold Chromium fields
+finish with the 45-byte non-composing body within the unchanged eight-second
+deadline; this does not prove a repair of the earlier intermittent failure.
+An actual virtual-pointer click on the second native row inserts the exact body
+and retains receiver focus. Physical input and normal-session qualification remain.
+
+The first visual test populated a shorter, higher-ranked second keyword while
+retaining an expectation for the first body. The rendered selection and 28-byte
+terminal observation prove that the chosen second record was inserted. Its
+failed test receipt is retained; correcting only the private fixture's ordering
+restores the expected 45-byte receiver assertion. No product code, retry or wait
+is used to explain that correction. The old independent GTK pointer failure
+remains separate from this native-popup pointer pass.
+
+The installer includes the two exact Fcitx interface headers, source hashes and
+LGPL license alongside the addon. The normal primary, existing consent and three
+global actions are restored after the private checks. Ghostty's first-line popup
+overlap remains visible, and native compositor material is not proven equivalent
+to AppKit glass. Those are still part of the requested panel work. Apple/shared
+Swift and the finite five remaining evidence groups are unchanged.
+
 ### Completion audit, 2026-10-03
 
 Source review at `95c0190` found obsolete unfinished labels for current v1

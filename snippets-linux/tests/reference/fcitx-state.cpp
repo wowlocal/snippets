@@ -21,23 +21,79 @@ protected:
   void updatePreeditImpl() override {}
 };
 struct CoreFixture {
-  static Row row(unsigned char identity, const char *name, const char *keyword) {
+  static Row row(unsigned char identity, const char *name,
+                 const char *keyword) {
     Row result{name, keyword};
     result.identity.back() = identity;
     return result;
   }
   static std::string metadata(const std::vector<Row> &rows) {
     std::string reply(1, char(rows.size()));
+    PanelPalette palette;
+    reply += char(palette.dark);
+    for (const auto *color :
+         {&palette.background, &palette.foreground, &palette.accent})
+      reply.append(reinterpret_cast<const char *>(color->data()),
+                   color->size());
+    auto shortValue = [&](uint16_t value) {
+      reply += char(value);
+      reply += char(value >> 8);
+    };
     for (const auto &row : rows) {
       reply.append(reinterpret_cast<const char *>(row.identity.data()),
                    row.identity.size());
-      for (const auto *field : {&row.name, &row.keyword}) {
-        reply += char(field->size());
-        reply += char(field->size() >> 8);
-        reply += *field;
+      for (auto field : {std::pair{&row.name, &row.nameMatches},
+                         std::pair{&row.keyword, &row.keywordMatches}}) {
+        shortValue(uint16_t(field.first->size()));
+        reply += *field.first;
+        reply += char(field.second->size());
+        for (auto [start, end] : *field.second) {
+          shortValue(start);
+          shortValue(end);
+        }
+      }
+      reply += char(row.tags.size());
+      shortValue(row.tagCount);
+      for (const auto &tag : row.tags) {
+        reply += char(tag.size());
+        reply += tag;
       }
     }
     return reply;
+  }
+  static void presentation() {
+    Row publicRow = row(1, "Public Unicode café", "public");
+    publicRow.nameMatches = {{15, 20}};
+    publicRow.keywordMatches = {{0, 3}};
+    publicRow.tags = {"Tag one", "Tag two"};
+    publicRow.tagCount = 3;
+    auto encoded = metadata({publicRow});
+    std::vector<Row> decoded;
+    PanelPalette palette;
+    assert(rowMetadata(encoded, decoded, palette) && decoded.size() == 1);
+    assert(decoded[0] == publicRow);
+    auto ordinary = MacPopupManager::raster(decoded, 0, palette, 1);
+    auto retina = MacPopupManager::raster(decoded, 0, palette, 2);
+    assert(ordinary && retina);
+    assert(ordinary->width == 336 && ordinary->height == 70);
+    assert(retina->width == ordinary->width &&
+           retina->height == ordinary->height);
+    assert(cairo_image_surface_get_width(retina->image) == 672);
+    assert(cairo_image_surface_get_height(retina->image) == 140);
+    assert(MacPopupManager::hit(retina->hits, 22, 20) == 0);
+    assert(MacPopupManager::hit(retina->hits, 4, 20) == -1);
+    assert(MacPopupManager::hit(retina->hits, 22, 67) == -1);
+    decoded[0].name = std::string(80, 'W');
+    decoded[0].nameMatches.clear();
+    auto wrapped = MacPopupManager::raster(decoded, 0, palette, 2);
+    assert(wrapped && wrapped->hits[0].height == 62 && wrapped->height == 86);
+    assert(!MacPopupManager::raster(decoded, 0, palette, 5));
+    assert(!MacPopupManager::supportsRuntime("5.2.0"));
+    publicRow.nameMatches = {
+        {19, 20}}; // Starts inside the final UTF-8 character.
+    encoded = metadata({publicRow});
+    decoded.clear();
+    assert(!rowMetadata(encoded, decoded, palette));
   }
   static void selection(Instance &instance) {
     PublicContext context(instance.inputContextManager());
@@ -184,5 +240,7 @@ int main() {
   CoreFixture::selection(instance);
   CoreFixture::invalidMetadata(instance, false);
   CoreFixture::invalidMetadata(instance, true);
-  std::puts("state fixture: 8 modifier, 6 capability and 6 selection/protocol checks passed");
+  CoreFixture::presentation();
+  std::puts("state fixture: 8 modifier, 6 capability, 6 selection/protocol and "
+            "2 panel checks passed");
 }

@@ -1,10 +1,14 @@
 // Fcitx transport only. Rust owns library access, matching and consent.
 // No surrounding text or general key stream is sent to Snippets.
+#include "fcitx-5.1.22/waylandim_public.h"
+#include "fcitx-5.1.22/zwp_input_method_v2.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <dlfcn.h>
+#include <fcitx-module/wayland/wayland_public.h>
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/key.h>
 #include <fcitx-utils/utf8.h>
@@ -16,11 +20,15 @@
 #include <fcitx/inputpanel.h>
 #include <fcitx/instance.h>
 #include <fcitx/text.h>
+#include <fcntl.h>
 #include <functional>
+#include <map>
 #include <memory>
+#include <pango/pangocairo.h>
 #include <poll.h>
 #include <set>
 #include <string>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -65,14 +73,14 @@ bool packet(int fd, unsigned char kind, const std::string &payload,
             unsigned char &replyKind, std::string &reply) {
   auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-  std::array<unsigned char, 9> header{'S', 'N', 'I', '2', kind, 0, 0, 0, 0};
+  std::array<unsigned char, 9> header{'S', 'N', 'I', '3', kind, 0, 0, 0, 0};
   for (size_t i = 0; i < 4; ++i)
     header[5 + i] = static_cast<unsigned char>(payload.size() >> (8 * i));
   if (!transfer(fd, header.data(), header.size(), true, deadline) ||
       (!payload.empty() && !transfer(fd, const_cast<char *>(payload.data()),
                                      payload.size(), true, deadline)) ||
       !transfer(fd, header.data(), header.size(), false, deadline) ||
-      std::memcmp(header.data(), "SNI2", 4) || header[4] > 3 ||
+      std::memcmp(header.data(), "SNI3", 4) || header[4] > 3 ||
       number(header.data() + 5) > Limit)
     return false;
   replyKind = header[4];
@@ -136,14 +144,105 @@ bool publicField(InputContext *ic) {
 struct Row {
   std::string name, keyword;
   std::array<unsigned char, 16> identity{};
+  std::vector<std::pair<uint16_t, uint16_t>> nameMatches{}, keywordMatches{};
+  std::vector<std::string> tags{};
+  uint16_t tagCount = 0;
+  bool operator==(const Row &) const = default;
 };
+struct PanelPalette {
+  bool dark = true;
+  std::array<unsigned char, 3> background{43, 43, 43},
+      foreground{245, 245, 245}, accent{0, 122, 255};
+  bool operator==(const PanelPalette &) const = default;
+};
+// All offsets are UTF-8 byte boundaries, not Pango character positions.
+bool rowMetadata(const std::string &reply, std::vector<Row> &rows,
+                 PanelPalette &palette) {
+  if (reply.size() < 11 || static_cast<unsigned char>(reply[0]) > 8 ||
+      static_cast<unsigned char>(reply[1]) > 1)
+    return false;
+  palette.dark = reply[1] != 0;
+  size_t offset = 2;
+  for (auto *color :
+       {&palette.background, &palette.foreground, &palette.accent}) {
+    std::memcpy(color->data(), reply.data() + offset, 3);
+    offset += 3;
+  }
+  auto byte = [&](unsigned &value) {
+    if (offset >= reply.size())
+      return false;
+    value = static_cast<unsigned char>(reply[offset++]);
+    return true;
+  };
+  auto shortValue = [&](uint16_t &value) {
+    unsigned a = 0, b = 0;
+    if (!byte(a) || !byte(b))
+      return false;
+    value = uint16_t(a | (b << 8));
+    return true;
+  };
+  auto string = [&](std::string &text, size_t size, size_t bound) {
+    if (size > bound || offset + size > reply.size())
+      return false;
+    text = reply.substr(offset, size);
+    offset += size;
+    return utf8::validate(text) && text.find('\0') == std::string::npos;
+  };
+  std::set<std::array<unsigned char, 16>> identities;
+  for (unsigned i = 0; i < static_cast<unsigned char>(reply[0]); ++i) {
+    Row row;
+    if (offset + 16 > reply.size())
+      return false;
+    std::memcpy(row.identity.data(), reply.data() + offset, 16);
+    offset += 16;
+    if (!identities.insert(row.identity).second)
+      return false;
+    for (auto field : {std::pair{&row.name, &row.nameMatches},
+                       std::pair{&row.keyword, &row.keywordMatches}}) {
+      uint16_t size = 0;
+      unsigned count = 0;
+      if (!shortValue(size) ||
+          !string(*field.first, size, field.first == &row.name ? 512 : 256) ||
+          !byte(count) || count > 128)
+        return false;
+      uint16_t previous = 0;
+      auto boundary = [&](uint16_t index) {
+        return index == field.first->size() ||
+               (index < field.first->size() &&
+                (static_cast<unsigned char>((*field.first)[index]) & 0xc0) !=
+                    0x80);
+      };
+      for (unsigned j = 0; j < count; ++j) {
+        uint16_t start = 0, end = 0;
+        if (!shortValue(start) || !shortValue(end) || start < previous ||
+            start >= end || end > size || !boundary(start) || !boundary(end))
+          return false;
+        field.second->emplace_back(start, end);
+        previous = end;
+      }
+    }
+    unsigned count = 0;
+    if (!byte(count) || count > 2 || !shortValue(row.tagCount) ||
+        row.tagCount < count || row.tagCount > 999)
+      return false;
+    for (unsigned j = 0; j < count; ++j) {
+      unsigned size = 0;
+      std::string tag;
+      if (!byte(size) || !string(tag, size, 64))
+        return false;
+      row.tags.push_back(std::move(tag));
+    }
+    rows.push_back(std::move(row));
+  }
+  return offset == reply.size();
+}
+#include "inline_fcitx_popup.h"
 class Word : public CandidateWord {
 public:
   Word(const Row &row, std::function<void(InputContext *)> select)
-      : CandidateWord(Text(row.name, TextFormatFlag::Bold)),
-        select_(std::move(select)) {
-    Text title(row.name, TextFormatFlag::Bold);
-    title.append("\n\\" + row.keyword);
+      : CandidateWord(Text(row.name)), select_(std::move(select)) {
+    Text title(row.name);
+    title.append("\n" + row.keyword);
     setText(title);
     setCustomLabel(Text(""));
   }
@@ -162,7 +261,8 @@ class Snippets : public AddonInstance {
   friend struct CoreFixture;
 #endif
 public:
-  explicit Snippets(Instance *instance) : instance_(instance) {
+  explicit Snippets(Instance *instance)
+      : instance_(instance), popup_(instance) {
     watchers_.push_back(instance_->watchEvent(
         EventType::InputContextKeyEvent, EventWatcherPhase::PreInputMethod,
         [this](Event &event) { key(static_cast<KeyEvent &>(event)); }));
@@ -210,6 +310,8 @@ public:
         });
   }
   ~Snippets() override {
+    if (active_)
+      clear(active_);
     if (fd_ >= 0)
       close(fd_);
     erase(query_);
@@ -217,6 +319,9 @@ public:
 
 private:
   void clear(InputContext *ic, bool update = true) {
+    popup_.hide();
+    if (update)
+      ic->inputPanel().setCustomInputPanelCallback({});
     if (fd_ >= 0)
       close(fd_);
     fd_ = -1;
@@ -253,6 +358,32 @@ private:
       list->setGlobalCursorIndex(int(selected_));
     ic->inputPanel().setCandidateList(std::move(list));
     ic->inputPanel().setAuxDown(Text());
+    if (!rows_.empty() && popup_.prepare(ic)) {
+      ic->inputPanel().setCustomInputPanelCallback(
+          [this](InputContext *context) {
+            if (context != active_ || !publicField(context)) {
+              popup_.hide();
+              return;
+            }
+            if (!popup_.paint(context, rows_, selected_, palette_,
+                              [this](const auto &identity) {
+                                if (!active_ || !publicField(active_))
+                                  return;
+                                for (size_t i = 0; i < rows_.size(); ++i)
+                                  if (rows_[i].identity == identity) {
+                                    select(active_, i);
+                                    break;
+                                  }
+                              })) {
+              popup_.hide();
+              context->inputPanel().setCustomInputPanelCallback({});
+              context->updateUserInterface(UserInterfaceComponent::InputPanel);
+            }
+          });
+    } else {
+      popup_.hide();
+      ic->inputPanel().setCustomInputPanelCallback({});
+    }
     ic->updatePreedit();
     ic->updateUserInterface(UserInterfaceComponent::InputPanel, true);
   }
@@ -282,72 +413,27 @@ private:
       clear(ic);
       ic->commitString(reply);
       erase(reply);
-      std::array<unsigned char, 9> ack{'S', 'N', 'I', '2', 3, 0, 0, 0, 0};
+      std::array<unsigned char, 9> ack{'S', 'N', 'I', '3', 3, 0, 0, 0, 0};
       transfer(fd, ack.data(), ack.size(), true,
                std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(50));
       close(fd);
       return true;
     }
-    if (kind != 1 || reply.empty() ||
-        static_cast<unsigned char>(reply[0]) > 8) {
-      erase(reply);
-      literal(ic);
-      return false;
-    }
     std::vector<Row> rows;
-    std::set<std::array<unsigned char, 16>> identities;
-    size_t offset = 1;
-    for (unsigned i = 0; i < static_cast<unsigned char>(reply[0]); ++i) {
-      Row row;
-      if (offset + row.identity.size() > reply.size()) {
-        erase(reply);
-        literal(ic);
-        return false;
-      }
-      std::memcpy(row.identity.data(), reply.data() + offset,
-                  row.identity.size());
-      offset += row.identity.size();
-      if (!identities.insert(row.identity).second) {
-        erase(reply);
-        literal(ic);
-        return false;
-      }
-      for (auto *text : {&row.name, &row.keyword}) {
-        if (offset + 2 > reply.size()) {
-          erase(reply);
-          literal(ic);
-          return false;
-        }
-        size_t n = static_cast<unsigned char>(reply[offset]) +
-                   (size_t(static_cast<unsigned char>(reply[offset + 1])) << 8);
-        offset += 2;
-        if (n > 512 || offset + n > reply.size()) {
-          erase(reply);
-          literal(ic);
-          return false;
-        }
-        *text = reply.substr(offset, n);
-        offset += n;
-        if (!utf8::validate(*text) || text->find('\0') != std::string::npos) {
-          erase(reply);
-          literal(ic);
-          return false;
-        }
-      }
-      rows.push_back(std::move(row));
-    }
-    if (offset != reply.size()) {
+    PanelPalette palette;
+    if (kind != 1 || !rowMetadata(reply, rows, palette)) {
       erase(reply);
       literal(ic);
       return false;
     }
+    palette_ = palette;
     erase(reply);
     // Mac suggestions retain a keyboard-selected record through query updates.
     // Use its identity, since names, keywords and ranking may change meanwhile.
     bool preserve = selectionWasUserDriven_ && selected_ < rows_.size();
-    auto previous = preserve ? rows_[selected_].identity
-                             : std::array<unsigned char, 16>{};
+    auto previous =
+        preserve ? rows_[selected_].identity : std::array<unsigned char, 16>{};
     rows_ = std::move(rows);
     selected_ = 0;
     selectionWasUserDriven_ = false;
@@ -477,6 +563,8 @@ private:
     update(ic, 1, query_);
   }
   Instance *instance_;
+  MacPopupManager popup_;
+  PanelPalette palette_;
   InputContext *active_ = nullptr;
   int fd_ = -1;
   std::string query_;

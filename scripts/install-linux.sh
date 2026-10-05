@@ -101,6 +101,9 @@ if [[ -n $TASK_GTK_RUNTIME ]]; then
 fi
 install_atomic "$TASK_TARGET_ROOT/release/snippets-owner-auth" "$TASK_DESTINATION/snippets-owner-auth" 755
 install_atomic "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" "$TASK_DESTINATION/libsnippets-fcitx.so" 755
+for TASK_FCITX_INTERFACE_FILE in COPYING SOURCE.json waylandim_public.h zwp_input_method_v2.h; do
+  install_atomic "$TASK_REPO_ROOT/snippets-linux/src/fcitx-5.1.22/$TASK_FCITX_INTERFACE_FILE" "$TASK_DESTINATION/fcitx-5.1.22/$TASK_FCITX_INTERFACE_FILE" 644
+done
 for TASK_BINARY in snippets snippets-cli; do
   install_atomic "$TASK_TARGET_ROOT/release/$TASK_BINARY" "$TASK_DESTINATION/$TASK_BINARY" 755
   mkdir -p -- "$TASK_INSTALL_PREFIX/bin"
@@ -120,8 +123,11 @@ Category=Module
 Version=0.1.0
 OnDemand=False
 Configurable=False
-[Dependencies]
+[Addon/Dependencies]
 0=core:5.1.0
+[Addon/OptionalDependencies]
+0=wayland
+1=waylandim
 EOF
 install_atomic "$TASK_ADDON_METADATA" "$TASK_INSTALL_PREFIX/share/fcitx5/addon/snippets.conf" 644
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/com.khm.snippets.linux.desktop" "$TASK_INSTALL_PREFIX/share/applications/com.khm.snippets.linux.desktop" 644

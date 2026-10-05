@@ -185,7 +185,7 @@ pub(crate) fn bounded(value: &str, bytes: usize) -> String {
     }
     text
 }
-fn highlights(value: &str, query: &str) -> Vec<(u32, u32)> {
+pub(crate) fn highlights(value: &str, query: &str) -> Vec<(u32, u32)> {
     let pattern = model::folded(query);
     let mut pattern = pattern.chars().peekable();
     let mut matched = Vec::new();

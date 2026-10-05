@@ -14,7 +14,7 @@ use std::{
     time::Instant,
 };
 
-const MAGIC: &[u8; 4] = b"SNI2";
+const MAGIC: &[u8; 4] = b"SNI3";
 const QUERY_LIMIT: usize = 480;
 const FAILED: Error = Error("The inline input context is no longer available.");
 
@@ -157,8 +157,9 @@ fn query(bytes: &[u8]) -> Result<&str> {
     }
     Ok(text)
 }
-fn rows(entries: &[Snippet]) -> Vec<u8> {
+fn rows(entries: &[Snippet], query: &str, palette: [u8; 10]) -> Vec<u8> {
     let mut bytes = vec![entries.len() as u8];
+    bytes.extend_from_slice(&palette);
     for entry in entries {
         // Record identities are local to this authenticated transport; they are
         // never displayed, logged or persisted by the addon.
@@ -177,9 +178,59 @@ fn rows(entries: &[Snippet]) -> Vec<u8> {
             let value = crate::inline_expansion::suggestions::bounded(value, bound);
             bytes.extend_from_slice(&(value.len() as u16).to_le_bytes());
             bytes.extend_from_slice(value.as_bytes());
+            let ranges = crate::inline_expansion::suggestions::highlights(&value, query);
+            bytes.push(ranges.len().min(128) as u8);
+            for (start, end) in ranges.into_iter().take(128) {
+                bytes.extend_from_slice(&(start as u16).to_le_bytes());
+                bytes.extend_from_slice(&(end as u16).to_le_bytes());
+            }
+        }
+        bytes.push(entry.tags.len().min(2) as u8);
+        bytes.extend_from_slice(&(entry.tags.len().min(999) as u16).to_le_bytes());
+        for tag in entry.tags.iter().take(2) {
+            let tag = crate::inline_expansion::suggestions::bounded(tag, 64);
+            bytes.push(tag.len() as u8);
+            bytes.extend_from_slice(tag.as_bytes());
         }
     }
     bytes
+}
+fn palette(data: &str) -> [u8; 10] {
+    let colors = data.parse::<toml::Table>().unwrap_or_default();
+    let dark = colors.get("mode").and_then(toml::Value::as_str) != Some("light");
+    let color = |key: &str, fallback: [u8; 3]| {
+        colors
+            .get(key)
+            .and_then(toml::Value::as_str)
+            .filter(|s| s.len() == 7 && s.starts_with('#'))
+            .and_then(|s| {
+                Some([
+                    u8::from_str_radix(s.get(1..3)?, 16).ok()?,
+                    u8::from_str_radix(s.get(3..5)?, 16).ok()?,
+                    u8::from_str_radix(s.get(5..7)?, 16).ok()?,
+                ])
+            })
+            .unwrap_or(fallback)
+    };
+    let mut result = [0; 10];
+    result[0] = u8::from(dark);
+    result[1..4].copy_from_slice(&color(
+        "background",
+        if dark { [43, 43, 43] } else { [242, 242, 242] },
+    ));
+    result[4..7].copy_from_slice(&color(
+        "foreground",
+        if dark { [245, 245, 245] } else { [25, 25, 25] },
+    ));
+    result[7..10].copy_from_slice(&color("accent", [0, 122, 255]));
+    result
+}
+fn current_palette() -> [u8; 10] {
+    let mut data = String::new();
+    let _ = crate::desktop::theme_path()
+        .and_then(|p| fs::File::open(p).ok())
+        .map(|f| f.take(16 * 1024).read_to_string(&mut data));
+    palette(&data)
 }
 fn clipboard(guard: &dyn Fn() -> Result<()>) -> Result<Zeroizing<String>> {
     let start = Instant::now();
@@ -281,7 +332,11 @@ fn serve(
                         .collect();
                     ranking.rank(&mut entries, &current_query);
                     entries.truncate(8);
-                    let metadata = if suggestions { rows(&entries) } else { vec![0] };
+                    let metadata = rows(
+                        if suggestions { &entries } else { &[] },
+                        &current_query,
+                        current_palette(),
+                    );
                     response(stream, 1, &metadata, &checked)?;
                     // Socket fragments contain no host context. Observe consent/lock
                     // while reading, and validate the receiving window once per
@@ -408,7 +463,7 @@ mod tests {
         assert!(result.status.success(), "native Fcitx state fixture failed");
         assert_eq!(
             result.stdout,
-            b"state fixture: 8 modifier, 6 capability and 6 selection/protocol checks passed\n"
+            b"state fixture: 8 modifier, 6 capability, 6 selection/protocol and 2 panel checks passed\n"
         );
     }
     #[test]
@@ -445,22 +500,30 @@ mod tests {
         let mut entry = Snippet::new("Public name", "BODY_MUST_NOT_LEAVE_IN_METADATA");
         entry.keyword = "publickeyword".into();
         let identity = entry.id;
-        let bytes = rows(&[entry]);
+        entry.tags = vec!["Public tag".into(), "Second tag".into(), "Extra tag".into()];
+        let bytes = rows(&[entry], "public", palette(""));
         assert!(!bytes.windows(4).any(|w| w == b"BODY"));
         assert_eq!(bytes[0], 1);
-        assert_eq!(&bytes[1..17], identity.as_bytes());
+        assert_eq!(&bytes[11..27], identity.as_bytes());
+        assert!(bytes.windows(10).any(|w| w == b"Public tag"));
+        assert!(!bytes.windows(9).any(|w| w == b"Extra tag"));
+        assert_eq!(
+            palette("mode='light'\nbackground='#ffffff'")[..4],
+            [0, 255, 255, 255]
+        );
+        assert_eq!(palette("accent='bad'")[7..], [0, 122, 255]);
     }
     #[test]
     fn bridge_authenticates_the_fcitx_process_and_refuses_large_frames() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         assert!(!trusted_peer(&server));
-        client.write_all(b"SNI2\x01\xff\xff\xff\xff").unwrap();
+        client.write_all(b"SNI3\x01\xff\xff\xff\xff").unwrap();
         assert!(request(&mut server, &|| Ok(())).is_err());
     }
     #[test]
     fn bridge_rejects_the_previous_row_protocol_before_taking_input() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
-        client.write_all(b"SNI1\x01\0\0\0\0").unwrap();
+        client.write_all(b"SNI2\x01\0\0\0\0").unwrap();
         assert!(request(&mut server, &|| Ok(())).is_err());
     }
 }

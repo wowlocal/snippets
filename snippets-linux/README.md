@@ -20,7 +20,10 @@ The panel follows the Mac interaction: up to eight ordinary names with keywords
 on the next line, typing `\` to open, arrows or Ctrl+N/P to select, Return/Tab to
 insert, Escape to dismiss. New explicit **Enable Expansion…** consent enables
 suggestions in the same action. Existing preferences are preserved, including
-legacy exact-only consent. The native Fcitx UI supplies the desktop theme.
+legacy exact-only consent. Snippets now supplies a Mac-style rounded panel through
+the existing Fcitx connection, using the Omarchy palette. It includes wrapped
+titles, keyword match tint, tags and mouse selection. Other input methods retain
+their own Fcitx theme.
 
 The original `0c125c28` receiving-app failures remain recorded. A first browser
 observation in the new integration also failed; an unchanged repeat passed. That
@@ -1063,6 +1066,31 @@ qualify a product renderer: the installed addon and user-test archive remain
 titles, pointer selection and Ghostty caret overlap remain panel work. The
 earlier cold first-field failure still has no confirmed repair. No global theme
 or compositor settings change is required by the demonstrated rendering path.
+
+That rendering path is now part of the product addon. A 320-point pane with an
+18-point radius contains 46/62-point rows, 12-point selection pills, 13-point
+titles and 11-point monospaced keywords. Two tag chips and a fitting `+N` chip
+yield to the keyword. UTF-8 match ranges come from the same Rust matching owner.
+The local row protocol is version 3; old peers fail before taking input.
+Palette values are bounded RGB data, and the addon receives no body until the
+existing selected insertion request. The Fcitx 5.1.22 wrapper is used only when
+both SDK and runtime match; other versions/frontends use the normal Fcitx panel.
+The exact interface sources, provenance and LGPL license accompany installation.
+
+The installed product passes the existing GTK, Chromium and Ghostty expansion,
+panel, full-modifier navigation, retained-selection, global shortcut and accessible
+clipboard-history checks. Panel screenshots include actual wrapped names, tags,
+overflow count and tinted matches from a private library. A virtual pointer click
+on the second row also inserts its exact body without changing receiver focus.
+Physical pointer input remains unverified; the older independent GTK button
+failure and history's accessible-selection qualification keep their own limits.
+The first visual-fixture attempt expected 45 bytes while selecting a different
+28-byte record; its screenshot and terminal count establish correct insertion of
+the selected record. Correcting the private fixture's ranking makes the existing
+receiver check coherent; product code, waits and deadlines are unchanged.
+Ghostty still supplies a popup position that overlaps its first input line.
+Compositor glass-material equivalence and the earlier cold first-field repair
+remain unproven. Cloud and GTK race work stays deferred.
 
 ### Insert saved secure text
 
