@@ -683,6 +683,7 @@ pub(crate) enum Reply {
     },
     BootstrapCandidate {
         state: key_store::Result<Option<initial_candidate::Status>>,
+        candidate: key_store::Result<Option<candidate::Status>>,
         failure: Option<Failure>,
     },
     CreationFailed {
@@ -2678,9 +2679,14 @@ impl Owner {
             .as_ref()
             .ok_or(Failure::InvalidState)?
             .key_binding()?;
-        let state =
-            initial_candidate::inspect(self.store.as_mut().ok_or(Failure::InvalidState)?, &binding);
-        Ok(Reply::BootstrapCandidate { state, failure })
+        let store = self.store.as_mut().ok_or(Failure::InvalidState)?;
+        let state = initial_candidate::inspect(store, &binding);
+        let candidate = candidate::inspect(store, &binding);
+        Ok(Reply::BootstrapCandidate {
+            state,
+            candidate,
+            failure,
+        })
     }
     fn prepare_handover(&mut self, code: Option<Zeroizing<String>>) -> Result<Reply> {
         self.check_owner()?;

@@ -1830,7 +1830,10 @@ impl AccountWindow {
                 self.set_bootstrap(bootstrap, None);
             }
             Reply::CandidatePairing {state,failure} => self.set_candidate_pairing(state, failure),
-            Reply::BootstrapCandidate {state,failure} => self.set_bootstrap(state, failure),
+            Reply::BootstrapCandidate {state,candidate,failure} => {
+                self.set_candidate_pairing(candidate, None);
+                self.set_bootstrap(state, failure);
+            },
             Reply::HandoverReview {..} => self.status.set_label("Review this library switch before authorizing it."),
             Reply::LocalHandoverReview {..} => self.status.set_label("Review the saved local switch before authorizing it."),
             Reply::RestorationReview {..} => self.status.set_label("Review the saved changes before authorizing restoration."),
@@ -3591,14 +3594,60 @@ mod tests {
         window.set_switching(handover::Status::default(), true, false);
         window.set_bootstrap(Ok(None), None);
         assert!(window.bootstrap_create.is_sensitive() && !window.sync.is_sensitive());
-        window.set_bootstrap(
-            Ok(Some(initial_candidate::Status::Sent)),
-            Some(Failure::Cloud(crate::cloud::Failure::Network)),
-        );
+        window.set_candidate_pairing(Ok(None), None);
+        window.apply(Reply::BootstrapCandidate {
+            state: Ok(Some(initial_candidate::Status::Sent)),
+            candidate: Ok(None),
+            failure: Some(Failure::Cloud(crate::cloud::Failure::Network)),
+        });
         assert!(window.bootstrap_create.is_sensitive() && !window.candidate_pair.is_sensitive());
         assert!(
             window.bootstrap_create.label().as_deref() == Some("Resume Selected Library Key Setup")
         );
+        window.apply(Reply::BootstrapCandidate {
+            state: Ok(Some(initial_candidate::Status::Lost)),
+            candidate: Ok(None),
+            failure: None,
+        });
+        assert!(
+            window.candidate_pair.is_sensitive(),
+            "A losing first-key candidate must allow requesting the winning key"
+        );
+        assert!(!window.bootstrap_create.is_sensitive() && !window.sync.is_sensitive());
+        assert!(!window.library_panel.is_sensitive() && window.switch_review.is_sensitive());
+        for role in [Role::Writer, Role::Reader] {
+            window.selected_role.set(Some(role));
+            window.apply(Reply::BootstrapCandidate {
+                state: Ok(Some(initial_candidate::Status::Sent)),
+                candidate: Ok(None),
+                failure: None,
+            });
+            assert!(!window.candidate_pair.is_sensitive());
+            window.apply(Reply::BootstrapCandidate {
+                state: Ok(Some(initial_candidate::Status::Lost)),
+                candidate: Ok(None),
+                failure: None,
+            });
+            assert_eq!(window.candidate_pair.is_sensitive(), role == Role::Writer);
+            assert!(!window.sync.is_sensitive() && !window.library_panel.is_sensitive());
+        }
+        window.selected_role.set(Some(Role::Owner));
+        window.apply(Reply::BootstrapCandidate {
+            state: Ok(Some(initial_candidate::Status::Lost)),
+            candidate: Ok(Some(candidate::Status::Waiting {
+                invitation: invitation.clone(),
+                received: false,
+            })),
+            failure: None,
+        });
+        assert!(window.candidate_panel.is_visible() && !window.candidate_pair.is_sensitive());
+        window.apply(Reply::BootstrapCandidate {
+            state: Ok(Some(initial_candidate::Status::Lost)),
+            candidate: Err(key_store::Failure::InvalidState),
+            failure: None,
+        });
+        assert!(!window.candidate_pair.is_sensitive());
+        window.set_candidate_pairing(Ok(None), None);
         window.set_bootstrap(
             Ok(Some(initial_candidate::Status::Ready {
                 kit: KitStatus::AwaitingPresentation,

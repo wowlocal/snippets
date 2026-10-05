@@ -1452,11 +1452,13 @@ fn lost_ui_reply_needs_no_volatile_quit_barrier_and_resumes_the_durable_key_setu
                         .map(AccountFailure::from);
                     Ok(Reply::BootstrapCandidate {
                         state: inspect(&mut store, &peer.core.pin),
+                        candidate: Ok(None),
                         failure,
                     })
                 }
                 Command::Inspect => Ok(Reply::BootstrapCandidate {
                     state: inspect(&mut store, &peer.core.pin),
+                    candidate: Ok(None),
                     failure: None,
                 }),
                 _ => Err(AccountFailure::InvalidState),
@@ -1478,7 +1480,7 @@ fn lost_ui_reply_needs_no_volatile_quit_barrier_and_resumes_the_durable_key_setu
             Ok(Some(Status::Sent | Status::Ready { .. }))
         ));
         assert!(worker.can_quit() && !worker.retention_required());
-        let Reply::BootstrapCandidate { state, failure } = worker
+        let Reply::BootstrapCandidate { state, failure, .. } = worker
             .request(Command::BootstrapCandidate)
             .unwrap()
             .recv_timeout(std::time::Duration::from_secs(10))

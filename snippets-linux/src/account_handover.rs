@@ -34,7 +34,7 @@ thread_local! {
 }
 /// Interpose an existing durable boundary in a native fixture's real reviewed
 /// commit. Review staging, Secret Service and PAM consent stay unchanged.
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 pub(crate) fn with_interruption<T>(point: Interruption, operation: impl FnOnce() -> T) -> T {
     struct Reset;
     impl Drop for Reset {

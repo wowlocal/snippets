@@ -5390,7 +5390,7 @@ under `~/.local` for user testing. Installation preserves data and has not opted
 to startup, sync, clipboard history or inline expansion. The exact artifact hashes,
 source receipt and installation checks accompany the checkpoint. The finite list
 of remaining stable-port acceptance gates and launch/test instructions is in
-[the native README](../../snippets-linux/README.md#user-test-build-and-bounded-remaining-acceptance-2026-10-04).
+[the native README](../../snippets-linux/README.md#user-test-build-and-bounded-remaining-acceptance-2026-10-05).
 This checkpoint does not declare the port complete or introduce new functionality.
 
 
@@ -6018,3 +6018,39 @@ checkpoint records the local update separately. Historical old-installation
 receipts remain intact. The finite board still contains five groups plus the GTK
 race. Library data, preferences, desktop rules and scheduled Stay Awake restoration
 remain preserved; physical input and real host authentication are not claimed.
+
+
+### Winning-key pairing after interrupted empty-target setup (2026-10-05)
+
+The finite durable scope exposed a specific native control-state bug. After a
+bootstrap failure, a Sent first-key candidate disables pairing. Resume can
+reconcile a competing immutable authority into Lost, but the setup reply did
+not refresh the pairing state. The screen offered another device's winning key
+while its request button remained disabled. The existing mapped account-controls
+test now demonstrates that exact failure on the old implementation, exit 101,
+without GTK criticals or host keyring/PAM/network access.
+
+The production setup reply now carries the retained pairing status from the same
+selected binding and private owner store. The UI applies that status first, then
+the first-key state. A Lost candidate can request the winning key for Owner or
+Writer; Reader, an existing pending invitation, unreadable pairing state and
+Sent/Ready first-key candidates still refuse new requests. No installed key,
+checkpoint, primary record, server write, consent or switch authorization is
+changed by this metadata refresh. There is no unconditional button enable or
+new volatile availability cache.
+
+The same existing GTK test passes after repair under fatal warnings, including
+role/pending/error refusals and unavailable data-plane actions. Existing
+first-key-candidate and pairing-candidate tests, all-target Clippy in both feature
+configurations, the unchanged native --switch workflow and Release build pass.
+A separate headless Clippy failure is resolved by restricting the native commit
+interposition helper to desktop test builds; no lint suppression is added. Test
+count remains 1,141 and no new runner option or scenario matrix is introduced.
+
+A new source-bound user archive and in-place normal-prefix installation contain
+the fix; the old verified program files remain available for rollback. Current
+build/deployment receipts live under ignored target/user-testing. Previous full
+suites and installed restoration receipts keep their original artifact hashes.
+This targeted repair does not close all interrupted first-key/switching work or
+the five bounded evidence groups, and the independent GTK fallback Cancel race
+remains unresolved. Desktop configuration and scheduled Stay Awake are preserved.

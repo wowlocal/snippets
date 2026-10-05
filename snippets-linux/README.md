@@ -1797,10 +1797,11 @@ The Release GUI, CLI and unprivileged PAM helper are installed under `~/.local`.
 Start the application with `~/.local/bin/snippets` or its desktop entry. Quit with
 Ctrl+Q or `~/.local/bin/snippets --quit`. The installer has not enabled login
 startup, sync, clipboard history or inline expansion. Installation preserves
-library data and the desktop configuration. The live installation now matches
-the verified `04fdfb2` user archive byte-for-byte for GUI, CLI and PAM helper. Its
-first-key continuation fixes are available through the normal launcher. Code-only
-rollback files are retained under ignored `target/user-testing/installed-before-04fdfb2/`.
+library data and the desktop configuration. The latest verified user archive and
+GUI/CLI/helper hashes are recorded in `target/user-testing/latest.json`. The normal
+prefix's deployed source and private code-only rollback directory are recorded in
+`target/user-testing/installed-current.json`. The normal launcher includes the
+first-key continuation and losing-candidate pairing-control fixes.
 
 For this user test, create a disposable ordinary snippet, edit and search it,
 close/reopen the library, and verify persistence. Exercise Copy and the picker in
@@ -1845,7 +1846,7 @@ specific defect.
 | --- | --- |
 | Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
-| Durable recovery | Other interrupted switching/first-key setup remains. Native candidate pairing from an independent trusted B installation preserves active A, restarts the invitation and retains the received B key until a separate PAM-authorized switch. Published-switch offline finish, unpublished-switch offline cancellation and first-key lost-response continuation pass. Native restoration cuts, SIGKILL/offline restoration and the historical missing-header file case also pass. |
+| Durable recovery | Other interrupted switching/first-key setup remains. Native candidate pairing from an independent trusted B installation preserves active A, restarts the invitation and retains the received B key until a separate PAM-authorized switch. Published-switch offline finish, unpublished-switch offline cancellation and first-key lost-response continuation pass. The interrupted empty-target candidate's losing-race pairing control is repaired and covered by the existing native controls gate; this does not prove all remaining interruption boundaries. Native restoration cuts, SIGKILL/offline restoration and the historical missing-header file case also pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 
@@ -2428,3 +2429,37 @@ this local deployment separately. Earlier archive and installation-preservation
 receipts remain historical and are not rewritten. The five bounded groups and
 independent GTK fallback cancellation race stay open. User data, compositor
 configuration and the scheduled Stay Awake restoration are preserved.
+
+
+## Pairing after a losing first-key candidate (2026-10-05)
+
+Review of the remaining interrupted empty-target setup found a concrete UI defect:
+a failed setup leaves the candidate Sent and disables pairing; if Resume then
+finds another device's winning authority, the candidate becomes Lost but the
+pairing button stayed disabled. The displayed instruction to get the winning key
+could not be followed without reselecting or reopening the library.
+
+The worker now includes the selected library's independently retained pairing
+status in its existing setup reply. Native controls apply that status before the
+first-key status, so Owner/Writer can request the winning key while Reader, an
+existing unfinished invitation and unreadable pairing state remain unavailable.
+Sent/Ready first-key candidates still disable new pairing. Active keys, local
+records, sync admission and the separate reviewed switch are unchanged.
+
+The existing native account-controls test fails at Sent -> Lost before the fix
+and passes afterward with fatal warnings on a private bus and private XDG roots.
+Its regression covers those role/pending/error refusals and keeps Send/Receive/Sync
+unavailable. No new test, runner option or general acceptance variant is added;
+only this reproduced defect extends the existing controls gate. Related candidate
+tests, all-target desktop/headless Clippy, the existing complete native switch
+scenario and Release compilation qualify the update. A headless lint failure also
+identified a desktop-only test interposition helper with an overly broad cfg; it
+is now compiled only for desktop tests, without suppressing the lint.
+
+The replacement user archive is built from the clean rebased checkpoint and the
+stock installer updates the normal user prefix, retaining code-only rollback
+files. Source/build/install receipts identify its exact artifacts. Earlier full
+desktop/headless and five installed restoration runs remain evidence for their
+recorded artifacts; they are not relabeled as full runs of this UI change.
+The five remaining groups and the independent GTK chooser cancellation defect
+stay open. No waiting or error suppression is a fix for that GTK defect.
