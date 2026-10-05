@@ -674,17 +674,40 @@ impl Inputs {
                 && slot(root, Slot::HistoryRestore).is_none()
         );
         reconnect(window, 2);
-        let (dialog, entry) = self.password(window, true);
-        entry.set_text("Public fictional password");
-        press(dialog.upcast_ref(), "Authorize");
-        finished(window, std::slice::from_ref(&entry));
-        assert!(
-            window.status.label()
-                == "Saved changes restored. Current versions and previous keys are kept. Reconnect and select a library before syncing."
-                && !window.sync.is_sensitive()
-                && !window.receive.is_sensitive()
-                && !window.send.is_sensitive()
-        );
+        if installed::enabled() {
+            until(
+                "native mixed fixture worker did not drain before installed restoration",
+                || window.prepare_quit(),
+            );
+            window.window.destroy();
+            let paths = self
+                .paths
+                .iter()
+                .map(|path| {
+                    (
+                        path.as_path(),
+                        if path.file_name().unwrap() == "public source A.json" {
+                            "Café public fixture"
+                        } else {
+                            self.source_password()
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            installed::restore(root, pam, &paths, true, self.retained());
+        } else {
+            let (dialog, entry) = self.password(window, true);
+            entry.set_text("Public fictional password");
+            press(dialog.upcast_ref(), "Authorize");
+            finished(window, std::slice::from_ref(&entry));
+            assert!(
+                window.status.label()
+                    == "Saved changes restored. Current versions and previous keys are kept. Reconnect and select a library before syncing."
+                    && !window.sync.is_sensitive()
+                    && !window.receive.is_sensitive()
+                    && !window.send.is_sensitive()
+            );
+        }
         assert!(
             restoration_live::protected(root) == protected
                 && slot(root, Slot::HistoryRestore).is_some()

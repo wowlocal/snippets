@@ -7,7 +7,7 @@ pub(in crate::account_ui::live_tests) enum Kind {
     EncryptedBackup,
 }
 pub(super) struct Input {
-    path: PathBuf,
+    pub(super) path: PathBuf,
     kind: Kind,
     bytes: Zeroizing<Vec<u8>>,
 }

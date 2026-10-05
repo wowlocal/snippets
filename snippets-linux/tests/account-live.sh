@@ -8,6 +8,7 @@ if [[ ${1:-} == --in-bus ]]; then
   test_name=$4
   export SNIPPETS_SECRET_TEST_BUS=$DBUS_SESSION_BUS_ADDRESS
   export SNIPPETS_SECRET_TEST_ROOT=$XDG_DATA_HOME/snippets
+  fixture_registry=
   if [[ $DBUS_SESSION_BUS_ADDRESS == ${SNIPPETS_SECRET_HOST_BUS:-} ]]; then
     printf '%s\n' 'Refusing to test on the desktop bus.' >&2
     exit 1
@@ -17,7 +18,15 @@ if [[ ${1:-} == --in-bus ]]; then
     gnome-keyring-daemon --foreground --components=secrets --unlock \
       --control-directory="$fixture_root/control" >"$fixture_root/daemon.log" 2>&1 &
   fixture_daemon=$!
-  trap 'kill "$fixture_daemon" 2>/dev/null || true; wait "$fixture_daemon" 2>/dev/null || true' EXIT
+  cleanup_fixture() {
+    fixture_exit=$?
+    if [[ $fixture_exit != 0 && -n ${SNIPPETS_INSTALLED_APP:-} && -f $XDG_DATA_HOME/installed-restoration.log ]]; then
+      cat "$XDG_DATA_HOME/installed-restoration.log"
+    fi
+    if [[ -n $fixture_registry ]]; then kill "$fixture_registry" 2>/dev/null || true; wait "$fixture_registry" 2>/dev/null || true; fi
+    kill "$fixture_daemon" 2>/dev/null || true; wait "$fixture_daemon" 2>/dev/null || true
+  }
+  trap cleanup_fixture EXIT
   ready=false
   for ((attempt=0; attempt<50; attempt++)); do
     if gdbus call --session --dest org.freedesktop.DBus \
@@ -31,6 +40,15 @@ if [[ ${1:-} == --in-bus ]]; then
   if [[ $ready != true ]]; then
     printf '%s\n' 'The isolated test keyring did not start.' >&2
     exit 1
+  fi
+  if [[ -n ${SNIPPETS_INSTALLED_APP:-} ]]; then
+    fixture_address=$(gdbus call --session --dest org.a11y.Bus --object-path /org/a11y/bus --method org.a11y.Bus.GetAddress)
+    fixture_pattern="^\('([^']+)',\)$"
+    [[ $fixture_address =~ $fixture_pattern ]]
+    export AT_SPI_BUS_ADDRESS=${BASH_REMATCH[1]}
+    DBUS_STARTER_ADDRESS=$AT_SPI_BUS_ADDRESS DBUS_STARTER_BUS_TYPE=accessibility \
+      /usr/lib/at-spi2-registryd >"$fixture_root/registry.log" 2>&1 &
+    fixture_registry=$!
   fi
   G_DEBUG=fatal-warnings "$test_binary" --exact "$test_name" --ignored --test-threads=1
   exit
@@ -115,6 +133,15 @@ Name=org.freedesktop.portal.Desktop
 Exec=/usr/bin/false
 SERVICE
   portal_service_xml="<servicedir>$fixture_root/portal-services</servicedir>"
+fi
+if [[ -n ${SNIPPETS_INSTALLED_APP:-} ]]; then
+  [[ $portal_mode == true && -x $SNIPPETS_INSTALLED_APP && -x ${SNIPPETS_INSTALLED_ATSPI:-} ]]
+  case ${2:-} in --file-restoration|--backup-file-restoration|--mixed-retained-restoration|--mixed-files-restoration|--mixed-backup-restoration) ;; *) exit 2 ;; esac
+  cat > "$fixture_root/portal-services/org.a11y.Bus.service" <<'SERVICE'
+[D-BUS Service]
+Name=org.a11y.Bus
+Exec=/usr/lib/at-spi-bus-launcher
+SERVICE
 fi
 cat > "$fixture_root/bus.conf" <<XML
 <busconfig>

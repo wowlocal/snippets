@@ -5910,3 +5910,55 @@ unresolved GTK chooser Cancel defect. Fresh fetch and rebase confirm main remain
 `e232c886`; the checkpoint and user archive bind the clean source to the verified
 binaries. Installed app, user data, compositor settings and the Stay Awake timer
 are unchanged. Stable-port acceptance remains open.
+
+### Installed full restoration (2026-10-05)
+
+All five existing `--portal-*-restoration` cycles now complete restoration through
+an unchanged installed Release app and original helper from checkpoint `667eb56`:
+JSON, backup, retained A plus C JSON, A/C JSON files and A JSON plus C backup.
+An offline archive installation into an owned temporary prefix is hash-checked
+before and after each complete cycle; no real installation or user data is used.
+Test-only `SNIPPETS_INSTALLED_APP` and `SNIPPETS_INSTALLED_ATSPI` enable this route
+inside those existing modes. No production option or acceptance variant is added.
+
+The native fixture still runs its complete original refusal, stale-source and
+newer-current checks. It drains/pauses the account worker through `prepare_quit`
+and destroys the window before the installed app starts. This is not a terminal
+parent-worker claim. The app's actual private-bus owner PID and `/proc` executable
+are checked before its AT-SPI controls and portal requests are admitted. A bounded
+closed-vocabulary controller writes only public fixture credentials; it never
+reads password fields, exports a tree or drives another process. Real Tab/Return
+and chooser keys require the exact owned active window and unlocked session.
+
+The production helper uses the public PAM fixture only in a private mount over
+`/etc/pam.d`, with the original UID. CPU Cairo and private AT-SPI apply only to the
+installed child; fatal warnings remain and the native parent retains `GTK_A11Y=none`.
+A private `/dev` is required: a root read-only mount alone marks inherited device
+nodes unusable, so `/dev/null` fails and the production session monitor correctly
+reports Unavailable. Exact Release-library probes and the already existing minimal
+installed chooser control isolate this fixture defect; neither a delay nor a
+production monitor change was used.
+
+Actual host chooser Cancel and filled native PAM Cancel preserve all files/key
+slots and the absent receipt. Separate vault credentials, a new review and fresh
+native PAM then restore the selection. The exact restored status is observed.
+Offline Send/Receive/Sync are unavailable: the exact owned nonempty complete tree
+has no sensitive button; absent or unique insensitive controls qualify, while
+ambiguity, traversal errors/limits and enabled controls refuse. The app process,
+bus owner and executable are observed terminal. Original full exact file, current
+version, unrelated record, protected key/header, CAS/feed, receipt and independent
+OpenSSL assertions follow, plus fresh-worker encrypted copy-before-source sync.
+
+Five entire installed cycles and 11 existing owner/multiple-source tests,
+format, shell syntax, C warnings-as-errors, all-target Clippy and Release
+harness/binaries pass on 326 frozen native inputs. There are still 1,141 tests.
+No production policy, runner option, warning exception or acceptance variant
+is added; bounded readiness/completion observations are not a GTK fix. All earlier
+failed/diagnostic cycles are retained separately and excluded from passing receipts, including the restored-status run whose visible-disabled
+button assertion incorrectly rejected a hidden disconnected data panel.
+
+The finite board now has five groups plus the unresolved independent GTK chooser
+Cancel race. This does not prove normal-host PAM or normal physical input. Fresh
+fetch/rebase confirms `main` `e232c886`; clean-source checkpoint/bundle and user
+archive are refreshed with exact artifact receipts. Host installation, user data,
+compositor settings and the scheduled Stay Awake restoration remain unchanged.

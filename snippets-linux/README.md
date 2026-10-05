@@ -1736,9 +1736,9 @@ receipt or primary writes. Contents of the selected backup are not imported.
 The account runner now isolates GTK configuration/cache and uses memory GSettings,
 as well as its existing private bus/keyring/data roots. This establishes GTK's
 fallback chooser. The portal variants below add actual host selection while
-retaining account/keyring isolation. Mixed-source history is covered; separately
-installed-app restoration remains unverified. See docs/linux/IMPLEMENTATION.md
-for the exact final evidence.
+retaining account/keyring isolation. All five combinations now also complete
+restoration through unchanged installed Release artifacts with private native PAM.
+See docs/linux/IMPLEMENTATION.md for the exact evidence and remaining host checks.
 
 The mixed-history variants first sync public source A, then install one public
 legacy sealed participant encrypted with independent C under A's metadata-only
@@ -1789,14 +1789,15 @@ the whole-selection refusal, stale-file/PAM, OpenSSL and fresh-worker sync check
 No compositor configuration is changed.
 
 
-## User test build and bounded remaining acceptance (2026-10-04)
+## User test build and bounded remaining acceptance (2026-10-05)
 
 The Release GUI, CLI and unprivileged PAM helper are installed under `~/.local`.
 Start the application with `~/.local/bin/snippets` or its desktop entry. Quit with
 Ctrl+Q or `~/.local/bin/snippets --quit`. The installer has not enabled login
 startup, sync, clipboard history or inline expansion. Installation preserves
-library data and the desktop configuration. The binary hashes equal checkpoint
-0be86d83; the subsequent chooser diagnostic changes are test-only.
+library data and the desktop configuration. Current verification retains the
+installed artifact hashes; the latest user archive binds its separate Release
+binaries to a clean source commit and does not replace this installation.
 
 For this user test, create a disposable ordinary snippet, edit and search it,
 close/reopen the library, and verify persistence. Exercise Copy and the picker in
@@ -1844,7 +1845,6 @@ specific defect.
 | Durable recovery | Other interrupted switching/first-key setup remains. Native candidate pairing from an independent trusted B installation preserves active A, restarts the invitation and retains the received B key until a separate PAM-authorized switch. Published-switch offline finish, unpublished-switch offline cancellation and first-key lost-response continuation pass. Native restoration cuts, SIGKILL/offline restoration and the historical missing-header file case also pass. |
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
-| Installed full restoration | All five source combinations pass in native harnesses using the actual host portal. This checkpoint checks only production chooser cancellation in the installed app, not complete restoration there. |
 
 The build is ready for user testing. Stable-port acceptance remains open on the
 GTK blocker and the checks above. Stay Awake and its 2026-10-05 09:00 Minsk
@@ -2324,3 +2324,50 @@ defect remains unresolved; no wait is added. Fresh fetch and rebase confirm the
 branch still includes current main `e232c886`. The refreshed user archive carries
 the clean commit and binary receipts; installed app, user data, desktop settings
 and the scheduled Stay Awake restoration remain unchanged.
+
+## Installed full restoration acceptance (2026-10-05)
+
+The five existing host-portal restoration cycles now complete their successful
+restoration through an independently installed Release GUI and its unchanged
+production PAM helper: JSON, encrypted backup, retained vault plus JSON, two
+JSON files and JSON plus backup. The owned temporary installation is extracted
+from source-bound checkpoint `667eb56`, and all three artifact hashes are checked
+before and after every cycle. The host installation remains unchanged.
+
+The original native negative/stale-file/current-version checks run first. Its
+worker is paused and drained through `prepare_quit` and its window is destroyed;
+that parent worker is not claimed terminal. The installed process uses the same
+private fixture bus, keyring and data root. Its original helper sees the public
+PAM module only through a private `/etc/pam.d` mount. The original UID is retained,
+and a private `/dev` supplies usable `/dev/null`; no host PAM policy is changed.
+Only this process uses Cairo rendering and private AT-SPI. Fatal warnings remain.
+
+Portal requests are pinned to the actual installed child PID. Public vault
+credentials are entered separately through its real mapped fields, and the real
+chooser's Cancel and filled PAM Cancel preserve all primary bytes, protected key
+slots and the absent completion receipt. A new review and fresh native PAM restore
+the entire selection. Exact success status and unavailable Send/Receive/Sync are
+observed in the owned, completely traversed accessibility tree. An enabled button,
+missing app, ambiguous target, traversal error or traversal limit refuses the
+unavailable assertion. The installed process, bus name and executable terminate.
+Original complete data/version/header/key/receipt and independent OpenSSL checks,
+then a fresh native worker's actual encrypted CAS and copy-before-source sync,
+remain mandatory and pass for every combination.
+
+Format, shell syntax, the C controller with warnings as errors, all-target Clippy,
+Release harness/binaries and 11 existing owner/multiple-source tests pass
+on 326 frozen inputs. Test count remains 1,141; no new test, runner option,
+acceptance variant or production change is introduced. Bounded readiness/completion
+observations are test-only; waiting is not presented as a GTK fix. Earlier failed and
+diagnostic cycles, including the private `/dev` fixture diagnosis and a successful
+restoration followed by an incorrect visible-button assertion, remain separately
+retained under ignored `target/live-omarchy-acceptance/installed-restore-*/` and
+are excluded from whole-cycle success.
+
+The finite board removes installed full restoration and retains five groups.
+Normal host authentication and physical input are still separate checks. The
+independent GTK fallback chooser Cancel race remains open. Fresh fetch/rebase
+confirms `main` `e232c886`; the clean checkpoint and refreshed user archive retain
+source/binary receipts. Existing installation, user data, compositor configuration
+and the scheduled Stay Awake restoration are unchanged. Stable-port acceptance
+remains open.

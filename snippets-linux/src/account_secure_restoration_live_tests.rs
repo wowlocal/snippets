@@ -14,6 +14,8 @@ const NEWER: &[u8] = b"Public newer secure restoration body after review";
 
 #[path = "account_restoration_file_live_tests.rs"]
 pub(super) mod files;
+#[path = "account_installed_restoration_live_tests.rs"]
+pub(super) mod installed;
 #[path = "account_mixed_restoration_live_tests.rs"]
 pub(super) mod mixed;
 
@@ -871,10 +873,30 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
     let window = interrupted_window.as_ref().unwrap_or(window);
     reconnect(window, 2);
     let authorized_before = creation::images(root);
-    let (dialog, entry) = password(window, &recovery, true);
-    entry.set_text("Public fictional password");
-    press(dialog.upcast_ref(), "Authorize");
-    finished(window, std::slice::from_ref(&entry));
+    if installed::enabled() {
+        assert!(boundary.is_none());
+        let input = file.as_ref().unwrap();
+        until(
+            "native fixture worker did not drain before installed restoration",
+            || window.prepare_quit(),
+        );
+        window.window.destroy();
+        installed::restore(
+            root,
+            pam,
+            &[(
+                input.path.as_path(),
+                input.passphrase("Café public fixture"),
+            )],
+            false,
+            false,
+        );
+    } else {
+        let (dialog, entry) = password(window, &recovery, true);
+        entry.set_text("Public fictional password");
+        press(dialog.upcast_ref(), "Authorize");
+        finished(window, std::slice::from_ref(&entry));
+    }
     let completion_window = boundary.and_then(|boundary| {
         finish_interrupted(
             InterruptedContext {
@@ -895,22 +917,24 @@ fn run_case(context: RestorationContext<'_>, scenario: Scenario) {
     }
     let _completion_stop = completion_window.as_ref().map(|w| Stop(w.clone()));
     let window = completion_window.as_ref().unwrap_or(window);
-    assert!(
-        window.status.label()
-            == "Saved changes restored. Current versions and previous keys are kept. Reconnect and select a library before syncing."
-    );
-    assert!(
-        !window.sync.is_sensitive()
-            && !window.receive.is_sensitive()
-            && !window.send.is_sensitive()
-    );
-    // A restarted, never-connected window has an empty GTK model; the same
-    // explicit reconnect gate uses its placeholder row after library listing.
-    let empty = window
-        .libraries
-        .model()
-        .is_some_and(|model| model.n_items() == 0);
-    assert!(window.libraries.selected() == if empty { gtk::INVALID_LIST_POSITION } else { 0 });
+    if !installed::enabled() {
+        assert!(
+            window.status.label()
+                == "Saved changes restored. Current versions and previous keys are kept. Reconnect and select a library before syncing."
+        );
+        assert!(
+            !window.sync.is_sensitive()
+                && !window.receive.is_sensitive()
+                && !window.send.is_sensitive()
+        );
+        // A restarted, never-connected window has an empty GTK model; the same
+        // explicit reconnect gate uses its placeholder row after library listing.
+        let empty = window
+            .libraries
+            .model()
+            .is_some_and(|model| model.n_items() == 0);
+        assert!(window.libraries.selected() == if empty { gtk::INVALID_LIST_POSITION } else { 0 });
+    }
     assert!(
         restoration_live::protected(root) == protected
             && slot(root, Slot::HistoryRestore).is_some()

@@ -13,6 +13,36 @@ const REQUEST: &str = "org.freedesktop.portal.Request";
 const DBUS: &str = "org.freedesktop.DBus";
 type Expected = (bool, Option<BTreeSet<PathBuf>>);
 static EXPECTED: std::sync::Mutex<Option<Expected>> = std::sync::Mutex::new(None);
+static INSTALLED_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub(super) struct InstalledClient(u32);
+pub(super) fn installed_client(pid: u32) -> InstalledClient {
+    assert!(enabled() && pid != 0 && pid != std::process::id());
+    assert!(
+        INSTALLED_PID
+            .compare_exchange(
+                0,
+                pid,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst
+            )
+            .is_ok()
+    );
+    InstalledClient(pid)
+}
+impl Drop for InstalledClient {
+    fn drop(&mut self) {
+        assert!(
+            INSTALLED_PID
+                .compare_exchange(
+                    self.0,
+                    0,
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst
+                )
+                .is_ok()
+        );
+    }
+}
 pub(super) fn enabled() -> bool {
     std::env::var("SNIPPETS_ACCOUNT_PORTAL").as_deref() == Ok("real-host-open-file")
 }
@@ -195,7 +225,9 @@ impl Peer {
         let registration = private.register_object(PATH, &info.lookup_interface(CHOOSER).unwrap()).property(move |_, _, _, _, property| { assert!(property == "version"); version.to_variant() }).method_call(move |connection, sender, _, _, method, parameters, invocation| {
             assert!(method == "OpenFile");
             let sender = sender.unwrap();
-            assert!(call(&connection, DBUS, "/org/freedesktop/DBus", DBUS, "GetConnectionUnixProcessID", &(sender,).to_variant()).get::<(u32,)>() == Some((std::process::id(),)));
+            let installed = INSTALLED_PID.load(std::sync::atomic::Ordering::SeqCst);
+            let expected_pid = if installed == 0 { std::process::id() } else { installed };
+            assert!(call(&connection, DBUS, "/org/freedesktop/DBus", DBUS, "GetConnectionUnixProcessID", &(sender,).to_variant()).get::<(u32,)>() == Some((expected_pid,)));
             let (parent, title, mut options) = parameters.get::<(String, String, HashMap<String, glib::Variant>)>().unwrap();
             assert!(parent.starts_with("wayland:") && title == "Choose Previous Vault File");
             let (multiple, expected) = EXPECTED.lock().unwrap().take().unwrap();
