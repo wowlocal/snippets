@@ -1125,6 +1125,20 @@ panel selection case is not evidence that exact inline expansion is repaired.
 Full glass-material equivalence also remains unproven. These are qualification limits, not successes inferred from a
 longer wait or a service restart.
 
+An external Fcitx observer reproduces that 12-byte Chromium failure while the
+candidate addon remains byte-for-byte unchanged. It sees FocusOut/FocusIn for
+the same ephemeral context before the first observed letter. Because this
+public watcher runs after Snippets can filter a key, those observations do not
+prove where the backslash disappeared or whether Snippets owned its preedit.
+Later observations also cover input-method activation, UI/preedit updates and
+bounded commit lengths; their passing runs do not establish a repair. With the
+Snippets addon absent, three cold fields retain the complete 13-byte literal
+keyword. That control is too small to rule out an intermittent lower-layer
+failure. Existing deadlines and input sequences are preserved. Numeric evidence
+is retained under `target/live-omarchy-acceptance/core-functionality/first-field-external-observer/`.
+The installed addon and user-test archive remain `8143b06`; the same five finite
+acceptance groups remain open.
+
 ### Insert saved secure text
 
 Open the picker from the destination application and select an enabled secure

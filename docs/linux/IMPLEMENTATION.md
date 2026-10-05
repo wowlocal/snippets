@@ -6605,3 +6605,18 @@ That preserves a fresh observation of the earlier core defect, not a qualified
 repair. The live gate stops, retains the failed receipt, and restores the
 installed `8143b06` addon. The candidate is checkpointed for review; the verified
 user-testing archive is not silently replaced with a failed-core candidate.
+
+The external-observer investigation reproduces the same focused 12-byte
+Chromium field on the unchanged candidate addon. Its public hook observes a
+same-context FocusOut/FocusIn pair but cannot prove the route of a key already
+filtered by Snippets. Extended input-method/UI/preedit observations pass the
+existing sequences; three cold fields without the Snippets addon retain the
+13-byte literal keyword. Neither result establishes a cause or repair. The
+numeric traces and byte bindings are preserved in
+`core-functionality/first-field-external-observer/verification.json`.
+One separate run stops at the temporary filesystem's user quota after successful
+GTK/Chromium expansion. Removing only completed fictional browser profiles
+frees 646 MiB, preserving their libraries, logs and traces; the interrupted
+sequence then completes. Normal Fcitx, original addon metadata and the installed
+`8143b06` application are restored. Native source, waits, user-test archive and
+the five acceptance groups are unchanged.
