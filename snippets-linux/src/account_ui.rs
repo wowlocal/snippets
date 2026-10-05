@@ -2703,7 +2703,10 @@ impl AccountWindow {
             }
             Ok(Some(initial_candidate::Status::Lost))=>self.bootstrap_status.set_label("Another device initialized this library. Get its key from that device or use its recovery code. The unused candidate is kept in protected history."),
             Ok(None)=>(),
-            Err(error)=>self.failure(error.into()),
+            Err(error)=>{
+                self.candidate_pair.set_sensitive(false);
+                self.failure(error.into());
+            },
         }
         if let Some(failure) = failure {
             self.failure(failure);
@@ -3604,6 +3607,22 @@ mod tests {
         assert!(
             window.bootstrap_create.label().as_deref() == Some("Resume Selected Library Key Setup")
         );
+        for error in [
+            key_store::Failure::InvalidState,
+            key_store::Failure::Secret(crate::secret_store::Failure::Unavailable),
+        ] {
+            window.apply(Reply::BootstrapCandidate {
+                state: Err(error),
+                candidate: Ok(None),
+                failure: None,
+            });
+            assert!(
+                !window.candidate_pair.is_sensitive(),
+                "Unreadable first-key state must not allow a new pairing request"
+            );
+            assert!(!window.bootstrap_create.is_sensitive() && !window.sync.is_sensitive());
+            assert!(!window.library_panel.is_sensitive());
+        }
         window.apply(Reply::BootstrapCandidate {
             state: Ok(Some(initial_candidate::Status::Lost)),
             candidate: Ok(None),

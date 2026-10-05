@@ -6062,3 +6062,28 @@ installed fallback Cancel gate passes on the updated GUI with fatal warnings,
 actual parent focus return and exact private primary/vault/history preservation.
 This checks installation and the existing cancellation case, not the losing-race
 transition in an installed process or a GTK path-bar fix.
+
+
+### Pairing stays unavailable when first-key status cannot be read (2026-10-05)
+
+Review of the previous metadata refresh found a concrete Sent -> read-error
+regression: a successful empty pairing inspection could re-enable its request
+button even though first-key history was invalid or unavailable. Backend
+admission already rejected such requests. The UI now explicitly disables new
+pairing when the first-key inspection fails and retains the existing error.
+A later valid Lost reply can enable the winning-key request again through the
+previous role/pending/error checks; saved keys and server operations are unchanged.
+
+The existing mapped GTK controls gate fails before the correction and passes
+after it, including invalid history and unavailable Secret Service, with fatal
+warnings and isolated XDG/bus roots. Two existing core refusal tests pass, along
+with desktop all-target Clippy, format and Release compilation. The only changed
+native input is account_ui.rs; no backend or headless code changes. Test count
+stays 1,141, without a new runner mode or general acceptance matrix.
+
+The latest source-bound user archive and normal-prefix deployment receipts
+record this UI correction and the unchanged existing installed chooser Cancel
+check. Earlier full-suite/native-switch/restoration results keep their original
+source hashes. No evidence gap or GTK defect is closed by this small repair;
+the five bounded remaining groups, physical input and real host authentication
+retain their scope. User data and desktop configuration are preserved.

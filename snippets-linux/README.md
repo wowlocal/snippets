@@ -2468,3 +2468,21 @@ The actual updated normal-prefix GUI also passes the unchanged existing fallback
 chooser Cancel case with fatal warnings, parent focus return and exact private
 primary/vault/history preservation. This requalifies that installed cancellation
 case; the Sent -> Lost regression above runs in the native Release harness.
+
+
+## Unreadable first-key status and pairing (2026-10-05)
+
+The losing-candidate refresh exposed one error transition: after Sent, an
+unreadable first-key status plus an empty pairing status enabled a new key
+request. The backend already refused it; the screen now keeps the request
+unavailable until setup history can be read. Invalid history and unavailable
+Secret Service both stay closed, while a later verified Lost result still
+allows the winning-key request with the existing role/pending/error checks.
+
+The same native controls test reproduces this defect before repair and passes
+afterward on private bus/XDG roots with fatal warnings. Two existing backend
+refusal tests, all-target desktop Clippy, format and Release compilation cover
+the changed UI layer. No backend, headless source, test count, runner option or
+general acceptance variant changes. Updated archive/install receipts identify
+the candidate; the normal installed fallback Cancel case is requalified on it.
+The five remaining groups and the independent GTK chooser Cancel race stay open.
