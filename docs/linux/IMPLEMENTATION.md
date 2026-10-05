@@ -382,6 +382,45 @@ The original core qualification above remains evidence for its original binary.
 Further cloud-sync and GTK-race work is deferred. Native keyboard injection does
 not prove hardware input, and Safe Mode does not establish a fresh normal session.
 
+### Full modifier navigation and current core limits, 2026-10-05
+
+Actual installed Ctrl-down / N / Ctrl-up followed by Return reproduced lost
+preedit and literal input on the previous addon. The handler treated the modifier
+press as cancellation; its Ctrl+N/P comparisons also omitted Fcitx key
+normalization. Modifier-only events now pass through without clearing preedit,
+the Ctrl comparisons are normalized, and ISO_Left_Tab is accepted for Shift+Tab.
+The native regression drives real Fcitx context/key objects with all frontends
+disabled, checks selection and exact preedit through press/release events, and
+fails against the original handler. Its eight checks and all 42 inline tests pass;
+five existing display/live tests stay ignored in that unit run. Desktop/headless
+all-target Clippy, format, installer syntax and Release compilation pass.
+
+The installed GUI, CLI and PAM helper retain exactly their previous hashes; only
+the addon changes. Library and preference metadata survive the atomic upgrade.
+With the stock Fcitx service running, full Ctrl+N, Ctrl+P and Shift+Tab sequences
+select and insert the correct saved public body while retaining GTK receiver
+focus. Existing exact-expansion and visible partial-panel checks pass again in
+GTK, default Wayland Chromium and Ghostty. Saved Open/Picker/Capture shortcuts,
+Return delivery, focus and clipboard restoration also pass.
+
+The history repeat stops at a virtual pointer click that fails to select its
+visible row. Exact cursor/focus observations and an independent GTK-only button
+reproduce missing click delivery without a Snippets primary or history state;
+additional pointer motion does not resolve it. Its cause remains unclassified.
+Accessible list selection supplies a separate valid UI path: background collection,
+encrypted private storage, literal Copy, opt-out, restart retention and Clear all
+pass without product changes or additional waits. The unsuccessful pointer runs
+remain recorded and do not become successful physical-input evidence.
+
+First-field checks retain their original focus sequence and deadlines, with no
+extra IME flags. Three cold browsers on the earlier addon passed. On the current
+addon the first two expand the actual record and the third retains the complete
+literal keyword. This narrows the existing first-field concern to a reproducible
+core blocker, with no claimed cause or timing repair. It is carried in the user
+candidate and remaining normal-input evidence group. Physical input and a fresh
+normal compositor session are still unverified. Cloud/GTK-race work remains
+explicitly deferred; the finite acceptance scope is unchanged.
+
 ### Completion audit, 2026-10-03
 
 Source review at `95c0190` found obsolete unfinished labels for current v1

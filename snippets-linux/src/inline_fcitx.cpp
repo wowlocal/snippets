@@ -157,6 +157,9 @@ private:
   std::function<void(InputContext *)> select_;
 };
 class Snippets : public AddonInstance {
+#ifdef SNIPPETS_FCITX_TESTING
+  friend struct CoreFixture;
+#endif
 public:
   explicit Snippets(Instance *instance) : instance_(instance) {
     watchers_.push_back(instance_->watchEvent(
@@ -354,6 +357,11 @@ private:
       clear(active_);
       return;
     }
+    // A real chord includes modifier presses/releases before its character.
+    // Preserve preedit while those keys pass through; decide on the subsequent
+    // non-modifier key (navigation, printable text, or another shortcut).
+    if (key.isModifier())
+      return;
     if (!active_) {
       if (!key.check(FcitxKey_backslash) ||
           !ic->inputPanel().preedit().empty() ||
@@ -394,11 +402,12 @@ private:
       }
       return;
     }
-    bool next =
-        key.check(FcitxKey_Down) || key.check(Key(FcitxKey_n, KeyState::Ctrl));
+    bool next = key.check(FcitxKey_Down) ||
+                key.check(Key(FcitxKey_n, KeyState::Ctrl).normalize());
     bool previous = key.check(FcitxKey_Up) ||
-                    key.check(Key(FcitxKey_p, KeyState::Ctrl)) ||
-                    key.check(Key(FcitxKey_Tab, KeyState::Shift));
+                    key.check(Key(FcitxKey_p, KeyState::Ctrl).normalize()) ||
+                    key.check(Key(FcitxKey_Tab, KeyState::Shift)) ||
+                    key.check(Key(FcitxKey_ISO_Left_Tab, KeyState::Shift));
     if (!rows_.empty() && (next || previous)) {
       consume(event);
       selected_ = (selected_ + rows_.size() + (next ? 1 : -1)) % rows_.size();
@@ -416,7 +425,7 @@ private:
     auto modifiers =
         key.states() & (KeyStates(KeyState::Ctrl) | KeyState::Alt |
                         KeyState::Super | KeyState::Meta | KeyState::Hyper);
-    if (modifiers.toInteger() || character.empty() || key.isModifier() ||
+    if (modifiers.toInteger() || character.empty() ||
         character.find_first_of("\\ \t\r\n") != std::string::npos ||
         std::any_of(character.begin(), character.end(),
                     [](unsigned char c) { return c < 0x20 || c == 0x7f; }) ||

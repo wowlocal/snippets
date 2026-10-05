@@ -1005,8 +1005,14 @@ direct Wayland backend and its protocol/echo tests remain as a fallback on syste
 without Fcitx; those historical checks do not qualify the new Fcitx backend.
 The normal primary is running with expansion and suggestions explicitly enabled
 through its native dialog. User library data was not used as a test fixture.
-Physical input, normal-session qualification and first receiving-field activation
-remain under review; the first unclassified Chromium observation is retained.
+Full modifier press/character/release sequences now preserve the panel: Ctrl+N/P
+and Shift+Tab select the correct public record in the installed GTK receiver.
+The native state regression covers eight modifier sequences and fails against the
+previous handler. Fcitx-normalized Ctrl key comparisons are used on both sides.
+Physical input and normal-session qualification remain open. The current three
+empty-profile browser launches expand in the first two receiving fields but retain
+the literal keyword in the third; this first-field failure remains a core blocker.
+No delay, retry or warning suppression is claimed as a repair.
 
 ### Insert saved secure text
 
@@ -1906,20 +1912,18 @@ specific defect.
 
 | Remaining check | Current limit |
 | --- | --- |
-| Normal Omarchy input and focus | Current live evidence uses Safe Mode. Check the normal configuration, physical shortcuts and paste/inline delivery in the intended receiving applications. |
+| Normal Omarchy input and focus | Current live evidence uses Safe Mode. Installed expansion/panels pass in GTK, Chromium and Ghostty; full Ctrl+N/P and Shift+Tab navigation pass. One of three current cold Chromium first fields retains the literal keyword: this core blocker is reproducible, with cause unclassified. Virtual pointer button delivery also fails on an independent GTK button; history passes via accessible row selection. Physical input and a fresh normal session remain. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
 | Durable recovery | Other interrupted switching/first-key setup remains. Native candidate pairing from an independent trusted B installation preserves active A, restarts the invitation and retains the received B key until a separate PAM-authorized switch. Published-switch offline finish, unpublished-switch offline cancellation and first-key lost-response continuation pass. The interrupted empty-target candidate's losing-race pairing control is repaired and covered by the existing native controls gate; this does not prove all remaining interruption boundaries. Native restoration cuts, SIGKILL/offline restoration and the historical missing-header file case also pass. |
-| Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
+| Remaining preferences and diagnostics | Accessible history selection, Copy, opt-out, restart and Clear now pass in the installed GUI. Physical history interaction remains. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 
-The archive is available for user testing with the combined-runtime GUI checks
-completed. Stable-port acceptance remains open on the five
-checks above; this does not repair system GTK or other applications. The scheduled
-Stay Awake restoration completed successfully at 2026-10-05 09:00 Minsk. The
-session was subsequently unlocked for these checks. An already running normal
-Snippets process is preserved; the combined runtime has only been installed in a
-private prefix. Desktop configuration and normal installation remain unchanged
-by candidate packaging.
+The source-bound archive is available for user testing. Its normal-prefix
+installation includes the combined GTK/adwaita runtime and native Fcitx addon;
+installation preserves library and preference metadata. Stable-port acceptance
+remains open on the five checks above, including the reproduced initial-field
+core blocker. System GTK and other applications are unchanged. The user-requested
+three-hour Stay Awake timer retains its original 2026-10-05 13:40:17 Minsk deadline.
 
 The latest verified user archive and its clean source commit are recorded in
 `target/user-testing/latest.json`. Builds retain the rebase on `main` `e232c886`

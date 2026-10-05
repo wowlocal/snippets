@@ -23,13 +23,13 @@ fn main() {
                 "-o",
             ])
             .arg(&addon_library);
-        for include in fcitx.include_paths {
+        for include in &fcitx.include_paths {
             addon.arg("-I").arg(include);
         }
-        for directory in fcitx.link_paths {
+        for directory in &fcitx.link_paths {
             addon.arg("-L").arg(directory);
         }
-        for library in fcitx.libs {
+        for library in &fcitx.libs {
             addon.arg(format!("-l{library}"));
         }
         addon.arg("-ldl");
@@ -48,6 +48,39 @@ fn main() {
         )
         .expect("Copy installable Fcitx addon");
         println!("cargo:rerun-if-changed=src/inline_fcitx.cpp");
+        let state_fixture = addon_output.join("snippets-fcitx-state-fixture");
+        let mut fixture = cc::Build::new().cpp(true).get_compiler().to_command();
+        fixture
+            .args([
+                "-std=c++20",
+                "-O2",
+                "-UNDEBUG",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "tests/reference/fcitx-state.cpp",
+                "-o",
+            ])
+            .arg(&state_fixture);
+        for include in &fcitx.include_paths {
+            fixture.arg("-I").arg(include);
+        }
+        for directory in &fcitx.link_paths {
+            fixture.arg("-L").arg(directory);
+        }
+        for library in &fcitx.libs {
+            fixture.arg(format!("-l{library}"));
+        }
+        fixture.arg("-ldl");
+        assert!(
+            fixture.status().expect("C++ compiler required").success(),
+            "Native Fcitx state fixture build failed"
+        );
+        println!(
+            "cargo:rustc-env=SNIPPETS_FCITX_STATE_FIXTURE={}",
+            state_fixture.display()
+        );
+        println!("cargo:rerun-if-changed=tests/reference/fcitx-state.cpp");
         if let Some(directory) = std::env::var_os("SNIPPETS_GTK_RUNTIME_DIR") {
             let directory = directory
                 .to_str()

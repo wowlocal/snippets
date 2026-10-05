@@ -1,5 +1,6 @@
 //! Ordinary-only Fcitx bridge. The addon owns a backslash-started preedit;
-//! no surrounding text, key stream, vault bodies or query is persisted.
+//! The transport retains no surrounding text, key stream or vault bodies.
+//! Successful choices follow the existing bounded local prefix-learning policy.
 use super::*;
 use std::{
     io::{Read, Write},
@@ -388,6 +389,22 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_modifier_chords_preserve_preedit_and_select_without_leaking_keys() {
+        let temporary = tempfile::tempdir().unwrap();
+        let result = std::process::Command::new(env!("SNIPPETS_FCITX_STATE_FIXTURE"))
+            .env("XDG_CONFIG_HOME", temporary.path().join("config"))
+            .env("XDG_DATA_HOME", temporary.path().join("data"))
+            .env("XDG_CACHE_HOME", temporary.path().join("cache"))
+            .env("XDG_RUNTIME_DIR", temporary.path())
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "native Fcitx state fixture failed");
+        assert_eq!(result.stdout, b"modifier chords: 8 passed\n");
+    }
     #[test]
     fn a_changed_or_removed_choice_cannot_deliver_its_previous_body() {
         let temporary = tempfile::tempdir().unwrap();
