@@ -1797,9 +1797,10 @@ The Release GUI, CLI and unprivileged PAM helper are installed under `~/.local`.
 Start the application with `~/.local/bin/snippets` or its desktop entry. Quit with
 Ctrl+Q or `~/.local/bin/snippets --quit`. The installer has not enabled login
 startup, sync, clipboard history or inline expansion. Installation preserves
-library data and the desktop configuration. Current verification retains the
-installed artifact hashes; the latest user archive binds its separate Release
-binaries to a clean source commit and does not replace this installation.
+library data and the desktop configuration. The live installation now matches
+the verified `04fdfb2` user archive byte-for-byte for GUI, CLI and PAM helper. Its
+first-key continuation fixes are available through the normal launcher. Code-only
+rollback files are retained under ignored `target/user-testing/installed-before-04fdfb2/`.
 
 For this user test, create a disposable ordinary snippet, edit and search it,
 close/reopen the library, and verify persistence. Exercise Copy and the picker in
@@ -2398,3 +2399,32 @@ bounded observations are not a fix. Source-bound logs and gate details are retai
 under ignored `target/live-omarchy-acceptance/candidate-full-*`. The refreshed user
 archive is verified offline against its clean commit; the host installation and
 scheduled Stay Awake restoration are preserved.
+
+## Current user-prefix installation (2026-10-05)
+
+The normal launchers were still pointing at three older Release artifacts despite
+the newer checked user archive. The stock installer now updates `~/.local` from
+that exact `04fdfb2` archive without rebuilding. All three installed ELF hashes,
+sizes, owner/single-link layout and mode match the verified payload; both symlink
+launchers resolve to those files and report version 0.1.0. Previous program and
+application-metadata files are retained privately for rollback. Installation uses
+the existing atomic file replacements, with no running primary.
+
+The installer writes executable/desktop/icon/metainfo files and does not open the
+library, alter preferences or enable autostart/sync. Host library/config metadata
+was compared only in memory and remains exact; no library contents or credentials were read. Record names/IDs, paths, ciphertext,
+credentials and their stable hashes were not logged, exported or persisted.
+
+The unchanged existing installed multiple-file chooser Cancel case now runs on
+the actual updated `~/.local` GUI. Its private bus, keyring, data/config/cache and
+accessibility registry remain isolated. With fatal warnings, the actual Cancel
+button closes the chooser, focus returns to Account & Recovery, the process exits
+normally and exact private primary/vault/history bytes stay unchanged. No native
+source, test, runner option or acceptance variant is added. The two-second existing
+observation follows Cancel; it is not a GTK race workaround.
+
+The archive's clean source remains `04fdfb2`; the documentation checkpoint records
+this local deployment separately. Earlier archive and installation-preservation
+receipts remain historical and are not rewritten. The five bounded groups and
+independent GTK fallback cancellation race stay open. User data, compositor
+configuration and the scheduled Stay Awake restoration are preserved.
