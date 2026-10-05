@@ -429,8 +429,9 @@ profile_associated_domains="$(plist_value "$WORK_DIR/profile.plist" \
     || "$profile_associated_domains" == *"*"* ]] \
     || fail "The provisioning profile does not authorize the HTTPS OAuth callback domain"
 
-profile_expiry="$(plist_value "$WORK_DIR/profile.plist" ExpirationDate || true)"
-profile_expiry_seconds="$(date -j -f '%a %b %d %T %Z %Y' \
+# ISO 8601 UTC: a local zone printed as "+03" (Europe/Minsk) defeats `date -f %Z`.
+profile_expiry="$(plutil -extract ExpirationDate raw -o - "$WORK_DIR/profile.plist" 2>/dev/null || true)"
+profile_expiry_seconds="$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' \
     "$profile_expiry" +%s 2>/dev/null || true)"
 [ -n "$profile_expiry_seconds" ] \
     || fail "Could not read the provisioning profile expiration date"
