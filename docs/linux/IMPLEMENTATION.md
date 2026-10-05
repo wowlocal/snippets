@@ -6183,3 +6183,43 @@ test case, runner option or general acceptance matrix. The previous broader
 suites/restoration tests retain their source/binary bindings. The current archive
 and normal-prefix deployment use clean-source receipts, exact payload hashes and
 code-only rollback files. The same five bounded evidence groups remain open.
+
+### Correct native runtime configuration and alert heading measurement (2026-10-05)
+
+The first app-local GTK delivery retained upstream default features but used
+the default `/usr/local` resource paths and file-only printing. It must not be
+treated as a complete match for the installed Omarchy GTK configuration. The
+replacement uses `/usr/share`, `/usr/lib` and `/etc`, enables CUPS, cloudproviders,
+colord, tracker, sysprof and Broadway, and retains Vulkan/OpenGL, Wayland/X11 and
+media. The exact build options and corresponding source accompany the runtime.
+With these options, the original path-bar cleanup still fails the unchanged
+minimal inflight-folder Cancel case (exit 134); the ownership patch passes it.
+The existing host portal cancel/single/multiple/focus smoke also passes.
+
+The corrected configuration exposes a separate libadwaita 1.9.3 defect before
+the installed chooser opens: an alert heading reports a global minimum height
+of 25 and then a minimum of 21 at width 372. GDB identifies the heading's
+AdwGizmo inside the dialog message area. `measure_heading` uses the larger of
+two font heights for its unconstrained minimum, although it can select the
+smaller font at a constrained width. The reference patch changes only that
+minimum from MAX to MIN; the natural size and constrained measurements stay
+unchanged. See the [release source](https://raw.githubusercontent.com/GNOME/libadwaita/1.9.3/src/adw-alert-dialog.c).
+
+`tests/reference/adw-alert-heading.c` reproduces exactly that warning without
+Snippets state, credentials, a chooser or restoration operations. It is added
+only for this newly observed defect. Original and patched libadwaita builds use
+the same options and GTK provider. Their actual mapped providers are checked:
+the original exits 134 in 0.53 seconds; the patched version exits 0 in 0.98
+seconds. Fatal warnings remain enabled. The original official source archive
+matches its published SHA-256 checksum. The unchanged installed multiple-file
+Cancel scenario also passes with the patched dependency in a private test-only
+loader environment, returning focus and preserving exact private state.
+
+The combined runtime includes both shared libraries, both corresponding source
+archives, both source patches and licenses. Installer verification accepts only
+the complete seven-file GTK payload or complete eleven-file combined payload,
+verifies every manifest hash and both SONAMEs, and installs the version before
+switching the GUI. The product still uses the GUI's relative RUNPATH, without a
+loader environment override or changes to the host GTK/libadwaita. Existing
+broader results retain their original source and binary bindings. The five
+bounded acceptance groups remain unchanged.

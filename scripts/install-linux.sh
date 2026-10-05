@@ -35,25 +35,34 @@ command -v readelf >/dev/null || { echo 'Requires readelf from binutils to verif
 TASK_GTK_DYNAMIC=$(LC_ALL=C readelf --dynamic "$TASK_TARGET_ROOT/release/snippets")
 TASK_GTK_RUNPATH=$(printf '%s\n' "$TASK_GTK_DYNAMIC" | sed -n 's/.*(RUNPATH).*Library runpath: \[\(.*\)\]$/\1/p')
 TASK_GTK_RUNTIME=
-TASK_GTK_FILES=(BUILD-INFO.json COPYING REBUILD.txt gtk-4.22.4-pathbar-cancel.patch gtk-4.22.4.tar.xz libgtk-4.so.1)
+TASK_GTK_BASE_FILES=(BUILD-INFO.json COPYING REBUILD.txt gtk-4.22.4-pathbar-cancel.patch gtk-4.22.4.tar.xz libgtk-4.so.1)
+TASK_GTK_FILES=("${TASK_GTK_BASE_FILES[@]}")
 verify_gtk_runtime() {
-  local TASK_DIRECTORY=$1 TASK_NAME=$2 TASK_ENTRY TASK_COUNT=0 TASK_SUMS TASK_DIGEST
+  local TASK_DIRECTORY=$1 TASK_NAME=$2 TASK_ENTRY TASK_COUNT=0 TASK_SUMS TASK_DIGEST TASK_EXPECTED_COUNT=7
   [[ -d $TASK_DIRECTORY && ! -L $TASK_DIRECTORY ]] || { echo 'The release GTK runtime directory is missing or linked.' >&2; return 1; }
+  TASK_GTK_FILES=("${TASK_GTK_BASE_FILES[@]}")
+  if [[ -e $TASK_DIRECTORY/libadwaita-1.so.0 || -L $TASK_DIRECTORY/libadwaita-1.so.0 ]]; then
+    TASK_GTK_FILES+=(COPYING.libadwaita libadwaita-1.9.3-alert-heading.patch libadwaita-1.9.3.tar.xz libadwaita-1.so.0)
+    TASK_EXPECTED_COUNT=11
+  fi
   for TASK_ENTRY in "$TASK_DIRECTORY"/* "$TASK_DIRECTORY"/.[!.]* "$TASK_DIRECTORY"/..?*; do
     [[ -e $TASK_ENTRY || -L $TASK_ENTRY ]] || continue
     [[ -f $TASK_ENTRY && ! -L $TASK_ENTRY ]] || { echo 'GTK runtime inputs must be regular files.' >&2; return 1; }
     case "${TASK_ENTRY##*/}" in
-      BUILD-INFO.json|COPYING|REBUILD.txt|SHA256SUMS|gtk-4.22.4-pathbar-cancel.patch|gtk-4.22.4.tar.xz|libgtk-4.so.1) ;;
+      BUILD-INFO.json|COPYING|REBUILD.txt|SHA256SUMS|gtk-4.22.4-pathbar-cancel.patch|gtk-4.22.4.tar.xz|libgtk-4.so.1|COPYING.libadwaita|libadwaita-1.9.3-alert-heading.patch|libadwaita-1.9.3.tar.xz|libadwaita-1.so.0) ;;
       *) echo 'Unexpected GTK runtime input.' >&2; return 1 ;;
     esac
     TASK_COUNT=$((TASK_COUNT + 1))
   done
-  [[ $TASK_COUNT == 7 ]] || { echo 'The GTK runtime payload is incomplete.' >&2; return 1; }
+  [[ $TASK_COUNT == "$TASK_EXPECTED_COUNT" ]] || { echo 'The GTK runtime payload is incomplete.' >&2; return 1; }
   TASK_DIGEST=$(sha256sum -- "$TASK_DIRECTORY/SHA256SUMS"); TASK_DIGEST=${TASK_DIGEST%% *}
   [[ $TASK_NAME == gtk-runtime-"$TASK_DIGEST" ]] || { echo 'GTK runtime manifest does not match the GUI loader path.' >&2; return 1; }
   TASK_SUMS=$(cd -- "$TASK_DIRECTORY" && sha256sum -- "${TASK_GTK_FILES[@]}")
   [[ $(cat -- "$TASK_DIRECTORY/SHA256SUMS") == "$TASK_SUMS" ]] || { echo 'GTK runtime content does not match its manifest.' >&2; return 1; }
   LC_ALL=C readelf --dynamic "$TASK_DIRECTORY/libgtk-4.so.1" | rg 'Library soname: \[libgtk-4\.so\.1\]' >/dev/null || { echo 'GTK runtime SONAME is incorrect.' >&2; return 1; }
+  if [[ $TASK_EXPECTED_COUNT == 11 ]]; then
+    LC_ALL=C readelf --dynamic "$TASK_DIRECTORY/libadwaita-1.so.0" | rg 'Library soname: \[libadwaita-1\.so\.0\]' >/dev/null || { echo 'libadwaita runtime SONAME is incorrect.' >&2; return 1; }
+  fi
 }
 if [[ -n $TASK_GTK_RUNPATH ]]; then
   TASK_GTK_RUNTIME=${TASK_GTK_RUNPATH#'$ORIGIN/'}
@@ -84,7 +93,7 @@ if [[ -n $TASK_GTK_RUNTIME ]]; then
   # Complete and verify the immutable version before switching the GUI binary.
   for TASK_GTK_FILE in "${TASK_GTK_FILES[@]}" SHA256SUMS; do
     TASK_GTK_MODE=644
-    [[ $TASK_GTK_FILE != libgtk-4.so.1 ]] || TASK_GTK_MODE=755
+    case "$TASK_GTK_FILE" in libgtk-4.so.1|libadwaita-1.so.0) TASK_GTK_MODE=755 ;; esac
     install_atomic "$TASK_TARGET_ROOT/release/$TASK_GTK_RUNTIME/$TASK_GTK_FILE" "$TASK_GTK_DESTINATION/$TASK_GTK_FILE" "$TASK_GTK_MODE"
   done
   verify_gtk_runtime "$TASK_GTK_DESTINATION" "$TASK_GTK_RUNTIME"

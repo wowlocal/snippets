@@ -1,0 +1,12 @@
+diff --git a/src/adw-alert-dialog.c b/src/adw-alert-dialog.c
+--- a/src/adw-alert-dialog.c
++++ b/src/adw-alert-dialog.c
+@@ -471,7 +471,7 @@
+   } else {
+     if (for_size < 0) {
+       if (minimum)
+-        *minimum = MAX (large_min, small_min);
++        *minimum = MIN (large_min, small_min);
+       if (natural)
+         *natural = MAX (large_nat, small_nat);
+     } else {

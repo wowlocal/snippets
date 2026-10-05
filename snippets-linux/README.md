@@ -2563,3 +2563,34 @@ the changed UI layer. No backend, headless source, test count, runner option or
 general acceptance variant changes. Updated archive/install receipts identify
 the candidate; the normal installed fallback Cancel case is requalified on it.
 The five remaining groups and the independent GTK chooser Cancel race stay open.
+
+## Native dependency fixes and remaining acceptance (2026-10-05)
+
+The user-test runtime carries the GTK path-bar cancellation ownership repair
+and a separate libadwaita alert-heading minimum-size repair. Both have minimal
+before/after reproductions with fatal warnings. Neither adds a wait or suppresses
+warnings. GTK's resource paths and optional native integrations match the current
+Omarchy host; the earlier `/usr/local`, file-print-only build remains historical.
+
+The GUI loads both libraries through its relative ELF RUNPATH. The installer
+checks the complete manifest, regular files and library SONAMEs before switching
+executables. Source archives, patches, licenses and rebuilding instructions are
+included. Python and Cargo are not needed for the installed product. System
+libraries and the external portal remain unchanged.
+
+The remaining acceptance is finite:
+
+1. Normal Omarchy configuration: physical shortcuts, focus, paste and inline
+   expansion in the intended receiving applications; current live checks use
+   Hyprland Safe Mode.
+2. Real PAM/keyring authentication, hardware sleep and a fresh login/autostart;
+   private or simulated checks do not close those observations.
+3. The already listed remaining key-setup/switch interruption boundaries;
+   earlier successful native restoration and interruption receipts keep their
+   source and binary bindings.
+4. Physical input and accessibility checks for clipboard history.
+5. Round trips with actual Apple app JSON and encrypted backups.
+
+The independent system GTK race still needs an upstream/system dependency fix.
+The bundled ownership repair covers the app's fallback chooser. New variants
+are added only when a concrete defect is found, as with the alert-heading case.
