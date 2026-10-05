@@ -260,9 +260,19 @@ function assert_provisioning_profile() {
     # not a year: a Developer ID profile is issued for ~18 years, but a freshly minted
     # development profile is only good for one, and rejecting that would fail every
     # local Release build for no reason.
+    # Read the date as ISO 8601 UTC. PlistBuddy prints it in the local zone, and a
+    # zone without a letter abbreviation (Europe/Minsk prints "+03") is something
+    # `date -f %Z` cannot parse.
     local expiry expiry_seconds now_seconds
-    expiry=$(/usr/libexec/PlistBuddy -c "Print :ExpirationDate" "$plist" 2>/dev/null || echo "")
-    expiry_seconds=$(date -j -f "%a %b %d %T %Z %Y" "$expiry" +%s 2>/dev/null || echo 0)
+    expiry=$(plutil -extract ExpirationDate raw -o - "$plist" 2>/dev/null || echo "")
+    expiry_seconds=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$expiry" +%s 2>/dev/null || echo "")
+    if [ -z "$expiry_seconds" ]; then
+        red_text
+        echo "Export failed — cannot read the provisioning profile's expiration date (${expiry:-missing})"
+        normal_text
+        rm -f "$plist"
+        exit 1
+    fi
     now_seconds=$(date +%s)
     if [ "$expiry_seconds" -lt "$((now_seconds + 7776000))" ]; then
         red_text
