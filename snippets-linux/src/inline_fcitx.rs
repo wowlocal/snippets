@@ -14,7 +14,7 @@ use std::{
     time::Instant,
 };
 
-const MAGIC: &[u8; 4] = b"SNI1";
+const MAGIC: &[u8; 4] = b"SNI2";
 const QUERY_LIMIT: usize = 480;
 const FAILED: Error = Error("The inline input context is no longer available.");
 
@@ -160,6 +160,9 @@ fn query(bytes: &[u8]) -> Result<&str> {
 fn rows(entries: &[Snippet]) -> Vec<u8> {
     let mut bytes = vec![entries.len() as u8];
     for entry in entries {
+        // Record identities are local to this authenticated transport; they are
+        // never displayed, logged or persisted by the addon.
+        bytes.extend_from_slice(entry.id.as_bytes());
         for (value, bound) in [
             (
                 if entry.name.trim().is_empty() {
@@ -405,7 +408,7 @@ mod tests {
         assert!(result.status.success(), "native Fcitx state fixture failed");
         assert_eq!(
             result.stdout,
-            b"state fixture: 8 modifier and 6 capability checks passed\n"
+            b"state fixture: 8 modifier, 6 capability and 6 selection/protocol checks passed\n"
         );
     }
     #[test]
@@ -441,15 +444,23 @@ mod tests {
         assert!(query("тест".as_bytes()).is_ok());
         let mut entry = Snippet::new("Public name", "BODY_MUST_NOT_LEAVE_IN_METADATA");
         entry.keyword = "publickeyword".into();
+        let identity = entry.id;
         let bytes = rows(&[entry]);
         assert!(!bytes.windows(4).any(|w| w == b"BODY"));
         assert_eq!(bytes[0], 1);
+        assert_eq!(&bytes[1..17], identity.as_bytes());
     }
     #[test]
     fn bridge_authenticates_the_fcitx_process_and_refuses_large_frames() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         assert!(!trusted_peer(&server));
-        client.write_all(b"SNI1\x01\xff\xff\xff\xff").unwrap();
+        client.write_all(b"SNI2\x01\xff\xff\xff\xff").unwrap();
+        assert!(request(&mut server, &|| Ok(())).is_err());
+    }
+    #[test]
+    fn bridge_rejects_the_previous_row_protocol_before_taking_input() {
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        client.write_all(b"SNI1\x01\0\0\0\0").unwrap();
         assert!(request(&mut server, &|| Ok(())).is_err());
     }
 }

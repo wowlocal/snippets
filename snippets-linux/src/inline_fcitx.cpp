@@ -65,14 +65,14 @@ bool packet(int fd, unsigned char kind, const std::string &payload,
             unsigned char &replyKind, std::string &reply) {
   auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-  std::array<unsigned char, 9> header{'S', 'N', 'I', '1', kind, 0, 0, 0, 0};
+  std::array<unsigned char, 9> header{'S', 'N', 'I', '2', kind, 0, 0, 0, 0};
   for (size_t i = 0; i < 4; ++i)
     header[5 + i] = static_cast<unsigned char>(payload.size() >> (8 * i));
   if (!transfer(fd, header.data(), header.size(), true, deadline) ||
       (!payload.empty() && !transfer(fd, const_cast<char *>(payload.data()),
                                      payload.size(), true, deadline)) ||
       !transfer(fd, header.data(), header.size(), false, deadline) ||
-      std::memcmp(header.data(), "SNI1", 4) || header[4] > 3 ||
+      std::memcmp(header.data(), "SNI2", 4) || header[4] > 3 ||
       number(header.data() + 5) > Limit)
     return false;
   replyKind = header[4];
@@ -135,6 +135,7 @@ bool publicField(InputContext *ic) {
 }
 struct Row {
   std::string name, keyword;
+  std::array<unsigned char, 16> identity{};
 };
 class Word : public CandidateWord {
 public:
@@ -223,6 +224,7 @@ private:
     rows_.clear();
     active_ = nullptr;
     selected_ = 0;
+    selectionWasUserDriven_ = false;
     if (update) {
       ic->inputPanel().reset();
       ic->updatePreedit();
@@ -280,7 +282,7 @@ private:
       clear(ic);
       ic->commitString(reply);
       erase(reply);
-      std::array<unsigned char, 9> ack{'S', 'N', 'I', '1', 3, 0, 0, 0, 0};
+      std::array<unsigned char, 9> ack{'S', 'N', 'I', '2', 3, 0, 0, 0, 0};
       transfer(fd, ack.data(), ack.size(), true,
                std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(50));
@@ -294,9 +296,23 @@ private:
       return false;
     }
     std::vector<Row> rows;
+    std::set<std::array<unsigned char, 16>> identities;
     size_t offset = 1;
     for (unsigned i = 0; i < static_cast<unsigned char>(reply[0]); ++i) {
       Row row;
+      if (offset + row.identity.size() > reply.size()) {
+        erase(reply);
+        literal(ic);
+        return false;
+      }
+      std::memcpy(row.identity.data(), reply.data() + offset,
+                  row.identity.size());
+      offset += row.identity.size();
+      if (!identities.insert(row.identity).second) {
+        erase(reply);
+        literal(ic);
+        return false;
+      }
       for (auto *text : {&row.name, &row.keyword}) {
         if (offset + 2 > reply.size()) {
           erase(reply);
@@ -327,8 +343,23 @@ private:
       return false;
     }
     erase(reply);
+    // Mac suggestions retain a keyboard-selected record through query updates.
+    // Use its identity, since names, keywords and ranking may change meanwhile.
+    bool preserve = selectionWasUserDriven_ && selected_ < rows_.size();
+    auto previous = preserve ? rows_[selected_].identity
+                             : std::array<unsigned char, 16>{};
     rows_ = std::move(rows);
     selected_ = 0;
+    selectionWasUserDriven_ = false;
+    if (preserve) {
+      for (size_t i = 0; i < rows_.size(); ++i) {
+        if (rows_[i].identity == previous) {
+          selected_ = i;
+          selectionWasUserDriven_ = true;
+          break;
+        }
+      }
+    }
     render(ic);
     return true;
   }
@@ -417,6 +448,7 @@ private:
     if (!rows_.empty() && (next || previous)) {
       consume(event);
       selected_ = (selected_ + rows_.size() + (next ? 1 : -1)) % rows_.size();
+      selectionWasUserDriven_ = true;
       render(ic);
       return;
     }
@@ -450,6 +482,7 @@ private:
   std::string query_;
   std::vector<Row> rows_;
   size_t selected_ = 0;
+  bool selectionWasUserDriven_ = false;
   std::set<int> consumed_;
   std::vector<std::unique_ptr<HandlerTableEntry<EventHandler>>> watchers_;
   std::unique_ptr<EventSourceTime> timer_;

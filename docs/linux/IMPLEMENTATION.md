@@ -470,6 +470,44 @@ independent virtual pointer-button delivery and normal/physical-input gate remai
 open. The other finite evidence groups and cloud/GTK-race deferral retain their
 scope. Source-bound candidate packaging preserves these limitations.
 
+### Preserve deliberate suggestion selection while typing, 2026-10-05
+
+The Mac controller preserves a user-selected record through subsequent result
+updates. The Fcitx addon instead reset the selected index to zero on every query
+reply. A minimal real-context reproduction fails against that handler. The actual
+installed GUI confirms the defect: backslash, Ctrl+N, another character and Return
+insert the other public body (28 bytes), while the selected body is 45 bytes.
+
+The row protocol now carries ordinary record identity inside the authenticated
+local connection. The addon retains a deliberate choice by identity through
+filtering, reordered results and changed names/keywords. A missing choice falls
+back to the top result and revokes the deliberate-selection flag, matching the
+Mac behavior; an unselected list continues following relevance. All field/session
+invalidation clears that flag. Identities are not displayed, logged or persisted
+by the addon. The protocol version changes to SNI2; old frames are rejected before
+the initial backslash is consumed. Duplicate/truncated row identities fail closed
+and return only the already typed literal query in a still-public context.
+
+Six real Fcitx selection/protocol checks cover retained identity, removed choices,
+default ranking, private-state invalidation and malformed frames. The existing
+eight modifier and six capability checks also pass. Desktop/headless all-target
+Clippy, format, installer syntax and Release compilation pass; 43 inline tests
+pass with four existing live tests ignored in the `inline_expansion::` unit filter.
+The installed repaired GUI/addon preserve the selected row through the same input
+sequence and deliver the intended 45-byte body without changing receiver focus.
+Before/after screenshots and artifact-bound receipts are retained. No delay,
+retry or warning suppression changes this result.
+
+A separate browser probe of the already identified capability boundary changes
+`inputmode` on composition start. Both unmodified versions retain the literal
+query instead of expanding. Closed numeric tracing identifies FocusOut, not a
+public capability-only event: Chromium recreates the native input context at this
+boundary even though the DOM field remains focused. This probe does not justify
+carrying queries across lost focus and is not added as an expansion acceptance
+requirement. It does not identify the original intermittent missing-backslash
+failure. Fcitx still supplies panel appearance; visual equivalence to the Mac
+glass surface remains unfinished. Cloud/GTK-race work stays deferred.
+
 ### Completion audit, 2026-10-03
 
 Source review at `95c0190` found obsolete unfinished labels for current v1

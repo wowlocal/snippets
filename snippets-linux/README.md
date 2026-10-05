@@ -1038,6 +1038,19 @@ old premature literal-match predicate. Diagnostic addon runs complete three fiel
 but those altered binaries and service restarts do not qualify a repair. The
 current user-test archive and candidate receipts distinguish these states.
 
+The panel also preserves a keyboard-selected snippet when further typing updates
+the results, following the Mac reference. A changed rank, name or keyword does
+not change the choice while that record remains offered. Without a deliberate
+selection, the best-ranked first result remains selected; removing the choice or
+entering a private field resets it. The installed previous version inserts the
+wrong public fixture after Ctrl+N and another character; the corrected version
+inserts the intended 45-byte fixture with receiver focus preserved. Version 2 of
+the authenticated local row protocol carries ordinary record identity only for
+this selection, without logging or addon persistence. Old row-protocol peers are
+rejected before taking input. Six native selection/protocol checks and the
+previous modifier/capability checks pass; 43 inline tests pass with four existing
+live cases ignored in this unit filter. No observation delay changed.
+
 ### Insert saved secure text
 
 Open the picker from the destination application and select an enabled secure

@@ -21,6 +21,78 @@ protected:
   void updatePreeditImpl() override {}
 };
 struct CoreFixture {
+  static Row row(unsigned char identity, const char *name, const char *keyword) {
+    Row result{name, keyword};
+    result.identity.back() = identity;
+    return result;
+  }
+  static std::string metadata(const std::vector<Row> &rows) {
+    std::string reply(1, char(rows.size()));
+    for (const auto &row : rows) {
+      reply.append(reinterpret_cast<const char *>(row.identity.data()),
+                   row.identity.size());
+      for (const auto *field : {&row.name, &row.keyword}) {
+        reply += char(field->size());
+        reply += char(field->size() >> 8);
+        reply += *field;
+      }
+    }
+    return reply;
+  }
+  static void selection(Instance &instance) {
+    PublicContext context(instance.inputContextManager());
+    context.focusIn();
+    Snippets addon(&instance);
+    addon.active_ = &context;
+    addon.query_ = "na";
+    addon.rows_ = {row(1, "First public", "native1"),
+                   row(2, "Second public", "native2"),
+                   row(3, "Chosen public", "native3")};
+    addon.render(&context);
+    for (unsigned i = 0; i < 2; ++i) {
+      KeyEvent down(&context, Key(FcitxKey_Down, KeyStates(), 108), false);
+      addon.key(down);
+      assert(down.filtered());
+    }
+    assert(addon.selected_ == 2 && addon.selectionWasUserDriven_);
+    auto reply = metadata({row(1, "First public", "native1"),
+                           row(3, "Edited chosen", "native-edited")});
+    assert(addon.apply(&context, 1, reply));
+    assert(addon.selected_ == 1 && addon.selectionWasUserDriven_);
+    assert(addon.rows_[1].identity.back() == 3);
+    assert(addon.query_ == "na" && context.commits == 0);
+
+    reply = metadata({row(2, "Remaining public", "native2")});
+    assert(addon.apply(&context, 1, reply));
+    assert(addon.selected_ == 0 && !addon.selectionWasUserDriven_);
+    reply = metadata({row(1, "New top public", "native1"),
+                      row(2, "Remaining public", "native2")});
+    assert(addon.apply(&context, 1, reply));
+    assert(addon.selected_ == 0 && !addon.selectionWasUserDriven_);
+    KeyEvent down(&context, Key(FcitxKey_Down, KeyStates(), 108), false);
+    addon.key(down);
+    assert(addon.selectionWasUserDriven_);
+    context.setCapabilityFlags(CapabilityFlag::Sensitive);
+    assert(!addon.active_ && !addon.selectionWasUserDriven_);
+    assert(context.commits == 0);
+  }
+  static void invalidMetadata(Instance &instance, bool duplicate) {
+    PublicContext context(instance.inputContextManager());
+    context.focusIn();
+    Snippets addon(&instance);
+    addon.active_ = &context;
+    addon.query_ = "public";
+    addon.rows_ = {row(1, "Original public", "public1")};
+    addon.selectionWasUserDriven_ = true;
+    addon.render(&context);
+    auto reply = metadata({row(2, "First public", "public2"),
+                           row(2, "Duplicate public", "public3")});
+    if (!duplicate)
+      reply.resize(8);
+    assert(!addon.apply(&context, 1, reply));
+    assert(!addon.active_ && addon.rows_.empty());
+    assert(!addon.selectionWasUserDriven_ && context.commits == 1);
+  }
   static void capability(Instance &instance, CapabilityFlags flags,
                          bool retained) {
     PublicContext context(instance.inputContextManager());
@@ -109,5 +181,8 @@ int main() {
   CoreFixture::capability(instance, CapabilityFlag::Password, false);
   CoreFixture::capability(instance, CapabilityFlag::Sensitive, false);
   CoreFixture::capability(instance, CapabilityFlag::Disable, false);
-  std::puts("state fixture: 8 modifier and 6 capability checks passed");
+  CoreFixture::selection(instance);
+  CoreFixture::invalidMetadata(instance, false);
+  CoreFixture::invalidMetadata(instance, true);
+  std::puts("state fixture: 8 modifier, 6 capability and 6 selection/protocol checks passed");
 }
