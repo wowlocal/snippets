@@ -17,8 +17,11 @@ omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode wayland wayland-
 Requirements: Rust 1.92+, GTK 4.12+, libadwaita 1.5+, ICU, libsecret 0.21+, Linux-PAM,
 libqrencode 4.1+, Wayland, libxkbcommon, Cairo/Pango and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
 are locked in `Cargo.lock`. Source builds normally use the installed native GTK.
-The user test bundle includes the verified GTK 4.22.4 fallback-cancellation repair
-as an app-local shared library; its other native dependencies remain host-provided.
+The latest user-test candidate includes GTK 4.22.4 and libadwaita 1.9.3 with the
+verified fallback-cancellation and alert-heading measurement repairs as app-local
+shared libraries. Other native dependencies are provided by Omarchy. Final live
+GUI checks for this combined runtime remain pending; its archive receipt records
+that limit.
 The CLI and storage model also build without GTK or libsecret using `--no-default-features`.
 
 From the repository root:
@@ -1812,10 +1815,13 @@ Start the application with `~/.local/bin/snippets` or its desktop entry. Quit wi
 Ctrl+Q or `~/.local/bin/snippets --quit`. The installer has not enabled login
 startup, sync, clipboard history or inline expansion. Installation preserves
 library data and the desktop configuration. The latest verified user archive and
-GUI/CLI/helper hashes are recorded in `target/user-testing/latest.json`. The normal
+GUI/CLI/helper hashes are recorded in `target/user-testing/latest.json`. This latest
+archive is a candidate pending final combined-runtime GUI checks. The normal
 prefix's deployed source and private code-only rollback directory are recorded in
 `target/user-testing/installed-current.json`. The normal launcher includes the
 first-key continuation and losing-candidate pairing-control fixes.
+It remains the separately verified `7fd967c` GTK-only deployment; packaging the
+combined GTK/libadwaita candidate has not replaced that installation.
 
 For this user test, create a disposable ordinary snippet, edit and search it,
 close/reopen the library, and verify persistence. Exercise Copy and the picker in
@@ -1833,13 +1839,22 @@ The simple GTK cancellation control passes. The installed Release app's actual
 **Choose Several Vault Files…** Cancel passes with both fatal and ordinary warning
 policies, and after navigation to that public folder: focus returns and the primary,
 vault and encrypted history/checkpoint files are unchanged. These passes do not
-close the GTK race by themselves. The user test bundle now carries the verified
-ownership repair for the app's fallback chooser. Its relative loader path is
-checked in an actual installed GUI without LD_LIBRARY_PATH. The same minimal
-reproduction passes using the installed runtime; original system GTK still
-reproduces the defect. The real host portal has its own unchanged GTK process;
-its existing cancel/single/multiple/focus smoke passes with the new GTK sender.
-Cancellation timing is unchanged.
+close the GTK race by themselves. The `7fd967c` GTK-only deployment carries the
+verified ownership repair for the app's fallback chooser. Its relative loader
+path was checked in the actual installed GUI without LD_LIBRARY_PATH. The same
+minimal reproduction passes using that installed runtime; original system GTK
+still reproduces the defect. The real host portal has its own unchanged GTK
+process; its existing cancel/single/multiple/focus smoke passes with that GTK
+sender and with the later corrected GTK host profile.
+
+The latest candidate also includes the independently verified libadwaita heading
+repair and corrected GTK resource paths/native integrations. Both libraries load
+through the candidate GUI's relative RUNPATH without a loader override, verified
+at executable initialization. Installation from the archive into a private prefix
+passes. Its final mapped inflight Cancel, installed-GUI Cancel/focus/private-state
+check and existing host-portal smoke still require the session to be unlocked.
+Earlier GUI passes are not relabeled as passes of this combined runtime. Neither
+source patch changes cancellation timing or suppresses warnings.
 
 Reproduce only this concrete defect in an unlocked Wayland session:
 
@@ -1869,10 +1884,12 @@ specific defect.
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 
-The build is ready for user testing with the app-local GTK repair. Stable-port
-acceptance remains open on the five checks above; this does not repair system GTK
-or other applications. Stay Awake and its 2026-10-05 09:00 Minsk
-restoration timer were preserved.
+The archive is available as a user-test candidate with the final combined-runtime
+GUI checks explicitly pending. Stable-port acceptance remains open on the five
+checks above; this does not repair system GTK or other applications. The scheduled
+Stay Awake restoration completed successfully at 2026-10-05 09:00 Minsk. The
+session is locked again; desktop configuration and the normal installation remain
+unchanged by candidate packaging.
 
 The latest verified user archive and its clean source commit are recorded in
 `target/user-testing/latest.json`. Builds retain the rebase on `main` `e232c886`

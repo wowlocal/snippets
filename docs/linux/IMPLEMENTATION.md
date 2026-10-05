@@ -6223,3 +6223,12 @@ switching the GUI. The product still uses the GUI's relative RUNPATH, without a
 loader environment override or changes to the host GTK/libadwaita. Existing
 broader results retain their original source and binary bindings. The five
 bounded acceptance groups remain unchanged.
+
+The combined-runtime candidate's Release build, harness compilation, private
+prefix/archive installation and executable loader initialization pass. Its final
+mapped GUI Cancel/focus/private-state check and existing host-portal smoke are
+pending an unlocked session; earlier successful controls retain their original
+runtime and binary bindings. Scheduled idle restoration succeeded at 09:00 Minsk,
+and the session is locked again. The normal `7fd967c` GTK-only installation is
+unchanged. The current archive and its exact clean-source receipt are recorded
+separately in `target/user-testing/latest.json`.
