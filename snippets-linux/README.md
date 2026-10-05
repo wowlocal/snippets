@@ -984,8 +984,11 @@ are excluded by the receiving-window guard.
 
 IPC uses a bounded, private runtime socket with reciprocal process authentication:
 the app accepts the installed Fcitx executable, and the addon accepts the exact GUI
-next to its installed library. Queries, bodies and surrounding text are never
-logged or persisted by this bridge. Candidate rows contain only ordinary metadata.
+next to its installed library. The transport does not log or persist
+queries, bodies or surrounding text. Successful selections follow existing
+**Suggestion Learning** settings: enabled prefix memory may retain a bounded short
+search prefix and the chosen ordinary record in private local files. Candidate
+rows contain only ordinary metadata.
 Selection rereads the saved record, refuses modified/removed choices and checks
 consent, observable session state and the original receiving window before delivery.
 `{clipboard}` reads a plain-text selection only when requested, with a short deadline;
@@ -1000,6 +1003,8 @@ focus. Saved shortcuts and the installed clipboard-history UI also pass on this
 same new executable. The earlier
 direct Wayland backend and its protocol/echo tests remain as a fallback on systems
 without Fcitx; those historical checks do not qualify the new Fcitx backend.
+The normal primary is running with expansion and suggestions explicitly enabled
+through its native dialog. User library data was not used as a test fixture.
 Physical input, normal-session qualification and first receiving-field activation
 remain under review; the first unclassified Chromium observation is retained.
 

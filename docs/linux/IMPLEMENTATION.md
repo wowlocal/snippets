@@ -331,7 +331,10 @@ input context/candidate transport; `inline_fcitx.rs` owns matching, consent,
 session/window guards, rereading choices, placeholders and usage acknowledgments.
 Secure bodies never enter this path. IPC is a private runtime socket with reciprocal
 executable-inode authentication and bounded frames. The addon stays dormant when
-no opted-in worker exists. It does not log or persist query/body data.
+no opted-in worker exists. Its transport does not log or persist query/body data.
+Successful selections feed the existing local learning owner; when prefix memory
+is enabled it may retain a bounded short search prefix and the selected ordinary
+record in private local files, under Suggestion Learning settings.
 
 The installer supplies the addon beside the GUI it authenticates and an additive
 Fcitx module manifest. Fcitx needs one restart to load that manifest. Normal system
@@ -363,6 +366,12 @@ Wayland Chromium and Ghostty. The screenshots were inspected. Saved Open/Picker/
 Capture bindings and the full installed history consent/background/view/Copy/
 opt-out/restart/Clear case pass again on this same executable, using public
 libraries and an isolated keyring. The previous clipboard and focus are restored.
+
+After public-fixture checks, the normal primary is restored. Expansion and the
+panel are explicitly enabled through its native confirmation, the stock Fcitx
+addon is connected, and all three normal global actions are registered. No macro
+or paste is sent to user library fields; the previous receiving-app focus is
+restored. The three-hour idle restoration timer retains its original deadline.
 
 The current code passes desktop/headless all-target Clippy and 41 inline tests
 with native tests serialized (five display/live cases ignored in that unit run).
