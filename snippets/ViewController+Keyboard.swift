@@ -63,6 +63,11 @@ extension ViewController {
                 dismissSearchInteraction()
             } else if isSearchSuggestionOverlayVisible {
                 hideSearchSuggestionOverlay()
+            } else if isSidebarCollapsed {
+                // The list cannot take focus while it is hidden, and the editor
+                // keeps ^N/^P for its caret. Search with its suggestions open is
+                // the list here: ^N/^P pick, Return edits, Escape comes back.
+                focusToolbarSearch()
             } else {
                 moveFocus(to: tableView)
             }
@@ -154,12 +159,15 @@ extension ViewController {
             return event
         }
 
-        if flags == [.control] && key == UInt16(kVK_ANSI_N) {
+        // In an editor ^N/^P are the text system's moveDown:/moveUp: — the
+        // caret's next and previous line — so only the list turns them into
+        // snippet navigation.
+        if flags == [.control] && key == UInt16(kVK_ANSI_N) && isListContext {
             selectAdjacentSnippet(direction: .down)
             return nil
         }
 
-        if flags == [.control] && key == UInt16(kVK_ANSI_P) {
+        if flags == [.control] && key == UInt16(kVK_ANSI_P) && isListContext {
             selectAdjacentSnippet(direction: .up)
             return nil
         }
@@ -189,21 +197,9 @@ extension ViewController {
             return true
         }
 
-        if isSearchFieldActive {
-            return false
-        }
-
-        if firstResponder === snippetTextView {
-            return false
-        }
-
-        if firstResponder === nameField.currentEditor()
-            || firstResponder === keywordField.currentEditor()
-            || firstResponder === tagsField.currentEditor() {
-            return false
-        }
-
-        return true
+        // Whatever holds a caret — the body or any field's shared field editor —
+        // owns Return and the emacs bindings.
+        return !(firstResponder is NSText)
     }
 
     func isReturnKey(_ event: NSEvent) -> Bool {
@@ -217,28 +213,6 @@ extension ViewController {
         case keyword
         case tags
         case content
-    }
-
-    func currentEditorFocusTarget() -> EditorFocusTarget? {
-        guard let firstResponder = view.window?.firstResponder else { return nil }
-
-        if firstResponder === snippetTextView {
-            return .content
-        }
-
-        if firstResponder === nameField.currentEditor() {
-            return .name
-        }
-
-        if firstResponder === keywordField.currentEditor() {
-            return .keyword
-        }
-
-        if firstResponder === tagsField.currentEditor() {
-            return .tags
-        }
-
-        return nil
     }
 
     func restoreEditorFocus(_ target: EditorFocusTarget?) {
@@ -258,9 +232,6 @@ extension ViewController {
 
     func selectAdjacentSnippet(direction: TableDirection) {
         guard !visibleSnippets.isEmpty else { return }
-        let focusTarget = currentEditorFocusTarget()
-        commitActiveEditorState(endingEditing: focusTarget != nil)
-
         let current = tableView.selectedRow
         let next: Int
         switch direction {
@@ -271,6 +242,5 @@ extension ViewController {
         }
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         tableView.scrollRowToVisible(next)
-        restoreEditorFocus(focusTarget)
     }
 }
