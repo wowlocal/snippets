@@ -6226,9 +6226,23 @@ bounded acceptance groups remain unchanged.
 
 The combined-runtime candidate's Release build, harness compilation, private
 prefix/archive installation and executable loader initialization pass. Its final
-mapped GUI Cancel/focus/private-state check and existing host-portal smoke are
-pending an unlocked session; earlier successful controls retain their original
-runtime and binary bindings. Scheduled idle restoration succeeded at 09:00 Minsk,
-and the session is locked again. The normal `7fd967c` GTK-only installation is
-unchanged. The current archive and its exact clean-source receipt are recorded
-separately in `target/user-testing/latest.json`.
+mapped GTK Cancel, independent alert-heading reproduction, installed-GUI
+Cancel/focus/private-state check and existing host-portal smoke now pass after
+the session was unlocked. Actual mapped libraries match the complete runtime
+payload; the GUI uses its relative RUNPATH without LD_LIBRARY_PATH. The portal
+harness alone selects the combined runtime through its test loader environment;
+the external portal remains unchanged. Earlier controls retain their own bindings.
+
+One initial installed-control attempt exited before Cancel without GTK warnings.
+It is retained as a failure, not relabeled as a GTK crash or a success. A narrow
+closed-stage diagnostic completes every public control; the unchanged existing
+runner then passes in 6.07 seconds. No observation timeout, added wait or warning
+suppression is used as a repair. The first cause remains unclassified and the
+normal input/focus evidence group stays open. The portal smoke passes in 11.15
+seconds; both minimal cases complete their intended observation without warnings.
+
+Scheduled idle restoration succeeded at 09:00 Minsk. The already running normal
+`7fd967c` GTK-only application is preserved; candidate checks use a private prefix,
+bus, keyring and XDG roots. No user library contents or credentials are read.
+The current archive and its exact clean-source receipt are recorded separately
+in `target/user-testing/latest.json`. The same five acceptance groups remain open.

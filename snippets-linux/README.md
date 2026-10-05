@@ -19,9 +19,9 @@ libqrencode 4.1+, Wayland, libxkbcommon, Cairo/Pango and wayland-protocols with 
 are locked in `Cargo.lock`. Source builds normally use the installed native GTK.
 The latest user-test candidate includes GTK 4.22.4 and libadwaita 1.9.3 with the
 verified fallback-cancellation and alert-heading measurement repairs as app-local
-shared libraries. Other native dependencies are provided by Omarchy. Final live
-GUI checks for this combined runtime remain pending; its archive receipt records
-that limit.
+shared libraries. Other native dependencies are provided by Omarchy. The combined
+runtime passes its minimal reproductions, installed-GUI Cancel/focus/private-state
+check and existing host-portal smoke with verified mapped libraries.
 The CLI and storage model also build without GTK or libsecret using `--no-default-features`.
 
 From the repository root:
@@ -1816,7 +1816,7 @@ Ctrl+Q or `~/.local/bin/snippets --quit`. The installer has not enabled login
 startup, sync, clipboard history or inline expansion. Installation preserves
 library data and the desktop configuration. The latest verified user archive and
 GUI/CLI/helper hashes are recorded in `target/user-testing/latest.json`. This latest
-archive is a candidate pending final combined-runtime GUI checks. The normal
+archive has passed the combined-runtime GUI checks in an isolated installation. The normal
 prefix's deployed source and private code-only rollback directory are recorded in
 `target/user-testing/installed-current.json`. The normal launcher includes the
 first-key continuation and losing-candidate pairing-control fixes.
@@ -1852,9 +1852,14 @@ repair and corrected GTK resource paths/native integrations. Both libraries load
 through the candidate GUI's relative RUNPATH without a loader override, verified
 at executable initialization. Installation from the archive into a private prefix
 passes. Its final mapped inflight Cancel, installed-GUI Cancel/focus/private-state
-check and existing host-portal smoke still require the session to be unlocked.
-Earlier GUI passes are not relabeled as passes of this combined runtime. Neither
-source patch changes cancellation timing or suppresses warnings.
+check and existing host-portal smoke now pass on the unlocked session. The
+unchanged installed runner verifies both libraries through its relative RUNPATH,
+actual Cancel, focus return, normal quit and exact private state. One earlier
+attempt failed before Cancel without GTK warnings; its control failure remains
+recorded separately. A diagnostic run and the unchanged runner then pass. No
+delay or warning-policy change is presented as a repair. Earlier GUI passes
+retain their original bindings. Neither source patch changes cancellation timing
+or suppresses warnings.
 
 Reproduce only this concrete defect in an unlocked Wayland session:
 
@@ -1884,12 +1889,14 @@ specific defect.
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 
-The archive is available as a user-test candidate with the final combined-runtime
-GUI checks explicitly pending. Stable-port acceptance remains open on the five
+The archive is available for user testing with the combined-runtime GUI checks
+completed. Stable-port acceptance remains open on the five
 checks above; this does not repair system GTK or other applications. The scheduled
 Stay Awake restoration completed successfully at 2026-10-05 09:00 Minsk. The
-session is locked again; desktop configuration and the normal installation remain
-unchanged by candidate packaging.
+session was subsequently unlocked for these checks. An already running normal
+Snippets process is preserved; the combined runtime has only been installed in a
+private prefix. Desktop configuration and normal installation remain unchanged
+by candidate packaging.
 
 The latest verified user archive and its clean source commit are recorded in
 `target/user-testing/latest.json`. Builds retain the rebase on `main` `e232c886`
