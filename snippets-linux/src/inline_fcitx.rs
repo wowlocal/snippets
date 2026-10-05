@@ -390,7 +390,7 @@ pub(super) fn run(
 mod tests {
     use super::*;
     #[test]
-    fn native_modifier_chords_preserve_preedit_and_select_without_leaking_keys() {
+    fn native_fcitx_state_preserves_public_preedit_and_releases_private_fields() {
         let temporary = tempfile::tempdir().unwrap();
         let result = std::process::Command::new(env!("SNIPPETS_FCITX_STATE_FIXTURE"))
             .env("XDG_CONFIG_HOME", temporary.path().join("config"))
@@ -403,7 +403,10 @@ mod tests {
             .output()
             .unwrap();
         assert!(result.status.success(), "native Fcitx state fixture failed");
-        assert_eq!(result.stdout, b"modifier chords: 8 passed\n");
+        assert_eq!(
+            result.stdout,
+            b"state fixture: 8 modifier and 6 capability checks passed\n"
+        );
     }
     #[test]
     fn a_changed_or_removed_choice_cannot_deliver_its_previous_body() {

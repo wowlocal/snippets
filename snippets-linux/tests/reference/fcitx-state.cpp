@@ -12,14 +12,42 @@ public:
       : InputContext(manager) {}
   ~PublicContext() override { destroy(); }
   const char *frontend() const override { return "public-snippets-fixture"; }
+  size_t commits = 0;
 
 protected:
-  void commitStringImpl(const std::string &) override {}
+  void commitStringImpl(const std::string &) override { ++commits; }
   void deleteSurroundingTextImpl(int, unsigned) override {}
   void forwardKeyImpl(const ForwardKeyEvent &) override {}
   void updatePreeditImpl() override {}
 };
 struct CoreFixture {
+  static void capability(Instance &instance, CapabilityFlags flags,
+                         bool retained) {
+    PublicContext context(instance.inputContextManager());
+    context.focusIn();
+    Snippets addon(&instance);
+    addon.active_ = &context;
+    addon.query_ = "public";
+    addon.rows_ = {{"First public", "public1"}, {"Second public", "public2"}};
+    addon.selected_ = 1;
+    addon.render(&context);
+    // Deliver the real Fcitx capability event, rather than calling our watcher.
+    context.setCapabilityFlags(flags);
+    assert(context.hasFocus());
+    assert(context.commits == 0);
+    if (retained) {
+      assert(publicField(&context));
+      assert(addon.active_ == &context && addon.query_ == "public");
+      assert(addon.rows_.size() == 2 && addon.selected_ == 1);
+      assert(context.inputPanel().candidateList());
+      assert(context.inputPanel().clientPreedit().toString() == "\\public");
+    } else {
+      assert(!publicField(&context));
+      assert(!addon.active_ && addon.query_.empty() && addon.rows_.empty());
+      assert(!context.inputPanel().candidateList());
+      assert(context.inputPanel().clientPreedit().empty());
+    }
+  }
   static void check(Instance &instance, KeySym modifier, KeyStates states,
                     KeySym symbol, size_t expected) {
     PublicContext context(instance.inputContextManager());
@@ -75,5 +103,11 @@ int main() {
                      0);
   CoreFixture::check(instance, FcitxKey_Control_L, KeyState::Ctrl,
                      FcitxKey_None, 0);
-  std::puts("modifier chords: 8 passed");
+  CoreFixture::capability(instance, CapabilityFlag::Preedit, true);
+  CoreFixture::capability(instance, CapabilityFlag::ClientSideInputPanel, true);
+  CoreFixture::capability(instance, CapabilityFlag::SurroundingText, true);
+  CoreFixture::capability(instance, CapabilityFlag::Password, false);
+  CoreFixture::capability(instance, CapabilityFlag::Sensitive, false);
+  CoreFixture::capability(instance, CapabilityFlag::Disable, false);
+  std::puts("state fixture: 8 modifier and 6 capability checks passed");
 }

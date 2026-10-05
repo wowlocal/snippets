@@ -979,7 +979,8 @@ panel at the caret and commits directly to its receiving input context without
 activating a Snippets window or changing the clipboard. Snippets does not claim
 a second input-method seat, need surrounding-text updates, or forward a general
 keyboard stream to the app. The addon excludes password/sensitive/disabled input
-contexts and resets its query on focus/reset/capability changes. Snippets windows
+contexts and resets its query on focus/reset/protected-capability changes. Public
+capability updates preserve its current query and selected row. Snippets windows
 are excluded by the receiving-window guard.
 
 IPC uses a bounded, private runtime socket with reciprocal process authentication:
@@ -1013,6 +1014,23 @@ Physical input and normal-session qualification remain open. The current three
 empty-profile browser launches expand in the first two receiving fields but retain
 the literal keyword in the third; this first-field failure remains a core blocker.
 No delay, retry or warning suppression is claimed as a repair.
+
+The latest capability-change candidate adds six real Fcitx state checks. Changing
+Preedit, ClientSideInputPanel or SurroundingText support in the same focused public
+context preserves the query, candidate rows and selection; Password, Sensitive and
+Disable transitions still wipe them without committing text. The previous handler
+fails the public Preedit case. All 42 inline tests and desktop/headless all-target
+Clippy pass. This change has not yet passed graphical acceptance: the three-hour
+Stay Awake period ended and the session locked again. It is not claimed to repair
+the Chromium first-field failure.
+
+A generation-scoped browser observer now records actual composition state and
+requires final expansion within the original eight-second deadline. On the last
+unmodified qualified addon, its first field retained only the 12 keyword letters
+and lost the backslash. This confirms an unresolved input failure beyond the
+old premature literal-match predicate. Diagnostic addon runs complete three fields,
+but those altered binaries and service restarts do not qualify a repair. The
+current user-test archive and candidate receipts distinguish these states.
 
 ### Insert saved secure text
 

@@ -421,6 +421,40 @@ candidate and remaining normal-input evidence group. Physical input and a fresh
 normal compositor session are still unverified. Cloud/GTK-race work remains
 explicitly deferred; the finite acceptance scope is unchanged.
 
+### Public capability changes preserve owned input, 2026-10-05
+
+A headless minimal reproduction delivers a real Fcitx capability event to the
+production handler. Enabling Preedit while the same context remains focused and
+public clears the old query and panel. The new handler preserves active state only
+for a capability event whose current context is still focused and public; the
+existing FocusOut, Reset, Destroy and input-method-switch invalidation remains.
+Password, Sensitive and Disable transitions still clear query and candidates.
+Six native cases check preserved query/rows/selection, private-state clearing and
+zero unintended commits. Together with the eight modifier cases they run through
+the production handler under actual Fcitx context objects. All 42 inline tests,
+desktop/headless all-target Clippy and Release builds pass. The normal GUI/CLI/PAM
+helper hashes remain unchanged; the addon changes. No timeout or delay changes.
+Fcitx separates capability notifications from focus lifecycle; see its
+[context setter](https://raw.githubusercontent.com/fcitx/fcitx5/5.1.22/src/lib/fcitx/inputcontext.cpp)
+and [Wayland frontend](https://raw.githubusercontent.com/fcitx/fcitx5/5.1.22/src/frontend/waylandim/waylandimserverv2.cpp).
+
+The first-field observer had an early literal-match predicate and forced the
+composition flag to false. Its diagnostic replacement scopes frames to each
+browser launch, records real composition state and requires final expansion within
+the original eight-second observation deadline. The unchanged qualified addon
+still fails one receiving field: 12 letters remain and the backslash is lost,
+without composition or later expansion. Closed numeric stage tracing succeeds in
+three fields on an instrumented addon, but does not identify the failing stage;
+no snippet bodies, names or general key stream enter those records. Original
+binaries are restored after each diagnostic run. Restarting a service, changing
+instrumentation or fixing an observer is not claimed as an application repair.
+
+The requested three-hour Stay Awake interval ended at 13:40:17 Minsk, and the
+session subsequently locked. Graphical acceptance of this capability candidate is
+pending unlock. The Chromium failure, independent missing virtual pointer-button
+delivery and the original normal/physical-input gate remain open. The other finite
+evidence groups and the user's cloud/GTK-race deferral retain their scope.
+
 ### Completion audit, 2026-10-03
 
 Source review at `95c0190` found obsolete unfinished labels for current v1

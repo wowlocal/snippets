@@ -173,8 +173,14 @@ public:
       watchers_.push_back(instance_->watchEvent(
           type, EventWatcherPhase::PreInputMethod, [this](Event &event) {
             auto *ic = static_cast<InputContextEvent &>(event).inputContext();
-            if (ic == active_)
-              clear(ic, event.type() != EventType::InputContextDestroyed);
+            if (ic != active_)
+              return;
+            // Preedit/client-panel capabilities may change in the same field.
+            // Preserve owned input while it is still focused and public.
+            if (event.type() == EventType::InputContextCapabilityChanged &&
+                publicField(ic))
+              return;
+            clear(ic, event.type() != EventType::InputContextDestroyed);
           }));
     }
     timer_ = instance_->eventLoop().addTimeEvent(
