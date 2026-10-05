@@ -1296,8 +1296,10 @@ Simulated interrupted same-vault restoration also passes offline cancellation
 and completion after a fresh worker, with separate fresh PAM and exact approved
 images. Retained foreign-vault restoration also passes independent current/source
 verification and current-root re-encryption, with OpenSSL checks across native sync.
-Candidate pairing for switching, interrupted switching, external-file/multiple-source
-vault restoration and actual process termination during restoration remain under review.
+Native candidate pairing, published-switch offline finish, unpublished-switch
+offline cancellation, all five installed file-source restoration combinations and
+actual SIGKILL/offline restoration now pass. Other already listed interruption work
+and the five bounded acceptance groups remain separate.
 All three globally assigned actions, visible tray-menu selection/focus and re-registration
 with a restarted Omarchy host pass; see the latest implementation milestone.
 Focus-dependent checks require an unlocked session for their entire lifetime.
@@ -2371,3 +2373,28 @@ confirms `main` `e232c886`; the clean checkpoint and refreshed user archive reta
 source/binary receipts. Existing installation, user data, compositor configuration
 and the scheduled Stay Awake restoration are unchanged. Stable-port acceptance
 remains open.
+
+## Complete current-candidate regressions (2026-10-05)
+
+Both existing Cargo suites pass on the same 326 native inputs as checkpoint
+`2028318`: desktop library 1,055 passed/86 ignored, 26 CLI integrations and one
+invalid-frame PAM-helper integration; headless library 938 passed/4 ignored and
+26 CLI integrations. No failures or GTK criticals are present in their logs.
+Headless output uses a separate target directory and all three production Release
+artifacts retain their hashes. Counts describe executions per feature configuration;
+ignored live cases are not counted as successful GUI acceptance.
+
+The existing native `--creation` case also passes again on this exact source,
+including accepted-but-unanswered first-key TLS upload, exact retained key/recovery
+capability, terminal old worker and fresh same-key continuation without another
+POST, followed by its complete creation and encrypted-sync assertions. Native
+inputs, tests and runner options are unchanged; no acceptance variant is added.
+
+The current implementation table and summary now agree with the saved successful
+native pairing, switch, ambiguity and full installed-restoration receipts. This
+does not close other keyring-write interruption scope or the five remaining groups.
+The GTK fallback Cancel defect remains independently reproducible and unresolved;
+bounded observations are not a fix. Source-bound logs and gate details are retained
+under ignored `target/live-omarchy-acceptance/candidate-full-*`. The refreshed user
+archive is verified offline against its clean commit; the host installation and
+scheduled Stay Awake restoration are preserved.
