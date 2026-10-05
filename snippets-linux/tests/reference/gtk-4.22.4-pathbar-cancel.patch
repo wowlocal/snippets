@@ -1,0 +1,8 @@
+--- a/gtk/gtkpathbar.c
++++ b/gtk/gtkpathbar.c
+@@ -777,2 +777,4 @@
+-          gtk_box_remove (GTK_BOX (info->path_bar->buttons_box), button_data->button);
++          /* These buttons are not parented until construction succeeds. */
++          g_object_ref_sink (button_data->button);
++          g_object_unref (button_data->button);
+         }

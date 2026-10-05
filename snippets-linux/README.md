@@ -1819,8 +1819,10 @@ The simple GTK cancellation control passes. The installed Release app's actual
 **Choose Several Vault Files…** Cancel passes with both fatal and ordinary warning
 policies, and after navigation to that public folder: focus returns and the primary,
 vault and encrypted history/checkpoint files are unchanged. These passes do not
-close the GTK race. No wait, error suppression, production code or system GTK patch
-has been presented as a fix. The real host-portal workflows remain passing.
+close the GTK race. A private GTK rebuild now verifies a small ownership repair
+against that same minimal reproduction; the installed system library and normal
+user archive still need that dependency repair. See the evidence below. The real
+host-portal workflows remain passing, and cancellation timing is unchanged.
 
 Reproduce only this concrete defect in an unlocked Wayland session:
 
@@ -1856,8 +1858,47 @@ restoration timer were preserved.
 
 The latest verified user archive and its clean source commit are recorded in
 `target/user-testing/latest.json`. Builds retain the rebase on `main` `e232c886`
-and include source and binary receipts. The archive is checked by installation
-into an owned temporary prefix; the existing installed app is not replaced.
+and include source and binary receipts. The archive's installation check uses an
+owned temporary prefix; normal-prefix deployment has its own source/hash receipt.
+
+### Private GTK cancellation repair (2026-10-05)
+
+The [GTK 4.22.4 failure cleanup](https://raw.githubusercontent.com/GNOME/gtk/4.22.4/gtk/gtkpathbar.c)
+tries to remove pending path buttons from a box. Those floating widgets are only
+parented after successful path construction, and the box can already be destroyed
+when the cancelled query completes. The small
+[reference patch](tests/reference/gtk-4.22.4-pathbar-cancel.patch) sinks and releases
+the unparented widgets directly. It leaves successful construction and Cancel
+timing unchanged; widget finalization releases the associated button metadata.
+
+An official, checksum-verified 4.22.4 source archive was built privately, retaining
+the default Vulkan/OpenGL and Wayland/X11 support. The baseline and patched
+libraries use identical build options. Existing diagnostic modes produced:
+
+| Existing check | Baseline GTK | Patched GTK |
+| --- | --- | --- |
+| Simple minimal Cancel | Exit 0, dismissed callback, no criticals | Same |
+| Minimal Cancel during 128-level path update, twice | Exit 134 with `GTK_IS_BOX`, both runs | Exit 0, dismissed callback, no criticals, both runs |
+| Installed `79e684b` multiple chooser after public-folder navigation | System GTK: exit 0, focus and exact private state preserved | Same |
+
+Each actual test process's mapped GTK provider was verified. Fatal warnings stayed
+enabled; the existing two-second observation occurs after Cancel. The C program,
+runner and Rust app were unchanged. Initial build-tool/header failures remain
+separate from the completed build and native results. Receipts, source checksums,
+build options and immutable libraries are under ignored `target/gtk-chooser-repair/`.
+
+To check the existing reproduction with a privately rebuilt patched library:
+
+```sh
+LD_LIBRARY_PATH=/absolute/path/to/patched-library \
+  bash snippets-linux/tests/chooser-cancel.sh minimal --inflight-folder
+```
+
+This verifies the repair for the reproduced defect; the ordinary launcher still
+uses unpatched system GTK. The dependency blocker remains open until its repair
+is delivered and checked in the normal installation. The user test build remains
+`79e684b`, the five remaining evidence groups retain their scope, and no new runner
+option, Rust test or general acceptance variant was added.
 The earlier `4bd8969` archive predates the first-key fixes below.
 
 ## Live diagnostics export and delete (2026-10-04)

@@ -6087,3 +6087,58 @@ check. Earlier full-suite/native-switch/restoration results keep their original
 source hashes. No evidence gap or GTK defect is closed by this small repair;
 the five bounded remaining groups, physical input and real host authentication
 retain their scope. User data and desktop configuration are preserved.
+
+
+### GTK path-bar cancellation: causal private repair (2026-10-05)
+
+The independent minimal C reproduction and installed-chooser runner are unchanged.
+Source review confirms that GTK 4.22.4's failure cleanup calls a container operation
+on pending buttons that are only parented on successful path construction. The
+cancelled callback may arrive after the box has been disposed. The reference patch
+at `snippets-linux/tests/reference/gtk-4.22.4-pathbar-cancel.patch` sinks and unrefs
+those floating widgets instead. Their weak-notify cleanup releases ButtonData.
+It does not change successful construction, Cancel timing or the warning policy.
+See the [exact upstream source](https://raw.githubusercontent.com/GNOME/gtk/4.22.4/gtk/gtkpathbar.c).
+
+The official GTK 4.22.4 archive matches its published SHA-256 checksum and the
+path-bar source matches the release tag. Both private libraries retain the default
+Vulkan/OpenGL, Wayland/X11, media and print support with identical Meson options;
+only tests, examples, introspection and documentation generation are disabled.
+Missing GLib generators were prepared from official 2.88.3 sources in a private
+tool directory. Missing Vulkan headers were supplied from Khronos v1.4.357,
+matching the installed loader. Initial configuration/build failures and the
+unsupported code-generator version probe remain recorded separately. No system
+package or library was installed or replaced.
+
+The completed baseline build reproduces the known fatal `GTK_IS_BOX` assertion
+twice, with exit 134 after 1.17 and 1.13 seconds. The patched library runs the exact
+same inflight-folder case twice, completing the dismissed callback with exit 0
+after 3.10 seconds and no criticals. Simple minimal Cancel controls pass with both
+libraries. The baseline/patched comparison uses immutable library copies and
+verified mapped providers in the actual owned C processes, with unchanged private
+bus/XDG isolation. Core creation is disabled only for these owned diagnostic
+children; fatal warnings remain enabled. The only observation delay follows
+Cancel and is not a repair.
+
+The installed `79e684b` GUI's existing multiple-file chooser, navigated to the
+same public deep folder, passes both with the system GTK and the private patched
+provider (5.72/5.74 seconds). In both cases actual Cancel returns focus, the app
+quits normally, and private primary/vault/history bytes are exactly preserved.
+Mapped providers are verified in the actual installed GUI process. This still
+does not reproduce the independent race in that installed flow or establish a
+system-wide repair. No extra runner option or acceptance matrix is introduced.
+
+The source patch applies cleanly to the exact original source and yields the
+same bytes as the built candidate. It is promoted to the reference directory only
+after every native/build handle has finished. The previous 326 native inputs and
+all installed/release executables remain unchanged; the reference patch becomes
+the 327th native input. The normal user archive/installation remain tied to clean
+source `79e684b`. GTK build/options/provider logs, source checksums and libraries
+are retained under ignored `target/gtk-chooser-repair/`.
+
+The private repair passes for this reproduced defect. Delivering it to the normal
+GTK dependency remains the existing stable-port blocker, alongside the same five
+bounded evidence groups. Successful portal receipts retain their original source
+and binary bindings. Final GTK/Wayland/D-Bus/unlocked/DNS/verified-HTTPS and fixture
+cleanup checks pass; Stay Awake and its 09:00 Minsk restoration timer are preserved.
+The clean development branch was fetched and rebased on current main `e232c886`.
