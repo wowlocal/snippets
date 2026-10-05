@@ -2,7 +2,8 @@
 
 Native GTK 4 / libadwaita desktop app and CLI, written in Rust. Python is not needed
 to build, install or run the application. It is used only by development tools
-that regenerate checked-in reference fixtures. The client handles ordinary local entries
+that regenerate checked-in reference fixtures or rebuild an optional patched GTK
+dependency with upstream Meson tools. The client handles ordinary local entries
 and an encrypted vault workspace; [the full desktop port remains in development](../docs/linux/IMPLEMENTATION.md).
 
 ## Build and install
@@ -15,7 +16,9 @@ omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode wayland wayland-
 
 Requirements: Rust 1.92+, GTK 4.12+, libadwaita 1.5+, ICU, libsecret 0.21+, Linux-PAM,
 libqrencode 4.1+, Wayland, libxkbcommon, Cairo/Pango and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
-are locked in `Cargo.lock`. The GUI links to the installed native GTK libraries.
+are locked in `Cargo.lock`. Source builds normally use the installed native GTK.
+The user test bundle includes the verified GTK 4.22.4 fallback-cancellation repair
+as an app-local shared library; its other native dependencies remain host-provided.
 The CLI and storage model also build without GTK or libsecret using `--no-default-features`.
 
 From the repository root:
@@ -34,6 +37,17 @@ Ensure the prefix's `bin` directory is on `PATH`.
 The authentication helper stays beside the application under `share/snippets-linux/`;
 it has no `bin` shortcut and runs without elevated privileges. Installation does
 not create or edit a system PAM policy.
+
+A bundled GUI embeds a relative ELF RUNPATH pointing to a manifest-addressed GTK
+directory beside the executable. The installer checks the exact regular-file
+payload, manifest/content hashes and SONAME before installing it, then completes
+and rechecks the runtime before replacing the GUI. Source builds without this
+option keep using system GTK even when an older bundle directory is present.
+CLI/helper and launched external applications receive no library-path override.
+`readelf` from binutils is required by the installer. The optional build input is
+`SNIPPETS_GTK_RUNTIME_DIR=gtk-runtime-<SHA256-of-SHA256SUMS>`; the corresponding
+directory belongs under the release output. The bundled license, original source
+archive, patch, receipt and `REBUILD.txt` allow rebuilding/replacing the dependency.
 
 ## Desktop settings and login startup
 
@@ -1811,7 +1825,7 @@ password in its native prompt yourself; automated acceptance used private PAM an
 keyring fixtures. Keep any diagnostic report to the action, observed result and
 whether focus returned; snippet contents and passwords are unnecessary.
 
-The known acceptance blocker is GTK 4.22.4 fallback cancellation during an
+The confirmed GTK 4.22.4 defect is fallback cancellation during an
 unfinished path-bar update. A minimal C program, independent of Snippets, reproduces
 `gtk_box_remove: GTK_IS_BOX` twice with a public 128-level folder. Fatal warnings
 abort; the ordinary policy emits criticals and returns the dismissed callback.
@@ -1819,10 +1833,13 @@ The simple GTK cancellation control passes. The installed Release app's actual
 **Choose Several Vault Files…** Cancel passes with both fatal and ordinary warning
 policies, and after navigation to that public folder: focus returns and the primary,
 vault and encrypted history/checkpoint files are unchanged. These passes do not
-close the GTK race. A private GTK rebuild now verifies a small ownership repair
-against that same minimal reproduction; the installed system library and normal
-user archive still need that dependency repair. See the evidence below. The real
-host-portal workflows remain passing, and cancellation timing is unchanged.
+close the GTK race by themselves. The user test bundle now carries the verified
+ownership repair for the app's fallback chooser. Its relative loader path is
+checked in an actual installed GUI without LD_LIBRARY_PATH. The same minimal
+reproduction passes using the installed runtime; original system GTK still
+reproduces the defect. The real host portal has its own unchanged GTK process;
+its existing cancel/single/multiple/focus smoke passes with the new GTK sender.
+Cancellation timing is unchanged.
 
 Reproduce only this concrete defect in an unlocked Wayland session:
 
@@ -1852,8 +1869,9 @@ specific defect.
 | Remaining preferences and diagnostics | Remaining physical/accessibility clipboard-history interaction. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
 | Apple data exchange | Perform an actual Apple-app JSON/encrypted-backup round trip. Independent format/vector checks and native backup portals pass. |
 
-The build is ready for user testing. Stable-port acceptance remains open on the
-GTK blocker and the checks above. Stay Awake and its 2026-10-05 09:00 Minsk
+The build is ready for user testing with the app-local GTK repair. Stable-port
+acceptance remains open on the five checks above; this does not repair system GTK
+or other applications. Stay Awake and its 2026-10-05 09:00 Minsk
 restoration timer were preserved.
 
 The latest verified user archive and its clean source commit are recorded in
@@ -1894,11 +1912,29 @@ LD_LIBRARY_PATH=/absolute/path/to/patched-library \
   bash snippets-linux/tests/chooser-cancel.sh minimal --inflight-folder
 ```
 
-This verifies the repair for the reproduced defect; the ordinary launcher still
-uses unpatched system GTK. The dependency blocker remains open until its repair
-is delivered and checked in the normal installation. The user test build remains
-`79e684b`, the five remaining evidence groups retain their scope, and no new runner
-option, Rust test or general acceptance variant was added.
+That private verification preceded delivery. The subsequent user bundle loads
+the same library through its own ELF RUNPATH, without changing system GTK. The
+five remaining evidence groups retain their scope, and no new runner option,
+Rust test or general acceptance variant was added.
+
+### App-local GTK delivery (2026-10-05)
+
+Only the GUI's link configuration changes: the Rust UI, model, CLI and helper
+sources remain unchanged. The candidate release installs into a prefix containing
+spaces, retaining exact binary/runtime hashes. The existing deep-folder minimal
+case and actual installed multiple chooser Cancel both pass with fatal warnings,
+verified mapped GTK providers and no LD_LIBRARY_PATH. Cancel returns focus and
+preserves the exact private primary/vault/history state. A compiler-only
+LD_RUN_PATH records the library path in the independent C diagnostic's ELF;
+the GUI uses its own relative RUNPATH.
+
+The existing actual host OpenFile smoke also passes cancel, single/multiple
+selection and parent focus with this GTK sender. That harness alone uses a scoped
+dependency override; the normal GUI and external portal environment are unchanged.
+All prior restoration/full-suite results retain their original source bindings.
+Both all-target Clippy configurations, format, installer syntax, Release build and
+the existing native harness compilation pass. The reference/runner/test count is
+unchanged. Current archive and deployment receipts remain under `target/user-testing`.
 The earlier `4bd8969` archive predates the first-key fixes below.
 
 ## Live diagnostics export and delete (2026-10-04)

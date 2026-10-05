@@ -1,5 +1,26 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=SNIPPETS_GTK_RUNTIME_DIR");
     if std::env::var_os("CARGO_FEATURE_DESKTOP").is_some() {
+        if let Some(directory) = std::env::var_os("SNIPPETS_GTK_RUNTIME_DIR") {
+            let directory = directory
+                .to_str()
+                .expect("GTK runtime directory must be UTF-8");
+            let digest = directory
+                .strip_prefix("gtk-runtime-")
+                .expect("GTK runtime directory must be content-addressed");
+            assert!(
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "GTK runtime directory must contain a SHA-256 digest"
+            );
+            // Only the GUI uses the optional app-local GTK. A versioned relative
+            // RUNPATH keeps later system-linked builds independent of old bundles.
+            println!(
+                "cargo:rustc-link-arg-bin=snippets=-Wl,--enable-new-dtags,-rpath,$ORIGIN/{directory}"
+            );
+        }
         pkg_config::Config::new()
             .atleast_version("4.1")
             .probe("libqrencode")

@@ -6142,3 +6142,44 @@ bounded evidence groups. Successful portal receipts retain their original source
 and binary bindings. Final GTK/Wayland/D-Bus/unlocked/DNS/verified-HTTPS and fixture
 cleanup checks pass; Stay Awake and its 09:00 Minsk restoration timer are preserved.
 The clean development branch was fetched and rebased on current main `e232c886`.
+
+
+### Deliver the verified GTK repair with the native GUI (2026-10-05)
+
+The optional `SNIPPETS_GTK_RUNTIME_DIR` build input accepts only an immutable
+manifest-addressed directory name. Build.rs emits a relative ELF RUNPATH only for
+the GUI binary. Default system-linked builds have no such path, so an old bundled
+directory cannot change a later unbundled build. CLI and PAM helper remain byte
+identical to the `79e684b` release and carry no runtime path. No Rust UI, model,
+worker or backend source changes; the sole changed native input is build.rs.
+
+The installer validates the exact seven regular-file runtime payload, its manifest
+address, each content hash and the GTK SONAME before modifying the prefix. It
+installs and verifies that version before atomically replacing the GUI. The
+runtime includes the exact verified shared library, COPYING, original GTK archive,
+source patch, build receipt and rebuilding/replacement instructions. Other native
+shared libraries remain supplied by the current Omarchy host. System GTK, global
+loader environment, desktop configuration and user data are unchanged.
+
+Format, installer syntax, all-target Clippy in desktop/headless configurations,
+Release compilation and the existing native harness build pass serially against
+the frozen 327-input source map. Installation into an owned prefix containing spaces
+preserves all program/runtime hashes and both launcher versions. The existing
+deep-folder minimal reproduction passes in 3.14 seconds without criticals using
+a compiler-recorded ELF path. The actual installed multiple chooser passes in
+5.79 seconds with its relative RUNPATH and no library-path environment override:
+mapped provider, Cancel, focus, normal exit and exact private state all check out.
+
+The unchanged host OpenFile smoke passes in 11.15 seconds with the new GTK sender,
+covering actual cancel, single/multiple selections and parent focus. The sender's
+mapped provider is verified. Only this private test harness uses LD_LIBRARY_PATH;
+the normal GUI uses its embedded path and the external portal retains its own
+unchanged system GTK. Source patch scope remains the same ownership cleanup,
+with no timing change or warning suppression. The independently failing system
+GTK reproduction is not relabeled as repaired.
+
+These checks deliver the known fallback repair for the app; they do not add a new
+test case, runner option or general acceptance matrix. The previous broader
+suites/restoration tests retain their source/binary bindings. The current archive
+and normal-prefix deployment use clean-source receipts, exact payload hashes and
+code-only rollback files. The same five bounded evidence groups remain open.
