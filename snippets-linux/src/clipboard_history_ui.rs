@@ -377,6 +377,7 @@ impl Service {
         dialog.add_responses(&[("cancel", "Cancel"), ("confirm", response)]);
         dialog.set_default_response(Some("cancel"));
         dialog.set_close_response("cancel");
+        observe_compact_dialog_layout(&dialog);
         *self.dialog.borrow_mut() = Some(dialog.clone());
         let this = self.clone();
         let generation = self.view_sequence.get();
@@ -446,6 +447,14 @@ impl HistoryWindow {
             "This computer only",
         )));
         layout.append(&header);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .vexpand(true)
+            .child(&content)
+            .build();
+        layout.append(&scroll);
         let privacy = label(
             "Copied text can include passwords and other secrets. History is encrypted locally, never synced, and retained for seven days; at most 1,000 entries / 32 MiB. Sensitivity hints and app exclusions cannot detect every secret.",
             "",
@@ -453,20 +462,25 @@ impl HistoryWindow {
         privacy.set_wrap(true);
         privacy.set_margin_start(16);
         privacy.set_margin_end(16);
-        layout.append(&privacy);
-        let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        content.append(&privacy);
+        let controls = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .column_spacing(8)
+            .row_spacing(8)
+            .max_children_per_line(4)
+            .build();
         let enable = gtk::Button::with_label("Enable Clipboard History…");
         let exclusions = gtk::Button::with_label("App Exclusions…");
         let reset = gtk::Button::with_label("Reset History Settings…");
         let refresh = gtk::Button::with_label("Refresh");
         for widget in [&enable, &exclusions, &reset, &refresh] {
-            controls.append(widget);
+            controls.insert(widget, -1);
         }
-        layout.append(&controls);
+        content.append(&controls);
         let query = gtk::SearchEntry::builder()
             .placeholder_text("Search copied text")
             .build();
-        layout.append(&query);
+        content.append(&query);
         let rows = gtk::ListBox::new();
         let preview = gtk::TextView::builder()
             .editable(false)
@@ -483,15 +497,20 @@ impl HistoryWindow {
             .position(360)
             .vexpand(true)
             .build();
-        layout.append(&pane);
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        content.append(&pane);
+        let actions = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .column_spacing(8)
+            .row_spacing(8)
+            .max_children_per_line(5)
+            .build();
         let copy = gtk::Button::with_label("Copy");
         let create = gtk::Button::with_label("Create Ordinary Snippet…");
         let delete = gtk::Button::with_label("Delete Entry…");
         let clear = gtk::Button::with_label("Clear History…");
         let more = gtk::Button::with_label("Show More");
         for widget in [&copy, &create, &delete, &clear, &more] {
-            actions.append(widget);
+            actions.insert(widget, -1);
         }
         layout.append(&actions);
         let status = label("Collection off.", "dim-label");

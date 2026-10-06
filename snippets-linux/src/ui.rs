@@ -106,6 +106,29 @@ fn button(icon: &str, tooltip: &str) -> gtk::Button {
     widget.update_property(&[gtk::accessible::Property::Label(tooltip)]);
     widget
 }
+fn observe_compact_dialog_layout(dialog: &adw::AlertDialog) {
+    // libadwaita's compact heading changes its measured height when `short`
+    // toggles. Invalidate the children too: resizing only the outer contents
+    // can retain an incompatible height in the message area's GTK cache.
+    let short = Cell::new(dialog.has_css_class("short"));
+    dialog.connect_css_classes_notify(move |dialog| {
+        let next = dialog.has_css_class("short");
+        if short.replace(next) == next {
+            return;
+        }
+        let mut pending = dialog.first_child().into_iter().collect::<Vec<_>>();
+        while let Some(widget) = pending.pop() {
+            if let Some(child) = widget.first_child() {
+                pending.push(child);
+            }
+            if let Some(sibling) = widget.next_sibling() {
+                pending.push(sibling);
+            }
+            widget.queue_resize();
+        }
+    });
+}
+
 fn scrolled(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
         .child(child)

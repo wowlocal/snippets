@@ -2281,6 +2281,26 @@ Those checks remain in the normal Omarchy input group. The seven-group board is
 narrowed, the independent GTK chooser blocker stays open, and the installed user
 test build and archive are unchanged.
 
+## Compact clipboard-history controls (2026-10-06)
+
+A 621×339 Clipboard History tile put the status label at y=342, outside the
+visible window. The header, adaptive action rows and status now remain outside
+an expandable vertical scroller; privacy text, collection controls, search and
+entries can scroll. Both control rows use nonselectable FlowBox children so
+buttons fit the available width. The success footer is visible in the same
+controlled viewport after a native Wayland pointer Copy; all 45 literal fixture
+bytes reach the clipboard. Real private-keyring background collection remains
+opt-in and is disabled before pointer inspection. User clipboard text is held
+only in memory for restoration, and the user library is not a fixture.
+
+The compact Enable confirmation also reproduces the libadwaita measurement
+warning. Its child-cache invalidation is now a shared native UI helper used by
+history confirmations and Learning reset dialogs. The small consent/Copy flow
+and the existing real learning/reset/restart cycle pass with fatal GTK warnings.
+Evidence retains the original tiled failure and the same-size private controlled
+confirmation. Physical mouse input and a fresh normal session remain unverified;
+this layout change does not repair or close the older missing-backslash failure.
+
 ## Installed learning and pointer selection (2026-10-06)
 
 The installed GUI now records learning from actual Fcitx expansion acknowledgment,

@@ -203,26 +203,7 @@ fn reset_dialog(records: bool, bindings: bool) -> adw::AlertDialog {
     dialog.set_close_response("cancel");
     dialog.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
     dialog.set_body_use_markup(false);
-    // libadwaita's compact heading changes its measured height when `short`
-    // toggles. Invalidate the children too: resizing only the outer contents
-    // can retain an incompatible height in the message area's GTK cache.
-    let short = Cell::new(dialog.has_css_class("short"));
-    dialog.connect_css_classes_notify(move |dialog| {
-        let next = dialog.has_css_class("short");
-        if short.replace(next) == next {
-            return;
-        }
-        let mut pending = dialog.first_child().into_iter().collect::<Vec<_>>();
-        while let Some(widget) = pending.pop() {
-            if let Some(child) = widget.first_child() {
-                pending.push(child);
-            }
-            if let Some(sibling) = widget.next_sibling() {
-                pending.push(sibling);
-            }
-            widget.queue_resize();
-        }
-    });
+    observe_compact_dialog_layout(&dialog);
     dialog
 }
 

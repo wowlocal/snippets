@@ -6800,3 +6800,25 @@ verification/cleanup corrections. User settings are preserved; ordinary-library
 fixtures are isolated. The five remaining groups and deferred cloud/race work
 are unchanged. The new candidate changes only learning-window/dialog layout;
 Fcitx addon bytes are unchanged from the surface-crash repair.
+
+Compact history layout, 2026-10-06: the same small-window defect is reproduced
+in Clipboard History. In a 621×339 tile, its status center is y=342, outside the
+viewport. Its middle content is now vertically scrollable, both button groups
+wrap through nonselectable FlowBox rows, and its header/actions/status stay
+visible. The compact Enable dialog repeats the known GTK measurement warning;
+the Learning dialog's public-API child-cache invalidation is moved into a shared
+UI helper and applied to history confirmations. The current installed GUI's
+private keyring/consent/collection/opt-out and actual pointer Copy pass. The
+45-byte clipboard match and success footer are inspected in a controlled private
+621×339 window; the original tiled failure is retained. No permanent compositor
+rule or user settings change is introduced.
+
+The background-copy setup must focus its separate public receiver: Snippets is
+intentionally excluded from history capture. A private library window introduced
+for layout inspection otherwise makes the collection control fail. The inspector
+also keeps runtime control files separate from exported safe evidence. Its
+clipboard owner preserves the latest nonfixture text through cleanup without
+persisting it. Native Learning's pointer/reset/restart cycle is rerun after the
+shared-helper move and passes on the same new GUI. The Fcitx addon is unchanged,
+the older missing-backslash cause remains unproven, and the five acceptance
+groups remain unchanged.
