@@ -6721,3 +6721,16 @@ stopped and the normal primary and current clipboard are restored separately.
 The five acceptance groups remain unchanged. Current Capture-fixed binaries
 are bound to ce29ed1e3921f973c76f4574a5b437972c854fa2; broader earlier live
 results retain their original binary hashes.
+
+Autonomous clipboard-history acceptance, 2026-10-06: after the user asks to
+automate desktop clicks, the installed Capture-fixed GUI is tested in a private
+library/session/keyring. Background collection records one public fixture;
+collection is then disabled before interaction. The owned window is inspected
+visually and its Copy button is clicked through a native Wayland virtual pointer,
+without an AT-SPI click action. The visible success status and exact 45-byte
+clipboard match both pass. The normal primary and latest nonfixture selection
+are restored. This establishes autonomous pointer delivery on the current GUI,
+not physical hardware input. Safe evidence remains in
+core-functionality/autonomous-history. Main was fetched and the branch remains
+rebased on 25296338. The existing user archive retains its exact 34caf0f source
+receipt; these additional results bind the same ce29ed1 native binaries.
