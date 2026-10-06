@@ -1200,7 +1200,7 @@ An isolated selected-text receiver reproduces failed copying in Russian and
 successful copying in English. A user-local override uses XKB `code:54` for C
 and preserves Ctrl+Insert for terminal-tagged windows. After the override,
 Super+C copies the exact fixture in both layouts through native virtual keyboard
-events. Physical confirmation of this host-config repair remains pending.
+events. The user also confirms physical Super+C copies without error in both layouts.
 
 The override lives in `~/.config/hypr/bindings.lua`, unbinds `SUPER + C` before
 replacing it, retains the existing down/up timer and focused-surface targeting,

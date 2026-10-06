@@ -6708,8 +6708,8 @@ release-only dispatcher control rejects the named Latin C in the Russian group
 and accepts XKB code:54 in both groups. The user-local bindings override retains
 terminal Ctrl+Insert, focused-layer delivery and the existing down/up timer;
 reload reports no configuration errors. The same receiver copies its exact text
-in both layouts after the override. These are virtual input checks; the user's
-physical confirmation remains pending. No packaged Omarchy defaults are edited.
+in both layouts after the override. The user subsequently confirms physical Super+C copies without error in both
+layouts. No packaged Omarchy defaults are edited.
 
 The user's actual copied text appearing in history establishes collection but
 does not qualify physical history Copy. A cleanup error clears the selection;
