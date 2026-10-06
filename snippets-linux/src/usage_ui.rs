@@ -41,14 +41,30 @@ impl Settings {
         content.set_margin_start(24);
         content.set_margin_end(24);
         content.set_margin_bottom(24);
-        layout.append(&content);
-        content.append(&label("The picker learns from successful copy, paste and expansion actions. Match quality and pins keep priority. The library list keeps its usual order.", ""));
+        let scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .vexpand(true)
+            .child(&content)
+            .build();
+        layout.append(&scroll);
+        let explanation = label(
+            "The picker learns from successful copy, paste and expansion actions. Match quality and pins keep priority. The library list keeps its usual order.",
+            "",
+        );
+        explanation.set_wrap(true);
+        content.append(&explanation);
         let ranking = gtk::CheckButton::with_label("Prefer frequently used snippets in the picker");
         let memory =
             gtk::CheckButton::with_label("Remember short search prefixes and chosen snippets");
         content.append(&ranking);
         content.append(&memory);
-        content.append(&label("Turning prefix memory off erases those choices. Turning frequency ranking off keeps collecting usage counts. Counts and prefixes stay in private local files; they are excluded from sync, export and encrypted backups. Snippet bodies, names, tags and clipboard text are never stored in this history.", "dim-label"));
+        let privacy = label(
+            "Turning prefix memory off erases those choices. Turning frequency ranking off keeps collecting usage counts. Counts and prefixes stay in private local files; they are excluded from sync, export and encrypted backups. Snippet bodies, names, tags and clipboard text are never stored in this history.",
+            "dim-label",
+        );
+        privacy.set_wrap(true);
+        content.append(&privacy);
         let counts = label("Loading local learning…", "");
         content.append(&counts);
         let mut resets = Vec::new();
@@ -187,6 +203,26 @@ fn reset_dialog(records: bool, bindings: bool) -> adw::AlertDialog {
     dialog.set_close_response("cancel");
     dialog.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
     dialog.set_body_use_markup(false);
+    // libadwaita's compact heading changes its measured height when `short`
+    // toggles. Invalidate the children too: resizing only the outer contents
+    // can retain an incompatible height in the message area's GTK cache.
+    let short = Cell::new(dialog.has_css_class("short"));
+    dialog.connect_css_classes_notify(move |dialog| {
+        let next = dialog.has_css_class("short");
+        if short.replace(next) == next {
+            return;
+        }
+        let mut pending = dialog.first_child().into_iter().collect::<Vec<_>>();
+        while let Some(widget) = pending.pop() {
+            if let Some(child) = widget.first_child() {
+                pending.push(child);
+            }
+            if let Some(sibling) = widget.next_sibling() {
+                pending.push(sibling);
+            }
+            widget.queue_resize();
+        }
+    });
     dialog
 }
 

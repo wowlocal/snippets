@@ -6769,3 +6769,34 @@ setting is off, with Suggestions still on; the normal UI confirms the disabled
 status and no observer socket. The saved choice is respected, the normal primary
 and three global actions are running, and Fcitx has no restart/crash or runtime
 trace override. The existing user archive and all 344 app inputs remain unchanged.
+
+Installed pointer/learning acceptance, 2026-10-06: actual selection from the
+Fcitx panel delivers the non-default fixture body and records usage/prefix
+learning through its real acknowledgment. The existing independent reset and
+restart cycle now runs through native pointer clicks/scrolling on the installed
+application, rather than App::learn test notifications. Cancel preserves both
+parts; counts reset preserves choices; prefix reset preserves counts; the final
+state survives process restart. Receiving focus and fictional-library bytes
+remain intact. The physical-pointer claim remains false.
+
+The actual small desktop tile exposes unwrapped text and inaccessible controls
+in Suggestion Learning. Descriptions now wrap and the content is vertically
+scrollable below its header. Opening its confirmation in a 621×339 tile exposes
+a GTK fatal-warning check: a box reports 81 pixels for width 621 against an
+earlier 93-pixel minimum. The private core ends in GLib logging/abort, through
+GTK size-request cache and scrolled-window measurement; no OOM is observed.
+Extracted cores are removed after diagnosis, and only closed stack/type facts
+are retained. libadwaita's `short` class changes heading/response measurements
+while queuing resize only on outer contents. The learning reset dialog now
+queues child resizes on that class transition using public GTK API. The complete
+installed pointer/scroll and reset/restart cycle passes with G_DEBUG fatal
+warnings after that change. No heading text or observation timeout is changed
+as a repair.
+
+The runner also corrects its lifecycle: a normal background primary is launched
+without waiting for process exit, learning acknowledgment precedes recipient
+focus handoff, and an enabled private restart reuses saved consent. Those are
+verification/cleanup corrections. User settings are preserved; ordinary-library
+fixtures are isolated. The five remaining groups and deferred cloud/race work
+are unchanged. The new candidate changes only learning-window/dialog layout;
+Fcitx addon bytes are unchanged from the surface-crash repair.

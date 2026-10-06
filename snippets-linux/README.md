@@ -2281,6 +2281,32 @@ Those checks remain in the normal Omarchy input group. The seven-group board is
 narrowed, the independent GTK chooser blocker stays open, and the installed user
 test build and archive are unchanged.
 
+## Installed learning and pointer selection (2026-10-06)
+
+The installed GUI now records learning from actual Fcitx expansion acknowledgment,
+with a native Wayland pointer choosing the non-default suggestion. The exact
+body arrives in an isolated GTK recipient while its focus stays there. Learning
+reports one usage record and one remembered prefix. Cancel preserves both;
+Reset Usage Counts preserves the prefix; a second acknowledged insertion followed
+by Forget Prefix Choices preserves its count. The resulting state survives Quit
+and reopening the installed process. No App::learn notification is fabricated.
+
+This exposed a desktop-layout defect: unwrapped descriptions stretched
+Suggestion Learning beyond its tile, and reset buttons fell below a 621×339
+window. Its explanations now wrap and its content scrolls vertically beneath
+an unchanged header. In this compact viewport, the bundled libadwaita dialog
+also retained incompatible child measurements when its `short` CSS class
+changed. The reset dialog now invalidates its child measurement caches through
+public GTK API on that transition. The same pointer/scroll, Cancel, independent
+reset and restart flow passes with fatal GTK warnings enabled.
+
+The fixture verifies a reset control is inside its visible viewport before
+clicking and waits for the actual learning acknowledgment before changing
+recipient focus. It preserves the library bytes and normal user's current
+Expansion-off setting. This establishes automated delivery and learning on the
+current GUI; physical mouse input and a fresh normal compositor session remain
+separate limits. Core evidence is in `core-functionality/installed-learning-pointer/`.
+
 ## Native process termination and offline restoration (2026-10-04)
 
 The already listed actual process-death gate passes at the mixed-image boundary.
