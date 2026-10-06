@@ -29,6 +29,7 @@ struct fixture {
     struct writer *writers;
     unsigned receives;
     int quit;
+    int initial_capture;
 };
 static const unsigned char public_text[] = "Public cafe\xc3\xa9 \xf0\x9f\xa6\x80 {clipboard}\n ";
 static const unsigned char nul_text[] = "Public\0text";
@@ -136,7 +137,7 @@ static void get_device(struct wl_client *client, struct wl_resource *manager, ui
     fixture->device = wl_resource_create(client, &ext_data_control_device_v1_interface, 1, id);
     assert(fixture->device);
     wl_resource_set_implementation(fixture->device, &device_impl, fixture, NULL);
-    selection(fixture, 'A', 0);
+    selection(fixture, fixture->initial_capture ? 'T' : 'A', 0);
     selection(fixture, 'P', 1);
 }
 static void forbidden_source(struct wl_client *client, struct wl_resource *manager, uint32_t id) {
@@ -183,6 +184,7 @@ int main(int argc, char **argv) {
     assert(argc == 2);
     signal(SIGPIPE, SIG_IGN);
     struct fixture fixture = {0};
+    fixture.initial_capture = !strcmp(argv[1], "capture");
     fixture.display = wl_display_create();
     assert(fixture.display);
     assert(wl_global_create(fixture.display, &wl_seat_interface, 2, &fixture, bind_seat));

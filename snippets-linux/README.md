@@ -1173,6 +1173,24 @@ repair; passing cold fields do not close it. Physical input, a fresh normal
 compositor session and full glass-material equivalence remain unverified. The
 user-test build is a candidate; cloud and chooser race work remains deferred.
 
+Physical keyboard acceptance confirms the Chromium first-field fixture expands
+to its exact 45-byte body without Return. Saved Open and Picker/Return actions
+also pass with physical keys, preserving target focus and the clipboard lease.
+The physical Capture action exposed a separate defect: while another application
+holds keyboard focus, GTK's cached clipboard offer can produce an empty draft.
+An existing-window control reproduces the empty body; the same selection is
+captured correctly when Snippets is focused.
+
+Explicit Capture now uses the existing read-only ext-data-control transport in
+a short-lived worker instead of the GTK clipboard offer. It reads only the current
+selection, checks the active Hyprland peer and unlocked session, retains the same
+256 KiB UTF-8/no-NUL limit and a two-second deadline, and writes no clipboard data
+or history. Empty selections show the existing hint without creating a draft.
+The focused/background comparison and the physical Capture hotkey now preserve
+the exact fixture body. Private native protocol tests cover an initial selection
+without any keyboard focus, empty input and revocation. Earlier first-field
+failure causality and a fresh normal compositor session remain open.
+
 ### Insert saved secure text
 
 Open the picker from the destination application and select an enabled secure

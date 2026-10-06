@@ -11,18 +11,18 @@ use zeroize::Zeroizing;
 const UNREADABLE: Error =
     Error("Clipboard text could not be read safely within its size and time limits.");
 #[derive(Clone, Copy)]
-struct Deadline {
+pub(crate) struct Deadline {
     boot: Duration,
     wall: Instant,
 }
 impl Deadline {
-    fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         Ok(Self {
             boot: crate::clock::uptime().ok_or(UNREADABLE)?,
             wall: Instant::now(),
         })
     }
-    fn validate(self) -> Result<()> {
+    pub(crate) fn validate(self) -> Result<()> {
         self.validate_at(crate::clock::uptime(), Instant::now())
     }
     fn validate_at(self, boot: Option<Duration>, wall: Instant) -> Result<()> {

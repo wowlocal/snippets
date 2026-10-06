@@ -45,7 +45,38 @@ unsafe extern "C" fn check(context: *mut c_void) -> c_int {
     .into()
 }
 pub(crate) struct Reader(NonNull<c_void>);
+
+/// One explicit Capture request. No collection preference, worker or history
+/// persistence is created. Unlike GDK's clipboard offer, this selection remains
+/// readable while another application's window holds the keyboard focus.
+pub(crate) fn capture_text() -> Result<Zeroizing<String>> {
+    let deadline = crate::sensitive_clipboard::Deadline::new()?;
+    let guard = || {
+        deadline.validate()?;
+        if crate::desktop::session_state() != crate::desktop::SessionState::Unlocked {
+            return Err(CANCELLED);
+        }
+        deadline.validate()
+    };
+    let mut reader = Reader::open(&guard)?;
+    if !crate::desktop::wayland_peer_matches(reader.peer_process()) {
+        return Err(CANCELLED);
+    }
+    reader.capture(&guard)
+}
+
 impl Reader {
+    fn capture(&mut self, guard: &dyn Fn() -> Result<()>) -> Result<Zeroizing<String>> {
+        let generation = self.generation();
+        let formats = self.formats()?;
+        let mime = ["text/plain;charset=utf-8", "text/plain"]
+            .into_iter()
+            .find(|mime| formats.iter().any(|format| format == mime))
+            .ok_or(CANCELLED)?;
+        // Capture must not create an empty draft. Preserve valid whitespace,
+        // UTF-8 and the model's 256 KiB bound; changed selections cancel reads.
+        self.receive(generation, mime, guard)
+    }
     pub fn open(guard: &dyn Fn() -> Result<()>) -> Result<Self> {
         guard()?;
         let mut context = Check(guard);

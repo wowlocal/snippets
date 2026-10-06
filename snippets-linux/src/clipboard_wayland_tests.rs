@@ -147,6 +147,26 @@ impl Drop for Server {
 }
 #[test]
 #[ignore = "requires unrestricted libwayland-server peer credentials; private socket pairs only"]
+fn explicit_capture_uses_current_nonempty_selection_without_keyboard_focus() {
+    let root = tempfile::tempdir().unwrap();
+    let binary = compile(root.path());
+    let (mut server, fd) = Server::start(&binary, "capture");
+    let mut reader = connect(fd, &|| Ok(())).unwrap();
+    assert_eq!(server.command(b'K'), 0);
+    // The private peer provides no keyboard focus or GTK surface. The same
+    // one-shot path used by Capture must still read the explicit selection.
+    assert_eq!(
+        reader.capture(&|| Ok(())).unwrap().as_str(),
+        "Public cafeé 🦀 {clipboard}\n "
+    );
+    server.offer(&mut reader, b'E');
+    assert!(reader.capture(&|| Ok(())).is_err());
+    server.offer(&mut reader, b'T');
+    assert!(reader.capture(&|| Err(CANCELLED)).is_err());
+}
+
+#[test]
+#[ignore = "requires unrestricted libwayland-server peer credentials; private socket pairs only"]
 fn private_libwayland_server_protocol_preserves_bounds_and_cancellation() {
     let root = tempfile::tempdir().unwrap();
     let binary = compile(root.path());

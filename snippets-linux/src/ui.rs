@@ -673,17 +673,22 @@ impl App {
         if !self.ensure_library() {
             return;
         }
-        let Some(display) = gdk::Display::default() else {
-            return;
-        };
+        let root = self.library.borrow().root.clone();
         let app = self.clone();
         glib::spawn_future_local(async move {
-            match display.clipboard().read_text_future().await {
-                Ok(Some(text)) if text.len() <= model::MAX_BODY_BYTES && !text.contains('\0') => {
+            let result = gio::spawn_blocking(crate::clipboard_history::wayland::capture_text).await;
+            if app.is_quitting() || app.library.borrow().root != root || !app.ensure_library() {
+                return;
+            }
+            match result {
+                Ok(Ok(text)) => {
                     app.main().new_entry(text.as_str());
                     app.present();
                 }
-                _ => app.toast("The clipboard has no supported text to capture."),
+                _ => {
+                    app.present();
+                    app.toast("The clipboard has no supported text to capture.");
+                }
             }
         });
     }

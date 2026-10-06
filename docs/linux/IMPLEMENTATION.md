@@ -6666,3 +6666,37 @@ still unclassified: neither the new positive fields nor the pointer crash repair
 prove its cause. Physical input and a fresh normal compositor session remain in
 the same finite acceptance group. Full glass equivalence and the other four
 acceptance groups remain open; cloud and chooser race work stays deferred.
+
+Physical core acceptance, 2026-10-06: the user types the Chromium first-field
+fixture on a real keyboard and confirms the exact 45-byte terminal body without
+Return. Open and Picker/Return global actions also pass with physical keys and
+preserve receiver focus and the clipboard lease. Capture activates but creates
+empty Untitled records in the isolated library. The original record remains
+intact; test-window expiry ends that initial attempt without qualifying Capture.
+
+The same explicitly published clipboard fixture is captured when Snippets is
+focused, but an existing-window background control produces an empty body.
+The GTK clipboard offer is therefore unsuitable for the global Capture path.
+Capture now reuses the native read-only ext-data-control reader for a single
+explicit request on a GIO worker. It verifies the Hyprland peer, unlocked session,
+current offer generation, 256 KiB UTF-8/no-NUL bounds and the existing two-second
+suspend-aware deadline. No history preference, collection worker, keyring or
+clipboard write is introduced. Library/quit checks still guard UI application
+of the result; unsupported/empty input brings forward the existing hint without
+creating a draft.
+
+The identical background control now saves all 30 fixture bytes, and physical
+Super+Alt+C saves the separate 31-byte fixture. The test closes its window too
+quickly for the user to inspect it, so subsequent human checks retain the window
+until acknowledgment. Native checks pass 28 history tests, all three private
+protocol tests (including initial capture without a keyboard-focused client),
+five deadline tests, desktop/headless all-target Clippy and Release build.
+The first new protocol attempt incorrectly requests the history fixture's
+forbidden baseline body; a distinct explicit-capture mode now publishes a
+readable initial selection. This is a test-peer correction, not an added delay.
+The Chromium observation writer also has a temporary-file collision; the terminal
+receipt and user's physical report independently agree, and subsequent writes
+are serialized. Safe evidence is retained in core-functionality/physical-core.
+The first-field journal bracket contains one Fcitx process with no dumped exit or
+automatic restart, so the older lost-backslash failure is not qualified as the
+surface-crash defect. The same five finite acceptance groups remain open.
