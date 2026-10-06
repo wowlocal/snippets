@@ -12,9 +12,9 @@ Core functionality takes priority over further sync and race-condition work.
 
 | Feature | Current result |
 | --- | --- |
-| Global shortcuts | Saved Super+Alt+N/P/C bindings pass Open, targeted Picker/Return and Capture through native virtual-keyboard events. Picker returns focus and restores the previous clipboard. Physical hardware input is not established by these events. |
+| Global shortcuts | Physical Super+Alt+N and Super+Alt+P/Return pass; Picker returns focus and restores the previous clipboard. Physical Super+Alt+C exposed empty background capture, now repaired and verified to persist the exact fixture body in the installed candidate. |
 | Clipboard history | Installed UI consent, collection while its window is closed, accessible row selection, literal Copy, opt-out, process restart and Clear pass with an isolated real keyring. The independent GTK button now passes with the test pointer kept alive; physical pointer input remains unverified. User library data and prior ordinary clipboard text are preserved. |
-| Inline expansion and suggestions | The updated native candidate integrates with Fcitx instead of competing for its input-method seat. The actual user-prefix GUI and addon expand real library records in GTK, default native Wayland Chromium and Ghostty with the stock Omarchy Fcitx service running. A single `\` opens the caret panel; Down and Return insert the selected actual record without moving receiver focus. |
+| Inline expansion and suggestions | The updated native candidate integrates with Fcitx instead of competing for its input-method seat. The actual user-prefix GUI and addon expand real library records in GTK, default native Wayland Chromium and Ghostty with the stock Omarchy Fcitx service running. A single `\` opens the caret panel; Down and Return insert the selected actual record without moving receiver focus. The user also confirms physical Chromium first-field expansion without Return. |
 
 The panel follows the Mac interaction: up to eight ordinary names with keywords
 on the next line, typing `\` to open, arrows or Ctrl+N/P to select, Return/Tab to
@@ -30,7 +30,7 @@ observation in the new integration also failed; an unchanged repeat passed. That
 initial result is retained as unclassified, not claimed fixed by retrying or by
 waiting longer. Further sync and chooser-race work stays deferred. The current
 compositor is still in Safe Mode using the user's unchanged profile; physical
-input and a fresh normal session remain separate checks.
+history/pointer interaction and a fresh normal session remain separate checks.
 
 ## Build and install
 
@@ -1191,6 +1191,30 @@ the exact fixture body. Private native protocol tests cover an initial selection
 without any keyboard focus, empty input and revocation. Earlier first-field
 failure causality and a fresh normal compositor session remain open.
 
+### Omarchy universal copy in Russian layout
+
+The installed Omarchy universal Super+C binding can fail with a Lua
+`send_key_state` error in the Russian layout. This precedes Snippets history
+collection: Hyprland resolves a named Latin C in the active keyboard group.
+An isolated selected-text receiver reproduces failed copying in Russian and
+successful copying in English. A user-local override uses XKB `code:54` for C
+and preserves Ctrl+Insert for terminal-tagged windows. After the override,
+Super+C copies the exact fixture in both layouts through native virtual keyboard
+events. Physical confirmation of this host-config repair remains pending.
+
+The override lives in `~/.config/hypr/bindings.lua`, unbinds `SUPER + C` before
+replacing it, retains the existing down/up timer and focused-surface targeting,
+and passes reload/config-error checks. It is a local desktop repair; the
+Snippets installer does not modify Omarchy bindings. The underlying
+[key resolver](https://raw.githubusercontent.com/hyprwm/Hyprland/efb50993780079460b0cbed1363e2166a2de1d9f/src/config/lua/bindings/LuaBindingsDispatchers.cpp)
+accepts numeric XKB codes before attempting layout-dependent keysym lookup.
+
+The user's new copy appearing in history confirms collection, not the physical
+history Copy action. That action remains unverified. The test cleanup briefly
+cleared the selection; the latest entry was recovered via the isolated encrypted
+history UI and republished without printing or storing its plaintext. Recovery
+is excluded from the application's acceptance claims and user-test archive.
+
 ### Insert saved secure text
 
 Open the picker from the destination application and select an enabled secure
@@ -2089,7 +2113,7 @@ specific defect.
 
 | Remaining check | Current limit |
 | --- | --- |
-| Normal Omarchy input and focus | Current live evidence uses Safe Mode. The surface-wrapper Release addon passes all nine existing core stages without a Fcitx restart, including Ghostty click insertion and three cold browser fields. Existing caret-panel and independent GTK button clicks pass with a continuous test pointer. The earlier missing-backslash/literal-input failure still has no confirmed cause or repair. History passes via accessible row selection. Physical input and a fresh normal session remain. |
+| Normal Omarchy input and focus | Current live evidence uses Safe Mode. The surface-wrapper Release addon passes all nine existing core stages without a Fcitx restart, including Ghostty click insertion and three cold browser fields. Existing caret-panel and independent GTK button clicks pass with a continuous test pointer. The earlier missing-backslash/literal-input failure still has no confirmed cause or repair. Physical Chromium inline expansion, Open and Picker/Return pass; repaired Capture persists the physical fixture. History passes via accessible row selection; physical history Copy and pointer selection remain, along with a fresh normal session. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
 | Durable recovery | Other interrupted switching/first-key setup remains. Native candidate pairing from an independent trusted B installation preserves active A, restarts the invitation and retains the received B key until a separate PAM-authorized switch. Published-switch offline finish, unpublished-switch offline cancellation and first-key lost-response continuation pass. The interrupted empty-target candidate's losing-race pairing control is repaired and covered by the existing native controls gate; this does not prove all remaining interruption boundaries. Native restoration cuts, SIGKILL/offline restoration and the historical missing-header file case also pass. |
 | Remaining preferences and diagnostics | Accessible history selection, Copy, opt-out, restart and Clear now pass in the installed GUI. Physical history interaction remains. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |

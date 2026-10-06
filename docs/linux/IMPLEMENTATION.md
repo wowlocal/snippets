@@ -6700,3 +6700,24 @@ are serialized. Safe evidence is retained in core-functionality/physical-core.
 The first-field journal bracket contains one Fcitx process with no dumped exit or
 automatic restart, so the older lost-backslash failure is not qualified as the
 surface-crash defect. The same five finite acceptance groups remain open.
+
+Omarchy universal-copy defect, 2026-10-06: the user reports intermittent Super+C
+and a Lua send_key_state error. A selected public GTK receiver reproduces failed
+Super+C copying in Russian and successful copying in English. A separate
+release-only dispatcher control rejects the named Latin C in the Russian group
+and accepts XKB code:54 in both groups. The user-local bindings override retains
+terminal Ctrl+Insert, focused-layer delivery and the existing down/up timer;
+reload reports no configuration errors. The same receiver copies its exact text
+in both layouts after the override. These are virtual input checks; the user's
+physical confirmation remains pending. No packaged Omarchy defaults are edited.
+
+The user's actual copied text appearing in history establishes collection but
+does not qualify physical history Copy. A cleanup error clears the selection;
+the latest encrypted private history entry is recovered through its isolated
+keyring/UI and kept by a native clipboard owner. No plaintext clipboard body
+is written to diagnostics, evidence or packaging. The test's original binding
+snapshot rejects our intentional override during cleanup; owned children are
+stopped and the normal primary and current clipboard are restored separately.
+The five acceptance groups remain unchanged. Current Capture-fixed binaries
+are bound to ce29ed1e3921f973c76f4574a5b437972c854fa2; broader earlier live
+results retain their original binary hashes.
