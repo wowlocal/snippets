@@ -10,6 +10,11 @@
     "sha256": "bc7d6ef7a9d3090652460135d06b5a7409c3ded35c54172daeb51e3093135b62"
   },
   {
+    "file": "wl_surface.h",
+    "source": "https://raw.githubusercontent.com/fcitx/fcitx5/5.1.22/src/lib/fcitx-wayland/core/wl_surface.h",
+    "sha256": "c4d10f9d2a34d9e155f8469b3108e86c597e79346ab107af1ffc680a6a504eb7"
+  },
+  {
     "file": "COPYING",
     "source": "https://raw.githubusercontent.com/fcitx/fcitx5/5.1.22/LICENSES/LGPL-2.1-or-later.txt",
     "sha256": "1ccf09bf2f598308df4bed9cd8e9657dc5cd0973d2800318f2e241486e2edf3f"

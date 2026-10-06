@@ -173,9 +173,11 @@ fn main() {
         .expect("Copy installable Fcitx addon");
         println!("cargo:rerun-if-changed=src/inline_fcitx.cpp");
         println!("cargo:rerun-if-changed=src/inline_fcitx_popup.h");
+        println!("cargo:rerun-if-changed=src/inline_fcitx_surface.h");
         println!("cargo:rerun-if-changed=src/inline_fcitx_anchor.h");
         println!("cargo:rerun-if-changed=src/fcitx-5.1.22/waylandim_public.h");
         println!("cargo:rerun-if-changed=src/fcitx-5.1.22/zwp_input_method_v2.h");
+        println!("cargo:rerun-if-changed=src/fcitx-5.1.22/wl_surface.h");
         println!("cargo:rerun-if-changed=data/input-method-v2.xml");
         let state_fixture = addon_output.join("snippets-fcitx-state-fixture");
         let mut fixture = cc::Build::new().cpp(true).get_compiler().to_command();

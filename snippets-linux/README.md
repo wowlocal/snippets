@@ -6,14 +6,14 @@ that regenerate checked-in reference fixtures or rebuild an optional patched GTK
 dependency with upstream Meson tools. The client handles ordinary local entries
 and an encrypted vault workspace; [the full desktop port remains in development](../docs/linux/IMPLEMENTATION.md).
 
-## Core qualification, 2026-10-05
+## Core qualification, 2026-10-06
 
 Core functionality takes priority over further sync and race-condition work.
 
 | Feature | Current result |
 | --- | --- |
 | Global shortcuts | Saved Super+Alt+N/P/C bindings pass Open, targeted Picker/Return and Capture through native virtual-keyboard events. Picker returns focus and restores the previous clipboard. Physical hardware input is not established by these events. |
-| Clipboard history | Installed UI consent, collection while its window is closed, accessible row selection, literal Copy, opt-out, process restart and Clear pass with an isolated real keyring. Virtual pointer buttons also fail on an independent GTK control; physical pointer input remains unverified. User library data and prior ordinary clipboard text are preserved. |
+| Clipboard history | Installed UI consent, collection while its window is closed, accessible row selection, literal Copy, opt-out, process restart and Clear pass with an isolated real keyring. The independent GTK button now passes with the test pointer kept alive; physical pointer input remains unverified. User library data and prior ordinary clipboard text are preserved. |
 | Inline expansion and suggestions | The updated native candidate integrates with Fcitx instead of competing for its input-method seat. The actual user-prefix GUI and addon expand real library records in GTK, default native Wayland Chromium and Ghostty with the stock Omarchy Fcitx service running. A single `\` opens the caret panel; Down and Return insert the selected actual record without moving receiver focus. |
 
 The panel follows the Mac interaction: up to eight ordinary names with keywords
@@ -1136,8 +1136,42 @@ Snippets addon absent, three cold fields retain the complete 13-byte literal
 keyword. That control is too small to rule out an intermittent lower-layer
 failure. Existing deadlines and input sequences are preserved. Numeric evidence
 is retained under `target/live-omarchy-acceptance/core-functionality/first-field-external-observer/`.
-The installed addon and user-test archive remain `8143b06`; the same five finite
-acceptance groups remain open.
+Those checks restored the `8143b06` addon and retained its user-test archive.
+The surface-interoperability update below supersedes that installed renderer;
+the same five finite acceptance groups remain open.
+
+On 2026-10-06, the unchanged mouse-fallback addon reproduces a Fcitx `SIGSEGV`
+when the pointer enters its panel. The service automatically restarts, so a later
+active-service check did not expose the failure. The core's first two frames are
+inside `libclassicui`; their function names remain unsymbolized. Fcitx's pointer
+wrapper treats surface proxy user data as its `WlSurface` object, and ClassicUI
+then reads that wrapper's window data. Snippets previously supplied a native
+`Window*`. Both caret and layer surfaces now carry the pinned Fcitx wrapper with
+null ClassicUI window data. Local wrapper functions remain hidden, and the same
+5.1.22 SDK/runtime checks gate their use. No additional input-method seat, grab,
+key replay or observation delay is introduced.
+
+A separate remaining failed click is classified by closed numeric events:
+the button arrives, but both pointer coordinates are negative and row hit testing
+returns -1. The short-lived test pointer makes the seat capability disappear;
+Hyprland initializes a newly requested pointer under an existing surface at
+(-1,-1). Keeping the owned test device alive before Fcitx startup and throughout
+the test gives valid coordinates without adding a sleep. Invalid coordinates
+remain rejected in the application. This input-fixture correction is distinct
+from the actual surface interoperability repair.
+
+The production Release addon then passes all nine existing live stages, including
+Ghostty fallback click insertion, three receiver expansions, full modifier
+navigation, retained selection, global actions, history and three cold browser
+fields. One Fcitx process survives the complete sequence with no service restart.
+The earlier caret-popup click and independent GTK button also pass with the held
+device. All 43 serial inline tests, desktop/headless all-target Clippy, formatting,
+installer syntax and the Release build pass. Numeric evidence is retained in
+`target/live-omarchy-acceptance/core-functionality/surface-interop/`.
+The earlier lost-backslash Chromium failure still has no confirmed cause or
+repair; passing cold fields do not close it. Physical input, a fresh normal
+compositor session and full glass-material equivalence remain unverified. The
+user-test build is a candidate; cloud and chooser race work remains deferred.
 
 ### Insert saved secure text
 

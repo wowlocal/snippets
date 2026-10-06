@@ -414,6 +414,8 @@ private:
     wl_shm *shm = nullptr;
     uint32_t compositorName = 0, shmName = 0;
     wl_surface *surface = nullptr;
+    std::unique_ptr<fcitx::wayland::WlSurface> wrappedSurface;
+    ScopedConnection surfaceScale;
     zwp_input_popup_surface_v2 *role = nullptr;
     zwlr_layer_shell_v1 *layerShell = nullptr;
     zwlr_layer_surface_v1 *layer = nullptr;
@@ -522,7 +524,12 @@ private:
           role, connected);
       dispose<zwlr_layer_surface_v1, zwlr_layer_surface_v1_destroy>(layer,
                                                                     connected);
-      dispose<wl_surface, wl_surface_destroy>(surface, connected);
+      surfaceScale.disconnect();
+      if (wrappedSurface) {
+        snippets_surface::connected.at(surface) = connected;
+        wrappedSurface.reset();
+        surface = nullptr;
+      }
       frames.clear();
       buffers.clear();
       layerReady = false;
@@ -583,10 +590,8 @@ private:
       destroySurface();
       mouseAnchor = std::move(anchor);
       scale = found->second->scale;
-      surface = wl_compositor_create_surface(compositor);
-      static const wl_surface_listener listener = {
-          entered, left, preferredScale, preferredTransform};
-      wl_surface_add_listener(surface, &listener, this);
+      if (!createSurface())
+        return false;
       layer = zwlr_layer_shell_v1_get_layer_surface(
           layerShell, surface, found->second->proxy,
           ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "snippets-suggestions");
@@ -606,13 +611,19 @@ private:
       wl_display_flush(display);
       return true;
     }
-    static void entered(void *, wl_surface *, wl_output *) {}
-    static void left(void *, wl_surface *, wl_output *) {}
-    static void preferredTransform(void *, wl_surface *, uint32_t) {}
-    static void preferredScale(void *data, wl_surface *, int32_t value) {
-      auto *self = static_cast<Window *>(data);
-      self->preferred = std::clamp(value, 1, 4);
-      self->updateScale();
+    bool createSurface() {
+      auto *proxy = wl_compositor_create_surface(compositor);
+      if (!proxy)
+        return false;
+      wrappedSurface = std::make_unique<fcitx::wayland::WlSurface>(
+          proxy);
+      surface = fcitx::wayland::rawPointer(wrappedSurface.get());
+      surfaceScale = wrappedSurface->preferredBufferScale().connect(
+          [this](int32_t value) {
+            preferred = std::clamp(value, 1, 4);
+            updateScale();
+          });
+      return true;
     }
     bool prepare(zwp_input_method_v2 *im, InputContext *ic) {
       if (!connected || !compositor || !shm || !im ||
@@ -624,10 +635,8 @@ private:
         updateScale();
       }
       if (!surface) {
-        surface = wl_compositor_create_surface(compositor);
-        static const wl_surface_listener listener = {
-            entered, left, preferredScale, preferredTransform};
-        wl_surface_add_listener(surface, &listener, this);
+        if (!createSurface())
+          return false;
         role = zwp_input_method_v2_get_input_popup_surface(im, surface);
         static const zwp_input_popup_surface_v2_listener popupListener = {
             rectangle};

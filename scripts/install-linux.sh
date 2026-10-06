@@ -101,7 +101,7 @@ if [[ -n $TASK_GTK_RUNTIME ]]; then
 fi
 install_atomic "$TASK_TARGET_ROOT/release/snippets-owner-auth" "$TASK_DESTINATION/snippets-owner-auth" 755
 install_atomic "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" "$TASK_DESTINATION/libsnippets-fcitx.so" 755
-for TASK_FCITX_INTERFACE_FILE in COPYING SOURCE.json waylandim_public.h zwp_input_method_v2.h; do
+for TASK_FCITX_INTERFACE_FILE in COPYING SOURCE.json waylandim_public.h zwp_input_method_v2.h wl_surface.h; do
   install_atomic "$TASK_REPO_ROOT/snippets-linux/src/fcitx-5.1.22/$TASK_FCITX_INTERFACE_FILE" "$TASK_DESTINATION/fcitx-5.1.22/$TASK_FCITX_INTERFACE_FILE" 644
 done
 for TASK_WAYLAND_SOURCE in wlr-layer-shell-v1.xml wlr-layer-shell-v1.source.json xdg-shell.xml xdg-shell.source.json; do

@@ -8,6 +8,7 @@
 #include "snippets-fcitx-layer-protocol.h"
 #undef namespace
 #include <algorithm>
+#include "inline_fcitx_surface.h"
 #include <array>
 #include <cctype>
 #include <chrono>

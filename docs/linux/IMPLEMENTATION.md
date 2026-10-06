@@ -6620,3 +6620,49 @@ frees 646 MiB, preserving their libraries, logs and traces; the interrupted
 sequence then completes. Normal Fcitx, original addon metadata and the installed
 `8143b06` application are restored. Native source, waits, user-test archive and
 the five acceptance groups are unchanged.
+
+
+2026-10-06: the unchanged mouse-fallback addon crashes Fcitx with SIGSEGV on
+pointer entry. The unit restarts automatically; checking only its later active
+state masked the failure. The crash's top two frames belong to libclassicui but
+remain unsymbolized. Available memory and the kernel journal do not indicate an
+OOM kill. The extracted core is deleted after reading sanitized function/module
+stacks; no process memory is included in evidence.
+
+The pinned Fcitx pointer dispatcher converts wl_surface proxy user data to its
+WlSurface wrapper. ClassicUI then interprets the wrapper's window data. Our raw
+Window pointer violates that contract. The native renderer now owns a real
+5.1.22 WlSurface wrapper with null ClassicUI window data, including for caret
+popups. Its local constructor/destructor are hidden to avoid replacing another
+module's wrapper implementation. Preferred-scale signals preserve existing
+rendering; connection-aware destruction retains the previous live/disconnected
+protocol behavior. The copied header, license and source hash accompany installs.
+The existing SDK/runtime gate, one borrowed connection and SNI3 remain intact.
+
+An unchanged Release click can still fail without a crash when a new test pointer
+binds under the already-focused surface. Numeric events show negative x/y,
+button delivery, public focused context, presented generation and hit index -1.
+Hyprland's pinned seat source sends (-1,-1) for that initial resource. Creating
+the owned input device before Fcitx and keeping it alive throughout the existing
+cases prevents capability churn. It is a fixture lifetime correction, not an
+application delay, retry or permission to select a row at invalid coordinates.
+
+The actual installed Release artifacts pass all nine existing core stages with
+one unchanged Fcitx process: GTK/Chromium/Ghostty, Ghostty click, full Ctrl/Shift
+navigation, retained choice, saved global actions, history and three cold first
+fields. Existing caret-popup click and independent GTK button predicates also
+pass with the held device. One wrapper attempts to restore the already-restored
+normal primary a second time; its assertion failure is retained separately from
+the two passing control receipts. No user library is used as a fixture.
+The native checks pass 43 serial inline tests plus four intentionally ignored
+live tests, desktop/headless all-target Clippy, format, installer syntax and
+Release build. Evidence lives in core-functionality/surface-interop.
+
+The checkpoint is rebased onto main 252963380149b618ba9e1094e3c5bccd05f36bc9.
+There are 344 native inputs and 350 curated source files. The newer addon is
+installed after its complete live gate; the user-test archive binds the exact
+clean source and binary hashes. The previous first-field Chromium failure is
+still unclassified: neither the new positive fields nor the pointer crash repair
+prove its cause. Physical input and a fresh normal compositor session remain in
+the same finite acceptance group. Full glass equivalence and the other four
+acceptance groups remain open; cloud and chooser race work stays deferred.
