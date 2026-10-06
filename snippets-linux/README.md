@@ -1215,6 +1215,32 @@ cleared the selection; the latest entry was recovered via the isolated encrypted
 history UI and republished without printing or storing its plaintext. Recovery
 is excluded from the application's acceptance claims and user-test archive.
 
+### First-key diagnostic qualification
+
+The latest unchanged candidate also reproduces a Chromium control that retains
+all 13 literal keyword bytes without expanding. Its first backslash reaches
+Fcitx and is published as client preedit; an IME deactivate/reactivate then
+occurs before the next letter. Chromium sends keyboard keymap updates and
+text-input disable/enable without a window-focus leave. The original diagnostic
+runner accepts literal input and exits zero; a core qualification gate must
+inspect each receiving predicate and require exact expansion instead.
+
+A matched control keeps one native virtual-keyboard device alive before Fcitx
+and throughout the receiver stages, retaining the same focus actions, glyphs
+and per-key cadence. The two receiver stages and unchanged panel stages all
+expand exactly. The interrupted first-key transition is absent in the receiver
+control. This corrects a test-device lifecycle; it does not establish a product
+repair or prove the cause of the older 12-byte missing-backslash observation.
+No waiting interval is added as a repair. The native controller source is
+[retained for development](../docs/linux/testing/input-persistent.c).
+
+Runtime tracing is removed after the checks. Browser diagnostics are reduced
+to closed protocol header events before export; temporary raw logs from the
+fictional browsers are discarded. Current normal settings show Expansion off,
+so restoration respects that saved choice instead of requiring a connected
+worker. The normal primary and three global actions remain running. The native
+application and its latest user-test archive are unchanged.
+
 ### Insert saved secure text
 
 Open the picker from the destination application and select an enabled secure

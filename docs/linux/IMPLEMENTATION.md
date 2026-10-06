@@ -6734,3 +6734,38 @@ not physical hardware input. Safe evidence remains in
 core-functionality/autonomous-history. Main was fetched and the branch remains
 rebased on 25296338. The existing user archive retains its exact 34caf0f source
 receipt; these additional results bind the same ce29ed1 native binaries.
+
+First-key transport diagnosis, 2026-10-06: the original four-stage order on the
+unchanged a68e2c88 GUI / 832115a8 addon records twelve fixture backslash presses
+arriving at Fcitx and twelve corresponding client-preedit prefixes. In the last
+Chromium receiver, an input-method deactivation between the backslash and next
+letter yields a literal 13-byte keyword rather than expansion. Exit zero from
+the older receiver runner is therefore insufficient: its accepted literal-input
+predicate is not a passing expansion result. The diagnostic supervisor now
+checks the actual receiving results and returns failure for that outcome.
+
+Chromium's fictional private logs show keyboard keymap updates and text-input
+disable/enable, without a keyboard/window leave. A matched native controller
+keeps its keyboard device alive before Fcitx and through receiver stages; panel
+stages retain their original driver. All four exact-expansion controls pass,
+and no receiver backslash has the intervening IME deactivation. Focus actions,
+public glyphs and key cadence are preserved; no timeout is widened as a repair.
+The first all-persistent panel experiment separately hits its mouse-anchor
+geometry assertion and is not counted as a receiver result. These observations
+narrow the current synthetic-input failure to device/lifecycle interruption;
+they do not prove the original 12-byte failure's cause or modify the app.
+
+Browser-side interception does not cover Chromium's private Wayland logger.
+Only closed header event names/times are exported from the fictional logs;
+their temporary raw files are discarded. The early startup maps inspection
+can transiently be inaccessible; tracer setup now awaits its own mapped library
+before beginning the unchanged receiving sequence. This is setup validation,
+not a first-key workaround. Safe baseline/control evidence is retained in
+core-functionality/first-key-wire. The native C input controller is retained
+under docs/linux/testing, outside production app inputs.
+
+Normal restoration originally assumes Expansion is enabled. The current saved
+setting is off, with Suggestions still on; the normal UI confirms the disabled
+status and no observer socket. The saved choice is respected, the normal primary
+and three global actions are running, and Fcitx has no restart/crash or runtime
+trace override. The existing user archive and all 344 app inputs remain unchanged.
