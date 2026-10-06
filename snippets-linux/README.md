@@ -2071,7 +2071,7 @@ specific defect.
 
 | Remaining check | Current limit |
 | --- | --- |
-| Normal Omarchy input and focus | Current live evidence uses Safe Mode. Installed expansion/panels pass in GTK, Chromium and Ghostty; full Ctrl+N/P and Shift+Tab navigation pass. Three cold first fields pass on the capability-change addon, but the earlier reproduced missing-backslash/literal-input failure still has no confirmed cause or repair. Virtual pointer button delivery also fails on an independent GTK button; history passes via accessible row selection. Physical input and a fresh normal session remain. |
+| Normal Omarchy input and focus | Current live evidence uses Safe Mode. The surface-wrapper Release addon passes all nine existing core stages without a Fcitx restart, including Ghostty click insertion and three cold browser fields. Existing caret-panel and independent GTK button clicks pass with a continuous test pointer. The earlier missing-backslash/literal-input failure still has no confirmed cause or repair. History passes via accessible row selection. Physical input and a fresh normal session remain. |
 | Host authentication and lifecycle | Real login PAM/keyring interaction, hardware suspend/resume and a fresh-login autostart cycle remain user-session checks. Private PAM/keyring, simulated sleep and user-manager activation already pass. |
 | Durable recovery | Other interrupted switching/first-key setup remains. Native candidate pairing from an independent trusted B installation preserves active A, restarts the invitation and retains the received B key until a separate PAM-authorized switch. Published-switch offline finish, unpublished-switch offline cancellation and first-key lost-response continuation pass. The interrupted empty-target candidate's losing-race pairing control is repaired and covered by the existing native controls gate; this does not prove all remaining interruption boundaries. Native restoration cuts, SIGKILL/offline restoration and the historical missing-header file case also pass. |
 | Remaining preferences and diagnostics | Accessible history selection, Copy, opt-out, restart and Clear now pass in the installed GUI. Physical history interaction remains. Mapped learning/picker windows, independent resets and persisted options now pass with public learning notifications. Core privacy/persistence, native lifecycle controls and the complete native diagnostic export/delete cycle with the actual host SaveFile portal pass. The diagnostic fixture has no global sink or system-log mirror; physical learning input remains part of the normal Omarchy input gate. |
@@ -2081,13 +2081,11 @@ The source-bound archive is available for user testing. Its normal-prefix
 installation includes the combined GTK/adwaita runtime and native Fcitx addon;
 installation preserves library and preference metadata. Stable-port acceptance
 remains open on the five checks above, including the reproduced initial-field
-core blocker. System GTK and other applications are unchanged. The user-requested
-three-hour Stay Awake interval ended at its original 2026-10-05 13:40:17 Minsk
-deadline. The user's subsequent four-hour request has a separate restoration
-timer for 2026-10-05 18:21:31 Minsk.
+core blocker. System GTK and other applications are unchanged. Desktop idle
+schedules are managed separately from application acceptance.
 
 The latest verified user archive and its clean source commit are recorded in
-`target/user-testing/latest.json`. Builds retain the rebase on `main` `e232c886`
+`target/user-testing/latest.json`. Builds retain the rebase on `main` `25296338`
 and include source and binary receipts. The archive's installation check uses an
 owned temporary prefix; normal-prefix deployment has its own source/hash receipt.
 
