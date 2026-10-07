@@ -5,6 +5,39 @@ is now Rust with GTK 4 / libadwaita. The ordinary-library app and CLI have been 
 from the initial prototype; Python is no longer needed to run, build, or install them.
 Apple targets and shared Swift sources are unchanged.
 
+### Event-driven Fcitx query transport, 2026-10-07
+
+The SNI3 application lookup no longer blocks a Fcitx key handler or heartbeat in
+`poll` while waiting for a reply. A bounded native event-loop channel writes and
+reads fragmented frames using socket readiness, with the existing 500 ms request
+deadline and 50 ms commit acknowledgment deadline. Cancellation disables both
+sources before closing the authenticated descriptor and erases transport buffers.
+It does not recursively dispatch Wayland or add a thread per keystroke.
+
+The typed preedit is shown while query admission is pending. App refusal retains
+literal input in the same still-public context; lifecycle loss cancels pending
+work. Query updates coalesce behind one request. Stale metadata is discarded;
+append-only typing after a pending exact match and buffered separators survive
+its eventual insertion. Backspace invalidates that append-only admission. Pending
+selection carries record identity, rather than applying an obsolete row index.
+The packet vocabulary and existing GUI consent remain unchanged. Ordinary source
+and field checks still gate publication, and no surrounding text enters SNI3.
+
+The native fixture verifies fragmented response framing while an unrelated event
+continues to run, timeout, canceled-callback suppression, a Space during a delayed
+body reply, and sensitive-field cancellation before that reply. All 43 serial
+inline tests pass; five graphical cases remain ignored. Desktop all-target Clippy
+passes. These checks qualify the transport mechanism, not complete live acceptance.
+
+The temporary diagnostic addon passes the existing panel stage in GTK/Chromium/
+Ghostty. In the following direct-expansion stage Chromium retains a literal
+13-byte keyword instead of expanding. Exit zero from the older controller is
+not accepted as expansion success. This observation does not prove repair of the
+earlier 12-byte lost-prefix failure. The change is checkpointed for continued core
+qualification; it is not installed over the normal `d94418a` or packaged as a
+qualified replacement. Temporary services/overrides are cleaned up and the input
+quarantine remains active. The same finite board and deferred cloud work remain.
+
 ### Preserve typed input across a Fcitx method switch, 2026-10-07
 
 Deployment qualification is still pending for `575ee989`. Its archive passes

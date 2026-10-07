@@ -7,10 +7,11 @@
 #define namespace namespace_name
 #include "snippets-fcitx-layer-protocol.h"
 #undef namespace
-#include <algorithm>
 #include "inline_fcitx_surface.h"
+#include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -78,25 +79,7 @@ bool transfer(int fd, void *data, size_t size, bool sending,
   }
   return true;
 }
-bool packet(int fd, unsigned char kind, const std::string &payload,
-            unsigned char &replyKind, std::string &reply) {
-  auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-  std::array<unsigned char, 9> header{'S', 'N', 'I', '3', kind, 0, 0, 0, 0};
-  for (size_t i = 0; i < 4; ++i)
-    header[5 + i] = static_cast<unsigned char>(payload.size() >> (8 * i));
-  if (!transfer(fd, header.data(), header.size(), true, deadline) ||
-      (!payload.empty() && !transfer(fd, const_cast<char *>(payload.data()),
-                                     payload.size(), true, deadline)) ||
-      !transfer(fd, header.data(), header.size(), false, deadline) ||
-      std::memcmp(header.data(), "SNI3", 4) || header[4] > 3 ||
-      number(header.data() + 5) > Limit)
-    return false;
-  replyKind = header[4];
-  reply.resize(number(header.data() + 5));
-  return reply.empty() ||
-         transfer(fd, reply.data(), reply.size(), false, deadline);
-}
+#include "inline_fcitx_channel.h"
 int connectApp() {
   const char *runtime = getenv("XDG_RUNTIME_DIR");
   if (!runtime)
@@ -272,7 +255,7 @@ class Snippets : public AddonInstance {
 #endif
 public:
   explicit Snippets(Instance *instance)
-      : instance_(instance), popup_(instance) {
+      : instance_(instance), popup_(instance), channel_(instance->eventLoop()) {
     watchers_.push_back(instance_->watchEvent(
         EventType::InputContextKeyEvent, EventWatcherPhase::PreInputMethod,
         [this](Event &event) { key(static_cast<KeyEvent &>(event)); }));
@@ -309,21 +292,25 @@ public:
     timer_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 250000, 0,
         [this](EventSourceTime *timer, uint64_t) {
-          if (active_) {
-            pollfd p{fd_, POLLIN, 0};
-            if (!publicField(active_))
-              clear(active_);
-            else if (poll(&p, 1, 0) > 0 &&
-                     (p.revents & (POLLIN | POLLHUP | POLLERR)))
+          if (active_ && !publicField(active_))
+            clear(active_);
+          if (active_ && !channel_.pending()) {
+            pollfd peer{fd_, POLLIN, 0};
+            if (poll(&peer, 1, 0) > 0 &&
+                (peer.revents & (POLLIN | POLLHUP | POLLERR)))
               literal(active_);
-          } else {
+          }
+          if (!active_ && !channel_.pending()) {
             int fd = connectApp();
             if (fd >= 0) {
-              unsigned char kind = 0;
-              std::string reply;
-              packet(fd, 0, "", kind, reply);
-              erase(reply);
-              close(fd);
+              fd_ = fd;
+              channel_.start(fd, 0, "",
+                             [this, fd](bool, unsigned char, std::string &) {
+                               if (fd_ == fd && !active_) {
+                                 close(fd_);
+                                 fd_ = -1;
+                               }
+                             });
             }
           }
           timer->setNextInterval(250000);
@@ -332,6 +319,7 @@ public:
         });
   }
   ~Snippets() override {
+    channel_.cancel();
     if (active_)
       clear(active_);
     if (fd_ >= 0)
@@ -341,6 +329,14 @@ public:
 
 private:
   void clear(InputContext *ic, bool update = true) {
+    channel_.cancel();
+    erase(requestQuery_);
+    erase(terminalTail_);
+    queuedSelection_ = false;
+    queuedDefault_ = false;
+    queuedIdentity_.fill(0);
+    selectionFallback_ = 0;
+    queuedNavigation_ = 0;
     popup_.hide();
     if (update)
       ic->inputPanel().setCustomInputPanelCallback({});
@@ -359,7 +355,7 @@ private:
     }
   }
   void literal(InputContext *ic) {
-    std::string original = "\\" + query_;
+    std::string original = "\\" + query_ + terminalTail_;
     bool permitted = publicField(ic);
     clear(ic);
     if (permitted)
@@ -367,8 +363,8 @@ private:
     erase(original);
   }
   void render(InputContext *ic) {
-    Text preedit("\\" + query_);
-    preedit.setCursor(int(query_.size() + 1));
+    Text preedit("\\" + query_ + terminalTail_);
+    preedit.setCursor(int(query_.size() + terminalTail_.size() + 1));
     ic->inputPanel().setClientPreedit(preedit);
     auto list = std::make_unique<CommonCandidateList>();
     list->setPageSize(8);
@@ -411,14 +407,88 @@ private:
   }
   bool update(InputContext *ic, unsigned char request,
               const std::string &data) {
-    unsigned char kind = 0;
-    std::string reply;
-    if (!packet(fd_, request, data, kind, reply)) {
-      erase(reply);
+    if (channel_.pending()) {
+      render(ic);
+      return true;
+    }
+    requestKind_ = request;
+    requestQuery_ = query_;
+    appendOnly_ = true;
+    int fd = fd_;
+    bool started = channel_.start(
+        fd, request, data,
+        [this, ic, fd](bool success, unsigned char kind, std::string &reply) {
+          if (active_ != ic || fd_ != fd)
+            return;
+          if (!success || !publicField(ic)) {
+            erase(reply);
+            literal(ic);
+            return;
+          }
+          if (kind == 2) {
+            if (!appendOnly_ || !query_.starts_with(requestQuery_) ||
+                reply.size() + query_.size() - requestQuery_.size() +
+                        terminalTail_.size() +
+                        (requestKind_ == 1 && queuedSelection_ &&
+                                 selectionFallback_
+                             ? 1
+                             : 0) >
+                    Limit) {
+              erase(reply);
+              literal(ic);
+              return;
+            }
+            reply += query_.substr(requestQuery_.size());
+            if (requestKind_ == 1 && queuedSelection_ && selectionFallback_)
+              reply += selectionFallback_;
+            reply += terminalTail_;
+            apply(ic, kind, reply);
+            return;
+          }
+          if (kind == 1 && query_ != requestQuery_) {
+            erase(reply);
+            update(ic, 1, query_);
+            return;
+          }
+          if (!apply(ic, kind, reply) || active_ != ic)
+            return;
+          if (queuedNavigation_ && !rows_.empty()) {
+            auto count = int(rows_.size());
+            selected_ = size_t(
+                ((int(selected_) + queuedNavigation_) % count + count) % count);
+            selectionWasUserDriven_ = true;
+            render(ic);
+          }
+          queuedNavigation_ = 0;
+          if (queuedSelection_) {
+            bool found = false;
+            size_t index = selected_;
+            if (queuedDefault_)
+              found = !rows_.empty();
+            else
+              for (size_t i = 0; i < rows_.size(); ++i) {
+                if (rows_[i].identity == queuedIdentity_) {
+                  index = i;
+                  found = true;
+                  break;
+                }
+              }
+            queuedSelection_ = false;
+            if (found)
+              select(ic, index);
+            else if (selectionFallback_) {
+              terminalTail_.insert(terminalTail_.begin(), selectionFallback_);
+              literal(ic);
+            }
+          } else if (!terminalTail_.empty())
+            literal(ic);
+        });
+    if (!started) {
       literal(ic);
       return false;
     }
-    return apply(ic, kind, reply);
+    render(ic);
+    return true;
   }
   bool apply(InputContext *ic, unsigned char kind, std::string &reply) {
     if (!publicField(ic) || ic != active_) {
@@ -428,18 +498,21 @@ private:
     }
     if (kind == 2 && utf8::validate(reply) &&
         reply.find('\0') == std::string::npos) {
-      // Keep the authenticated connection alive just long enough to acknowledge
-      // commit.
       int fd = fd_;
       fd_ = -1;
       clear(ic);
       ic->commitString(reply);
       erase(reply);
-      std::array<unsigned char, 9> ack{'S', 'N', 'I', '3', 3, 0, 0, 0, 0};
-      transfer(fd, ack.data(), ack.size(), true,
-               std::chrono::steady_clock::now() +
-                   std::chrono::milliseconds(50));
-      close(fd);
+      fd_ = fd;
+      channel_.start(
+          fd, 3, "",
+          [this, fd](bool, unsigned char, std::string &) {
+            if (fd_ == fd && !active_) {
+              close(fd_);
+              fd_ = -1;
+            }
+          },
+          false, 50000);
       return true;
     }
     std::vector<Row> rows;
@@ -472,8 +545,17 @@ private:
     return true;
   }
   void select(InputContext *ic, size_t index) {
-    if (ic == active_ && publicField(ic) && index < rows_.size())
-      update(ic, 2, std::string(1, char(index)));
+    if (ic != active_ || !publicField(ic) || index >= rows_.size())
+      return;
+    if (channel_.pending()) {
+      if (requestKind_ == 2)
+        return;
+      queuedSelection_ = true;
+      queuedDefault_ = false;
+      queuedIdentity_ = rows_[index].identity;
+      return;
+    }
+    update(ic, 2, std::string(1, char(index)));
   }
   void consume(KeyEvent &event) {
     if (consumed_.size() < 64)
@@ -512,21 +594,21 @@ private:
           !ic->inputPanel().preedit().empty() ||
           !ic->inputPanel().clientPreedit().empty())
         return;
+      // A verified socket exists only while the opted-in GUI owns its worker.
+      // Keep the actual typed glyph visible while it asynchronously admits the
+      // query; refusal commits literal input, and lifecycle loss cancels it.
+      if (fd_ >= 0) {
+        channel_.cancel();
+        close(fd_);
+        fd_ = -1;
+      }
       fd_ = connectApp();
       if (fd_ < 0)
         return;
       active_ = ic;
       query_.clear();
-      // Only take ownership after the opted-in app admits this public field.
-      unsigned char kind = 0;
-      std::string reply;
-      if (!packet(fd_, 1, "", kind, reply) || kind != 1) {
-        erase(reply);
-        clear(ic);
-        return;
-      }
       consume(event);
-      apply(ic, kind, reply);
+      update(ic, 1, "");
       return;
     }
     if (key.check(FcitxKey_Escape)) {
@@ -536,6 +618,7 @@ private:
     }
     if (key.check(FcitxKey_BackSpace)) {
       consume(event);
+      appendOnly_ = false;
       if (query_.empty())
         clear(ic);
       else {
@@ -553,6 +636,12 @@ private:
                     key.check(Key(FcitxKey_p, KeyState::Ctrl).normalize()) ||
                     key.check(Key(FcitxKey_Tab, KeyState::Shift)) ||
                     key.check(Key(FcitxKey_ISO_Left_Tab, KeyState::Shift));
+    if (rows_.empty() && channel_.pending() && (next || previous)) {
+      consume(event);
+      // Preserve modulo for any possible row count, one through eight.
+      queuedNavigation_ = (queuedNavigation_ + (next ? 1 : -1)) % 840;
+      return;
+    }
     if (!rows_.empty() && (next || previous)) {
       consume(event);
       selected_ = (selected_ + rows_.size() + (next ? 1 : -1)) % rows_.size();
@@ -560,17 +649,33 @@ private:
       render(ic);
       return;
     }
-    if (!rows_.empty() &&
-        (key.check(FcitxKey_Return) || key.check(FcitxKey_KP_Enter) ||
-         key.check(FcitxKey_Tab))) {
+    if ((key.check(FcitxKey_Return) || key.check(FcitxKey_KP_Enter) ||
+         key.check(FcitxKey_Tab)) &&
+        (channel_.pending() || !rows_.empty())) {
       consume(event);
-      select(ic, selected_);
+      if (channel_.pending() && requestKind_ == 1) {
+        queuedSelection_ = true;
+        queuedDefault_ = !selectionWasUserDriven_ || rows_.empty();
+        if (!rows_.empty())
+          queuedIdentity_ = rows_[selected_].identity;
+        selectionFallback_ = key.check(FcitxKey_Tab) ? '\t' : '\n';
+      } else
+        select(ic, selected_);
       return;
     }
     std::string character = Key::keySymToUTF8(key.sym());
     auto modifiers =
         key.states() & (KeyStates(KeyState::Ctrl) | KeyState::Alt |
                         KeyState::Super | KeyState::Meta | KeyState::Hyper);
+    if (channel_.pending() && !modifiers.toInteger() && !character.empty() &&
+        (queuedSelection_ || !terminalTail_.empty() || character == " ") &&
+        terminalTail_.size() + character.size() <= 480) {
+      consume(event);
+      terminalTail_ += character;
+      erase(character);
+      render(ic);
+      return;
+    }
     if (modifiers.toInteger() || character.empty() ||
         character.find_first_of("\\ \t\r\n") != std::string::npos ||
         std::any_of(character.begin(), character.end(),
@@ -586,10 +691,18 @@ private:
   }
   Instance *instance_;
   MacPopupManager popup_;
+  AsyncChannel channel_;
   PanelPalette palette_;
   InputContext *active_ = nullptr;
   int fd_ = -1;
   std::string query_;
+  std::string requestQuery_, terminalTail_;
+  unsigned char requestKind_ = 0;
+  bool appendOnly_ = true;
+  bool queuedSelection_ = false, queuedDefault_ = false;
+  char selectionFallback_ = 0;
+  int queuedNavigation_ = 0;
+  std::array<unsigned char, 16> queuedIdentity_{};
   std::vector<Row> rows_;
   size_t selected_ = 0;
   bool selectionWasUserDriven_ = false;

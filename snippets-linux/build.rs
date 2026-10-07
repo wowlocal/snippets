@@ -172,6 +172,7 @@ fn main() {
         )
         .expect("Copy installable Fcitx addon");
         println!("cargo:rerun-if-changed=src/inline_fcitx.cpp");
+        println!("cargo:rerun-if-changed=src/inline_fcitx_channel.h");
         println!("cargo:rerun-if-changed=src/inline_fcitx_popup.h");
         println!("cargo:rerun-if-changed=src/inline_fcitx_surface.h");
         println!("cargo:rerun-if-changed=src/inline_fcitx_anchor.h");

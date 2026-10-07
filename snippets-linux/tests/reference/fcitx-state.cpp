@@ -25,6 +25,154 @@ protected:
   void updatePreeditImpl() override {}
 };
 struct CoreFixture {
+  static void asyncFraming() {
+    EventLoop loop;
+    AsyncChannel channel(loop);
+    int sockets[2];
+    assert(!socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets));
+    bool completed = false, responsive = false;
+    auto pulse = loop.addTimeEvent(CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 1000,
+                                   1, [&](EventSourceTime *source, uint64_t) {
+                                     source->setEnabled(false);
+                                     responsive = true;
+                                     return true;
+                                   });
+    pulse->setOneShot();
+    auto first = loop.addTimeEvent(
+        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 5000, 1,
+        [&](EventSourceTime *source, uint64_t) {
+          source->setEnabled(false);
+          assert(send(sockets[1], "SNI", 3, MSG_NOSIGNAL) == 3);
+          return true;
+        });
+    first->setOneShot();
+    auto rest = loop.addTimeEvent(
+        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 10000, 1,
+        [&](EventSourceTime *source, uint64_t) {
+          source->setEnabled(false);
+          const unsigned char bytes[]{'3', 1, 3, 0, 0, 0, 'a', 'b', 'c'};
+          assert(send(sockets[1], bytes, sizeof(bytes), MSG_NOSIGNAL) ==
+                 ssize_t(sizeof(bytes)));
+          return true;
+        });
+    rest->setOneShot();
+    assert(channel.start(
+        sockets[0], 1, "",
+        [&](bool success, unsigned char kind, std::string &reply) {
+          assert(success && kind == 1 && reply == "abc" && responsive);
+          completed = true;
+          loop.exit();
+        }));
+    assert(loop.exec() && completed && !channel.pending());
+    close(sockets[0]);
+    close(sockets[1]);
+  }
+  static void asyncTimeout() {
+    EventLoop loop;
+    AsyncChannel channel(loop);
+    int sockets[2];
+    assert(!socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets));
+    bool completed = false;
+    assert(channel.start(
+        sockets[0], 1, "",
+        [&](bool success, unsigned char, std::string &reply) {
+          assert(!success && reply.empty());
+          completed = true;
+          loop.exit();
+        },
+        true, 10000));
+    assert(loop.exec() && completed && !channel.pending());
+    close(sockets[0]);
+    close(sockets[1]);
+  }
+  static void asyncCancellation() {
+    EventLoop loop;
+    AsyncChannel channel(loop);
+    int old[2], fresh[2];
+    assert(!socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, old));
+    assert(!socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, fresh));
+    bool stale = false, completed = false;
+    assert(
+        channel.start(old[0], 1, "", [&](bool, unsigned char, std::string &) {
+          stale = true;
+        }));
+    channel.cancel();
+    const unsigned char invalid[]{'S', 'N', 'I', '3', 1, 1, 0, 4, 0};
+    assert(send(fresh[1], invalid, sizeof(invalid), MSG_NOSIGNAL) ==
+           ssize_t(sizeof(invalid)));
+    assert(channel.start(fresh[0], 1, "",
+                         [&](bool success, unsigned char, std::string &) {
+                           assert(!success && !stale);
+                           completed = true;
+                           loop.exit();
+                         }));
+    assert(loop.exec() && completed && !stale);
+    close(old[0]);
+    close(old[1]);
+    close(fresh[0]);
+    close(fresh[1]);
+  }
+  static void delayedBody(bool cancel) {
+    char name[] = "public-fcitx-async-context";
+    char disabled[] = "--disable=all";
+    char *arguments[]{name, disabled, nullptr};
+    Instance instance(2, arguments);
+    instance.initialize();
+    PublicContext context(instance.inputContextManager());
+    context.focusIn();
+    Snippets addon(&instance);
+    int sockets[2];
+    assert(!socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets));
+    addon.active_ = &context;
+    addon.fd_ = sockets[0];
+    addon.query_ = "n";
+    assert(addon.update(&context, 1, "n"));
+    assert(context.commits == 0 && addon.channel_.pending());
+    auto edit = instance.eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 1000, 1,
+        [&](EventSourceTime *source, uint64_t) {
+          source->setEnabled(false);
+          assert(addon.channel_.pending());
+          if (cancel) {
+            context.setCapabilityFlags(CapabilityFlag::Sensitive);
+            assert(!addon.active_ && !addon.channel_.pending());
+          } else {
+            KeyEvent space(&context, Key(FcitxKey_space, KeyStates(), 65),
+                           false);
+            addon.key(space);
+            assert(space.filtered() && addon.terminalTail_ == " ");
+          }
+          return true;
+        });
+    edit->setOneShot();
+    auto reply = instance.eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 10000, 1,
+        [&](EventSourceTime *source, uint64_t) {
+          source->setEnabled(false);
+          const unsigned char frame[]{'S', 'N', 'I', '3', 2,   6,   0,  0,
+                                      0,   'P', 'U', 'B', 'L', 'I', 'C'};
+          auto n = send(sockets[1], frame, sizeof(frame), MSG_NOSIGNAL);
+          if (cancel) {
+            assert(n < 0 && errno == EPIPE && context.commits == 0);
+            instance.eventLoop().exit();
+          } else
+            assert(n == ssize_t(sizeof(frame)));
+          return true;
+        });
+    reply->setOneShot();
+    auto done = instance.eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 30000, 1,
+        [&](EventSourceTime *source, uint64_t) {
+          source->setEnabled(false);
+          assert(!cancel && context.commits == 1 &&
+                 context.lastCommit == "PUBLIC ");
+          instance.eventLoop().exit();
+          return true;
+        });
+    done->setOneShot();
+    assert(instance.eventLoop().exec());
+    close(sockets[1]);
+  }
   static void inputMethodSwitch(Instance &instance,
                                 InputMethodSwitchedReason reason,
                                 const char *query, bool preserve) {
@@ -291,12 +439,17 @@ int main() {
   CoreFixture::presentation();
   CoreFixture::mousePlacement();
   CoreFixture::inputMethodSwitch(instance, InputMethodSwitchedReason::Other,
-                                "nat", true);
+                                 "nat", true);
   CoreFixture::inputMethodSwitch(instance, InputMethodSwitchedReason::Enumerate,
-                                "", true);
-  CoreFixture::inputMethodSwitch(instance,
-                                InputMethodSwitchedReason::CapabilityChanged,
-                                "nat", false);
+                                 "", true);
+  CoreFixture::inputMethodSwitch(
+      instance, InputMethodSwitchedReason::CapabilityChanged, "nat", false);
+  CoreFixture::asyncFraming();
+  CoreFixture::asyncTimeout();
+  CoreFixture::asyncCancellation();
+  CoreFixture::delayedBody(false);
+  CoreFixture::delayedBody(true);
   std::puts("state fixture: 8 modifier, 6 capability, 6 selection/protocol and "
-            "2 panel, 4 mouse placement and 3 input method switch checks passed");
+            "2 panel, 4 mouse placement, 3 input method switch and 5 async IPC "
+            "checks passed");
 }
