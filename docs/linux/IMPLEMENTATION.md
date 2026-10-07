@@ -5,6 +5,21 @@ is now Rust with GTK 4 / libadwaita. The ordinary-library app and CLI have been 
 from the initial prototype; Python is no longer needed to run, build, or install them.
 Apple targets and shared Swift sources are unchanged.
 
+### Real desktop keyring acceptance, 2026-10-07
+
+The actual desktop Secret Service is available and its default collection is
+unlocked. The unchanged production secrets.c adapter negotiates its required
+DH/AES session and passes one owned, random-namespace record cycle: initially
+missing, create, exact read, update, exact updated read, delete, then missing.
+Only public fictional bytes are used. No existing user item is targeted and no
+collection lock/unlock is requested. The disposable entry is removed; only the
+bounded outcome codes, booleans and production-source hash are retained in
+ignored real-keyring-owned-record.json. The private-keyring fixture's desktop-bus
+refusal remains intact; its collection-lock cases are not run on the desktop.
+This closes the real-provider CRUD observation, not real PAM credentials,
+hardware suspend or a fresh login. The original Apple-app exchange still needs
+an actual Mac resource; local Xcode/Swift tools are unavailable.
+
 ### Installed user-test milestone, 2026-10-07
 
 The qualified candidate is rebuilt from clean, pushed source 896b2099 and

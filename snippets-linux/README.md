@@ -2931,13 +2931,18 @@ The remaining acceptance is finite:
 1. Normal Omarchy configuration: physical shortcuts, focus, paste and inline
    expansion in the intended receiving applications; current live checks use
    Hyprland Safe Mode.
-2. Real PAM/keyring authentication, hardware sleep and a fresh login/autostart;
-   private or simulated checks do not close those observations.
+2. Real PAM authentication, hardware sleep and a fresh login/autostart remain
+   pending. The actual unlocked desktop Secret Service now passes production-
+   adapter create/read/update/delete in one disposable fictional namespace;
+   its record is removed and other user items are not targeted.
 3. The already listed remaining key-setup/switch interruption boundaries;
    earlier successful native restoration and interruption receipts keep their
    source and binary bindings.
-4. Physical input and accessibility checks for clipboard history.
-5. Round trips with actual Apple app JSON and encrypted backups.
+4. Physical input for clipboard history remains unavailable under the current
+   evdev quarantine. Accessibility and virtual pointer Copy pass on the installed
+   GUI; those results do not claim physical hardware evidence.
+5. Round trips with actual Apple app JSON and encrypted backups still require
+   a Mac resource; reference-codec and native-portal checks do not close it.
 
 The independent system GTK race still needs an upstream/system dependency fix.
 The bundled ownership repair covers the app's fallback chooser. New variants
