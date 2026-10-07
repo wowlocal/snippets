@@ -27,7 +27,9 @@ installer preserves desktop config and does not make that edit automatically.
 
 The candidate also preserves an ordinary typed query when switching Fcitx
 keyboard methods and performs query transport through the native event loop.
-The normal installation is still `d94418a` pending package/install verification.
+The `896b2099` archive is now installed and passes the same nine-stage gate again
+on the actual user-prefix binaries. Its offline installation and four native
+artifact hashes are verified; the licensed GTK/adwaita runtime is preserved.
 The complete port remains open; physical input and a fresh normal compositor
 session remain separate checks. See the current
 [implementation and qualification evidence](../docs/linux/IMPLEMENTATION.md).

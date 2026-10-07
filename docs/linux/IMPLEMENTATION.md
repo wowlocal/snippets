@@ -5,6 +5,31 @@ is now Rust with GTK 4 / libadwaita. The ordinary-library app and CLI have been 
 from the initial prototype; Python is no longer needed to run, build, or install them.
 Apple targets and shared Swift sources are unchanged.
 
+### Installed user-test milestone, 2026-10-07
+
+The qualified candidate is rebuilt from clean, pushed source 896b2099 and
+packaged as snippets-omarchy-0.1.0-x86_64-896b209.tar.gz. The archive has 33 exact
+regular members, a refreshed source receipt including the asynchronous channel,
+all native artifacts and the existing licensed GTK/adwaita runtime/rebuild
+material. Offline archive installation passes without Cargo or Python. The
+normal user-prefix upgrade is accepted only after all nine existing core stages
+pass again on its actual installed GUI/addon; the receipt binds all four hashes
+to the archive. The Chromium feature is read from a private byte copy of the
+actual user flags file and its effective command line is checked. There is no
+explicit feature override in this installed gate. Evidence is retained in
+ignored stable-core-itorxcoa and installed-hidden-webui-* directories.
+
+installed-current.json now names 896b2099. The installed GUI/CLI/PAM bytes remain
+the prior d94418a bytes; the addon has the event-driven query and method-switch
+repairs. The native 345-input source set matches the source-identical 43-pass,
+five-ignored inline suite and desktop all-target Clippy. A fresh release build
+binds those source bytes to 896b2099 and reproduces the qualified artifact hashes.
+User consent/preferences, ordinary clipboard restoration, stock Fcitx/background
+app cleanup and physical evdev quarantine remain intact. No compositor or machine
+restart occurs. The complete native-port goal remains open pending the original
+full acceptance scope; the current core gate has no failing stage with the
+Chromium 152 compatibility feature enabled.
+
 ### Chromium cold-field repair and full core gate, 2026-10-07
 
 The current first-field cancellation is traced to a different, background
@@ -45,7 +70,7 @@ line with a private exact backup. Other flags, Snippets preferences and the evde
 quarantine are preserved. The browser is not restarted automatically; the flag
 applies to new processes. A source package must document this Chromium 152
 requirement and retain the installer's policy of preserving desktop config.
-The normal installation remains d94418a until the new package's install gate.
+The installed milestone above records acceptance of the subsequent package upgrade.
 A separate unchanged d94418a baseline also passes three cold fields; that positive
 run cannot retroactively prove the cause of an old uninstrumented failure.
 The repair is claimed for the currently reproduced cancellation mechanism, and
