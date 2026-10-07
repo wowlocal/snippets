@@ -10,6 +10,12 @@ and an encrypted vault workspace; [the full desktop port remains in development]
 
 Core functionality takes priority over further sync and race-condition work.
 
+The current development fix also preserves a typed ordinary query literally when
+switching Fcitx keyboard methods in the same focused public field. A separate
+private US/Russian-method control reproduces the discarded `\nat` before the fix
+and verifies its exact preservation afterward. Sensitive capability transitions
+still discard it. This does not establish the cause of the older Chromium failure.
+
 The installed `d94418a` GUI/addon now passes all nine existing core stages in the
 current unlocked Omarchy session, including terminal expansion in three cold
 Chromium fields. Actual recipient results are checked, rather than treating a

@@ -5,6 +5,35 @@ is now Rust with GTK 4 / libadwaita. The ordinary-library app and CLI have been 
 from the initial prototype; Python is no longer needed to run, build, or install them.
 Apple targets and shared Swift sources are unchanged.
 
+### Preserve typed input across a Fcitx method switch, 2026-10-07
+
+A targeted check of the unclassified first-prefix loss found a separate concrete
+defect: switching from the US to the Russian Fcitx keyboard method in the same
+public GTK field discards an owned `\nat` query. Before the switch, the receiver
+reports a four-byte matching preedit; afterward it reports no preedit and zero
+committed bytes. Receiver focus, Fcitx process and fictional library stay intact.
+The check uses a private Fcitx profile/bus/library and does not change the user's
+configured input methods. The failed baseline and matched candidate evidence are
+retained separately under ignored `core-functionality/snippets-layout-loss-*/`.
+
+The addon now ends an ordinary input-method switch by committing its independently
+owned query literally to the still-public, focused context. It cancels selection
+and closes its query connection; it does not choose a snippet or acknowledge an
+expansion. Capability-driven switches retain the discard policy, and the existing
+public-field guard refuses commits after focus loss or in sensitive/disabled
+fields. Reset/destruction/focus handling is unchanged.
+
+The identical live candidate check retains exactly four committed bytes and an
+empty final preedit, with focus preserved. Its actual candidate addon provider is
+verified in the private Fcitx process. The existing native state fixture now checks
+literal query preservation, a lone backslash, capability-switch discard and no
+duplicate commit on a repeated event. It fails before the fix and passes after it.
+All 43 existing serial inline tests pass on the frozen 344 native inputs; five
+live/disabled graphical cases remain ignored and are not counted as GUI results.
+This finding does not classify the historical twelve-letter Chromium result;
+that original failure still has no confirmed cause or repair. The finite board
+and deferred cloud/chooser work remain unchanged.
+
 ### Current core acceptance, 2026-10-07
 
 Recovery resumed the existing native-app goal from the installed `d94418a`

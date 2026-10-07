@@ -13,14 +13,38 @@ public:
   ~PublicContext() override { destroy(); }
   const char *frontend() const override { return "public-snippets-fixture"; }
   size_t commits = 0;
+  std::string lastCommit;
 
 protected:
-  void commitStringImpl(const std::string &) override { ++commits; }
+  void commitStringImpl(const std::string &text) override {
+    ++commits;
+    lastCommit = text;
+  }
   void deleteSurroundingTextImpl(int, unsigned) override {}
   void forwardKeyImpl(const ForwardKeyEvent &) override {}
   void updatePreeditImpl() override {}
 };
 struct CoreFixture {
+  static void inputMethodSwitch(Instance &instance,
+                                InputMethodSwitchedReason reason,
+                                const char *query, bool preserve) {
+    PublicContext context(instance.inputContextManager());
+    context.focusIn();
+    Snippets addon(&instance);
+    addon.active_ = &context;
+    addon.query_ = query;
+    addon.render(&context);
+    InputContextSwitchInputMethodEvent event(reason, "", &context);
+    instance.postEvent(event);
+    assert(context.hasFocus());
+    assert(!addon.active_ && addon.query_.empty() && addon.rows_.empty());
+    assert(context.inputPanel().clientPreedit().empty());
+    assert(context.commits == (preserve ? 1u : 0u));
+    if (preserve)
+      assert(context.lastCommit == std::string("\\") + query);
+    instance.postEvent(event);
+    assert(context.commits == (preserve ? 1u : 0u));
+  }
   static Row row(unsigned char identity, const char *name,
                  const char *keyword) {
     Row result{name, keyword};
@@ -266,6 +290,13 @@ int main() {
   CoreFixture::invalidMetadata(instance, true);
   CoreFixture::presentation();
   CoreFixture::mousePlacement();
+  CoreFixture::inputMethodSwitch(instance, InputMethodSwitchedReason::Other,
+                                "nat", true);
+  CoreFixture::inputMethodSwitch(instance, InputMethodSwitchedReason::Enumerate,
+                                "", true);
+  CoreFixture::inputMethodSwitch(instance,
+                                InputMethodSwitchedReason::CapabilityChanged,
+                                "nat", false);
   std::puts("state fixture: 8 modifier, 6 capability, 6 selection/protocol and "
-            "2 panel and 4 mouse placement checks passed");
+            "2 panel, 4 mouse placement and 3 input method switch checks passed");
 }

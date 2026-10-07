@@ -291,6 +291,18 @@ public:
             if (event.type() == EventType::InputContextCapabilityChanged &&
                 publicField(ic))
               return;
+            // Changing layouts cancels Snippets selection, but the characters
+            // already typed still belong in this public, focused field. The
+            // keyboard engine resets its own panel before this watcher runs;
+            // our independently owned query must be committed literally.
+            // Capability-driven switches retain the existing discard policy.
+            if (event.type() == EventType::InputContextSwitchInputMethod &&
+                static_cast<InputContextSwitchInputMethodEvent &>(event)
+                        .reason() !=
+                    InputMethodSwitchedReason::CapabilityChanged) {
+              literal(ic);
+              return;
+            }
             clear(ic, event.type() != EventType::InputContextDestroyed);
           }));
     }
