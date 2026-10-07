@@ -5,6 +5,49 @@ is now Rust with GTK 4 / libadwaita. The ordinary-library app and CLI have been 
 from the initial prototype; Python is no longer needed to run, build, or install them.
 Apple targets and shared Swift sources are unchanged.
 
+### Current core acceptance, 2026-10-07
+
+Recovery resumed the existing native-app goal from the installed `d94418a`
+candidate. The clean `work/omarchy-rust-checkpoint` checkout, its native sources,
+the user archive and all four installed native artifact hashes agree. Main remains
+`25296338`; no new native build or installation was needed for this qualification.
+
+All nine existing core stages pass on that actual installed GUI/addon: panel and
+exact expansion in GTK/Chromium/Ghostty, Ghostty pointer selection, Ctrl+N/P and
+Shift+Tab, retained selection while typing, saved Open/Picker/Capture shortcuts,
+encrypted history collection/copy/opt-out/restart/clear, and three empty-profile
+Chromium first fields with final non-composing expansion. The supervisor checks
+the actual recipient results; a literal keyword is a failure even when an older
+controller exits zero. Fcitx stays in one process without an automatic restart
+through all nine stages. Evidence is retained under ignored
+`target/live-omarchy-acceptance/core-functionality/snippets-recovery-core-pkhfrrnp/`.
+
+The desktop intentionally has no physical input devices. A first setup attempt
+without a virtual keyboard fails before expansion consent: compositor selection
+alone supplies no GTK keyboard focus. That failed receipt remains separately
+retained. The successful existing sequence holds a native Wayland virtual keyboard
+and pointer for seat capability lifetime; individual stage inputs keep their
+original controllers and cadence. This corrects the isolated test setup, changes
+no application behavior and claims no physical hardware check.
+
+The evdev quarantine, unlocked Stay Awake session, compositor and saved user
+consent are preserved. User expansion remains disabled; only fictional isolated
+libraries opt in. The normal background primary and stock Fcitx service are
+restored afterward. The historical lost first backslash is still unclassified;
+these positive results do not prove a causal repair. The same five acceptance
+groups remain, and cloud/sync and chooser-race work stays deferred.
+
+The existing four-stage panel/receiver order also passes on this candidate with
+the original per-call keyboard driver and one held seat keyboard. Sanitized wire
+records cover the Fcitx frontend and fixture driver, but the browser logger hook
+produces no browser records in this run. This is a limited diagnostic observation,
+not proof of the old loss's cause or of its repair. Trace setup initially compares
+an unresolved symlink with the mapped library's real pathname; that setup failure
+is retained separately. Resolving the owned library path corrects the provider
+check without changing input or observation timing. Runtime trace overrides are
+removed and normal services/preferences are restored. No persistent-input repeat
+or additional acceptance variant is needed after the unchanged order passes.
+
 Current v1 conflict-carrier recovery uses an authenticated grouped decision,
 immutable originals and one encrypted primary redo. Foreign-vault current-v1
 graphs can now be re-encrypted with independently authenticated source/current

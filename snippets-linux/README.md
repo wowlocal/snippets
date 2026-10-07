@@ -6,9 +6,19 @@ that regenerate checked-in reference fixtures or rebuild an optional patched GTK
 dependency with upstream Meson tools. The client handles ordinary local entries
 and an encrypted vault workspace; [the full desktop port remains in development](../docs/linux/IMPLEMENTATION.md).
 
-## Core qualification, 2026-10-06
+## Core qualification, 2026-10-07
 
 Core functionality takes priority over further sync and race-condition work.
+
+The installed `d94418a` GUI/addon now passes all nine existing core stages in the
+current unlocked Omarchy session, including terminal expansion in three cold
+Chromium fields. Actual recipient results are checked, rather than treating a
+controller's zero exit as sufficient. This run uses isolated fictional libraries
+and direct Wayland virtual input while physical evdev devices remain quarantined.
+It preserves the user's disabled expansion preference and adds no acceptance
+variant. The historical intermittent loss of the first `\` remains unclassified;
+the complete port is still open. See the current acceptance section in
+[IMPLEMENTATION.md](../docs/linux/IMPLEMENTATION.md).
 
 | Feature | Current result |
 | --- | --- |
