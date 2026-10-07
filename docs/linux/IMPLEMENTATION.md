@@ -5,6 +5,19 @@ is now Rust with GTK 4 / libadwaita. The ordinary-library app and CLI have been 
 from the initial prototype; Python is no longer needed to run, build, or install them.
 Apple targets and shared Swift sources are unchanged.
 
+### Stable virtual-input core check, 2026-10-07
+
+The existing input helper now keeps one Wayland virtual keyboard/keymap alive
+for the whole core run, including real modifier chords and saved global shortcuts.
+The asynchronous candidate passes eight existing stages with exact recipient
+checks: panels, expansion in all three receivers, modifier selection, retained
+selection, global shortcuts and encrypted Clipboard History. Its cold Chromium
+field fails with the literal 13-byte keyword. Skipping redundant window-focus
+requests does not resolve it. A private profile verified with Fcitx's GetConfig
+also reproduces the original 12-letter lost-prefix result with
+PersistentVirtualKeyboard=True and PreferKeyEvent=False. Neither setting is
+applied to user configuration. Normal installed artifacts remain d94418a.
+
 ### Event-driven Fcitx query transport, 2026-10-07
 
 The SNI3 application lookup no longer blocks a Fcitx key handler or heartbeat in
