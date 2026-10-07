@@ -10,6 +10,14 @@ and an encrypted vault workspace; [the full desktop port remains in development]
 
 Core functionality takes priority over further sync and race-condition work.
 
+The latest asynchronous candidate passes eight existing core stages with one
+persistent virtual keyboard, but a cold Chromium field can still retain only the
+literal keyword. A numeric browser/Fcitx trace observes Chromium disabling and
+reenabling text-input-v3 without window focus loss; Fcitx then cancels the owned
+query. The trigger of that browser transition and a repair remain open. A
+server-side-preedit prototype also fails and is rejected. See the current
+[browser cancellation evidence](../docs/linux/IMPLEMENTATION.md).
+
 The current development fix also preserves a typed ordinary query literally when
 switching Fcitx keyboard methods in the same focused public field. A separate
 private US/Russian-method control reproduces the discarded `\nat` before the fix

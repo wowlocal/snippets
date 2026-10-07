@@ -5,6 +5,42 @@ is now Rust with GTK 4 / libadwaita. The ordinary-library app and CLI have been 
 from the initial prototype; Python is no longer needed to run, build, or install them.
 Apple targets and shared Swift sources are unchanged.
 
+### Browser-side cancellation trace, 2026-10-07
+
+The existing cold-field failure is now observed from both sides of the Wayland
+protocol. In an owned Chromium 152.0.7977.82 profile, the browser receives the
+first backslash preedit, then sends text-input-v3 disable/commit/enable/commit
+about 16 ms after the addon consumes that key. There is no intervening keyboard
+leave or receiving-window focus change. Fcitx receives deactivation and emits
+InputContextFocusOut; Snippets clears its request, then subsequent letters pass
+as ordinary keyboard events. This run ends with the literal 13-byte keyword.
+The closed timeline is retained in ignored stable-core-x9_0k19a evidence.
+
+A later traced cold field sends the same content hint/purpose before and after
+this transition. The Chromium source calls Blur/Focus from UpdateFocus and
+implements these with Disable/Enable. This identifies the observed cancellation
+path, but does not yet establish which browser client-state update triggers it,
+retroactively prove the earlier uninstrumented twelve-letter failure's cause,
+or prove a repair. See [Chromium's exact version source](https://github.com/chromium/chromium/blob/152.0.7977.82/ui/ozone/platform/wayland/host/wayland_input_method_context.cc).
+
+A diagnostic server-side-preedit prototype reproduces twelve letters without the
+prefix: the browser still performs the disable/enable transition even without a
+client preedit. It is rejected and never installed normally. Extending intent
+across this focus boundary would need field identity, including sensitive-field
+transitions; window focus alone is insufficient. Production cancellation policy
+is preserved while the receiving-field problem remains open.
+
+The earlier browser trace was missing because actual stderr calls passed through
+logging trampolines and fortified vfprintf. The test-only wire-browser helper
+now covers these calls in an explicitly owned fictional browser. It emits only
+closed numeric protocol events, ephemeral ordinals, bounded hint/purpose values
+and times. Its no-desktop native smoke covers fortified formatting, rejection of
+an injected protocol header inside argument text, and absence of plaintext marker
+bytes or stderr output. Run python3 docs/linux/testing/test-wire-browser.py.
+No app logger vocabulary, runtime settings, acceptance group or installed artifact
+changes. The normal background app/Fcitx and evdev quarantine are restored after
+each diagnostic run.
+
 ### Stable virtual-input core check, 2026-10-07
 
 The existing input helper now keeps one Wayland virtual keyboard/keymap alive
