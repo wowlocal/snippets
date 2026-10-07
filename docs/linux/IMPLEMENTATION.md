@@ -7,6 +7,16 @@ Apple targets and shared Swift sources are unchanged.
 
 ### Preserve typed input across a Fcitx method switch, 2026-10-07
 
+Deployment qualification is still pending for `575ee989`. Its archive passes
+regular-file/content/source binding and offline installation checks, but the
+existing installed nine-stage gate stops in its second stage: Chromium's focused
+field contains twelve letters without the backslash or expansion. The GUI/CLI/PAM
+bytes remain identical to `d94418a`; the addon differs. The installer restores all
+four previous native files and the addon manifest. `installed-current.json`
+continues to bind the normal installation to `d94418a`; the newer `latest.json`
+explicitly has `host_installation_matches_archive=false`. The candidate is not
+promoted by its successful narrow method-switch control.
+
 A targeted check of the unclassified first-prefix loss found a separate concrete
 defect: switching from the US to the Russian Fcitx keyboard method in the same
 public GTK field discards an owned `\nat` query. Before the switch, the receiver
@@ -33,6 +43,26 @@ live/disabled graphical cases remain ignored and are not counted as GUI results.
 This finding does not classify the historical twelve-letter Chromium result;
 that original failure still has no confirmed cause or repair. The finite board
 and deferred cloud/chooser work remain unchanged.
+
+The resumed first-prefix investigation keeps production sources unchanged.
+Temporary native-addon traces retain only closed event numbers, ephemeral context
+ordinals, flags, bounded lengths and monotonic times. Matched browser observers
+also retain only fixture comparisons, lengths and composition flags. A fixed-seat
+control expands to 45 bytes; other fields receive a literal 13-byte keyword after
+an IME deactivate/reactivate without window-focus loss. Chromium can omit a DOM
+compositionend while later input events are non-composing, so the observer's
+composition flag alone is not a reliable completion or failure-causality claim.
+Recorded command timestamps also show an abort preceding the deliberate rekey;
+that intervention does not prove the spontaneous failure's cause.
+
+A private Fcitx `PersistentVirtualKeyboard` experiment still fails expansion in
+one of three cold fields and is not applied to the user's configuration. A
+temporary literal-prefix prototype works with GTK's usable surrounding text,
+but Chromium announces the capability without supplying the required echo. It
+retains the actual first glyph but cannot safely admit the query or delete that
+glyph for expansion. The prototype is not adopted or packaged. The historical
+lost-prefix blocker remains open. Temporary runtime overrides are removed,
+normal services and `d94418a` are restored, and the evdev quarantine remains active.
 
 ### Current core acceptance, 2026-10-07
 

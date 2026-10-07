@@ -15,6 +15,9 @@ switching Fcitx keyboard methods in the same focused public field. A separate
 private US/Russian-method control reproduces the discarded `\nat` before the fix
 and verifies its exact preservation afterward. Sensitive capability transitions
 still discard it. This does not establish the cause of the older Chromium failure.
+The `575ee989` archive passes offline installation, but its complete core gate
+reproduces that older failure. The normal installation is therefore rolled back
+to `d94418a`; the newer candidate is not yet qualified for normal use.
 
 The installed `d94418a` GUI/addon now passes all nine existing core stages in the
 current unlocked Omarchy session, including terminal expansion in three cold
