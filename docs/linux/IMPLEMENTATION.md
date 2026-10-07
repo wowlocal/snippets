@@ -5,6 +5,53 @@ is now Rust with GTK 4 / libadwaita. The ordinary-library app and CLI have been 
 from the initial prototype; Python is no longer needed to run, build, or install them.
 Apple targets and shared Swift sources are unchanged.
 
+### Chromium cold-field repair and full core gate, 2026-10-07
+
+The current first-field cancellation is traced to a different, background
+Chromium WebUI view, rather than a change in the receiving textarea. A frozen
+Chromium 152.0.7977.82 ELF capture observes the receiving view with flags 544,
+then a different view/node with flags 546 (AUTOCOMPLETE_OFF added). The main DOM
+field stays connected, focused and without an autocomplete attribute; it loads
+once. A read-only inspection of owned targets finds the matching active,
+autocomplete-off textarea in omnibox-popup.top-chrome. That internal document
+is not focused, but is not marked hidden. The extension background page has no
+text fields. Only typed properties/comparisons/counts are retained, never bodies,
+DOM/view identities, target IDs or caller process IDs.
+
+Chromium's InputMethodAuraLinux::OnTextInputTypeChanged updates its context
+before the base implementation's focus check. The background WebUI's input-state
+notification therefore resets the focused page's IME through Blur/Focus,
+Disable/Enable and Fcitx InputContextFocusOut. Clearing Snippets intent at this
+scope boundary is correct; resuming it based only on window focus would be unsafe.
+See [the pinned Chromium implementation](https://github.com/chromium/chromium/blob/152.0.7977.82/ui/base/ime/linux/input_method_auralinux.cc).
+
+With Chromium's OmniboxWebUIPopupMarkAsHidden feature enabled, the extra
+background textarea registration disappears from the field-state capture and
+all three cold receivers get the exact 45-byte expansion. The WebUI targets
+remain present; no browser UI or Snippets capability is removed. This uses the
+browser's own [WasHidden policy](https://github.com/chromium/chromium/blob/152.0.7977.82/chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.cc), not a wait, retry, intent carryover or weaker completion predicate.
+
+The existing nine-stage core gate then passes on the event-driven native
+candidate without GDB, DevTools or diagnostic addons: panels and exact expansion
+in GTK/Chromium/Ghostty, Ghostty pointer selection, Ctrl+N/P/Shift+Tab, retained
+selection, saved Open/Picker/Capture actions, encrypted history collection/copy/
+opt-out/restart/clear, and terminal expansion in three cold Chromium profiles.
+Evidence is retained in ignored stable-core-2z910gn_. The addon is the clean
+0ed3ae60 native implementation; source bytes, artifact hashes and unchanged
+Fcitx lifetime are bound by its receipt.
+
+The tested feature is merged into the existing user Chromium enable-features
+line with a private exact backup. Other flags, Snippets preferences and the evdev
+quarantine are preserved. The browser is not restarted automatically; the flag
+applies to new processes. A source package must document this Chromium 152
+requirement and retain the installer's policy of preserving desktop config.
+The normal installation remains d94418a until the new package's install gate.
+A separate unchanged d94418a baseline also passes three cold fields; that positive
+run cannot retroactively prove the cause of an old uninstrumented failure.
+The repair is claimed for the currently reproduced cancellation mechanism, and
+is qualified with the compatibility feature enabled. Physical input and a fresh
+normal compositor session remain separate, currently unavailable evidence.
+
 ### Browser-side cancellation trace, 2026-10-07
 
 The existing cold-field failure is now observed from both sides of the Wayland

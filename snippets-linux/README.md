@@ -10,32 +10,27 @@ and an encrypted vault workspace; [the full desktop port remains in development]
 
 Core functionality takes priority over further sync and race-condition work.
 
-The latest asynchronous candidate passes eight existing core stages with one
-persistent virtual keyboard, but a cold Chromium field can still retain only the
-literal keyword. A numeric browser/Fcitx trace observes Chromium disabling and
-reenabling text-input-v3 without window focus loss; Fcitx then cancels the owned
-query. The trigger of that browser transition and a repair remain open. A
-server-side-preedit prototype also fails and is rejected. See the current
-[browser cancellation evidence](../docs/linux/IMPLEMENTATION.md).
+The event-driven native candidate passes all nine existing core stages with
+isolated fictional libraries and one persistent virtual keyboard. This includes
+exact expansion and Mac-style panels in GTK/Chromium/Ghostty, pointer selection,
+modifier navigation, global shortcuts, Clipboard History and three cold Chromium
+first fields. GDB and DevTools are absent from the qualification run.
 
-The current development fix also preserves a typed ordinary query literally when
-switching Fcitx keyboard methods in the same focused public field. A separate
-private US/Russian-method control reproduces the discarded `\nat` before the fix
-and verifies its exact preservation afterward. Sensitive capability transitions
-still discard it. This does not establish the cause of the older Chromium failure.
-The `575ee989` archive passes offline installation, but its complete core gate
-reproduces that older failure. The normal installation is therefore rolled back
-to `d94418a`; the newer candidate is not yet qualified for normal use.
+Chromium 152 initializes a background omnibox WebUI textarea that can reset the
+focused page's IME. Its own `OmniboxWebUIPopupMarkAsHidden` feature prevents the
+reproduced cancellation while preserving the modern browser UI. On this host it
+is merged into the existing `~/.config/chromium-flags.conf` enable-features list
+with a private backup. Other flags and the user's disabled expansion preference
+are preserved. For another Chromium 152 installation, add this feature to the
+existing `--enable-features=` list, then start a new browser process. The Snippets
+installer preserves desktop config and does not make that edit automatically.
 
-The installed `d94418a` GUI/addon now passes all nine existing core stages in the
-current unlocked Omarchy session, including terminal expansion in three cold
-Chromium fields. Actual recipient results are checked, rather than treating a
-controller's zero exit as sufficient. This run uses isolated fictional libraries
-and direct Wayland virtual input while physical evdev devices remain quarantined.
-It preserves the user's disabled expansion preference and adds no acceptance
-variant. The historical intermittent loss of the first `\` remains unclassified;
-the complete port is still open. See the current acceptance section in
-[IMPLEMENTATION.md](../docs/linux/IMPLEMENTATION.md).
+The candidate also preserves an ordinary typed query when switching Fcitx
+keyboard methods and performs query transport through the native event loop.
+The normal installation is still `d94418a` pending package/install verification.
+The complete port remains open; physical input and a fresh normal compositor
+session remain separate checks. See the current
+[implementation and qualification evidence](../docs/linux/IMPLEMENTATION.md).
 
 | Feature | Current result |
 | --- | --- |
