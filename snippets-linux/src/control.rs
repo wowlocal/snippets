@@ -17,6 +17,10 @@ pub(crate) use peer::Lease;
 #[path = "control_server.rs"]
 pub(crate) mod server;
 
+#[path = "control_expansion.rs"]
+mod expansion;
+pub use expansion::{ExpansionCommand, ExpansionSettings, ExpansionState};
+
 pub const PROTOCOL: u32 = 1;
 const MAX_HEADER: usize = 24 * 1024;
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(120);
@@ -115,6 +119,13 @@ impl Header {
     pub(crate) fn validate(&self) -> Result<()> {
         if self.nonce.is_nil() || self.command.len() > 32 || self.bytes > model::MAX_BODY_BYTES {
             return Err(INVALID);
+        }
+        if ExpansionCommand::from_wire(&self.command).is_some() {
+            return if self.identifier.is_none() && self.addition.is_none() && self.bytes == 0 {
+                Ok(())
+            } else {
+                Err(INVALID)
+            };
         }
         match self.command.as_str() {
             "status" if self.identifier.is_none() && self.addition.is_none() && self.bytes == 0 => {
@@ -265,6 +276,7 @@ pub enum Outcome {
     Created(Uuid),
     State { count: usize, unlocked: bool },
     Rejected(Status),
+    Expansion(ExpansionSettings),
 }
 impl Client {
     pub fn check(&self) -> Result<()> {
@@ -311,6 +323,19 @@ impl Client {
             &[],
         )
     }
+    pub fn expansion(mut self, command: ExpansionCommand) -> Result<Outcome> {
+        self.exchange(
+            Header {
+                v: PROTOCOL,
+                nonce: Uuid::new_v4(),
+                command: command.wire().into(),
+                identifier: None,
+                addition: None,
+                bytes: 0,
+            },
+            &[],
+        )
+    }
     pub fn add(mut self, addition: Addition, body: Zeroizing<Vec<u8>>) -> Result<Outcome> {
         self.exchange(
             Header {
@@ -345,6 +370,23 @@ impl Client {
                 return Err(INVALID);
             }
             return Ok(Outcome::Rejected(reply.status));
+        }
+        if ExpansionCommand::from_wire(&header.command).is_some() {
+            if reply.bytes == 0
+                || reply.bytes > 1024
+                || reply.created_id.is_some()
+                || reply.secure_count.is_some()
+                || reply.unlocked.is_some()
+            {
+                return Err(INVALID);
+            }
+            let bytes = read_body(&mut self.stream, reply.bytes, &|| self.lease.check())?;
+            let settings: ExpansionSettings =
+                serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+            if !settings.valid() {
+                return Err(INVALID);
+            }
+            return Ok(Outcome::Expansion(settings));
         }
         match header.command.as_str() {
             "reveal"

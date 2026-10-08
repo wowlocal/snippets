@@ -20,6 +20,10 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+type ExpansionHandler = Box<
+    dyn Fn(control::ExpansionCommand) -> std::result::Result<control::ExpansionSettings, Status>,
+>;
+
 pub(crate) struct Service {
     application: adw::Application,
     root: PathBuf,
@@ -32,6 +36,7 @@ pub(crate) struct Service {
     before: Box<dyn Fn() -> bool>,
     created: Box<dyn Fn()>,
     unlocked: Box<dyn Fn() -> bool>,
+    expansion: RefCell<Option<ExpansionHandler>>,
 }
 struct Active {
     window: adw::ApplicationWindow,
@@ -94,6 +99,7 @@ impl Service {
             before: Box::new(before),
             created: Box::new(created),
             unlocked: Box::new(unlocked),
+            expansion: RefCell::new(None),
         });
         this.start();
         let weak = Rc::downgrade(&this);
@@ -117,6 +123,9 @@ impl Service {
             glib::ControlFlow::Continue
         });
         this
+    }
+    pub(crate) fn set_expansion_handler(&self, handler: ExpansionHandler) {
+        *self.expansion.borrow_mut() = Some(handler);
     }
     fn start(&self) {
         if self.server.borrow().is_some() || self.quitting.get() {
@@ -147,6 +156,17 @@ impl Service {
     fn accept(self: &Rc<Self>, offer: Offer) {
         if self.quitting.get() || offer.lease.check().is_err() {
             let _ = offer.commands.send(Command::Deny);
+            return;
+        }
+        if let Some(command) = control::ExpansionCommand::from_wire(&offer.header.command) {
+            let response = match self.expansion.borrow().as_ref() {
+                None => Command::Reject(Status::Unsupported),
+                Some(handler) => match handler(command) {
+                    Ok(settings) => Command::Expansion(settings),
+                    Err(status) => Command::Reject(status),
+                },
+            };
+            let _ = offer.commands.send(response);
             return;
         }
         if offer.header.command == "status" {

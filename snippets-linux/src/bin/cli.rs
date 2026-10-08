@@ -23,6 +23,16 @@ struct Options {
 }
 #[derive(Subcommand)]
 enum Operation {
+    /// Configure ordinary inline expansion through the background app.
+    Expansion {
+        #[command(subcommand)]
+        command: ExpansionOperation,
+    },
+    /// Configure the inline suggestions panel through the background app.
+    Suggestions {
+        #[command(subcommand)]
+        command: SuggestionsOperation,
+    },
     List(Filter),
     Search {
         query: String,
@@ -51,6 +61,20 @@ enum Operation {
     Import {
         file: PathBuf,
     },
+}
+#[derive(Subcommand)]
+enum ExpansionOperation {
+    Status,
+    /// Opt in to ordinary expansion and suggestions. No GUI confirmation is needed.
+    Enable,
+    Disable,
+    Retry,
+}
+#[derive(Subcommand)]
+enum SuggestionsOperation {
+    Status,
+    Enable,
+    Disable,
 }
 #[derive(Args, Default)]
 struct Filter {
@@ -221,6 +245,9 @@ fn execute(command: Operation, library: &mut Library) -> Result<Value> {
             let (added, skipped) = library.import(&data)?;
             Ok(json!({"imported": added, "skipped": skipped}))
         }
+        Operation::Expansion { .. } | Operation::Suggestions { .. } => {
+            unreachable!("configuration routing")
+        }
         Operation::Reveal { .. } | Operation::SecureStatus => {
             Err(Error("Secure commands require the running desktop app."))
         }
@@ -344,6 +371,10 @@ fn secure_command(root: PathBuf, command: Operation) -> u8 {
         Ok(Outcome::State { count, unlocked }) => {
             print_json(&json!({"secureCount":count,"appAvailable":true,"unlocked":unlocked}))
         }
+        Ok(Outcome::Expansion(_)) => {
+            eprintln!("Unexpected control response.");
+            return 1;
+        }
         Ok(Outcome::Rejected(status)) => {
             eprintln!("{}", status.message());
             return status.exit_code();
@@ -357,6 +388,42 @@ fn secure_command(root: PathBuf, command: Operation) -> u8 {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("{error}");
+            1
+        }
+    }
+}
+fn expansion_command(root: &std::path::Path, command: control::ExpansionCommand) -> u8 {
+    let client = match Client::connect(root) {
+        Ok(client) => client,
+        Err(error)
+            if control::unavailable(&error) && command == control::ExpansionCommand::Status =>
+        {
+            return match snippets_linux::inline_settings::Preference::read(root).and_then(|p|
+                print_json(&json!({"appAvailable": false,"enabled":p.enabled,"suggestions":p.suggestions,"state":null}))) {
+                Ok(()) => 0, Err(error) => {eprintln!("{error}");1}
+            };
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            if control::unavailable(&error) {
+                eprintln!("Start the background app with: snippets --background");
+                return 3;
+            }
+            return 1;
+        }
+    };
+    match client.expansion(command) {
+        Ok(Outcome::Expansion(settings)) => {
+            let mut value = serde_json::to_value(settings).expect("closed settings response");
+            value["appAvailable"] = json!(true);
+            if print_json(&value).is_ok() { 0 } else { 1 }
+        }
+        Ok(Outcome::Rejected(status)) => {
+            eprintln!("{}", status.message());
+            status.exit_code()
+        }
+        _ => {
+            eprintln!("The configuration request could not be confirmed.");
             1
         }
     }
@@ -376,6 +443,23 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+    let configuration = match &options.command {
+        Operation::Expansion { command } => Some(match command {
+            ExpansionOperation::Status => control::ExpansionCommand::Status,
+            ExpansionOperation::Enable => control::ExpansionCommand::Enable,
+            ExpansionOperation::Disable => control::ExpansionCommand::Disable,
+            ExpansionOperation::Retry => control::ExpansionCommand::Retry,
+        }),
+        Operation::Suggestions { command } => Some(match command {
+            SuggestionsOperation::Status => control::ExpansionCommand::Status,
+            SuggestionsOperation::Enable => control::ExpansionCommand::EnableSuggestions,
+            SuggestionsOperation::Disable => control::ExpansionCommand::DisableSuggestions,
+        }),
+        _ => None,
+    };
+    if let Some(command) = configuration {
+        return std::process::ExitCode::from(expansion_command(&root, command));
+    }
     if matches!(
         &options.command,
         Operation::Reveal { .. } | Operation::SecureStatus
@@ -394,6 +478,37 @@ fn main() -> std::process::ExitCode {
         Err(error) => {
             eprintln!("{error}");
             std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn configuration_commands_require_an_explicit_action() {
+        assert!(matches!(
+            Options::try_parse_from(["snippets-cli", "expansion", "enable"])
+                .unwrap()
+                .command,
+            Operation::Expansion {
+                command: ExpansionOperation::Enable
+            }
+        ));
+        assert!(matches!(
+            Options::try_parse_from(["snippets-cli", "suggestions", "disable"])
+                .unwrap()
+                .command,
+            Operation::Suggestions {
+                command: SuggestionsOperation::Disable
+            }
+        ));
+        for args in [
+            vec!["snippets-cli", "expansion"],
+            vec!["snippets-cli", "expansion", "enable", "extra"],
+            vec!["snippets-cli", "suggestions", "retry"],
+        ] {
+            assert!(Options::try_parse_from(args).is_err());
         }
     }
 }

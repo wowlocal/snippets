@@ -106,6 +106,75 @@ impl Service {
         });
         this
     }
+    pub fn configure(
+        &self,
+        command: crate::control::ExpansionCommand,
+    ) -> std::result::Result<crate::control::ExpansionSettings, crate::control::Status> {
+        use crate::control::{ExpansionCommand as Command, ExpansionSettings, ExpansionState};
+        if self.quitting.get()
+            || (command != Command::Status && (self.busy.get() || self.dialog.borrow().is_some()))
+        {
+            return Err(crate::control::Status::Refused);
+        }
+        if command == Command::Disable {
+            // Revocation is immediate, even when persistence fails.
+            self.disable();
+            if self.error.get().is_some() {
+                return Err(crate::control::Status::Error);
+            }
+        } else if command != Command::Status {
+            let before = Preference::read(&self.root).map_err(|_| crate::control::Status::Error)?;
+            let result = match command {
+                Command::Enable if !before.enabled => {
+                    Preference::enable_with_suggestions(&self.root)
+                }
+                Command::Enable | Command::Retry => Ok(()),
+                Command::Disable => Preference::write(&self.root, false),
+                Command::EnableSuggestions if !before.enabled => {
+                    return Err(crate::control::Status::Refused);
+                }
+                Command::EnableSuggestions => Preference::write_suggestions(&self.root, true),
+                Command::DisableSuggestions => Preference::write_suggestions(&self.root, false),
+                Command::Status => unreachable!(),
+            };
+            result.map_err(|_| crate::control::Status::Error)?;
+            let after = Preference::read(&self.root).map_err(|_| crate::control::Status::Error)?;
+            let changed =
+                self.enabled.get() != after.enabled || self.suggestions.get() != after.suggestions;
+            self.enabled.set(after.enabled);
+            self.suggestions.set(after.suggestions);
+            self.error.set(None);
+            if changed || command == Command::Retry {
+                self.stop();
+                self.restart_pending.set(after.enabled);
+                if self.worker.borrow().as_ref().is_none_or(Handle::finished) {
+                    self.worker.borrow_mut().take();
+                    self.restart_pending.set(false);
+                    self.start();
+                }
+            }
+            self.refresh();
+        }
+        let state = if !self.enabled.get() {
+            ExpansionState::Disabled
+        } else if self.restart_pending.get() {
+            ExpansionState::Starting
+        } else {
+            match self.status.get() {
+                Status::WaitingForUnlock => ExpansionState::WaitingForUnlock,
+                Status::WaitingForField => ExpansionState::WaitingForField,
+                Status::Listening => ExpansionState::Listening,
+                Status::Stopped => ExpansionState::Stopped,
+                Status::Unavailable => ExpansionState::Unavailable,
+                Status::WaitingForFcitx => ExpansionState::WaitingForFcitx,
+            }
+        };
+        Ok(ExpansionSettings {
+            enabled: self.enabled.get(),
+            suggestions: self.suggestions.get(),
+            state,
+        })
+    }
     fn start(&self) {
         if !self.enabled.get()
             || self.error.get().is_some()

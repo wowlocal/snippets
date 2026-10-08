@@ -56,6 +56,22 @@ waiting longer. Further sync and chooser-race work stays deferred. The current
 compositor is still in Safe Mode using the user's unchanged profile; physical
 history/pointer interaction and a fresh normal session remain separate checks.
 
+## Terminal control
+
+Inline expansion can be configured without opening a window:
+
+```sh
+snippets --background
+snippets-cli expansion enable
+snippets-cli expansion status
+snippets-cli suggestions enable
+```
+
+`expansion disable` stops it; `expansion retry` reconnects after a runtime problem.
+The command reports the primary process's actual worker state. GUI and CLI must
+be updated together. See [CLI commands and coverage](../docs/linux/CLI.md) for
+exit codes, consent behavior and the remaining full terminal-control scope.
+
 ## Build and install
 
 On Omarchy, install missing build and native runtime packages:

@@ -193,3 +193,129 @@ fn client_binds_reply_nonce_role_and_status_before_reading_or_returning_any_body
         worker.join().unwrap();
     }
 }
+
+#[test]
+fn configuration_requests_cannot_carry_snippet_metadata_or_secret_bytes() {
+    for command in [
+        ExpansionCommand::Status,
+        ExpansionCommand::Enable,
+        ExpansionCommand::Disable,
+        ExpansionCommand::EnableSuggestions,
+        ExpansionCommand::DisableSuggestions,
+        ExpansionCommand::Retry,
+    ] {
+        let mut request = header(command.wire());
+        request.validate().unwrap();
+        request.bytes = 1;
+        assert!(request.validate().is_err());
+        request.bytes = 0;
+        request.identifier = Some("public".into());
+        assert!(request.validate().is_err());
+        request.identifier = None;
+        request.addition = Some(Addition {
+            name: String::new(),
+            keyword: "public".into(),
+            tags: vec![],
+            is_enabled: true,
+            is_pinned: false,
+        });
+        assert!(request.validate().is_err());
+    }
+    assert!(ExpansionCommand::from_wire("expansion-enable-unknown").is_none());
+}
+
+#[test]
+fn configuration_replies_are_closed_and_legacy_servers_are_reported() {
+    use std::os::unix::net::UnixStream;
+    for case in 0..5 {
+        let (stream, server) = UnixStream::pair().unwrap();
+        stream.set_nonblocking(true).unwrap();
+        let mut server = local_io(server);
+        let worker = std::thread::spawn(move || {
+            let request: Header = read_header(&mut server, &|| Ok(())).unwrap();
+            assert_eq!(request.command, "expansion-status");
+            let mut reply = Reply::status(
+                request.nonce,
+                if case == 4 {
+                    Status::Unsupported
+                } else {
+                    Status::Ok
+                },
+            );
+            let mut payload =
+                serde_json::json!({"enabled":true,"suggestions":true,"state":"waitingForField"});
+            match case {
+                1 => payload["message"] = serde_json::json!("unapproved field"),
+                2 => payload["enabled"] = serde_json::json!(false),
+                3 => reply.header.unlocked = Some(true),
+                _ => (),
+            }
+            if case != 4 {
+                reply.body = Zeroizing::new(serde_json::to_vec(&payload).unwrap());
+                reply.header.bytes = reply.body.len();
+            }
+            write_header(&mut server, &reply.header, &|| Ok(())).unwrap();
+            let _ = write_all(&mut server, &reply.body, &|| Ok(()));
+        });
+        let client = Client {
+            stream: local_io(stream),
+            lease: Lease::fixture(|| Ok(())),
+        };
+        match client.expansion(ExpansionCommand::Status) {
+            Ok(Outcome::Expansion(settings)) if case == 0 => {
+                assert!(settings.enabled && settings.suggestions);
+                assert_eq!(settings.state, ExpansionState::WaitingForField);
+            }
+            Ok(Outcome::Rejected(Status::Unsupported)) if case == 4 => (),
+            Err(_) if (1..=3).contains(&case) => (),
+            _ => panic!("invalid configuration response accepted"),
+        }
+        worker.join().unwrap();
+    }
+}
+
+#[cfg(feature = "desktop")]
+#[test]
+fn configuration_server_routes_to_primary_and_returns_exact_saved_state() {
+    use std::os::unix::net::UnixStream;
+    let root = tempfile::tempdir().unwrap();
+    let (stream, server_stream) = UnixStream::pair().unwrap();
+    stream.set_nonblocking(true).unwrap();
+    server_stream.set_nonblocking(true).unwrap();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let path = root.path().to_owned();
+    let server = std::thread::spawn(move || {
+        server::serve(server_stream, path, Lease::fixture(|| Ok(())), &sender)
+    });
+    let client = std::thread::spawn(move || {
+        Client {
+            stream: local_io(stream),
+            lease: Lease::fixture(|| Ok(())),
+        }
+        .expansion(ExpansionCommand::Enable)
+    });
+    let offer = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(offer.header.command, "expansion-enable");
+    crate::inline_settings::Preference::enable_with_suggestions(root.path()).unwrap();
+    offer
+        .commands
+        .send(server::Command::Expansion(ExpansionSettings {
+            enabled: true,
+            suggestions: true,
+            state: ExpansionState::Starting,
+        }))
+        .unwrap();
+    assert!(matches!(
+        client.join().unwrap().unwrap(),
+        Outcome::Expansion(ExpansionSettings {
+            enabled: true,
+            suggestions: true,
+            state: ExpansionState::Starting
+        })
+    ));
+    server.join().unwrap().unwrap();
+    let saved = crate::inline_settings::Preference::read(root.path()).unwrap();
+    assert!(saved.enabled && saved.suggestions);
+    assert!(!root.path().join("snippets.json").exists());
+    assert!(!root.path().join("Vault").exists());
+}

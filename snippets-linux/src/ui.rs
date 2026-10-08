@@ -228,6 +228,24 @@ impl App {
                 })
             },
         ));
+        let owner = Rc::downgrade(self);
+        self.control
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .set_expansion_handler(Box::new(move |command| {
+                let app = owner.upgrade().ok_or(crate::control::Status::Refused)?;
+                if app.is_quitting() {
+                    return Err(crate::control::Status::Refused);
+                }
+                app.start_inline();
+                let service = app
+                    .inline
+                    .borrow()
+                    .clone()
+                    .ok_or(crate::control::Status::Error)?;
+                service.configure(command)
+            }));
     }
     fn learn(&self, id: uuid::Uuid, event: crate::usage::Event, query: Option<&str>) {
         if let Some(usage) = self.usage.borrow().as_ref() {

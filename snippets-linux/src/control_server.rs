@@ -28,6 +28,8 @@ pub(crate) enum Command {
         authorization: Authorization,
     },
     State(bool),
+    Expansion(ExpansionSettings),
+    Reject(Status),
 }
 pub(crate) enum Notice {
     Prepared(Preview),
@@ -212,7 +214,9 @@ pub(crate) fn serve(
             &|| lease.check(),
         );
     }
-    if !["status", "reveal", "add-secure"].contains(&header.command.as_str()) {
+    if !["status", "reveal", "add-secure"].contains(&header.command.as_str())
+        && ExpansionCommand::from_wire(&header.command).is_none()
+    {
         return write_header(
             &mut stream,
             &Reply::status(header.nonce, Status::Unsupported).header,
@@ -248,9 +252,23 @@ pub(crate) fn serve(
                 reply.header.unlocked = Some(document.is_some() && unlocked);
                 (reply, None)
             }
+            Command::Expansion(settings)
+                if ExpansionCommand::from_wire(&header.command).is_some() =>
+            {
+                if !settings.valid() {
+                    return Err(INVALID);
+                }
+                let mut reply = Reply::status(header.nonce, Status::Ok);
+                reply.body = Zeroizing::new(serde_json::to_vec(&settings).map_err(|_| INVALID)?);
+                reply.header.bytes = reply.body.len();
+                (reply, None)
+            }
+            Command::Reject(status) if status != Status::Ok => {
+                (Reply::status(header.nonce, status), None)
+            }
             Command::Deny => (Reply::status(header.nonce, Status::Denied), None),
             Command::Refuse => (Reply::status(header.nonce, Status::Refused), None),
-            Command::Prepare if header.command != "status" => {
+            Command::Prepare if matches!(header.command.as_str(), "reveal" | "add-secure") => {
                 match Captured::capture(root, &header, body, lease.clone()) {
                     Err(status) => (Reply::status(header.nonce, status), None),
                     Ok(captured) => {

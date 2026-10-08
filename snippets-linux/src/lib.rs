@@ -29,6 +29,7 @@ pub mod global_shortcuts;
 pub mod inbound;
 #[cfg(any(test, feature = "desktop"))]
 pub mod inline_expansion;
+pub mod inline_settings;
 pub mod journal;
 pub mod key_store;
 pub mod local_auth;
