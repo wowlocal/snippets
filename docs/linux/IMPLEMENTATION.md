@@ -5,6 +5,32 @@ is now Rust with GTK 4 / libadwaita. The ordinary-library app and CLI have been 
 from the initial prototype; Python is no longer needed to run, build, or install them.
 Apple targets and shared Swift sources are unchanged.
 
+### CLI expansion control installed, 2026-10-08
+
+The user's request now includes full terminal access to application functions.
+The first implementation adds expansion status/enable/disable/retry and suggestion
+status/enable/disable to the verified app/CLI control channel. Explicit CLI enable
+is opt-in and applies through the primary process without presenting settings or
+confirmation windows. Disable revokes the worker before attempting persistence.
+Stored preferences retain their strict schema and link/size checks. The offline
+status path creates no library or settings files.
+
+Source e82a89e3 is packaged and installed with matching GUI/CLI binaries. The
+Fcitx addon, owner-auth helper and bundled runtime retain their accepted bytes.
+Validation passes 13 control tests, 43 inline tests (five graphical/disabled tests
+remain ignored), the CLI argument test, desktop all-target Clippy and a CLI build
+check without default GTK features. Offline archive installation passes. The
+actual installed CLI then enables expansion and suggestions and observes
+waitingForField. No app window is presented by configuration; no virtual input,
+compositor restart or Fcitx restart is used. Evidence is in ignored
+cli-control-install-uz0pkakf/verification.json. The earlier nine-stage gate remains
+bound to source 896b2099 and is not relabelled as a fresh e82a89e3 GUI run.
+
+Full CLI parity is tracked in [CLI.md](CLI.md); this first change does not claim
+terminal completion of the remaining history, vault, backup, account and review
+workflows. Current user constraints are background work and no evdev quarantine.
+The working checkout is now outside /tmp after the external session restart.
+
 ### Real desktop keyring acceptance, 2026-10-07
 
 The actual desktop Secret Service is available and its default collection is

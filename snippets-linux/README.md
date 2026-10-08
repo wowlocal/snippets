@@ -6,6 +6,15 @@ that regenerate checked-in reference fixtures or rebuild an optional patched GTK
 dependency with upstream Meson tools. The client handles ordinary local entries
 and an encrypted vault workspace; [the full desktop port remains in development](../docs/linux/IMPLEMENTATION.md).
 
+## Current user build, 2026-10-08
+
+Installed build `e82a89e3` adds command-line expansion and suggestion controls.
+`snippets-cli expansion enable` has been applied to the user's normal library;
+the worker reports `waitingForField`. Configuration does not open a GUI window.
+The prior nine-stage GUI qualification below belongs to `896b2099`; the new build
+passes the control/inline regression suites and an actual installed CLI check.
+Full command-line coverage remains ongoing; see [CLI coverage](../docs/linux/CLI.md).
+
 ## Core qualification, 2026-10-07
 
 Core functionality takes priority over further sync and race-condition work.
