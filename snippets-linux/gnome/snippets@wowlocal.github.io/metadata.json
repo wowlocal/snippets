@@ -1,0 +1,8 @@
+{
+  "uuid": "snippets@wowlocal.github.io",
+  "name": "Snippets",
+  "description": "Restore the original application for an explicitly selected Snippets insertion.",
+  "shell-version": ["50"],
+  "url": "https://github.com/wowlocal/snippets",
+  "version": 1
+}

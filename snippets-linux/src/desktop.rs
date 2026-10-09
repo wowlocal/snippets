@@ -3,6 +3,9 @@
 #[path = "desktop_gnome.rs"]
 mod gnome;
 #[cfg(feature = "desktop")]
+#[path = "desktop_gnome_insertion.rs"]
+mod gnome_insertion;
+#[cfg(feature = "desktop")]
 #[path = "desktop_sleep.rs"]
 mod sleep;
 use serde_json::Value;
@@ -373,6 +376,8 @@ impl Drop for SessionMonitor {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PasteTarget {
+    #[cfg(feature = "desktop")]
+    gnome: Option<gnome_insertion::Target>,
     address: String,
     process: u64,
     terminal: bool,
@@ -434,6 +439,8 @@ impl PasteTarget {
                 })
             });
         Some(Self {
+            #[cfg(feature = "desktop")]
+            gnome: None,
             address: address.into(),
             process,
             terminal,
@@ -447,6 +454,17 @@ impl PasteTarget {
         if session_state() != SessionState::Unlocked {
             return None;
         }
+        #[cfg(feature = "desktop")]
+        if environment() == Environment::Gnome {
+            return Some(Self {
+                gnome: Some(gnome_insertion::Target::capture()?),
+                address: String::new(),
+                process: 0,
+                terminal: false,
+                captured: crate::clock::uptime()?,
+                wall: SystemTime::now(),
+            });
+        }
         Self::from_window(&query("activewindow")?)
     }
     fn matches(&self, window: &Value) -> bool {
@@ -454,12 +472,21 @@ impl PasteTarget {
             && window.get("pid").and_then(Value::as_u64) == Some(self.process)
     }
     pub fn exists(&self) -> bool {
+        #[cfg(feature = "desktop")]
+        if let Some(target) = &self.gnome {
+            return self.is_fresh() && target.check().0;
+        }
         query("clients")
             .and_then(|v| v.as_array().cloned())
             .is_some_and(|clients| clients.iter().any(|w| self.matches(w)))
     }
     #[cfg(feature = "desktop")]
     pub(crate) fn is_active_unlocked(&self) -> bool {
+        if let Some(target) = &self.gnome {
+            return self.is_fresh()
+                && session_state() == SessionState::Unlocked
+                && target.check().1;
+        }
         session_state() == SessionState::Unlocked
             && query("activewindow").is_some_and(|window| self.matches(&window))
     }
@@ -473,6 +500,9 @@ impl PasteTarget {
     }
     #[cfg(feature = "desktop")]
     pub(crate) fn application_label(&self) -> Option<String> {
+        if let Some(target) = &self.gnome {
+            return target.label();
+        }
         let clients = query("clients")?;
         let window = clients.as_array()?.iter().find(|w| self.matches(w))?;
         let class = window.get("class")?.as_str()?;
@@ -485,11 +515,30 @@ impl PasteTarget {
         if session_state() != SessionState::Unlocked || !self.exists() {
             return false;
         }
+        #[cfg(feature = "desktop")]
+        if let Some(target) = &self.gnome {
+            return target.focus();
+        }
         let expression = format!(
             "assert(hl.dispatch(hl.dsp.focus({{ window = \"address:{}\" }})).ok)",
             self.address
         );
         hypr(&["eval", &expression]).is_some_and(|data| data.trim_ascii() == b"ok")
+    }
+    #[cfg(feature = "desktop")]
+    pub(crate) fn is_gnome(&self) -> bool {
+        self.gnome.is_some()
+    }
+    /// Explicit ordinary-snippet insertion. Secure insertion retains its separate
+    /// authorization and transport; it cannot enter the companion's text API.
+    #[cfg(feature = "desktop")]
+    pub(crate) fn insert_ordinary(&self, text: &str) -> bool {
+        if let Some(target) = &self.gnome {
+            return self.is_fresh()
+                && session_state() == SessionState::Unlocked
+                && target.commit(text);
+        }
+        self.paste()
     }
     pub fn paste(&self) -> bool {
         if session_state() != SessionState::Unlocked

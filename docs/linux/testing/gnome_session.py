@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -19,6 +20,7 @@ from xml.sax.saxutils import escape
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--extension", type=Path, help="stage the Snippets companion in this lab only")
     args = parser.parse_args()
     root = args.directory.absolute()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -47,6 +49,13 @@ def main():
                GSETTINGS_BACKEND="keyfile", GNOME_SHELL_SESSION_MODE="user",
                WAYLAND_DISPLAY="snippets-lab",
                IBUS_ADDRESS=f"unix:path={root}/runtime/ibus-bus")
+    if args.extension:
+        metadata = json.loads((args.extension / "metadata.json").read_text())
+        assert metadata["uuid"] == "snippets@wowlocal.github.io"
+        destination = root / "data/gnome-shell/extensions" / metadata["uuid"]
+        destination.mkdir(parents=True)
+        for name in ("metadata.json", "extension.js"):
+            shutil.copy2(args.extension / name, destination / name)
     components = root / "data/ibus/component"
     components.mkdir(parents=True)
     env["IBUS_COMPONENT_PATH"] = f"{components}:/usr/share/ibus/component"
@@ -93,6 +102,9 @@ def main():
             ("org.gnome.desktop.input-sources", "sources", "[('xkb', 'us')]"),
         ]:
             subprocess.run(["gsettings", "set", schema, key, value], env=env, check=True)
+        if args.extension:
+            subprocess.run(["gsettings", "set", "org.gnome.shell", "enabled-extensions",
+                            "['snippets@wowlocal.github.io']"], env=env, check=True)
         spawn("shell", ["gnome-shell", "--headless", "--no-x11",
                         "--virtual-monitor", "1280x800", "--wayland-display", "snippets-lab"])
         env["WAYLAND_DISPLAY"] = "snippets-lab"

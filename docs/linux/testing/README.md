@@ -133,3 +133,33 @@ be active and visible through AT-SPI before quitting the app.
 
 This tests shortcut delivery, not successful clipboard capture or insertion from
 the app's picker. Those operations need separate receiver assertions.
+
+
+## GNOME picker companion
+
+The companion must be present before the headless Shell loads its extensions.
+Use a new lab directory (the helper never modifies the user's extensions):
+
+```sh
+python3 docs/linux/testing/gnome_session.py /tmp/snippets-gnome-picker \
+  --extension snippets-linux/gnome/snippets@wowlocal.github.io
+# In a second shell:
+python3 docs/linux/testing/gnome_picker.py /tmp/snippets-gnome-picker \
+  snippets-linux/target/debug --chromium /path/to/chromium
+node docs/linux/testing/test-gnome-companion.mjs
+```
+
+The runner stages the real executables together and uses a temporary library. It
+selects entries in the actual GTK picker with a virtual keyboard, then checks real
+GTK field contents and ordered Chromium DOM observations. The browser case includes
+multiline Unicode. The GTK cases check clipboard preservation, password refusal,
+intervening focus, companion disable/re-enable, a headless shield cycle and calls
+from a foreign D-Bus connection. GTK's receiver uses the Wayland input module;
+Chromium explicitly enables native Wayland IME/text-input-v3. Neither uses JavaScript
+to insert text. AT-SPI is used only for owned app/dialog observations and the
+fictional shortcut permission dialog. Its occasional stale accessibility-cache
+warning is retained in output; missing or failed assertions are fatal.
+
+The Node fixture runs the actual companion policy methods against a deterministic
+Shell double. It verifies negative cases and lifecycle logic but is not evidence
+of desktop integration. See `../GNOME.md` for the remaining qualification limits.

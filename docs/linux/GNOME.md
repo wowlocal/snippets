@@ -4,8 +4,9 @@
 
 The first GNOME milestone targets stock Ubuntu GNOME on Wayland, preserving its
 IBus input system. It shares the GTK application and library with the Hyprland
-build. It does not replace input methods, install a Shell extension or enable
-Shell Eval.
+build. It does not replace input methods or enable Shell Eval. An experimental
+Shell companion now supplies ordinary picker insertion; it is staged only by the
+owned engineering harness until installation/onboarding is implemented.
 
 Implemented:
 
@@ -27,9 +28,11 @@ Implemented:
 
 Not yet qualified: IBus expansion and caret suggestions across applications.
 An experimental GNOME GlobalShortcuts portal adapter registers Open, Picker and
-Capture actions through the system permission dialog. Receiving these actions is
-separate from the unfinished GNOME capture and insertion mechanisms.
-Not implemented: GNOME clipboard-history capture and cross-application insertion. Existing Hyprland
+Capture actions through the system permission dialog. Shortcut delivery and the
+associated capture or insertion operation are verified separately.
+An experimental Shell companion supplies cross-application ordinary insertion
+for native Wayland text-input clients. GNOME clipboard-history capture remains
+unimplemented. Existing Hyprland
 window-target and Wayland peer checks remain required for those mechanisms.
 The installer still builds only the desktop preview. The `ibus` feature is an
 engineering opt-in until the remaining lifecycle and installation acceptance cases are complete.
@@ -123,8 +126,8 @@ virtual keyboard lazily, and hot-plugging it during the first composition caused
 Chromium to reset that composition. The runner now primes the keyboard before
 starting Chromium and retains it throughout the run. No product-code focus/reset
 checks were relaxed. The alternate GTK IME browser path remains unqualified.
-Input-source/IBus restart coverage, popup presentation, installation and
-cross-application insertion remain outstanding.
+Input-source/IBus restart coverage, popup presentation and installation remain
+outstanding. Ordinary picker insertion now has the separate coverage below.
 
 The shortcut adapter owns a private portal connection and session. It registers
 the native desktop application identity before other portal calls, checks sender
@@ -155,6 +158,53 @@ and [native application registry](https://github.com/flatpak/xdg-desktop-portal/
 The event age check is GNOME-specific: its backend forwards Mutter's wrapping
 32-bit monotonic millisecond timestamp; it is not assumed to be a portable clock
 for other portal backends. See the [GNOME implementation](https://gitlab.gnome.org/GNOME/xdg-desktop-portal-gnome/-/blob/main/src/globalshortcuts.c).
+
+## Ordinary picker insertion companion
+
+`snippets-linux/gnome/snippets@wowlocal.github.io` is currently qualified against
+GNOME Shell 50. The app pins its companion calls to the issuing Shell's unique
+D-Bus owner. The companion admits only the connection owning the primary
+`com.khm.snippets.linux` application name; it has no arbitrary window selector,
+generic key-injection method, or clipboard reader.
+
+Capture produces a random, memory-only ticket for the active foreign window and
+current Mutter input focus. It binds the ticket to the calling application owner
+and process, expires after 120 seconds, and permits one ordinary insertion. The
+app restores the original window before committing through Mutter's input-method
+transport. Password/unknown purposes and private/hidden/unknown hints are refused
+again at delivery. Returning to a target manually, selecting another window,
+physical input outside the picker, entering overview, a screen-shield transition,
+sleep notification, owner loss, or companion disable revokes the pending ticket.
+A fresh ticket is required after re-enable. Secure insertion does not use this
+ordinary text endpoint.
+
+Successful GNOME insertion does not write the clipboard. The app reads clipboard
+text only for an explicit `{clipboard}` placeholder on this path. An unavailable
+or changed target reports that the picker must be reopened from the target window;
+it does not claim a successful paste or silently redirect to the newly focused
+application. The existing Hyprland clipboard/paste path is retained.
+
+The owned real GTK4 and Chromium receivers passed ordinary insertion (including
+multiline Unicode in Chromium), refusal of
+password targets and cancellation after an intervening window switch. GTK also
+verified unchanged clipboard contents, foreign D-Bus caller refusal, companion
+disable/re-enable and a headless screen-shield cycle. This shield has no password;
+it does not qualify authenticated unlock or a real logind suspension. The policy
+fixture additionally covers sleep notifications, owner replacement, expired and
+single-use tickets, pending capture races, privacy hints and payload limits.
+
+The destination contract is a window plus the currently declared native input
+focus, not a browser DOM element identifier. Application-internal background
+changes are not observable as stable field identities through Mutter. Clients
+using a direct IBus module or X11 without a Mutter text-input focus are refused
+and retain the explicit Copy workflow; those paths are not qualified for picker
+insertion. The Chromium run uses native Wayland IME/text-input-v3 flags. Installation,
+input-source onboarding and broader application coverage remain incomplete.
+
+The companion policy fixture, formatting and syntax checks passed. Both the
+Ubuntu `desktop,ibus` build and the default Omarchy build passed Clippy with
+warnings denied and all six filtered desktop tests. This regression run does not
+claim a new Hyprland UI qualification.
 
 The experimental feature's build, four Rust bridge tests, 27 filtered worker
 tests, native IBus protocol smoke and GTK4 receiver passed in the Ubuntu VM.

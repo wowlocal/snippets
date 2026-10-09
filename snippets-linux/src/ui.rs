@@ -671,21 +671,46 @@ impl App {
         self.copy_serial.set(serial);
         let app = self.clone();
         glib::spawn_future_local(async move {
-            let previous = if clipboard.formats().contains_type(String::static_type()) {
-                match clipboard.read_text_future().await {
-                    Ok(value) => value,
-                    Err(_) => {
-                        app.toast("The clipboard could not be read.");
-                        return;
+            let needs_clipboard = target.as_ref().is_none_or(|target| !target.is_gnome())
+                || snippet.content.contains("{clipboard}");
+            let previous =
+                if needs_clipboard && clipboard.formats().contains_type(String::static_type()) {
+                    match clipboard.read_text_future().await {
+                        Ok(value) => value,
+                        Err(_) => {
+                            app.toast("The clipboard could not be read.");
+                            return;
+                        }
                     }
-                }
-            } else {
-                None
-            };
+                } else {
+                    None
+                };
             if app.copy_serial.get() != serial {
                 return;
             }
             let text = placeholders::resolve(&snippet.content, previous.as_deref().unwrap_or(""));
+            if let Some(target) = target.as_ref().filter(|target| target.is_gnome()) {
+                // Mutter commits ordinary text through the restored input focus.
+                // It does not consume a clipboard offer; GNOME can revoke the
+                // background app's clipboard visibility when the picker loses focus.
+                if !target.focus() {
+                    app.gnome_insertion_failed();
+                    return;
+                }
+                if let Some(picker) = app.picker.borrow().as_ref() {
+                    picker.window.set_visible(false);
+                }
+                glib::timeout_future(Duration::from_millis(200)).await;
+                if app.copy_serial.get() != serial {
+                    return;
+                }
+                if target.insert_ordinary(&text) {
+                    app.learn(snippet.id, crate::usage::Event::Paste, query.as_deref());
+                } else {
+                    app.gnome_insertion_failed();
+                }
+                return;
+            }
             let provider = internal_clipboard_provider(&text);
             if clipboard.set_content(Some(&provider)).is_err() {
                 app.toast("The clipboard could not be updated.");
@@ -709,7 +734,7 @@ impl App {
                 app.learn(snippet.id, crate::usage::Event::Copy, query.as_deref());
                 return;
             }
-            if !target.paste() {
+            if !target.insert_ordinary(&text) {
                 app.learn(snippet.id, crate::usage::Event::Copy, query.as_deref());
                 app.paste_failed();
                 return;
@@ -723,6 +748,14 @@ impl App {
                 let _ = clipboard.set_content(Some(&internal_clipboard_provider(&previous)));
             }
         });
+    }
+    fn gnome_insertion_failed(self: &Rc<Self>) {
+        if let Some(picker) = self.picker.borrow().as_ref() {
+            picker.window.present();
+        }
+        self.toast(
+            "The original window can no longer receive text. Reopen the picker from that window.",
+        );
     }
     fn paste_failed(self: &Rc<Self>) {
         if let Some(picker) = self.picker.borrow().as_ref() {

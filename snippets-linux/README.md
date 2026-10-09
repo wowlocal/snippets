@@ -13,8 +13,10 @@ session-lock observation and isolated background app/CLI lifecycle coverage.
 The experimental IBus path now passes owned GTK4 and Chromium Wayland expansion
 checks. An experimental GlobalShortcuts portal adapter opens the app and picker
 through real GNOME bindings. **Full GNOME support is not qualified:** input-service
-and portal restart cases, popup presentation, onboarding, clipboard capture and
-cross-application insertion remain outstanding. The existing
+and portal restart cases, popup presentation, onboarding and clipboard capture
+remain outstanding. An experimental Shell companion now passes ordinary picker
+insertion in owned GTK4 and Chromium native Wayland receivers; its installation
+and broader client coverage are still incomplete. The existing
 Hyprland/Fcitx build remains the default Cargo configuration.
 
 Use `./scripts/install-linux.sh --desktop gnome` for the preview; the installer
