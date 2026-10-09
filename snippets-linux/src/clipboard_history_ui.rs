@@ -146,7 +146,7 @@ impl Service {
             .map(|monitor| monitor.witness())
         else {
             self.monitor_error.set(Some(
-                "Collection paused: an observable Hyprland session is required.",
+                "Collection paused: an observable desktop session is required.",
             ));
             return;
         };
@@ -639,7 +639,7 @@ impl HistoryWindow {
             input.buffer().set_text(&service.preference.borrow().excluded_apps.join("\n"));
             input.set_size_request(400, 180);
             let dialog = adw::AlertDialog::builder().heading("App Exclusions")
-                .body("Foreground Hyprland app classes to exclude, one per line. This hint cannot identify every clipboard source or secret.")
+                .body("Foreground application IDs or classes to exclude, one per line. This hint cannot identify every clipboard source or secret.")
                 .extra_child(&scrolled(&input)).build();
             dialog.add_responses(&[("cancel","Cancel"),("save","Save Exclusions")]);
             dialog.set_default_response(Some("cancel")); dialog.set_close_response("cancel");

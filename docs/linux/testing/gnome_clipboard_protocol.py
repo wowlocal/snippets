@@ -7,6 +7,7 @@ Capture UI test; this script itself is a protocol client, not the product GUI.
 import argparse
 import json
 import os
+import pwd
 from pathlib import Path
 import time
 import ctypes
@@ -18,10 +19,19 @@ import tempfile
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('lab', type=Path)
+    parser.add_argument('--system-account', action='store_true')
     args = parser.parse_args()
     root = args.lab.absolute()
     env = json.loads((root / 'environment.json').read_text())
-    assert env['XDG_RUNTIME_DIR'] == str(root / 'runtime') and env['WAYLAND_DISPLAY'] == 'snippets-lab'
+    if args.system_account:
+        account = pwd.getpwuid(os.getuid())
+        assert account.pw_name == 'snippets-gnome-test'
+        assert root == Path(account.pw_dir) == Path('/var/lib/snippets-gnome-test')
+        assert env['XDG_RUNTIME_DIR'] == f'/run/user/{os.getuid()}'
+        assert env['DBUS_SESSION_BUS_ADDRESS'] == f'unix:path=/run/user/{os.getuid()}/bus'
+        env['WAYLAND_DISPLAY'] = 'snippets-lab'
+    else:
+        assert env['XDG_RUNTIME_DIR'] == str(root / 'runtime') and env['WAYLAND_DISPLAY'] == 'snippets-lab'
     os.environ.update(env)
     os.environ.pop('DISPLAY', None)
     os.environ.update(GTK_IM_MODULE='wayland', GTK_A11Y='none')
@@ -30,6 +40,11 @@ def main():
     from gi.repository import Gio, GLib, Gtk, Gdk, GObject
     Gtk.init()
     bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+    shell_pid = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                              'GetConnectionUnixProcessID', GLib.Variant('(s)', ('org.gnome.Shell',)),
+                              None, 0, 3000, None).unpack()[0]
+    assert Path(f'/proc/{shell_pid}').stat().st_uid == os.getuid()
+    assert b'--headless' in Path(f'/proc/{shell_pid}/cmdline').read_bytes().split(b'\0')
     owner = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
                          'RequestName', GLib.Variant('(su)', ('com.khm.snippets.linux', 4)), None, 0, 3000, None).unpack()[0]
     assert owner == 1, 'another primary is running; it was not replaced'
@@ -106,7 +121,15 @@ def main():
         assert result[0][0] and bytes(result[0][1]) == b'Public exact text', ('normal transport failed', result[0][0], len(result[0][1]))
         print('Real Mutter clipboard: exact bounded transfer passed', flush=True)
         for cancel in ['selection', 'shield', 'disable']:
-            window.present(); entry.grab_focus(); wait(window.is_active); settle(0.3)
+            # A headless shield cycle can return to overview instead of this window.
+            bus.call_sync('org.gnome.Shell', '/org/gnome/Shell', 'org.freedesktop.DBus.Properties', 'Set',
+                          GLib.Variant('(ssv)', ('org.gnome.Shell', 'OverviewActive', GLib.Variant('b', False))),
+                          None, 0, 3000, None)
+            window.present(); settle(0.5)
+            if not window.is_active():
+                for code, pressed in [(56, True), (1, True), (1, False), (56, False)]:
+                    remote('NotifyKeyboardKeycode', GLib.Variant('(ub)', (code, pressed)))
+            wait(window.is_active); entry.grab_focus(); settle(0.3)
             for pressed in [True, False]:
                 remote('NotifyKeyboardKeycode', GLib.Variant('(ub)', (42, pressed)))
             settle(0.1)

@@ -13,6 +13,70 @@ use std::{
 };
 pub(crate) const PREFERENCE_CHANGED: Error =
     Error("History settings changed. Collection stopped; reset settings before enabling it again.");
+
+enum CaptureReader {
+    Wayland {
+        reader: super::wayland::Reader,
+        seen: u64,
+    },
+    Gnome(crate::gnome_clipboard::HistoryReader),
+}
+impl CaptureReader {
+    fn open(excluded: &[String], guard: &dyn Fn() -> Result<()>) -> Result<Self> {
+        if crate::desktop::environment() == crate::desktop::Environment::Gnome {
+            return crate::gnome_clipboard::HistoryReader::open(excluded, guard).map(Self::Gnome);
+        }
+        let reader = super::wayland::Reader::open(guard)?;
+        let seen = reader.generation();
+        Ok(Self::Wayland { reader, seen })
+    }
+    fn next(
+        &mut self,
+        excluded: &[String],
+        guard: &dyn Fn() -> Result<()>,
+    ) -> Result<Option<Zeroizing<String>>> {
+        let (reader, seen) = match self {
+            Self::Wayland { reader, seen } => (reader, seen),
+            Self::Gnome(reader) => {
+                let result = reader.read_new(excluded, guard);
+                std::thread::sleep(Duration::from_millis(100));
+                return result;
+            }
+        };
+        if !reader.next(*seen, guard)? {
+            return Ok(None);
+        }
+        *seen = reader.generation();
+        let Ok(formats) = reader.formats() else {
+            return Ok(None);
+        };
+        let formats: Vec<_> = formats.iter().map(String::as_str).collect();
+        if !permits(&formats, false) {
+            return Ok(None);
+        }
+        let Some(mime) = formats
+            .iter()
+            .find(|mime| mime.eq_ignore_ascii_case("text/plain;charset=utf-8"))
+            .or_else(|| {
+                formats
+                    .iter()
+                    .find(|mime| mime.eq_ignore_ascii_case("text/plain"))
+            })
+        else {
+            return Ok(None);
+        };
+        let Some(source) = ClipboardSource::observe(excluded) else {
+            return Ok(None);
+        };
+        let Ok(text) = reader.receive(*seen, mime, guard) else {
+            return Ok(None);
+        };
+        if guard().is_err() || !source.validate() {
+            return Ok(None);
+        }
+        Ok(Some(text))
+    }
+}
 #[derive(Default)]
 struct State {
     epoch: u64,
@@ -243,7 +307,6 @@ impl Handle {
             .spawn(move || {
                 let _completion = CaptureDone(finished);
                 let mut reader = None;
-                let mut seen = 0;
                 let mut reported = false;
                 let scope = || -> Result<()> {
                     if stopping.load(Ordering::Acquire)
@@ -265,10 +328,9 @@ impl Handle {
                         ticket.check()
                     };
                     if reader.is_none() {
-                        match super::wayland::Reader::open(&guard) {
+                        match CaptureReader::open(&preference.excluded_apps, &guard) {
                             Ok(opened) => {
                                 // The first offer is always a pre-existing baseline.
-                                seen = opened.generation();
                                 reader = Some(opened);
                                 reported = false;
                                 let _ = enqueue(
@@ -297,41 +359,19 @@ impl Handle {
                             }
                         }
                     }
-                    let connection = reader.as_mut().expect("clipboard reader");
-                    match connection.next(seen, &guard) {
-                        Ok(false) => continue,
+                    let text = match reader
+                        .as_mut()
+                        .expect("clipboard reader")
+                        .next(&preference.excluded_apps, &guard)
+                    {
+                        Ok(None) => continue,
                         Err(_) => {
                             reader.take();
                             continue;
                         }
-                        Ok(true) => (),
-                    }
-                    seen = connection.generation();
-                    let Ok(formats) = connection.formats() else {
-                        continue;
+                        Ok(Some(text)) => text,
                     };
-                    let formats: Vec<_> = formats.iter().map(String::as_str).collect();
-                    if !permits(&formats, false) {
-                        continue;
-                    }
-                    let Some(mime) = formats
-                        .iter()
-                        .find(|mime| mime.eq_ignore_ascii_case("text/plain;charset=utf-8"))
-                        .or_else(|| {
-                            formats
-                                .iter()
-                                .find(|mime| mime.eq_ignore_ascii_case("text/plain"))
-                        })
-                    else {
-                        continue;
-                    };
-                    let Some(source) = ClipboardSource::observe(&preference.excluded_apps) else {
-                        continue;
-                    };
-                    let Ok(text) = connection.receive(seen, mime, &guard) else {
-                        continue;
-                    };
-                    if guard().is_err() || !source.validate() {
+                    if guard().is_err() {
                         continue;
                     }
                     let _ = enqueue(

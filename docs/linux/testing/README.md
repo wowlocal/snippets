@@ -278,3 +278,42 @@ readable rows, highlight and screen-edge placement; the text assertions alone do
 not qualify appearance. Reviewed examples are in `evidence/`. Chromium uses native
 Wayland IME/text-input-v3 flags; the default/confined launcher remains a separate
 qualification. All failures are fatal and the owned app/browser are stopped.
+
+## GNOME encrypted clipboard history
+
+`gnome_history.py` runs under the disposable systemd account described above.
+It refuses other accounts, a non-headless Shell, an existing Snippets primary,
+`SNIPPETS_SUPPORT_DIR`, or a reused output directory. It needs an unlocked real
+Secret Service in that account (use a separate GNOME Keyring with a fictional
+password), the installed Release in `~/.local`, Python GI/pyatspi, a C compiler,
+GTK development files and the native Chromium binary available in the Ubuntu VM.
+Never unlock or reuse the normal user's keyring for this check.
+
+Save the owned session launch environment as a JSON string dictionary in
+`/var/lib/snippets-gnome-test/environment.json` (no credentials). Run as that
+account on its own bus with `WAYLAND_DISPLAY=snippets-lab`:
+
+```sh
+python3 docs/linux/testing/gnome_history.py /var/lib/snippets-gnome-test/history-check-new
+python3 docs/linux/testing/gnome_clipboard_protocol.py /var/lib/snippets-gnome-test --system-account
+```
+
+The history runner sets a new XDG data root so the actual production default-root
+and capture guards stay enabled. It drives consent, exclusions, row selection,
+Copy, Clear and opt-out through the installed GTK UI. Its independent GTK producer
+and Chromium profile contain only fictional text. It checks ciphertext on disk
+and exact decrypted UI values, collection with the view closed, initial/reconnect
+baselines, process restart, sensitive MIME/password refusal and application
+exclusions. A native delayed content provider proves cancellation during transfer
+on focus change, shield transition and extension disable, followed by recovery.
+The browser uses real Ctrl+A/C and native Wayland IME flags; its HTML prepopulates
+only the fictional source text. This does not qualify the confined snap launcher.
+
+A retained Mutter virtual keyboard controls only the headless session. Command
+launches without activation tokens can leave windows unfocused; the test cycles
+owned windows with Alt+Escape and verifies actual focus before UI actions. It
+never moves a pointer. Applications, browser and remote keyboard are stopped on
+exit; test artifacts remain under the new output directory. The shield cycle is
+unauthenticated. Actual GDM unlock, physical pointer interaction and real system
+suspend remain separate checks. Mesa software-rendering and stale accessibility
+cache warnings are retained; any failed assertion makes the runner fail.

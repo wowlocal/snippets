@@ -34,9 +34,9 @@ An experimental GNOME GlobalShortcuts portal adapter registers Open, Picker and
 Capture actions through the system permission dialog. Shortcut delivery and the
 associated capture or insertion operation are verified separately.
 An experimental Shell companion supplies cross-application ordinary insertion
-for native Wayland text-input clients. GNOME clipboard-history capture remains
-unimplemented. Existing Hyprland
-window-target and Wayland peer checks remain required for those mechanisms.
+for native Wayland text-input clients. Opted-in clipboard history now uses a
+separate generation-based companion reader. Existing Hyprland window-target and
+Wayland peer checks remain required for the Hyprland mechanisms.
 The GNOME installer builds `desktop,ibus` and installs the engine and companion.
 It does not enable them or replace existing input sources. The integration
 remains experimental until the remaining acceptance cases are complete.
@@ -173,8 +173,9 @@ The test reads the real screen-lock state, starts the actual GTK app in the
 background with a temporary library, exercises CLI expansion controls, verifies
 `unsupportedDesktop`, and checks that one Quit terminates the app. It leaves the
 real library, input configuration, keyboard, pointer and clipboard untouched.
-It passed on the Ubuntu VM with the screen locked on 2026-10-09. Interactive
-editing, unlock/relock and IBus text insertion are separate, outstanding checks.
+It passed on the Ubuntu VM with the screen locked on 2026-10-09. That early
+read-only check did not exercise interactive editing or IBus insertion; the
+subsequent isolated application checks below cover those separately.
 
 The Ubuntu desktop feature suite completed with **1090 passed, 89 ignored**;
 the live GNOME test is a separate additional pass. The headless configuration
@@ -331,8 +332,9 @@ focus, not a browser DOM element identifier. Application-internal background
 changes are not observable as stable field identities through Mutter. Clients
 using a direct IBus module or X11 without a Mutter text-input focus are refused
 and retain the explicit Copy workflow; those paths are not qualified for picker
-insertion. The Chromium run uses native Wayland IME/text-input-v3 flags. Installation,
-input-source onboarding and broader application coverage remain incomplete.
+insertion. The Chromium run uses native Wayland IME/text-input-v3 flags. The
+installer and Settings onboarding now have the separate checks above; broader
+application input paths remain unqualified.
 
 The companion policy fixture, formatting and syntax checks passed. Both the
 Ubuntu `desktop,ibus` build and the default Omarchy build passed Clippy with
@@ -403,7 +405,42 @@ python3 docs/linux/testing/gnome_picker.py LAB PREFIX/share/snippets-linux --cli
 python3 docs/linux/testing/ibus_engine_smoke.py LAB PREFIX/share/snippets-linux --installed --gtk --clipboard
 ```
 
-These explicit reads do not enable background history. GNOME background clipboard
-history remains unimplemented. MIME privacy markers depend on what the producing
-application advertises; unmarked secret text cannot be identified reliably.
-The native-focus contract and browser qualification limits above still apply.
+These explicit reads do not enable background history. MIME privacy markers depend
+on what the producing application advertises; unmarked secret text cannot be
+identified reliably. The native-focus contract and browser qualification limits
+above still apply.
+
+## Opted-in clipboard history
+
+GNOME history uses the same encrypted local store and consent UI as Hyprland.
+The companion admits source metadata only while the primary application's opted-in
+collector is polling. A short lease expires when polling stops. Each clipboard
+owner change has an opaque cursor; initial connection and reconnection establish
+a baseline without reading existing text. No clipboard bytes are cached in Shell.
+
+Only a fresh offer from the same live foreground window and ordinary native
+Wayland input focus can be read. Application IDs and classes are checked against
+the exclusions before transfer and revalidated afterward; the app's own process
+and internal clipboard markers are excluded. Missing identity, password or
+private focus, sensitive MIME types, changed focus/selection, lock, sleep and
+extension disable fail closed. History shares the explicit reader's transfer
+size and time limits. It remains off by default and retains the existing encrypted
+storage, keyring, cancellation and settings-generation guards.
+
+The installed Release has passed real GTK collection while the history window is
+closed, encrypted disk/decrypted UI, application exclusions, password and MIME
+refusal, companion reconnection and opt-out. The same run verifies process
+restart (old clipboard skipped, fresh collection resumes), literal history Copy
+without recapture, Clear, and cancellation of a native delayed transfer on
+focus change, screen-shield transition and companion disable. A fresh native
+Wayland Chromium profile copies fictional Unicode with real Ctrl+A/C; that exact
+text must decrypt into the history UI. This uses the disposable
+`snippets-gnome-test` account, a real GNOME Keyring and a new XDG data root; it does
+not bypass the production refusal to collect under `SNIPPETS_SUPPORT_DIR`.
+
+This change passed strict all-target Clippy and the filtered clipboard suite on
+both Ubuntu (`desktop,ibus`) and Omarchy (default features): 39 unit cases and
+one command integration case passed; four display-dependent unit cases remained
+ignored by that command and have the separate live evidence above. The common
+explicit clipboard transport was rechecked in the real systemd GNOME session:
+exact text plus pending selection/shield/disable cancellation passed.

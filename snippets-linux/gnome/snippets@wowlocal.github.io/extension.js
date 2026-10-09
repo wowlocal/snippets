@@ -12,6 +12,7 @@ const APP = 'com.khm.snippets.linux';
 const PATH = '/com/khm/Snippets/Gnome';
 const XML = `<node><interface name="com.khm.Snippets.Gnome1">
 <method name="ReadClipboard"><arg type="b" direction="out"/><arg type="ay" direction="out"/></method>
+<method name="ReadHistory"><arg type="s" direction="in"/><arg type="as" direction="in"/><arg type="s" direction="out"/><arg type="b" direction="out"/><arg type="ay" direction="out"/></method>
 <method name="EnableInput"><arg type="b" direction="out"/></method>
 <method name="Capture"><arg type="s" direction="out"/><arg type="s" direction="out"/></method>
 <method name="Check"><arg type="s" direction="in"/><arg type="b" direction="out"/><arg type="b" direction="out"/></method>
@@ -38,10 +39,24 @@ function ordinaryFocus() {
     return im.currentFocus;
 }
 
+function historyLabels(window) {
+    try {
+        const labels = [window.get_gtk_application_id(), window.get_wm_class()]
+            .filter(value => typeof value === 'string' && value.trim()).map(value => value.trim().toLowerCase());
+        return labels.length && labels.every(value => new TextEncoder().encode(value).length <= 512 &&
+            !/[\x00-\x1f\x7f]/.test(value)) ? labels : null;
+    } catch {
+        return null;
+    }
+}
+
 export default class SnippetsExtension extends Extension {
     enable() {
         this._tickets = new Map();
         this._clipboardRead = null;
+        this._historyToken = GLib.uuid_string_random();
+        this._historyOffer = null;
+        this._historyUntil = 0;
         this._owner = null;
         // Keep epochs monotonic across disable/enable on the same extension.
         this._generation = (this._generation ?? 0) + 1;
@@ -63,8 +78,17 @@ export default class SnippetsExtension extends Extension {
                 this._generation++;
             });
         this._selectionSignal = global.display.get_selection().connect('owner-changed', (_selection, type) => {
-            if (type === Meta.SelectionType.SELECTION_CLIPBOARD)
+            if (type === Meta.SelectionType.SELECTION_CLIPBOARD) {
                 this._clipboardRead?.cancel();
+                this._historyToken = GLib.uuid_string_random();
+                // Metadata only. No bytes are requested until the opted-in
+                // application worker asks for this particular new selection.
+                this._historyOffer = this._ready() && GLib.get_monotonic_time() < this._historyUntil ? {
+                    window: global.display.focus_window, focus: ordinaryFocus(),
+                    labels: historyLabels(global.display.focus_window),
+                    created: GLib.get_monotonic_time(),
+                } : null;
+            }
         });
         this._focusSignal = global.display.connect('notify::focus-window', () => this._focusChanged());
         this._lockSignal = Main.screenShield.connect('active-changed', () => this._cancelOperations());
@@ -124,6 +148,9 @@ export default class SnippetsExtension extends Extension {
     _cancelOperations() {
         this._tickets?.clear();
         this._clipboardRead?.cancel();
+        this._historyOffer = null;
+        this._historyUntil = 0;
+        this._historyToken = GLib.uuid_string_random();
         this._setupGeneration++;
     }
 
@@ -163,6 +190,8 @@ export default class SnippetsExtension extends Extension {
 
     _focusChanged() {
         this._clipboardRead?.cancel();
+        this._historyOffer = null;
+        this._historyToken = GLib.uuid_string_random();
         this._setupGeneration++;
         const window = global.display.focus_window;
         for (const [id, ticket] of this._tickets) {
@@ -180,9 +209,72 @@ export default class SnippetsExtension extends Extension {
     }
 
     ReadClipboardAsync(_parameters, invocation) {
+        this._readClipboard(invocation, (ok, bytes) =>
+            invocation.return_value(new GLib.Variant('(bay)', [ok, bytes])));
+    }
+
+    ReadHistoryAsync([previous, excluded], invocation) {
         if (!this._caller(invocation))
             return;
-        const rejected = () => invocation.return_value(new GLib.Variant('(bay)', [false, []]));
+        // Only an actively polling, opted-in primary app admits source
+        // metadata. The lease expires automatically if the collector stops.
+        this._historyUntil = GLib.get_monotonic_time() + 2000000;
+        const token = this._historyToken;
+        const reply = (ok = false, bytes = []) =>
+            invocation.return_value(new GLib.Variant('(sbay)', [token, ok, bytes]));
+        // An empty cursor establishes a baseline. Reconnect, enable and unlock
+        // must never import an already-existing clipboard offer.
+        if (!previous || previous === token) {
+            reply();
+            return;
+        }
+        const offer = this._historyOffer;
+        const owner = this._owner;
+        const generation = this._generation;
+        const valid = () => {
+            const now = GLib.get_monotonic_time();
+            const labels = offer?.window ? historyLabels(offer.window) : null;
+            return this._ready() && owner === this._owner && generation === this._generation &&
+                token === this._historyToken && this._historyOffer === offer && offer?.window && offer.focus &&
+                labels && offer.labels && labels.length === offer.labels.length &&
+                labels.every((label, index) => label === offer.labels[index]) &&
+                offer.window.get_compositor_private() !== null && offer.window.get_pid() > 0 &&
+                global.display.focus_window === offer.window && ordinaryFocus() === offer.focus &&
+                now >= offer.created && now - offer.created < 5000000;
+        };
+        if (previous.length > 64 || !Array.isArray(excluded) || excluded.length > 128 ||
+            excluded.some(value => typeof value !== 'string' || new TextEncoder().encode(value).length > 256 ||
+                /[\x00-\x1f\x7f]/.test(value)) || !valid()) {
+            reply();
+            return;
+        }
+        const denied = excluded.map(value => value.trim().toLowerCase());
+        if (offer.labels.some(value => value === APP || denied.includes(value))) {
+            reply();
+            return;
+        }
+        // Also reject our own process when the compositor has no application ID.
+        Gio.DBus.session.call('org.freedesktop.DBus', '/org/freedesktop/DBus',
+            'org.freedesktop.DBus', 'GetConnectionUnixProcessID',
+            new GLib.Variant('(s)', [owner]), new GLib.VariantType('(u)'),
+            Gio.DBusCallFlags.NO_AUTO_START, 1000, null, (connection, result) => {
+                try {
+                    const [pid] = connection.call_finish(result).deep_unpack();
+                    if (!valid() || !pid || offer.window.get_pid() === pid)
+                        throw new Error('unavailable');
+                } catch {
+                    reply();
+                    return;
+                }
+                this._readClipboard(invocation, (ok, bytes) => reply(ok && Boolean(valid()),
+                    ok && valid() ? bytes : []));
+            });
+    }
+
+    _readClipboard(invocation, reply) {
+        if (!this._caller(invocation))
+            return;
+        const rejected = () => reply(false, []);
         const focus = ordinaryFocus();
         const window = global.display.focus_window;
         if (!Number.isInteger(Meta.SelectionType.SELECTION_CLIPBOARD) || this._clipboardRead || !focus || !window) {
@@ -241,7 +333,7 @@ export default class SnippetsExtension extends Extension {
                     this._clipboardRead = null;
                 try { output.close(null); } catch {}
             }
-            invocation.return_value(new GLib.Variant('(bay)', [ok, bytes]));
+            reply(ok, bytes);
         };
         try {
             selection.transfer_async(Meta.SelectionType.SELECTION_CLIPBOARD, mime, 256 * 1024 + 1,

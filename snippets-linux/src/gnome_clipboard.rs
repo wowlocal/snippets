@@ -1,11 +1,14 @@
 //! Explicit, bounded clipboard acquisition through the primary-app-only companion.
-//! No background collection, plaintext persistence or clipboard writes.
+//! History has a separate opt-in generation reader; neither reader writes the clipboard.
 use crate::model::{Error, MAX_BODY_BYTES, Result};
 use gtk::{gio, glib, prelude::*};
 use zeroize::Zeroizing;
 const UNAVAILABLE: Error = Error(
     "GNOME clipboard text is unavailable. Enable the Snippets companion and use an ordinary text field.",
 );
+#[path = "gnome_clipboard_history.rs"]
+mod history;
+pub(crate) use history::Reader as HistoryReader;
 pub(crate) fn read(guard: &dyn Fn() -> Result<()>) -> Result<Zeroizing<String>> {
     guard()?;
     let deadline = crate::sensitive_clipboard::Deadline::new()?;

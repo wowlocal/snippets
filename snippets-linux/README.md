@@ -1,20 +1,26 @@
 # Snippets for Linux
 
-Native GTK 4 / libadwaita desktop app and CLI, written in Rust. Python is not needed
-to build, install or run the application. It is used only by development tools
-that regenerate checked-in reference fixtures or rebuild an optional patched GTK
-dependency with upstream Meson tools. The client handles ordinary local entries
+Native GTK 4 / libadwaita desktop app and CLI, written in Rust. Python is needed by
+the installer to generate installation metadata, but not to run the application.
+Development tools also use it to regenerate checked-in reference fixtures or
+rebuild an optional patched GTK dependency with upstream Meson tools. The client handles ordinary local entries
 and an encrypted vault workspace; [the full desktop port remains in development](../docs/linux/IMPLEMENTATION.md).
 
-## GNOME preview, 2026-10-09
+## GNOME preview, 2026-10-10
 
 The first GNOME backend builds on stock Ubuntu without Fcitx. It adds native
 session-lock observation and isolated background app/CLI lifecycle coverage.
 The experimental IBus path now passes owned GTK4 and Chromium Wayland expansion
 checks. An experimental GlobalShortcuts portal adapter opens the app and picker
 through real GNOME bindings and recovers after a portal frontend crash.
-**Full GNOME support is not qualified:** popup presentation, a complete fresh-login
-check and background clipboard history remain outstanding. Explicit Capture
+Native candidate panels now pass GTK/Chromium selection and cancellation checks,
+with reviewed screenshots. Settings preparation and activation pass across a
+real systemd-managed GNOME session restart in a disposable headless account.
+The IBus registry cache is refreshed before later daemon starts so an existing
+cache cannot hide the newly installed engine.
+Opted-in background clipboard history now uses the companion and the existing
+encrypted local store. **Full GNOME support is not qualified:** GDM
+authentication/physical-seat login and broader client paths remain outstanding. Explicit Capture
 and the IBus `{clipboard}` placeholder now use the companion. Settings now offers explicit
 GNOME preparation and input-source activation. An experimental Shell companion
 now passes ordinary picker insertion in owned GTK4 and Chromium native Wayland
@@ -1415,12 +1421,14 @@ or `snippets --clipboard-history`. Collection starts only after explicit consent
 in its window; it is off by default. An empty, disabled history does not read
 the clipboard or initialize a keyring namespace, key, preferences or history image.
 
-The native read-only Wayland data-control client watches future text copies
-without requiring Snippets to have keyboard focus. It ignores the initial offer
+On Hyprland, the native read-only Wayland data-control client watches future
+text copies without requiring Snippets to have keyboard focus. On GNOME, the
+companion observes new clipboard generations while the opted-in worker polls;
+only ordinary native Wayland text-input focus is eligible. It ignores the initial offer
 on every connection and reconnect, including after an observed desktop lock.
 Primary selection, file copies, sensitivity markers and Snippets-generated
 clipboard providers are excluded before requesting text. Default password-manager
-classes and custom **App Exclusions** use the foreground Hyprland window as a
+classes and custom **App Exclusions** use the foreground window identity as a
 best-effort hint; they cannot identify every source or secret. A locked,
 unobservable or changed session cancels acquisition and admission to storage.
 
@@ -1449,8 +1457,9 @@ The view decrypts the retained copy, searches and copies it without recapture.
 Deletion and clear require their own default-Cancel confirmations and preserve the
 current clipboard. The image has private permissions and contains no fixture
 plaintext. This fixture disables accessibility services on its private test bus;
-accessibility and physical input remain separate acceptance work. Other Wayland
-compositors require ext-data-control-v1 and the current Hyprland session/source checks.
+accessibility and physical input remain separate acceptance work. GNOME integration evidence and native-focus limits are documented in
+[GNOME support](../docs/linux/GNOME.md#opted-in-clipboard-history). Other Wayland
+compositors remain unsupported unless their session/source checks are implemented.
 
 ## Local suggestion learning
 

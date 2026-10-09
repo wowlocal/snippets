@@ -215,3 +215,74 @@ for (const cancel of [f => f.selectionChanged(), f => f.switchTo(f.other),
     assert.equal(g.invoke('ReadClipboard').value[0], false); assert.equal(g.readCount(), 0);
 }
 console.log('GNOME clipboard: primary-only, bounded transfer, sensitive formats, single read and lifecycle cancellation passed');
+
+{
+    const f = fixture();
+    assert.equal(f.invoke('ReadHistory', ['', []], ':1.666').error, 'com.khm.Snippets.Unavailable');
+    const baseline = f.invoke('ReadHistory', ['', []]).value;
+    assert.equal(baseline[1], false);
+    f.selectionChanged();
+    const response = f.invoke('ReadHistory', [baseline[0], []]);
+    assert.equal(f.readCount(), 1);
+    f.clipboard([80, 117, 98]);
+    assert.equal(response.value[1], true);
+    assert.deepEqual(response.value[2], [80, 117, 98]);
+    assert.equal(f.invoke('ReadHistory', [response.value[0], []]).value[1], false);
+    assert.equal(f.readCount(), 1);
+    f.selectionChanged();
+    assert.equal(f.invoke('ReadHistory', ['', []]).value[1], false); // A fresh collector skips existing text.
+    assert.equal(f.readCount(), 1);
+}
+for (const excluded of [['public.fixture'], [' PUBLIC.FIXTURE '], ['x'.repeat(257)], Array(129).fill('public'), ['line\nbreak']]) {
+    const f = fixture();
+    const baseline = f.invoke('ReadHistory', ['', []]).value[0];
+    f.selectionChanged();
+    assert.equal(f.invoke('ReadHistory', [baseline, excluded]).value[1], false);
+    assert.equal(f.readCount(), 0);
+}
+for (const change of [
+    f => f.switchTo(f.other), f => {f.switchTo(f.other); f.switchTo(f.target);},
+    f => f.advance(5000000), f => f.sleep(), f => f.Main.screenShield.emit('active-changed'),
+    f => {f.extension.disable(); f.extension.enable();},
+    f => {f.target.get_gtk_application_id = () => 'com.khm.snippets.linux';},
+    f => {f.target.get_pid = () => 42;},
+    f => {f.target.get_wm_class = () => null;},
+    f => {f.Main.inputMethod.content_purpose = f.Clutter.InputContentPurpose.PASSWORD;},
+    f => f.formats(['text/plain', 'application/x-keepassxc']),
+]) {
+    const f = fixture();
+    const baseline = f.invoke('ReadHistory', ['', []]).value[0];
+    f.selectionChanged(); change(f);
+    assert.equal(f.invoke('ReadHistory', [baseline, []]).value[1], false);
+    assert.equal(f.readCount(), 0);
+}
+for (const change of [f => f.selectionChanged(), f => f.switchTo(f.other), f => f.ownerChanged(),
+    f => f.sleep(), f => f.extension.disable(), f => {f.target.get_wm_class = () => 'changed.fixture';}]) {
+    const f = fixture();
+    const baseline = f.invoke('ReadHistory', ['', []]).value[0];
+    f.selectionChanged(); f.defer();
+    const reply = f.invoke('ReadHistory', [baseline, []]); change(f); f.finish();
+    assert.equal(reply.value[1], false);
+    assert.equal(f.readCount(), 0);
+}
+{
+    const f = fixture();
+    const baseline = f.invoke('ReadHistory', ['', []]).value[0];
+    f.selectionChanged();
+    const reply = f.invoke('ReadHistory', [baseline, []]);
+    f.selectionChanged(); f.clipboard([80]);
+    assert.equal(reply.value[1], false);
+    assert.equal(reply.value[2].length, 0);
+}
+{
+    const f = fixture();
+    f.selectionChanged();
+    assert.equal(f.invoke('ReadHistory', ['unknown-before-collection', []]).value[1], false);
+    assert.equal(f.readCount(), 0);
+    const cursor = f.invoke('ReadHistory', ['', []]).value[0];
+    f.advance(2000000);
+    f.selectionChanged(); // A stopped collector no longer admits source metadata.
+    assert.equal(f.invoke('ReadHistory', [cursor, []]).value[1], false);
+    assert.equal(f.readCount(), 0);
+}
+console.log('GNOME history protocol: initial baseline, source exclusions, privacy, expiry and deferred-read revocation passed');

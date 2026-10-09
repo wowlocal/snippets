@@ -1,7 +1,7 @@
 {
   "uuid": "snippets@wowlocal.github.io",
   "name": "Snippets",
-  "description": "Input source setup, ordinary snippet insertion and explicit clipboard capture for Snippets.",
+  "description": "Input source setup, ordinary snippet insertion and clipboard capture/history for Snippets.",
   "shell-version": [
     "50"
   ],
