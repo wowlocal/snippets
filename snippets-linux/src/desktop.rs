@@ -1,4 +1,7 @@
-//! Read-only Omarchy theme adapter and short-lived Hyprland paste destinations.
+//! Desktop session observation, Omarchy themes and Hyprland paste destinations.
+#[cfg(feature = "desktop")]
+#[path = "desktop_gnome.rs"]
+mod gnome;
 #[cfg(feature = "desktop")]
 #[path = "desktop_sleep.rs"]
 mod sleep;
@@ -18,6 +21,32 @@ use std::{
     time::{Duration, Instant},
 };
 pub const APP_ID: &str = "com.khm.snippets.linux";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Environment {
+    Gnome,
+    Hyprland,
+    Unknown,
+}
+impl Environment {
+    fn detect(desktop: &str, hyprland: bool) -> Self {
+        let gnome = desktop.split(':').any(|v| v.eq_ignore_ascii_case("gnome"));
+        let hypr = desktop
+            .split(':')
+            .any(|v| v.eq_ignore_ascii_case("hyprland"));
+        match (gnome, hypr, hyprland) {
+            (true, false, false) => Self::Gnome,
+            (false, _, true) => Self::Hyprland,
+            _ => Self::Unknown,
+        }
+    }
+}
+pub fn environment() -> Environment {
+    Environment::detect(
+        &env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
+        env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some_and(|v| !v.is_empty()),
+    )
+}
 
 pub fn theme_path() -> Option<PathBuf> {
     env::var_os("XDG_STATE_HOME")
@@ -69,6 +98,9 @@ pub fn theme_css(data: &str) -> (String, Option<bool>) {
     )
 }
 fn hypr(arguments: &[&str]) -> Option<Vec<u8>> {
+    if environment() == Environment::Gnome {
+        return None;
+    }
     let mut child = Command::new("hyprctl")
         .args(arguments)
         .stdin(Stdio::null())
@@ -110,6 +142,9 @@ fn query(operation: &str) -> Option<Value> {
 }
 #[cfg(feature = "desktop")]
 pub(crate) fn wayland_peer_matches(pid: u64) -> bool {
+    if environment() != Environment::Hyprland {
+        return false;
+    }
     let Some(signature) = env::var("HYPRLAND_INSTANCE_SIGNATURE")
         .ok()
         .filter(|s| !s.is_empty())
@@ -152,13 +187,23 @@ impl SessionState {
     }
 }
 pub fn session_state() -> SessionState {
-    SessionState::decode(query("locked"))
+    match environment() {
+        Environment::Gnome => {
+            #[cfg(feature = "desktop")]
+            return gnome::state();
+            #[cfg(not(feature = "desktop"))]
+            return SessionState::Unavailable;
+        }
+        Environment::Hyprland => SessionState::decode(query("locked")),
+        Environment::Unknown => SessionState::Unavailable,
+    }
 }
 
 struct ObservedSession {
     state: SessionState,
     checked: Duration,
     epoch: u64,
+    revoked_until: Duration,
     #[cfg(feature = "desktop")]
     sleep: sleep::Observation,
 }
@@ -172,9 +217,10 @@ impl ObservedSession {
     }
     fn snapshot(&self) -> (SessionState, u64) {
         (
-            if crate::clock::uptime()
-                .is_none_or(|now| now.saturating_sub(self.checked) > Duration::from_millis(1250))
-                || self.sleep_blocked()
+            if crate::clock::uptime().is_none_or(|now| {
+                now < self.revoked_until
+                    || now.saturating_sub(self.checked) > Duration::from_millis(1250)
+            }) || self.sleep_blocked()
             {
                 SessionState::Unavailable
             } else {
@@ -218,6 +264,7 @@ impl SessionWitness {
         Self(Arc::new(Mutex::new(ObservedSession {
             state,
             epoch,
+            revoked_until: Duration::ZERO,
             checked: crate::clock::uptime().unwrap(),
             #[cfg(feature = "desktop")]
             sleep: sleep::Observation::ready(),
@@ -234,6 +281,7 @@ impl SessionMonitor {
             state: SessionState::Unavailable,
             checked: Duration::ZERO,
             epoch: 0,
+            revoked_until: Duration::ZERO,
             #[cfg(feature = "desktop")]
             sleep: sleep::Observation::default(),
         }));
@@ -265,6 +313,8 @@ impl SessionMonitor {
                     );
                     timer.attach(Some(&worker_context));
                     let mut sleep = sleep::Monitor::new(value.clone());
+                    let mut gnome = (environment() == Environment::Gnome)
+                        .then(|| gnome::Monitor::new(value.clone()));
                     let mut next_poll = Instant::now();
                     while !ending.load(Ordering::Acquire) {
                         while worker_context.pending() {
@@ -272,7 +322,11 @@ impl SessionMonitor {
                         }
                         sleep.refresh();
                         if Instant::now() >= next_poll {
-                            poll();
+                            if let Some(gnome) = gnome.as_mut() {
+                                gnome.refresh();
+                            } else {
+                                poll();
+                            }
                             next_poll = Instant::now() + Duration::from_millis(250);
                         }
                         // Let D-Bus wake the worker immediately, between Hypr
@@ -468,6 +522,7 @@ mod tests {
             state: SessionState::Unlocked,
             checked: crate::clock::uptime().unwrap(),
             epoch: 3,
+            revoked_until: Duration::ZERO,
             #[cfg(feature = "desktop")]
             sleep: sleep::Observation::ready(),
         };
@@ -478,6 +533,22 @@ mod tests {
             .unwrap()
             .saturating_sub(Duration::from_secs(2));
         assert!(value.snapshot() == (SessionState::Unavailable, 5));
+    }
+    #[test]
+    fn desktop_selection_recognizes_gnome_tokens_without_guessing() {
+        for name in ["GNOME", "ubuntu:GNOME", "gnome:GNOME-Classic"] {
+            assert_eq!(Environment::detect(name, false), Environment::Gnome);
+        }
+        assert_eq!(Environment::detect("Hyprland", true), Environment::Hyprland);
+        assert_eq!(Environment::detect("", true), Environment::Hyprland);
+        for (name, signature) in [
+            ("", false),
+            ("not-gnome", false),
+            ("GNOME", true),
+            ("GNOME:Hyprland", false),
+        ] {
+            assert_eq!(Environment::detect(name, signature), Environment::Unknown);
+        }
     }
     #[test]
     fn missing_or_malformed_lock_state_never_authorizes_insertion() {

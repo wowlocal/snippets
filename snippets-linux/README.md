@@ -1,10 +1,22 @@
-# Snippets for Omarchy
+# Snippets for Linux
 
 Native GTK 4 / libadwaita desktop app and CLI, written in Rust. Python is not needed
 to build, install or run the application. It is used only by development tools
 that regenerate checked-in reference fixtures or rebuild an optional patched GTK
 dependency with upstream Meson tools. The client handles ordinary local entries
 and an encrypted vault workspace; [the full desktop port remains in development](../docs/linux/IMPLEMENTATION.md).
+
+## GNOME preview, 2026-10-09
+
+The first GNOME backend builds on stock Ubuntu without Fcitx. It adds native
+session-lock observation and isolated background app/CLI lifecycle coverage.
+**Inline expansion, the caret popup, global shortcuts, clipboard history and
+cross-application insertion are not supported on GNOME yet.** The existing
+Hyprland/Fcitx build remains the default Cargo configuration.
+
+Use `./scripts/install-linux.sh --desktop gnome` for the preview; the installer
+also detects `ubuntu:GNOME` automatically. See [GNOME scope, build and integration
+checks](../docs/linux/GNOME.md) before installing it for daily use.
 
 ## Current user build, 2026-10-08
 

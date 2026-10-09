@@ -8,8 +8,9 @@ description = "Native GTK desktop client for Snippets on Omarchy"
 default-run = "snippets"
 
 [features]
-default = ["desktop"]
+default = ["desktop", "fcitx"]
 desktop = ["dep:gtk", "dep:adw", "dep:pangocairo", "dep:cairo", "secret-service", "local-auth"]
+fcitx = ["desktop"]
 secret-service = []
 local-auth = []
 

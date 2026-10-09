@@ -57,7 +57,10 @@ impl Service {
                     this.status.set(status);
                 }
                 if worker.finished()
-                    && !matches!(this.status.get(), Status::Stopped | Status::Unavailable)
+                    && !matches!(
+                        this.status.get(),
+                        Status::Stopped | Status::Unavailable | Status::UnsupportedDesktop
+                    )
                 {
                     this.status.set(Status::Unavailable);
                 }
@@ -166,7 +169,9 @@ impl Service {
                 Status::Listening => ExpansionState::Listening,
                 Status::Stopped => ExpansionState::Stopped,
                 Status::Unavailable => ExpansionState::Unavailable,
+                #[cfg(feature = "fcitx")]
                 Status::WaitingForFcitx => ExpansionState::WaitingForFcitx,
+                Status::UnsupportedDesktop => ExpansionState::UnsupportedDesktop,
             }
         };
         Ok(ExpansionSettings {

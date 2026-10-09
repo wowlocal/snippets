@@ -44,6 +44,7 @@ pub enum ExpansionState {
     Stopped,
     Unavailable,
     WaitingForFcitx,
+    UnsupportedDesktop,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

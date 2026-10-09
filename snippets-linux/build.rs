@@ -1,6 +1,6 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=SNIPPETS_GTK_RUNTIME_DIR");
-    if std::env::var_os("CARGO_FEATURE_DESKTOP").is_some() {
+    if std::env::var_os("CARGO_FEATURE_FCITX").is_some() {
         let fcitx = pkg_config::Config::new()
             .cargo_metadata(false)
             .atleast_version("5.1")
@@ -241,6 +241,8 @@ fn main() {
             state_fixture.display()
         );
         println!("cargo:rerun-if-changed=tests/reference/fcitx-state.cpp");
+    }
+    if std::env::var_os("CARGO_FEATURE_DESKTOP").is_some() {
         if let Some(directory) = std::env::var_os("SNIPPETS_GTK_RUNTIME_DIR") {
             let directory = directory
                 .to_str()

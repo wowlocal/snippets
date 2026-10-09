@@ -1,8 +1,10 @@
 //! One background owner per enabled library; no host text crosses to GTK.
 use super::*;
 use crate::desktop::{SessionState, SessionWitness};
+#[cfg(any(test, feature = "fcitx"))]
+use std::path::Path;
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -15,7 +17,7 @@ use std::{
 const STOPPED: Error = Error("Inline expansion stopped. Check the text field before trying again.");
 const CLIPBOARD: Error =
     Error("The clipboard placeholder could not be read safely within its size and time limits.");
-#[cfg(feature = "desktop")]
+#[cfg(feature = "fcitx")]
 #[path = "inline_fcitx.rs"]
 mod fcitx;
 #[cfg(test)]
@@ -105,6 +107,11 @@ mod tests {
     }
     #[test]
     fn locked_worker_never_connects_and_explicit_stop_or_revocation_joins() {
+        let expected = if crate::desktop::environment() == crate::desktop::Environment::Gnome {
+            Status::UnsupportedDesktop
+        } else {
+            Status::WaitingForUnlock
+        };
         for explicit in [true, false] {
             let temporary = tempfile::tempdir().unwrap();
             let library = Library::prepare(temporary.path().join("Public library")).unwrap();
@@ -116,7 +123,7 @@ mod tests {
                     .receiver
                     .recv_timeout(Duration::from_secs(2))
                     .unwrap()
-                    == Status::WaitingForUnlock
+                    == expected
             );
             if explicit {
                 handle.stop();
@@ -129,12 +136,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(5));
             }
             assert!(!library.path().exists());
-            assert!(
-                handle
-                    .receiver
-                    .try_iter()
-                    .all(|status| status == Status::WaitingForUnlock)
-            );
+            assert!(handle.receiver.try_iter().all(|status| status == expected));
         }
     }
 }
@@ -146,7 +148,9 @@ pub(crate) enum Status {
     Listening,
     Stopped,
     Unavailable,
+    #[cfg(feature = "fcitx")]
     WaitingForFcitx,
+    UnsupportedDesktop,
 }
 impl Status {
     pub fn text(self) -> &'static str {
@@ -158,8 +162,12 @@ impl Status {
             Self::Unavailable => {
                 "Inline expansion could not connect. Check that Fcitx and the Snippets addon are installed, then retry."
             }
+            #[cfg(feature = "fcitx")]
             Self::WaitingForFcitx => {
                 "Enabled; waiting for the Snippets Fcitx addon. Restart Fcitx after installing Snippets."
+            }
+            Self::UnsupportedDesktop => {
+                "Inline expansion is not available on this desktop yet. Your saved snippets remain available in the app."
             }
         }
     }
@@ -318,7 +326,13 @@ fn run(
     sender: mpsc::SyncSender<Status>,
     usage: Option<crate::usage_store::Handle>,
 ) {
-    #[cfg(feature = "desktop")]
+    // Native GNOME input is owned by IBus. Do not claim its seat with the
+    // wlroots fallback or select Fcitx merely because its executable exists.
+    if crate::desktop::environment() == crate::desktop::Environment::Gnome {
+        let _ = sender.try_send(Status::UnsupportedDesktop);
+        return;
+    }
+    #[cfg(feature = "fcitx")]
     if Path::new("/usr/bin/fcitx5").is_file() {
         fcitx::run(root, witness, stop, sender, usage);
         return;

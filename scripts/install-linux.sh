@@ -4,31 +4,53 @@ set -euo pipefail
 TASK_REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 TASK_INSTALL_PREFIX=$HOME/.local
 TASK_BUILD=true
+TASK_DESKTOP=auto
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix) [[ $# -ge 2 && -n $2 ]] || { echo '--prefix requires a path' >&2; exit 2; }; TASK_INSTALL_PREFIX=$2; shift 2 ;;
     --no-build) TASK_BUILD=false; shift ;;
+    --desktop) [[ $# -ge 2 ]] || { echo '--desktop requires auto, hyprland or gnome' >&2; exit 2; }; TASK_DESKTOP=$2; shift 2 ;;
     --help|-h)
-      echo 'Usage: ./scripts/install-linux.sh [--prefix PATH] [--no-build]'
+      echo 'Usage: ./scripts/install-linux.sh [--prefix PATH] [--no-build] [--desktop auto|hyprland|gnome]'
       echo 'Builds and installs native Rust executables under ~/.local. Preserves library data.'
       exit 0 ;;
     *) echo 'Unknown option. Use --help.' >&2; exit 2 ;;
   esac
 done
+if [[ $TASK_DESKTOP == auto ]]; then
+  case ":${XDG_CURRENT_DESKTOP:-}:" in
+    *:GNOME:*|*:gnome:*) TASK_DESKTOP=gnome ;;
+    *) TASK_DESKTOP=hyprland ;;
+  esac
+fi
+case "$TASK_DESKTOP" in gnome|hyprland) ;; *) echo '--desktop requires auto, hyprland or gnome' >&2; exit 2 ;; esac
 cd -- "$TASK_REPO_ROOT"
 
-if ! pkg-config --atleast-version=4.12 gtk4 || ! pkg-config --atleast-version=1.5 libadwaita-1 || ! pkg-config --exists icu-i18n || ! pkg-config --atleast-version=0.21 libsecret-1 || ! pkg-config --exists pam || ! pkg-config --atleast-version=4.1 libqrencode || ! pkg-config --atleast-version=5.1 Fcitx5Core || ! pkg-config --exists wayland-client wayland-protocols json-c pangocairo Fcitx5Module || ! command -v wayland-scanner >/dev/null; then
-  echo 'Requires GTK >= 4.12, libadwaita >= 1.5, ICU, libsecret >= 0.21, Linux-PAM, libqrencode >= 4.1, Fcitx5 >= 5.1, Wayland, Cairo/Pango, json-c, and wayland-protocols.' >&2
-  echo 'On Omarchy: omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols json-c pkgconf base-devel' >&2
+if ! pkg-config --atleast-version=4.12 gtk4 || ! pkg-config --atleast-version=1.5 libadwaita-1 || ! pkg-config --exists icu-i18n || ! pkg-config --atleast-version=0.21 libsecret-1 || ! pkg-config --exists pam || ! pkg-config --atleast-version=4.1 libqrencode || ! pkg-config --exists wayland-client wayland-protocols xkbcommon json-c pangocairo || ! command -v wayland-scanner >/dev/null; then
+  echo 'Requires GTK >= 4.12, libadwaita >= 1.5, ICU, libsecret >= 0.21, Linux-PAM, libqrencode >= 4.1, Wayland, xkbcommon, Cairo/Pango, json-c, and wayland-protocols.' >&2
+  if [[ $TASK_DESKTOP == gnome ]]; then
+    echo 'On Ubuntu: sudo apt install build-essential cargo pkg-config libgtk-4-dev libadwaita-1-dev libicu-dev libsecret-1-dev libpam0g-dev libaudit-dev libcap-ng-dev libqrencode-dev libwayland-dev wayland-protocols libxkbcommon-dev libjson-c-dev' >&2
+  else
+    echo 'On Omarchy: omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols json-c pkgconf base-devel' >&2
+  fi
   exit 1
 fi
+TASK_FEATURES=(--no-default-features --features desktop)
+TASK_DEFAULT_TARGET=$TASK_REPO_ROOT/snippets-linux/target/gnome
+if [[ $TASK_DESKTOP == hyprland ]]; then
+  pkg-config --atleast-version=5.1 Fcitx5Core && pkg-config --exists Fcitx5Module || { echo 'The Hyprland build requires Fcitx5 >= 5.1 development files.' >&2; exit 1; }
+  TASK_FEATURES=(--no-default-features --features desktop,fcitx)
+  TASK_DEFAULT_TARGET=$TASK_REPO_ROOT/snippets-linux/target
+fi
+TASK_TARGET_ROOT=${CARGO_TARGET_DIR:-$TASK_DEFAULT_TARGET}
+[[ $TASK_TARGET_ROOT = /* ]] || TASK_TARGET_ROOT=$TASK_REPO_ROOT/$TASK_TARGET_ROOT
 if $TASK_BUILD; then
   command -v cargo >/dev/null || { echo 'Cargo is required to build. On Omarchy: omarchy pkg add rust' >&2; exit 1; }
-  cargo build --locked --release --manifest-path "$TASK_REPO_ROOT/snippets-linux/Cargo.toml" --bins
+  cargo build --locked --release --manifest-path "$TASK_REPO_ROOT/snippets-linux/Cargo.toml" --target-dir "$TASK_TARGET_ROOT" "${TASK_FEATURES[@]}" --bins
 fi
-TASK_TARGET_ROOT=${CARGO_TARGET_DIR:-$TASK_REPO_ROOT/snippets-linux/target}
-[[ $TASK_TARGET_ROOT = /* ]] || TASK_TARGET_ROOT=$TASK_REPO_ROOT/$TASK_TARGET_ROOT
-[[ -f "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" && ! -L "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" ]] || { echo 'Release Fcitx addon is missing; rebuild Snippets.' >&2; exit 1; }
+if [[ $TASK_DESKTOP == hyprland ]]; then
+  [[ -f "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" && ! -L "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" ]] || { echo 'Release Fcitx addon is missing; rebuild Snippets.' >&2; exit 1; }
+fi
 for TASK_BINARY in snippets snippets-cli snippets-owner-auth; do
   [[ -x "$TASK_TARGET_ROOT/release/$TASK_BINARY" ]] || { echo 'Release executables are missing; run the installer without --no-build.' >&2; exit 1; }
 done
@@ -100,10 +122,12 @@ if [[ -n $TASK_GTK_RUNTIME ]]; then
   verify_gtk_runtime "$TASK_GTK_DESTINATION" "$TASK_GTK_RUNTIME"
 fi
 install_atomic "$TASK_TARGET_ROOT/release/snippets-owner-auth" "$TASK_DESTINATION/snippets-owner-auth" 755
-install_atomic "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" "$TASK_DESTINATION/libsnippets-fcitx.so" 755
-for TASK_FCITX_INTERFACE_FILE in COPYING SOURCE.json waylandim_public.h zwp_input_method_v2.h wl_surface.h; do
-  install_atomic "$TASK_REPO_ROOT/snippets-linux/src/fcitx-5.1.22/$TASK_FCITX_INTERFACE_FILE" "$TASK_DESTINATION/fcitx-5.1.22/$TASK_FCITX_INTERFACE_FILE" 644
-done
+if [[ $TASK_DESKTOP == hyprland ]]; then
+  install_atomic "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" "$TASK_DESTINATION/libsnippets-fcitx.so" 755
+  for TASK_FCITX_INTERFACE_FILE in COPYING SOURCE.json waylandim_public.h zwp_input_method_v2.h wl_surface.h; do
+    install_atomic "$TASK_REPO_ROOT/snippets-linux/src/fcitx-5.1.22/$TASK_FCITX_INTERFACE_FILE" "$TASK_DESTINATION/fcitx-5.1.22/$TASK_FCITX_INTERFACE_FILE" 644
+  done
+fi
 for TASK_WAYLAND_SOURCE in wlr-layer-shell-v1.xml wlr-layer-shell-v1.source.json xdg-shell.xml xdg-shell.source.json; do
   install_atomic "$TASK_REPO_ROOT/snippets-linux/data/$TASK_WAYLAND_SOURCE" "$TASK_DESTINATION/wayland-protocols/$TASK_WAYLAND_SOURCE" 644
 done
@@ -115,9 +139,10 @@ for TASK_BINARY in snippets snippets-cli; do
   mv -fT -- "$TASK_LINK/$TASK_BINARY" "$TASK_INSTALL_PREFIX/bin/$TASK_BINARY"
   rmdir -- "$TASK_LINK"
 done
-TASK_ADDON_METADATA=$(mktemp)
-trap 'rm -f -- "$TASK_ADDON_METADATA"' EXIT
-cat > "$TASK_ADDON_METADATA" <<EOF
+if [[ $TASK_DESKTOP == hyprland ]]; then
+  TASK_ADDON_METADATA=$(mktemp)
+  trap 'rm -f -- "$TASK_ADDON_METADATA"' EXIT
+  cat > "$TASK_ADDON_METADATA" <<EOF
 [Addon]
 Name=Snippets
 Type=SharedLibrary
@@ -132,7 +157,8 @@ Configurable=False
 0=wayland
 1=waylandim
 EOF
-install_atomic "$TASK_ADDON_METADATA" "$TASK_INSTALL_PREFIX/share/fcitx5/addon/snippets.conf" 644
+  install_atomic "$TASK_ADDON_METADATA" "$TASK_INSTALL_PREFIX/share/fcitx5/addon/snippets.conf" 644
+fi
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/com.khm.snippets.linux.desktop" "$TASK_INSTALL_PREFIX/share/applications/com.khm.snippets.linux.desktop" 644
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/com.khm.snippets.linux.metainfo.xml" "$TASK_INSTALL_PREFIX/share/metainfo/com.khm.snippets.linux.metainfo.xml" 644
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/snippets-icon.png" "$TASK_INSTALL_PREFIX/share/icons/hicolor/256x256/apps/com.khm.snippets.linux.png" 644
@@ -140,4 +166,8 @@ if command -v update-desktop-database >/dev/null; then
   update-desktop-database "$TASK_INSTALL_PREFIX/share/applications"
 fi
 printf 'Installed Snippets. Run: %q\n' "$TASK_INSTALL_PREFIX/bin/snippets"
-echo 'Restart Fcitx once after installation to load the Snippets addon. Expansion remains opt-in in Snippets Settings.'
+if [[ $TASK_DESKTOP == hyprland ]]; then
+  echo 'Restart Fcitx once after installation to load the Snippets addon. Expansion remains opt-in in Snippets Settings.'
+else
+  echo 'GNOME desktop preview installed. Inline expansion, global shortcuts and cross-application insertion are not yet supported on GNOME.'
+fi
