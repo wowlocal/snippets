@@ -260,6 +260,10 @@ struct CoreFixture {
     auto wrapped = MacPopupManager::raster(decoded, 0, palette, 2);
     assert(wrapped && wrapped->hits[0].height == 62 && wrapped->height == 86);
     assert(!MacPopupManager::raster(decoded, 0, palette, 5));
+    assert(MacPopupManager::supportsRuntime("5.1.22"));
+    assert(MacPopupManager::supportsRuntime("5.1.23"));
+    assert(!MacPopupManager::supportsRuntime(nullptr));
+    assert(!MacPopupManager::supportsRuntime("5.1.24"));
     assert(!MacPopupManager::supportsRuntime("5.2.0"));
     publicRow.nameMatches = {
         {19, 20}}; // Starts inside the final UTF-8 character.

@@ -18,7 +18,10 @@ public:
     }
   };
   static bool supportsRuntime(const char *version) {
-    return version && !std::strcmp(version, "5.1.22");
+    // 5.1.23 retains the pinned Wayland wrappers and their Utils layouts.
+    // Keep unknown releases on ClassicUI until their interfaces are checked.
+    return version && (!std::strcmp(version, "5.1.22") ||
+                       !std::strcmp(version, "5.1.23"));
   }
 
 private:

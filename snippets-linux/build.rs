@@ -421,6 +421,7 @@ fn main() {
         println!("cargo:rerun-if-changed={shortcuts_protocol}");
     }
     let icu = pkg_config::Config::new()
+        .cargo_metadata(false)
         .probe("icu-i18n")
         .expect("ICU development files are required");
     let mut compiler = cc::Build::new();
@@ -429,9 +430,13 @@ fn main() {
         compiler.include(include);
     }
     compiler.compile("snippets_icu");
+    // With --as-needed, system libraries must follow the C archive that uses
+    // them. Unit-test executables expose this ordering on GNU ld.
+    pkg_config::Config::new().probe("icu-i18n").unwrap();
     println!("cargo:rerun-if-changed=src/icu.c");
     if std::env::var_os("CARGO_FEATURE_LOCAL_AUTH").is_some() {
         let pam = pkg_config::Config::new()
+            .cargo_metadata(false)
             .probe("pam")
             .expect("Linux-PAM development files are required");
         let mut compiler = cc::Build::new();
@@ -443,10 +448,12 @@ fn main() {
             compiler.include(include);
         }
         compiler.compile("snippets_owner_auth");
+        pkg_config::Config::new().probe("pam").unwrap();
         println!("cargo:rerun-if-changed=src/owner_auth.c");
     }
     if std::env::var_os("CARGO_FEATURE_SECRET_SERVICE").is_some() {
         let secret = pkg_config::Config::new()
+            .cargo_metadata(false)
             .atleast_version("0.21")
             .probe("libsecret-1")
             .expect("libsecret development files are required");
@@ -459,6 +466,7 @@ fn main() {
             compiler.include(include);
         }
         compiler.compile("snippets_secrets");
+        pkg_config::Config::new().probe("libsecret-1").unwrap();
         println!("cargo:rerun-if-changed=src/secrets.c");
     }
 }

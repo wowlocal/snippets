@@ -1122,9 +1122,68 @@ titles and 11-point monospaced keywords. Two tag chips and a fitting `+N` chip
 yield to the keyword. UTF-8 match ranges come from the same Rust matching owner.
 The local row protocol is version 3; old peers fail before taking input.
 Palette values are bounded RGB data, and the addon receives no body until the
-existing selected insertion request. The Fcitx 5.1.22 wrapper is used only when
-both SDK and runtime match; other versions/frontends use the normal Fcitx panel.
+existing selected insertion request. The Fcitx 5.1.22 wrapper is used only with
+an explicitly supported SDK and runtime (5.1.22 or 5.1.23); other
+versions/frontends use the normal Fcitx panel.
 The exact interface sources, provenance and LGPL license accompany installation.
+
+The 5.1.23 allowance was checked in Try Omarchy on ARM64. The three vendored
+headers are byte-identical to the upstream 5.1.23 tag; the relevant Utils
+headers and `waylandim.cpp` also retain their 5.1.22 contents. A Debug build
+and the five Fcitx tests pass. Live Wayland GTK and Chromium receivers pass
+exact expansion, Return, Tab, Escape, Down and Up selection; Foot passes exact
+expansion, Return, Tab, Escape and Down selection. The custom panel was visually
+checked in all three, with Chromium additionally checked at 1x and 2x.
+One virtual-pointer insertion selected the second row without losing receiver
+focus, but later repetitions did not reliably select it. A shutdown after a
+pointer interaction also failed to preserve the expected unfinished query;
+three standalone shutdown repetitions did preserve it. These intermittent
+pointer/lifecycle results remain unresolved, so this is not a complete
+compatibility qualification or evidence of a repair for those paths.
+These checks use public fixtures and synthetic input. They do not qualify
+physical input, Ghostty, GNOME, or later Fcitx releases.
+
+A subsequent controlled comparison built upstream 5.1.22 and 5.1.23 with the
+same compiler/options and used identical Snippets GUI/addon binaries. Each
+version ran with its own verified Fcitx libraries and a fresh keyboard-us
+profile in a private mount namespace, preserving the executable-inode peer
+check without replacing the system installation. Both passed 16/17 initial
+keyboard cases and 8/9 fresh-window Chromium repetitions. Exact-expansion and
+Tab failures occurred on both versions across these phases. Pointer selection
+and the dependent quit-after-pointer sequence failed on both; standalone quit
+preserved the unfinished query in 3/3 repetitions on each. The 1x Return check
+failed once on 5.1.23, then passed in all three isolated repetitions on both
+versions. These results do not establish a regression unique to 5.1.23 or
+identify whether the remaining failures belong to the integration, compositor,
+or synthetic-input harness. The original system 5.1.23 service was restored.
+
+The follow-up on 2026-10-09 corrected two defects in that comparison harness.
+The saved screenshots for the reported fresh-window exact/Tab failures already
+show the complete 45-byte expansion while their event-only observer reports
+zero bytes. The receiver now orders HTTP observations by browser event number
+and samples the current DOM after composition events. Four regression checks
+cover late empty results, stale cases, later failures and the closed schema.
+This corrects the measurement; it is not a new text-delivery fix in Snippets.
+
+Pointer diagnostics also distinguish a synthetic click from an actual popup
+selection: with the pointer already at its destination, the failed case delivers
+no enter/motion/button event to the popup. Moving from outside the future popup
+delivers valid coordinates and selects row two. The corrected controller keeps
+the keyboard and pointer alive before Fcitx startup, starts each pointer case
+outside the panel, and then moves into the measured row for one click. These
+helpers are retained in [native input diagnostics](../docs/linux/testing/README.md).
+
+With the original product binaries and no diagnostic addon/preloader, the
+corrected gate passes 15/15 cases on 5.1.22: three each of exact expansion, Tab,
+1x Return, 2x second-row click and quit preserving the literal query. On 5.1.23,
+all 12 completed exact/Tab/Return/click cases pass; the user requested removal
+of the test cursor before that version's final quit group. That run is recorded
+as interrupted, not fully passed. These were separate browser processes using
+existing isolated fixture profiles, not fresh-profile qualification. The
+system 5.1.23 service was restored and no test input devices remain. Stationary
+physical pointer behavior and fresh-profile first-field reliability remain
+unqualified. Chromium settings were unchanged: this VM's Chromium 153 already
+enables the previously used omnibox-hidden feature by default in upstream code.
 
 The installed product passes the existing GTK, Chromium and Ghostty expansion,
 panel, full-modifier navigation, retained-selection, global shortcut and accessible
@@ -1197,7 +1256,7 @@ wrapper treats surface proxy user data as its `WlSurface` object, and ClassicUI
 then reads that wrapper's window data. Snippets previously supplied a native
 `Window*`. Both caret and layer surfaces now carry the pinned Fcitx wrapper with
 null ClassicUI window data. Local wrapper functions remain hidden, and the same
-5.1.22 SDK/runtime checks gate their use. No additional input-method seat, grab,
+5.1.22/5.1.23 SDK/runtime checks gate their use. No additional input-method seat, grab,
 key replay or observation delay is introduced.
 
 A separate remaining failed click is classified by closed numeric events:
