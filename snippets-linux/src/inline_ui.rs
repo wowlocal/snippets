@@ -460,7 +460,7 @@ impl Service {
 }
 fn enable_dialog() -> adw::AlertDialog {
     let dialog = adw::AlertDialog::builder().heading("Enable Inline Expansion?")
-        .body("Typing \\ opens ordinary snippet names and keywords at the text cursor. Use ↑/↓ or Ctrl+N/P to select, Return or Tab to insert, and Escape to dismiss. Snippets processes the query you type after \\ through Fcitx. A {clipboard} placeholder reads the current text clipboard only when requested by that snippet. Secure snippets, password and sensitive fields are excluded.").build();
+        .body("Typing \\ opens ordinary snippet names and keywords at the text cursor. Use ↑/↓ or Ctrl+N/P to select, Return or Tab to insert, and Escape to dismiss. Snippets processes the query you type after \\ through your input method. A {clipboard} placeholder reads the current text clipboard only when requested by that snippet. Secure snippets, password and sensitive fields are excluded.").build();
     dialog.add_responses(&[("cancel", "Cancel"), ("enable", "Enable Expansion")]);
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");
@@ -469,7 +469,7 @@ fn enable_dialog() -> adw::AlertDialog {
 }
 fn suggestions_dialog() -> adw::AlertDialog {
     let dialog = adw::AlertDialog::builder().heading("Enable Inline Suggestions?")
-        .body("Typing \\ opens ordinary snippet names and keywords at the text cursor through Fcitx. Use ↑/↓ or Ctrl+N/P to select, Return or Tab to insert, and Escape to dismiss. Secure snippets, password and sensitive fields are excluded.").build();
+        .body("Typing \\ opens ordinary snippet names and keywords at the text cursor through your input method. Use ↑/↓ or Ctrl+N/P to select, Return or Tab to insert, and Escape to dismiss. Secure snippets, password and sensitive fields are excluded.").build();
     dialog.add_responses(&[("cancel", "Cancel"), ("enable", "Enable Suggestions")]);
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");

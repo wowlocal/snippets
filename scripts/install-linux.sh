@@ -25,22 +25,27 @@ if [[ $TASK_DESKTOP == auto ]]; then
 fi
 case "$TASK_DESKTOP" in gnome|hyprland) ;; *) echo '--desktop requires auto, hyprland or gnome' >&2; exit 2 ;; esac
 cd -- "$TASK_REPO_ROOT"
+command -v python3 >/dev/null || { echo 'Python 3 is required to generate installation metadata.' >&2; exit 1; }
 
 if ! pkg-config --atleast-version=4.12 gtk4 || ! pkg-config --atleast-version=1.5 libadwaita-1 || ! pkg-config --exists icu-i18n || ! pkg-config --atleast-version=0.21 libsecret-1 || ! pkg-config --exists pam || ! pkg-config --atleast-version=4.1 libqrencode || ! pkg-config --exists wayland-client wayland-protocols xkbcommon json-c pangocairo || ! command -v wayland-scanner >/dev/null; then
   echo 'Requires GTK >= 4.12, libadwaita >= 1.5, ICU, libsecret >= 0.21, Linux-PAM, libqrencode >= 4.1, Wayland, xkbcommon, Cairo/Pango, json-c, and wayland-protocols.' >&2
   if [[ $TASK_DESKTOP == gnome ]]; then
-    echo 'On Ubuntu: sudo apt install build-essential cargo pkg-config libgtk-4-dev libadwaita-1-dev libicu-dev libsecret-1-dev libpam0g-dev libaudit-dev libcap-ng-dev libqrencode-dev libwayland-dev wayland-protocols libxkbcommon-dev libjson-c-dev' >&2
+    echo 'On Ubuntu: sudo apt install build-essential cargo pkg-config python3 libgtk-4-dev libadwaita-1-dev libicu-dev libsecret-1-dev libpam0g-dev libaudit-dev libcap-ng-dev libqrencode-dev libwayland-dev wayland-protocols libxkbcommon-dev libjson-c-dev libibus-1.0-dev' >&2
   else
     echo 'On Omarchy: omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols json-c pkgconf base-devel' >&2
   fi
   exit 1
 fi
-TASK_FEATURES=(--no-default-features --features desktop)
+TASK_FEATURES=(--no-default-features --features desktop,ibus)
+TASK_BINARIES=(snippets snippets-cli snippets-owner-auth snippets-ibus)
 TASK_DEFAULT_TARGET=$TASK_REPO_ROOT/snippets-linux/target/gnome
 if [[ $TASK_DESKTOP == hyprland ]]; then
   pkg-config --atleast-version=5.1 Fcitx5Core && pkg-config --exists Fcitx5Module || { echo 'The Hyprland build requires Fcitx5 >= 5.1 development files.' >&2; exit 1; }
   TASK_FEATURES=(--no-default-features --features desktop,fcitx)
+  TASK_BINARIES=(snippets snippets-cli snippets-owner-auth)
   TASK_DEFAULT_TARGET=$TASK_REPO_ROOT/snippets-linux/target
+else
+  pkg-config --atleast-version=1.5.20 ibus-1.0 || { echo 'The GNOME build requires IBus >= 1.5.20 development files (libibus-1.0-dev on Ubuntu).' >&2; exit 1; }
 fi
 TASK_TARGET_ROOT=${CARGO_TARGET_DIR:-$TASK_DEFAULT_TARGET}
 [[ $TASK_TARGET_ROOT = /* ]] || TASK_TARGET_ROOT=$TASK_REPO_ROOT/$TASK_TARGET_ROOT
@@ -51,8 +56,8 @@ fi
 if [[ $TASK_DESKTOP == hyprland ]]; then
   [[ -f "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" && ! -L "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" ]] || { echo 'Release Fcitx addon is missing; rebuild Snippets.' >&2; exit 1; }
 fi
-for TASK_BINARY in snippets snippets-cli snippets-owner-auth; do
-  [[ -x "$TASK_TARGET_ROOT/release/$TASK_BINARY" ]] || { echo 'Release executables are missing; run the installer without --no-build.' >&2; exit 1; }
+for TASK_BINARY in "${TASK_BINARIES[@]}"; do
+  [[ -f "$TASK_TARGET_ROOT/release/$TASK_BINARY" && -x "$TASK_TARGET_ROOT/release/$TASK_BINARY" && ! -L "$TASK_TARGET_ROOT/release/$TASK_BINARY" ]] || { echo 'Release executables are missing or linked; run the installer without --no-build.' >&2; exit 1; }
 done
 command -v readelf >/dev/null || { echo 'Requires readelf from binutils to verify the native release.' >&2; exit 1; }
 TASK_GTK_DYNAMIC=$(LC_ALL=C readelf --dynamic "$TASK_TARGET_ROOT/release/snippets")
@@ -95,6 +100,14 @@ fi
 mkdir -p -- "$TASK_INSTALL_PREFIX"
 TASK_INSTALL_PREFIX=$(realpath -- "$TASK_INSTALL_PREFIX")
 TASK_DESTINATION=$TASK_INSTALL_PREFIX/share/snippets-linux
+TASK_METADATA=$(mktemp -d)
+trap 'rm -rf -- "$TASK_METADATA"' EXIT
+TASK_METADATA_OPTIONS=()
+if [[ $TASK_DESKTOP == gnome ]]; then TASK_METADATA_OPTIONS=(--gnome); fi
+python3 "$TASK_REPO_ROOT/scripts/linux-install-metadata.py" \
+  --destination "$TASK_DESTINATION" \
+  --template "$TASK_REPO_ROOT/snippets-linux/data/com.khm.snippets.linux.desktop" \
+  --output "$TASK_METADATA" "${TASK_METADATA_OPTIONS[@]}"
 for TASK_BINARY in snippets snippets-cli; do
   if [[ -e $TASK_INSTALL_PREFIX/bin/$TASK_BINARY && ! -L $TASK_INSTALL_PREFIX/bin/$TASK_BINARY ]]; then
     echo "An existing $TASK_BINARY executable occupies the destination; choose another --prefix." >&2
@@ -122,6 +135,15 @@ if [[ -n $TASK_GTK_RUNTIME ]]; then
   verify_gtk_runtime "$TASK_GTK_DESTINATION" "$TASK_GTK_RUNTIME"
 fi
 install_atomic "$TASK_TARGET_ROOT/release/snippets-owner-auth" "$TASK_DESTINATION/snippets-owner-auth" 755
+if [[ $TASK_DESKTOP == gnome ]]; then
+  install_atomic "$TASK_TARGET_ROOT/release/snippets-ibus" "$TASK_DESTINATION/snippets-ibus" 755
+  install_atomic "$TASK_METADATA/snippets.xml" "$TASK_INSTALL_PREFIX/share/ibus/component/snippets.xml" 644
+  TASK_EXTENSION=snippets@wowlocal.github.io
+  for TASK_EXTENSION_FILE in metadata.json extension.js; do
+    install_atomic "$TASK_REPO_ROOT/snippets-linux/gnome/$TASK_EXTENSION/$TASK_EXTENSION_FILE" \
+      "$TASK_INSTALL_PREFIX/share/gnome-shell/extensions/$TASK_EXTENSION/$TASK_EXTENSION_FILE" 644
+  done
+fi
 if [[ $TASK_DESKTOP == hyprland ]]; then
   install_atomic "$TASK_TARGET_ROOT/release/libsnippets-fcitx.so" "$TASK_DESTINATION/libsnippets-fcitx.so" 755
   for TASK_FCITX_INTERFACE_FILE in COPYING SOURCE.json waylandim_public.h zwp_input_method_v2.h wl_surface.h; do
@@ -140,8 +162,7 @@ for TASK_BINARY in snippets snippets-cli; do
   rmdir -- "$TASK_LINK"
 done
 if [[ $TASK_DESKTOP == hyprland ]]; then
-  TASK_ADDON_METADATA=$(mktemp)
-  trap 'rm -f -- "$TASK_ADDON_METADATA"' EXIT
+  TASK_ADDON_METADATA=$TASK_METADATA/snippets.conf
   cat > "$TASK_ADDON_METADATA" <<EOF
 [Addon]
 Name=Snippets
@@ -159,7 +180,7 @@ Configurable=False
 EOF
   install_atomic "$TASK_ADDON_METADATA" "$TASK_INSTALL_PREFIX/share/fcitx5/addon/snippets.conf" 644
 fi
-install_atomic "$TASK_REPO_ROOT/snippets-linux/data/com.khm.snippets.linux.desktop" "$TASK_INSTALL_PREFIX/share/applications/com.khm.snippets.linux.desktop" 644
+install_atomic "$TASK_METADATA/com.khm.snippets.linux.desktop" "$TASK_INSTALL_PREFIX/share/applications/com.khm.snippets.linux.desktop" 644
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/com.khm.snippets.linux.metainfo.xml" "$TASK_INSTALL_PREFIX/share/metainfo/com.khm.snippets.linux.metainfo.xml" 644
 install_atomic "$TASK_REPO_ROOT/snippets-linux/data/snippets-icon.png" "$TASK_INSTALL_PREFIX/share/icons/hicolor/256x256/apps/com.khm.snippets.linux.png" 644
 if command -v update-desktop-database >/dev/null; then
@@ -169,5 +190,6 @@ printf 'Installed Snippets. Run: %q\n' "$TASK_INSTALL_PREFIX/bin/snippets"
 if [[ $TASK_DESKTOP == hyprland ]]; then
   echo 'Restart Fcitx once after installation to load the Snippets addon. Expansion remains opt-in in Snippets Settings.'
 else
-  echo 'GNOME desktop preview installed. Inline expansion, global shortcuts and cross-application insertion are not yet supported on GNOME.'
+  echo 'Experimental GNOME components installed. Desktop preferences and input sources were preserved.'
+  echo 'IBus registration and Shell companion activation are separate steps; see docs/linux/GNOME.md.'
 fi

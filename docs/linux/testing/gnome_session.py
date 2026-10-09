@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -21,7 +22,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--extension", type=Path, help="stage the Snippets companion in this lab only")
+    parser.add_argument("--installed-prefix", type=Path, help="discover installed components from this prefix")
     args = parser.parse_args()
+    if args.extension and args.installed_prefix:
+        parser.error("use either --extension or --installed-prefix")
     root = args.directory.absolute()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     children = []
@@ -59,6 +63,12 @@ def main():
     components = root / "data/ibus/component"
     components.mkdir(parents=True)
     env["IBUS_COMPONENT_PATH"] = f"{components}:/usr/share/ibus/component"
+    if args.installed_prefix:
+        share = args.installed_prefix.resolve() / "share"
+        assert (share / "ibus/component/snippets.xml").is_file()
+        assert (share / "gnome-shell/extensions/snippets@wowlocal.github.io/metadata.json").is_file()
+        env["XDG_DATA_DIRS"] = f"{share}:/usr/local/share:/usr/share"
+        env["IBUS_COMPONENT_PATH"] = f"{share}/ibus/component:/usr/share/ibus/component"
     # The test runner supplies this owned symlink while a fixture is running.
     executable = escape(str(root / "engine-current/snippets-ibus"))
     (components / "snippets.xml").write_text(f'''<component>
@@ -93,8 +103,9 @@ def main():
         env["DBUS_SESSION_BUS_ADDRESS"] = address
         bus.stdout.close()
         # This engine bus belongs only to the lab. Never use --replace.
-        spawn("ibus", ["ibus-daemon", "--single", "--emoji-extension=disable",
-                       "--address", env["IBUS_ADDRESS"], "--cache=none"])
+        ibus_command = ["ibus-daemon", "--single", "--emoji-extension=disable",
+                        "--address", env["IBUS_ADDRESS"], "--cache=none"]
+        ibus = spawn("ibus", ibus_command)
         for schema, key, value in [
             ("org.gnome.desktop.session", "idle-delay", "uint32 0"),
             ("org.gnome.desktop.screensaver", "lock-enabled", "false"),
@@ -102,7 +113,7 @@ def main():
             ("org.gnome.desktop.input-sources", "sources", "[('xkb', 'us')]"),
         ]:
             subprocess.run(["gsettings", "set", schema, key, value], env=env, check=True)
-        if args.extension:
+        if args.extension or args.installed_prefix:
             subprocess.run(["gsettings", "set", "org.gnome.shell", "enabled-extensions",
                             "['snippets@wowlocal.github.io']"], env=env, check=True)
         spawn("shell", ["gnome-shell", "--headless", "--no-x11",
@@ -131,6 +142,27 @@ def main():
         }, indent=2) + "\n")
         print(f"GNOME lab ready: {root}", flush=True)
         while not stopping:
+            request = root / "restart-ibus.request"
+            if request.exists():
+                # Only this supervisor's owned input-service process group is
+                # restarted. No systemctl/--replace or user-bus access occurs.
+                nonce = request.read_text()
+                assert len(nonce) == 32 and all(c in '0123456789abcdef' for c in nonce)
+                request.unlink()
+                os.killpg(ibus.pid, signal.SIGTERM)
+                ibus.wait(timeout=4)
+                children.remove(ibus)
+                # A daemon terminated by SIGTERM can leave its filesystem
+                # socket behind. This exact path belongs to the stopped lab
+                # daemon; never search/remove another session's sockets.
+                socket = root / 'runtime/ibus-bus'
+                if socket.exists():
+                    assert stat.S_ISSOCK(socket.lstat().st_mode)
+                    socket.unlink()
+                ibus = spawn("ibus-restarted", ibus_command)
+                receipt = root / "restart-ibus.pending"
+                receipt.write_text(nonce)
+                receipt.replace(root / "restart-ibus.done")
             if any(child.poll() is not None for child in children):
                 raise RuntimeError("a lab service exited")
             time.sleep(0.2)

@@ -5,8 +5,8 @@
 The first GNOME milestone targets stock Ubuntu GNOME on Wayland, preserving its
 IBus input system. It shares the GTK application and library with the Hyprland
 build. It does not replace input methods or enable Shell Eval. An experimental
-Shell companion now supplies ordinary picker insertion; it is staged only by the
-owned engineering harness until installation/onboarding is implemented.
+Shell companion now supplies ordinary picker insertion. The installer stages
+the components; activation/onboarding is still a separate, unfinished step.
 
 Implemented:
 
@@ -34,8 +34,9 @@ An experimental Shell companion supplies cross-application ordinary insertion
 for native Wayland text-input clients. GNOME clipboard-history capture remains
 unimplemented. Existing Hyprland
 window-target and Wayland peer checks remain required for those mechanisms.
-The installer still builds only the desktop preview. The `ibus` feature is an
-engineering opt-in until the remaining lifecycle and installation acceptance cases are complete.
+The GNOME installer builds `desktop,ibus` and installs the engine and companion.
+It does not enable them or replace existing input sources. The integration
+remains experimental until the remaining acceptance cases are complete.
 
 ## Build and install
 
@@ -46,7 +47,8 @@ Older distributions may need newer development packages; they are not qualified.
 ```sh
 sudo apt install build-essential cargo pkg-config libgtk-4-dev libadwaita-1-dev \
   libicu-dev libsecret-1-dev libpam0g-dev libaudit-dev libcap-ng-dev \
-  libqrencode-dev libwayland-dev wayland-protocols libxkbcommon-dev libjson-c-dev
+  libqrencode-dev libwayland-dev wayland-protocols libxkbcommon-dev libjson-c-dev \
+  libibus-1.0-dev python3
 ./scripts/install-linux.sh --desktop gnome
 ```
 
@@ -57,6 +59,41 @@ artifacts default to `snippets-linux/target/gnome`, separate from the Hyprland
 artifacts. `CARGO_TARGET_DIR` can override either directory. Library storage is
 preserved. Switching an existing prefix does not remove old Fcitx addon files or
 change a running input-method service; use a separate prefix for this preview.
+
+Installed GNOME files include `share/snippets-linux/snippets-ibus`,
+`share/ibus/component/snippets.xml`, and
+`share/gnome-shell/extensions/snippets@wowlocal.github.io/`. Component XML and all
+desktop actions contain the actual absolute installation path. Reinstallation
+preserves library data, opt-in preferences and desktop/input configuration.
+
+**Activation is not yet automated.** Stock IBus reads its compiled system
+component directory, not `~/.local/share/ibus/component`; merely installing the
+XML in a user prefix does not register the engine. Its `IBUS_COMPONENT_PATH`
+override replaces the search list, so any eventual per-user service setup must
+retain the system component directory and existing custom directories. See the
+[IBus registry implementation](https://github.com/ibus/ibus/blob/main/src/ibusregistry.c).
+The owned test session supplies this path only to its separate daemon. Do not
+copy user-owned executable references into a machine-wide registry or replace
+the running user's input daemon to reproduce the test.
+
+The Shell companion also requires discovery and explicit enablement. GNOME
+Wayland reloads installed extension code in a new session; the test uses a new
+headless Shell. See the [GNOME extension guide](https://gjs.guide/extensions/development/creating.html).
+Input-source onboarding and the complete installed user flow remain outstanding.
+
+The real Ubuntu Release artifacts passed the isolated installer check below.
+The equivalent Hyprland Release check passed on Omarchy with `--desktop hyprland`:
+
+```sh
+python3 scripts/test-linux-install.py --target-dir snippets-linux/target/gnome
+```
+
+This verifies binary contents and single-link installation, repeat installation,
+real IBus XML parsing, and real GLib desktop/action launch with a fictional
+executable at a path containing spaces, quotes and other special characters.
+The check uses disposable prefixes and never launches the installed GUI or
+opens a user library. It requires Python GI, the IBus typelib and
+`desktop-file-validate` from `desktop-file-utils`.
 
 ## Verification
 
@@ -126,8 +163,15 @@ virtual keyboard lazily, and hot-plugging it during the first composition caused
 Chromium to reset that composition. The runner now primes the keyboard before
 starting Chromium and retains it throughout the run. No product-code focus/reset
 checks were relaxed. The alternate GTK IME browser path remains unqualified.
-Input-source/IBus restart coverage, popup presentation and installation remain
-outstanding. Ordinary picker insertion now has the separate coverage below.
+The installed Release engine was launched automatically by IBus from the
+generated component XML and passed the GTK4 and Chromium native Wayland checks.
+It additionally passed real GTK4 input-source switch
+and IBus-daemon restart checks: old preedit was cancelled, suffix-only typing
+stayed literal, and a fresh query expanded after reconnection. The owned
+supervisor stops and recreates only its private daemon; this is not a test of
+the user's systemd service or login flow. Popup presentation and complete
+activation/onboarding remain outstanding. Ordinary picker insertion has the
+separate coverage below.
 
 The shortcut adapter owns a private portal connection and session. It registers
 the native desktop application identity before other portal calls, checks sender

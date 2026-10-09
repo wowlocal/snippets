@@ -163,3 +163,34 @@ warning is retained in output; missing or failed assertions are fatal.
 The Node fixture runs the actual companion policy methods against a deterministic
 Shell double. It verifies negative cases and lifecycle logic but is not evidence
 of desktop integration. See `../GNOME.md` for the remaining qualification limits.
+
+## Installed GNOME Release and input-service restart
+
+Use a fresh, disposable installation prefix. `--installed-prefix` makes the lab
+discover the actual installed Shell companion and IBus XML. Only the private
+daemon gets the component-path override; no system/user service is reconfigured.
+
+```sh
+./scripts/install-linux.sh --desktop gnome --prefix /tmp/snippets-gnome-installed
+python3 scripts/test-linux-install.py --target-dir snippets-linux/target/gnome
+python3 docs/linux/testing/gnome_session.py /tmp/snippets-gnome-installed-lab \
+  --installed-prefix /tmp/snippets-gnome-installed
+# In a second shell:
+python3 docs/linux/testing/ibus_engine_smoke.py /tmp/snippets-gnome-installed-lab \
+  /tmp/snippets-gnome-installed/share/snippets-linux --installed --gtk --restart-ibus
+```
+
+The installed runner uses the existing executables and lets IBus launch its
+registered engine. It still creates only a temporary library. The GTK test
+checks source-switch cancellation and fresh expansion after returning. The
+restart case sends a nonce request to the owned supervisor, observes the IBus
+connection actually disconnect and reconnect, checks that old preedit never
+commits, and requires a fresh expansion in the real entry. The supervisor removes
+only the stopped daemon's exact stale socket before recreating it. Child test
+processes use separate process groups so daemon shutdown cannot terminate the
+test controller. These checks do not qualify the normal systemd login flow.
+
+The installer regression can also run on Omarchy with `--desktop hyprland` and
+that build's target directory. Both variants validate the actual Release files,
+independent installation copies, desktop/action launch with a fictional receiver,
+and preservation of data/preferences on reinstall.

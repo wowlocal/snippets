@@ -10,9 +10,11 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
+import uuid
 
 
 def main():
@@ -22,7 +24,11 @@ def main():
     parser.add_argument("--gtk", action="store_true", help="send virtual keyboard events through Mutter to a GTK4 entry")
     parser.add_argument("--chromium", type=Path, help="Chromium executable for a real Wayland DOM receiver")
     parser.add_argument("--chromium-ime", choices=("wayland", "gtk"), default="wayland")
+    parser.add_argument("--installed", action="store_true", help="use binaries at their installed location")
+    parser.add_argument("--restart-ibus", action="store_true", help="GTK: restart only the owned lab input daemon")
     args = parser.parse_args()
+    if args.restart_ibus and not args.gtk:
+        parser.error("--restart-ibus requires --gtk")
     lab = json.loads((args.lab / "environment.json").read_text())
     # A lab directory and its private bus are mandatory; never fall back to the
     # caller's normal IBus address or user library.
@@ -54,14 +60,17 @@ def main():
     logs = []
     with tempfile.TemporaryDirectory(prefix="ibus-fixture-", dir=args.lab) as tmp:
         root = Path(tmp)
-        installed = root / "installed"
-        installed.mkdir()
+        installed = args.binaries.resolve() if args.installed else root / "installed"
+        if not args.installed:
+            installed.mkdir()
         library = root / "library"
         env = dict(os.environ, SNIPPETS_SUPPORT_DIR=str(library))
-        for name in ("snippets", "snippets-cli", "snippets-owner-auth", "snippets-ibus"):
-            shutil.copy2(args.binaries / name, installed / name)
+        if not args.installed:
+            for name in ("snippets", "snippets-cli", "snippets-owner-auth", "snippets-ibus"):
+                shutil.copy2(args.binaries / name, installed / name)
         engine_link = args.lab / "engine-current"
-        engine_link.symlink_to(installed)
+        if not args.installed:
+            engine_link.symlink_to(installed)
 
         def cli(*arguments):
             result = subprocess.run([str(installed / "snippets-cli"), *arguments],
@@ -73,7 +82,7 @@ def main():
             log = (args.lab / f"fixture-{name}.log").open("wb")
             logs.append(log)
             child = subprocess.Popen([str(installed / name), *arguments], env=env,
-                                     stdout=log, stderr=log)
+                                     stdout=log, stderr=log, start_new_session=True)
             children.append(child)
             return child
 
@@ -84,9 +93,10 @@ def main():
             wait(lambda: cli("expansion", "status")["appAvailable"])
             cli("expansion", "enable")
             wait(lambda: (Path(lab["XDG_RUNTIME_DIR"]) / "snippets-ibus.sock").is_socket())
-            engine = spawn("snippets-ibus", "--ibus")
-            settle(0.4)
-            assert engine.poll() is None
+            if not args.installed:
+                engine = spawn("snippets-ibus", "--ibus")
+                settle(0.4)
+                assert engine.poll() is None
             subprocess.run(["gsettings", "set", "org.gnome.desktop.input-sources", "sources",
                             "[('ibus', 'snippets')]"], env=env, check=True)
             settle(0.5)
@@ -95,7 +105,21 @@ def main():
                     from gnome_browser import run
                     run(args.chromium, args.lab, settle, wait, args.chromium_ime)
                 else:
-                    gtk_smoke(settle, wait, cli)
+                    def restart_ibus():
+                        disconnected = []
+                        signal = bus.connect("disconnected", lambda _bus: disconnected.append(True))
+                        try:
+                            nonce = uuid.uuid4().hex
+                            (args.lab / "restart-ibus.request").write_text(nonce)
+                            receipt = args.lab / "restart-ibus.done"
+                            wait(lambda: receipt.exists() and receipt.read_text() == nonce)
+                            wait(lambda: bool(disconnected))
+                            wait(bus.is_connected)
+                            wait(lambda: bus.get_global_engine() is not None and
+                                 bus.get_global_engine().get_name() == "snippets")
+                        finally:
+                            bus.disconnect(signal)
+                    gtk_smoke(settle, wait, cli, restart_ibus if args.restart_ibus else None)
                 subprocess.run([str(installed / "snippets"), "--quit"], env=env, check=True, timeout=8)
                 gui.wait(timeout=8)
                 return
@@ -220,19 +244,20 @@ def main():
                 pass  # A failed lab bus must not prevent owned process cleanup.
             for child in reversed(children):
                 if child.poll() is None:
-                    child.terminate()
+                    os.killpg(child.pid, signal.SIGTERM)
             for child in children:
                 try:
                     child.wait(timeout=4)
                 except subprocess.TimeoutExpired:
-                    child.kill()
+                    os.killpg(child.pid, signal.SIGKILL)
                     child.wait()
             for log in logs:
                 log.close()
-            engine_link.unlink()
+            if not args.installed:
+                engine_link.unlink()
 
 
-def gtk_smoke(settle, wait, cli):
+def gtk_smoke(settle, wait, cli, restart_ibus=None):
     # The caller has checked both private runtime and IBus addresses before any
     # GTK or D-Bus connection is opened. No real desktop input is reachable here.
     os.environ["GTK_IM_MODULE"] = "wayland"
@@ -323,6 +348,41 @@ def gtk_smoke(settle, wait, cli):
         settle(1.7)
         type_text("ometest")
         assert entry.get_text() == "ometest", "composition survived GNOME screen shield"
+        # Reconfigure only this keyfile-backed lab. Existing source lists on
+        # the user's desktop are never read or written by the test.
+        def source(value):
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.input-sources',
+                            'sources', value], check=True)
+            settle(0.5)
+
+        entry.set_text('')
+        type_text('\\gn')
+        source("[('xkb', 'us')]")
+        type_text('ometest')
+        assert entry.get_text() == 'ometest', 'composition survived input-source switch'
+        source("[('xkb', 'us'), ('ibus', 'snippets')]")
+        # Selecting an engine through the public IBus API models the source
+        # switch without relying on a Shell Eval or a private UI object.
+        input_bus = IBus.Bus.new()
+        assert input_bus.set_global_engine('snippets')
+        settle(0.3)
+        entry.set_text('')
+        type_text('\\gnometest')
+        wait(lambda: entry.get_text() == 'Public GNOME expansion')
+        print('GTK4 IBus: input-source switch cancels, fresh query expands after return', flush=True)
+        if restart_ibus:
+            source("[('ibus', 'snippets')]")
+            entry.set_text('')
+            type_text('\\gn')
+            restart_ibus()
+            settle(0.5)
+            assert entry.get_text() == '', 'restart committed the old composition'
+            type_text('ometest')
+            assert entry.get_text() == 'ometest', 'composition survived input-service restart'
+            entry.set_text('')
+            type_text('\\gnometest')
+            wait(lambda: entry.get_text() == 'Public GNOME expansion')
+            print('GTK4 IBus: daemon restart revokes old composition; installed engine recovers fresh expansion', flush=True)
         print("GTK4 Wayland E2E: Mutter keyboard → Shell → IBus → real entry; "
               "exact expansion, password pass-through, focus and screen-shield cancellation passed", flush=True)
     finally:
