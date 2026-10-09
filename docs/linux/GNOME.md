@@ -212,6 +212,38 @@ six desktop adapter tests. This is not a clean full parallel run. Prefer bounded
 test concurrency for the expensive restoration fixtures on this VM. Strict
 `cargo clippy --all-targets -- -D warnings` passed for the default build.
 
+### Final regression evidence, 2026-10-10
+
+The Ubuntu `desktop,ibus` baseline completed with **1078 passed, 89 ignored**,
+plus **28 CLI/core/helper cases passed**. The no-default-features build check
+passed. This full run was compiled before the history addition; the final history
+change has the separate changed-layer and real-application checks below.
+
+The sequential Omarchy/default-feature baseline completed with **1072 passed,
+2 failed, 88 ignored**. Neither failure is represented as a clean full-suite pass:
+
+- The device sign-in fixture recomputed its issued expiry for a pending reply;
+  crossing a second correctly triggered production response validation.
+  `38fed09` makes the fixture retain the issued expiry and separately asserts
+  rejection of a changed expiry. All four device-sign-in cases passed on both
+  platforms, including a final Omarchy rerun.
+- The process-crash recovery test failed to spawn its own executable with ENOENT.
+  The running baseline binary had been replaced by an incremental test build in
+  the same target directory. The exact crash/recovery case passed on the final
+  binary; no application change or timeout relaxation was needed. Do not rebuild
+  a running test's target directory: use a separate `CARGO_TARGET_DIR` for
+  concurrent builds.
+
+The remaining CLI/core/helper groups then passed separately on Omarchy
+(**1 + 26 + 1 cases**). Final production history sources were compared by hash
+with those built/tested in each VM. Both configurations passed strict all-target
+Clippy; the final clipboard suite passed **39 unit + 1 command cases** on each,
+with four display-dependent cases ignored by that command. The installed GTK,
+Chromium and companion transport scenarios below supply the separate live UI
+and cancellation evidence. No unresolved failure remains from these runs;
+this is a baseline plus scoped final-change qualification, not a fresh complete
+suite on one immutable final binary.
+
 ## IBus and shortcut integration
 
 The IBus backend owns composition generations across reset, focus and content
