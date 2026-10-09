@@ -41,6 +41,28 @@ The GNOME installer builds `desktop,ibus` and installs the engine and companion.
 It does not enable them or replace existing input sources. The integration
 remains experimental until the remaining acceptance cases are complete.
 
+## Qualification map
+
+The following evidence belongs to Ubuntu 26.04.1 / GNOME Shell 50.1 and the
+installed GNOME Release. Each interactive test uses fictional data in an owned
+headless desktop; none controls the user's desktop or reads their library.
+
+| Requirement | Actual integration evidence |
+| --- | --- |
+| Stock IBus setup | Settings prepares the real per-user service, preserves US/RU, discovers the engine after systemd session restart and activates it. |
+| Automatic expansion | GTK4 entry text and Chromium DOM/composition assertions, including password and cross-field cancellation; installed engine launched by IBus XML. |
+| Candidate panel | Visible native Shell rows, keyboard selection, Escape and password suppression in GTK/Chromium; screenshots inspected for layout. |
+| Global shortcuts | Real portal permission/bindings, active main/picker windows, Capture result and automatic recovery after frontend loss. |
+| Picker insertion | Exact GTK/Chromium receiver text, multiline Unicode, unchanged clipboard, focus/password/disable/shield cancellation. |
+| Clipboard history | Actual opt-in UI and Secret Service, encrypted storage/decrypted view, GTK/Chromium copies, exclusions, pending-read cancellation and restart recovery. |
+| Preserve Hyprland | Default `desktop,fcitx` stays enabled; existing source/witness checks remain; both feature configurations pass strict Clippy and the changed-layer tests. |
+
+Native Chromium tests explicitly enable Wayland IME/text-input-v3 and use a
+fresh profile with the snap's binary launched directly. They do not establish
+confined snap/default-flag behavior. Other GNOME versions, X11/direct-IBus picker
+targets, physical-seat/GDM authentication and real suspend are outside this
+qualification. These are compatibility limits, not silently passing test cases.
+
 ## Build and install
 
 Requires Rust 1.92 or newer, GTK >= 4.12 and libadwaita >= 1.5. This was exercised
@@ -151,7 +173,7 @@ Run the feature matrix on Linux:
 
 ```sh
 cargo test --locked --manifest-path snippets-linux/Cargo.toml
-cargo test --locked --manifest-path snippets-linux/Cargo.toml --no-default-features --features desktop
+cargo test --locked --manifest-path snippets-linux/Cargo.toml --no-default-features --features desktop,ibus
 cargo check --locked --manifest-path snippets-linux/Cargo.toml --no-default-features
 ```
 
@@ -177,22 +199,22 @@ It passed on the Ubuntu VM with the screen locked on 2026-10-09. That early
 read-only check did not exercise interactive editing or IBus insertion; the
 subsequent isolated application checks below cover those separately.
 
-The Ubuntu desktop feature suite completed with **1090 passed, 89 ignored**;
+The initial Ubuntu desktop-only feature suite completed with **1090 passed, 89 ignored**;
 the live GNOME test is a separate additional pass. The headless configuration
 also passed `cargo check`. An isolated installer smoke check using staged debug
 executables verified the links, desktop entry and absence of Fcitx files; this
 was a file-layout check, not a qualified Release build.
 
-The Hyprland/default-feature library run passed 1057 tests, failed 10 and
+An earlier Hyprland/default-feature library run passed 1057 tests, failed 10 and
 ignored 87 under parallel VM load. All 10 failures passed when rerun sequentially
 without changing application code or timeouts; the same rerun also passed all
 six desktop adapter tests. This is not a clean full parallel run. Prefer bounded
 test concurrency for the expensive restoration fixtures on this VM. Strict
 `cargo clippy --all-targets -- -D warnings` passed for the default build.
 
-## Next implementation boundary
+## IBus and shortcut integration
 
-The IBus prototype owns composition generations across reset, focus and content
+The IBus backend owns composition generations across reset, focus and content
 type changes; drops pending work on connection loss or consent revocation; and
 checks GNOME Shell's unlocked state through its unique bus owner before delivering
 a reply. Candidate rows contain ordinary-snippet metadata, never vault bodies.
@@ -283,8 +305,8 @@ The owned `--restart-portal` fixture now passes actual post-crash key delivery.
 The installed Release app also stayed running, reconnected without a Retry click,
 and opened its previously minimized window on a fresh key press. Services on the
 user's desktop were untouched. This covers a frontend crash on the qualified
-Ubuntu image; complete login/onboarding and other portal implementations remain
-separate acceptance cases.
+Ubuntu image. The separate systemd setup/onboarding checks above cover session
+restart; GDM authentication and other portal implementations remain unqualified.
 
 See the public [GlobalShortcuts interface](https://github.com/flatpak/xdg-desktop-portal/blob/main/data/org.freedesktop.portal.GlobalShortcuts.xml)
 and [native application registry](https://github.com/flatpak/xdg-desktop-portal/blob/main/data/org.freedesktop.host.portal.Registry.xml).
@@ -341,12 +363,12 @@ Ubuntu `desktop,ibus` build and the default Omarchy build passed Clippy with
 warnings denied and all six filtered desktop tests. This regression run does not
 claim a new Hyprland UI qualification.
 
-The experimental feature's build, four Rust bridge tests, 27 filtered worker
+Earlier in this integration, the feature build, four Rust bridge tests, 27 filtered worker
 tests, native IBus protocol smoke and GTK4 receiver passed in the Ubuntu VM.
 The protocol smoke includes application stop/restart and reconnect. The shared
 refactor also passed strict all-target Clippy and five bridge tests on Omarchy,
-including the native Fcitx state fixture. These targeted checks do not replace
-the remaining GNOME acceptance cases.
+including the native Fcitx state fixture. Those targeted checks are complemented by the installed application and
+session-lifecycle evidence described above.
 
 Privacy detection depends on the application's input-purpose/hint declarations.
 GTK's visual `visibility=false` alone does **not** declare a password field; GTK
