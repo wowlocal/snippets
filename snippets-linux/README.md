@@ -12,8 +12,8 @@ The first GNOME backend builds on stock Ubuntu without Fcitx. It adds native
 session-lock observation and isolated background app/CLI lifecycle coverage.
 The experimental IBus path now passes owned GTK4 and Chromium Wayland expansion
 checks. An experimental GlobalShortcuts portal adapter opens the app and picker
-through real GNOME bindings. **Full GNOME support is not qualified:** portal
-restart recovery, popup presentation, onboarding and clipboard capture
+through real GNOME bindings and recovers after a portal frontend crash.
+**Full GNOME support is not qualified:** popup presentation, onboarding and clipboard capture
 remain outstanding. An experimental Shell companion now passes ordinary picker
 insertion in owned GTK4 and Chromium native Wayland receivers; activation and
 broader client coverage are still incomplete. The existing

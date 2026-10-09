@@ -184,18 +184,35 @@ version 1, bindings are edited in the application's page in GNOME Settings.
 
 The real portal fixture passed all three action bindings, clean disconnect and
 reconnect, explicit session closure, and opening/activating the actual GTK main
-window and picker. The targeted shortcut suite passed 12 tests (two separate
+window and picker. The targeted shortcut suite passed 14 tests (two separate
 native fixtures ignored by default) on both Ubuntu and Omarchy. Strict all-target
 Clippy passed for `desktop,ibus` on Ubuntu and the default Fcitx build on Omarchy.
 
-**Open restart failure:** terminating the owned `xdg-desktop-portal` frontend
-correctly revokes the existing adapter. A replacement frontend then accepts a new
-registration but does not deliver its real shortcut on this Ubuntu image. The
-`--restart-portal` fixture requires delivery and fails; registration alone is not
-counted as recovery. Restarting only the owned GNOME portal backend restored
-normal delivery in the test lab. This suggests stale backend bindings after a
-frontend crash, but the upstream cause is not yet fully established. The app does
-not restart desktop services as a workaround. This remains a qualification gap.
+**Frontend restart recovery:** the original failure was reproduced again on the
+Ubuntu image: the GNOME backend retained an orphan session and its accelerator
+grabs after the frontend vanished. A new frontend accepted registration but
+delivered no keys. The adapter now releases its exact old session through
+`org.freedesktop.impl.portal.Session.Close`, only after the frontend's unique bus
+name has actually disappeared. The call is pinned to the GNOME backend owner
+observed when that session was created. It neither enumerates other sessions nor
+creates registrations through the implementation API. A living frontend remains
+the authority for Close. This GNOME-specific cleanup uses the backend's
+[session-close implementation](https://github.com/GNOME/xdg-desktop-portal-gnome/blob/main/src/session.c)
+and [accelerator cleanup](https://github.com/GNOME/xdg-desktop-portal-gnome/blob/main/src/globalshortcuts.c).
+
+The worker revokes previously delivered/queued events before reconnecting through
+the normal permission portal. It recovers only from confirmed frontend owner
+loss; explicit Session.Closed, denied registration, disabled consent and a
+stopped worker do not retry automatically. A private D-Bus test verifies that
+cleanup never redirects to a replacement backend or another session, and worker
+tests verify event revocation through recovery and stop.
+
+The owned `--restart-portal` fixture now passes actual post-crash key delivery.
+The installed Release app also stayed running, reconnected without a Retry click,
+and opened its previously minimized window on a fresh key press. Services on the
+user's desktop were untouched. This covers a frontend crash on the qualified
+Ubuntu image; complete login/onboarding and other portal implementations remain
+separate acceptance cases.
 
 See the public [GlobalShortcuts interface](https://github.com/flatpak/xdg-desktop-portal/blob/main/data/org.freedesktop.portal.GlobalShortcuts.xml)
 and [native application registry](https://github.com/flatpak/xdg-desktop-portal/blob/main/data/org.freedesktop.host.portal.Registry.xml).

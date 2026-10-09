@@ -113,23 +113,31 @@ entry inside the lab, runs the Rust portal fixture, approves its three known
 bindings in the real GNOME Settings dialog through AT-SPI, and sends real modifier
 chords through the lab's virtual keyboard. It checks action routing, reconnection,
 and explicit session closure. `--restart-portal` additionally tests real delivery
-after disappearance/replacement of the owned portal frontend; this currently
-exposes a qualification failure on Ubuntu (see `../GNOME.md`). The process is
+after disappearance/replacement of the owned portal frontend. The process is
 stopped only after verifying its private bus environment.
 It never approves dialogs on the user's session. A missing case or failed Rust
 fixture returns nonzero.
-Run the crash case last and recreate the owned lab afterwards: a failed recovery
-can leave the lab backend holding stale bindings. Do not restart services on the
-user's desktop to clean up this fixture.
+The corrected adapter releases only its own orphan backend session and restores
+delivery after a frontend crash. Recreate the owned lab when comparing an older,
+unfixed build: its failed recovery can leave stale bindings. Never clean this up
+by restarting services on the user's desktop.
 
 ```sh
 python3 docs/linux/testing/gnome_shortcuts.py /tmp/snippets-gnome-owned "$PWD" \
-  --application snippets-linux/target/debug/snippets
+  --restart-portal --application /tmp/snippets-gnome-installed/bin/snippets
 ```
 
 The optional `--application` phase also launches the actual GTK app with a fresh
 library, sends Open and Picker shortcuts, and requires each resulting window to
 be active and visible through AT-SPI before quitting the app.
+With `--restart-portal`, it then minimizes the app, verifies that the fictional
+receiver has focus, stops only the owned portal frontend and requires a real
+shortcut to reactivate the same running app. No Retry click or direct app action
+may substitute for recovery. Use the installed single-link executable layout.
+The GTK receiver disables its own accessibility export to avoid calling itself
+synchronously through AT-SPI; the tested app and portal keep accessibility on.
+The runner explicitly leaves the fresh Shell's overview through its public
+OverviewActive property and verifies receiver focus before registration.
 
 This tests shortcut delivery, not successful clipboard capture or insertion from
 the app's picker. Those operations need separate receiver assertions.

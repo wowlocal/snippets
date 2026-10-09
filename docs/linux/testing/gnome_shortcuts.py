@@ -31,6 +31,9 @@ def main():
     assert environment["DBUS_SESSION_BUS_ADDRESS"] != os.environ.get("DBUS_SESSION_BUS_ADDRESS")
     os.environ.update(environment)
     os.environ.pop("DISPLAY", None)
+    # AT-SPI must inspect the app/portal, never synchronously call this GTK
+    # receiver on the same main thread that is servicing accessibility.
+    os.environ["GTK_A11Y"] = "none"
     # Older running labs may predate exporting the display before bus startup.
     subprocess.run(["dbus-update-activation-environment", "WAYLAND_DISPLAY"], check=True)
     desktop = root / "data/applications/com.khm.snippets.linux.desktop"
@@ -60,12 +63,14 @@ def main():
         try:
             for item in (125, 56, code):
                 key(item, True)
+            settle(0.05)
         finally:
             for item in (code, 56, 125):
                 key(item, False)
+        settle(0.1)
 
     def descendants(node, depth=0):
-        if depth > 24:
+        if node is None or depth > 24:
             return
         yield node
         for child in node:
@@ -90,6 +95,33 @@ def main():
                             raise RuntimeError("fixture dialog approval failed")
                         print("Approved the three fixture bindings in GNOME Settings", flush=True)
 
+    def stop_owned_portal():
+        pid = connection.call_sync(
+            "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+            "GetConnectionUnixProcessID",
+            GLib.Variant("(s)", ("org.freedesktop.portal.Desktop",)),
+            None, 0, 3000, None).unpack()[0]
+        process_env = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0")
+        expected = ("DBUS_SESSION_BUS_ADDRESS=" + environment["DBUS_SESSION_BUS_ADDRESS"]).encode()
+        assert expected in process_env, "refuse to stop a portal outside the owned lab"
+        os.kill(pid, signal.SIGTERM)
+
+    def settle(seconds):
+        until = time.monotonic() + seconds
+        while time.monotonic() < until:
+            while GLib.MainContext.default().pending():
+                GLib.MainContext.default().iteration(False)
+            time.sleep(0.02)
+
+    def active_title(title):
+        for app in pyatspi.Registry.getDesktop(0):
+            for window in app:
+                state = window.getState()
+                if (window.name == title and state.contains(pyatspi.STATE_SHOWING)
+                        and state.contains(pyatspi.STATE_ACTIVE)):
+                    return True
+        return False
+
     child = None
     receiver = None
     log = (root / "portal-test.log").open("w")
@@ -105,11 +137,20 @@ def main():
         receiver.present()
         # Keep a real application active: GNOME intentionally doesn't deliver
         # normal-mode global shortcuts while the empty-desktop overview is up.
-        until = time.monotonic() + 1
-        while time.monotonic() < until:
-            while GLib.MainContext.default().pending():
-                GLib.MainContext.default().iteration(False)
-            time.sleep(0.02)
+        settle(1)
+        # A new Shell still shows its initial overview even with a receiver.
+        # Leave that owned overview before checking NORMAL-mode bindings.
+        key(1, True)
+        key(1, False)
+        settle(0.3)
+        connection.call_sync('org.gnome.Shell', '/org/gnome/Shell',
+                             'org.freedesktop.DBus.Properties', 'Set',
+                             GLib.Variant('(ssv)', ('org.gnome.Shell', 'OverviewActive',
+                                                   GLib.Variant('b', False))),
+                             None, 0, 3000, None)
+        receiver.present()
+        settle(0.5)
+        assert receiver.is_active(), 'owned receiver is not active before shortcut registration'
         env = dict(os.environ, SNIPPETS_GNOME_SHORTCUT_LIVE=str(root))
         if args.restart_portal:
             env["SNIPPETS_GNOME_PORTAL_RESTART"] = "1"
@@ -139,15 +180,7 @@ def main():
                 elif value in ("reconnected", "replacement-registered"):
                     chord(49)
                 elif value == "revoke-owner":
-                    pid = connection.call_sync(
-                        "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
-                        "GetConnectionUnixProcessID",
-                        GLib.Variant("(s)", ("org.freedesktop.portal.Desktop",)),
-                        None, 0, 3000, None).unpack()[0]
-                    process_env = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0")
-                    expected = ("DBUS_SESSION_BUS_ADDRESS=" + environment["DBUS_SESSION_BUS_ADDRESS"]).encode()
-                    assert expected in process_env, "refuse to stop a portal outside the owned lab"
-                    os.kill(pid, signal.SIGTERM)
+                    stop_owned_portal()
             time.sleep(0.1)
         if child.returncode != 0 or status.read_text().strip() != "passed":
             raise RuntimeError("real portal keyboard fixture failed")
@@ -158,6 +191,7 @@ def main():
                 preference.write_text('{"schema":1,"enabled":true}\n')
                 preference.chmod(0o600)
                 app_env = dict(os.environ, SNIPPETS_SUPPORT_DIR=library)
+                app_env.pop("GTK_A11Y", None)
                 executable = str(args.application.absolute())
                 child = subprocess.Popen([executable, "--background"], env=app_env,
                                          stdout=log, stderr=log, start_new_session=True)
@@ -171,19 +205,35 @@ def main():
                                 GLib.MainContext.default().iteration(False)
                             if child.poll() is not None:
                                 raise RuntimeError("GTK app exited before activation")
-                            active = False
-                            for app in pyatspi.Registry.getDesktop(0):
-                                for window in app:
-                                    state = window.getState()
-                                    if (window.name == title and state.contains(pyatspi.STATE_SHOWING)
-                                            and state.contains(pyatspi.STATE_ACTIVE)):
-                                        active = True
-                            if active:
+                            if active_title(title):
                                 print(f"Real GTK window active: {title}", flush=True)
                                 break
                             if time.monotonic() >= until:
                                 raise RuntimeError(f"shortcut did not activate {title}")
                             time.sleep(0.1)
+                    if args.restart_portal:
+                        key(1, True)
+                        key(1, False)  # Dismiss the picker.
+                        settle(0.3)
+                        # Minimize the main window through GNOME's ordinary
+                        # binding; the fictional receiver must regain focus.
+                        for item in (125, 35):
+                            key(item, True)
+                        for item in (35, 125):
+                            key(item, False)
+                        settle(0.5)
+                        assert receiver.is_active(), 'receiver did not regain focus before restart'
+                        stop_owned_portal()
+                        # The worker reconnects itself. No app restart, retry
+                        # button, or direct action invocation may make this pass.
+                        deadline = time.monotonic() + 15
+                        while not active_title('Snippets'):
+                            assert child.poll() is None
+                            if time.monotonic() >= deadline:
+                                raise RuntimeError('app did not restore shortcuts after portal restart')
+                            chord(49)
+                            settle(0.5)
+                        print('Real GTK app recovered its shortcut automatically after portal restart', flush=True)
                 finally:
                     subprocess.run([executable, "--quit"], env=app_env,
                                    stdout=log, stderr=log, timeout=10, check=True)

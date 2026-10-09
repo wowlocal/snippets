@@ -14,6 +14,7 @@ const PORTAL: &str = "org.freedesktop.portal.Desktop";
 const PATH: &str = "/org/freedesktop/portal/desktop";
 const API: &str = "org.freedesktop.portal.GlobalShortcuts";
 const BUS: &str = "org.freedesktop.DBus";
+const GNOME_BACKEND: &str = "org.freedesktop.impl.portal.desktop.gnome";
 type Options = HashMap<String, glib::Variant>;
 
 fn action(id: &str) -> Option<Action> {
@@ -105,9 +106,12 @@ pub(super) struct Portal {
     connection: gio::DBusConnection,
     owner: String,
     session: Option<ObjectPath>,
+    backend_owner: Option<String>,
     version: u32,
     subscriptions: Vec<gio::SignalSubscription>,
     revoked: Rc<Cell<bool>>,
+    owner_lost: Rc<Cell<bool>>,
+    session_closed: Rc<Cell<bool>>,
     bound: Rc<RefCell<HashSet<String>>>,
     queue: Rc<RefCell<VecDeque<Queued>>>,
     token: Option<String>,
@@ -271,14 +275,18 @@ impl Portal {
             connection,
             owner,
             session: None,
+            backend_owner: None,
             version: 0,
             subscriptions: vec![],
             revoked: Rc::new(Cell::new(false)),
+            owner_lost: Rc::new(Cell::new(false)),
+            session_closed: Rc::new(Cell::new(false)),
             bound: Rc::new(RefCell::new(HashSet::new())),
             queue: Rc::new(RefCell::new(VecDeque::new())),
             token: None,
         };
         let revoked = this.revoked.clone();
+        let owner_lost = this.owner_lost.clone();
         this.subscriptions.push(this.connection.subscribe_to_signal(
             Some(BUS),
             Some(BUS),
@@ -286,7 +294,10 @@ impl Portal {
             Some("/org/freedesktop/DBus"),
             Some(PORTAL),
             gio::DBusSignalFlags::NONE,
-            move |_| revoked.set(true),
+            move |_| {
+                revoked.set(true);
+                owner_lost.set(true);
+            },
         ));
         let version = this.call(
             PATH,
@@ -321,7 +332,29 @@ impl Portal {
             return Err(UNAVAILABLE);
         }
         this.session = Some(ObjectPath::try_from(session.as_str()).map_err(|_| UNAVAILABLE)?);
+        // GNOME 50 can leave its backend session (and Shell accelerator grabs)
+        // alive when the portal frontend disappears. Retain only the backend
+        // owner associated with this newly created, unguessable session. Cleanup
+        // never enumerates sessions or creates/grabs shortcuts outside the portal.
+        this.backend_owner = this
+            .connection
+            .call_sync(
+                Some(BUS),
+                "/org/freedesktop/DBus",
+                BUS,
+                "GetNameOwner",
+                Some(&(GNOME_BACKEND,).to_variant()),
+                None,
+                gio::DBusCallFlags::NO_AUTO_START,
+                1000,
+                None::<&gio::Cancellable>,
+            )
+            .ok()
+            .and_then(|v| v.get::<(String,)>())
+            .map(|v| v.0)
+            .filter(|v| v.starts_with(':') && v.len() <= 256);
         let revoked = this.revoked.clone();
+        let session_closed = this.session_closed.clone();
         this.subscriptions.push(this.connection.subscribe_to_signal(
             Some(&this.owner),
             Some("org.freedesktop.portal.Session"),
@@ -329,7 +362,10 @@ impl Portal {
             Some(&session),
             None,
             gio::DBusSignalFlags::NONE,
-            move |_| revoked.set(true),
+            move |_| {
+                session_closed.set(true);
+                revoked.set(true);
+            },
         ));
         let bound = this.bound.clone();
         let queue = this.queue.clone();
@@ -449,6 +485,19 @@ impl Portal {
     }
 }
 impl Backend for Portal {
+    fn can_reconnect(&self) -> bool {
+        self.owner_lost.get() && !self.session_closed.get()
+    }
+    fn reconnect(self: Box<Self>, guard: &dyn Fn() -> Result<()>) -> Result<Box<dyn Backend>> {
+        guard()?;
+        if !self.can_reconnect() {
+            return Err(UNAVAILABLE);
+        }
+        // Release the orphan before a replacement backend grabs the same keys.
+        drop(self);
+        guard()?;
+        Ok(Box::new(Self::open(guard)?))
+    }
     fn can_configure(&self) -> bool {
         self.version >= 2
     }
@@ -495,12 +544,46 @@ impl Drop for Portal {
     fn drop(&mut self) {
         self.subscriptions.clear();
         if let Some(session) = &self.session {
-            let _ = self.call(
+            let closed = self.call(
                 session.as_str(),
                 "org.freedesktop.portal.Session",
                 "Close",
                 None,
             );
+            if closed.is_err() {
+                // Use the public frontend whenever it still exists. The narrow
+                // GNOME workaround only releases our own orphan after its
+                // issuing frontend's unique name has actually disappeared.
+                let frontend_absent = self
+                    .connection
+                    .call_sync(
+                        Some(BUS),
+                        "/org/freedesktop/DBus",
+                        BUS,
+                        "NameHasOwner",
+                        Some(&(self.owner.as_str(),).to_variant()),
+                        None,
+                        gio::DBusCallFlags::NO_AUTO_START,
+                        1000,
+                        None::<&gio::Cancellable>,
+                    )
+                    .ok()
+                    .and_then(|v| v.get::<(bool,)>())
+                    .is_some_and(|(exists,)| !exists);
+                if frontend_absent && let Some(owner) = &self.backend_owner {
+                    let _ = self.connection.call_sync(
+                        Some(owner),
+                        session.as_str(),
+                        "org.freedesktop.impl.portal.Session",
+                        "Close",
+                        None,
+                        None,
+                        gio::DBusCallFlags::NO_AUTO_START,
+                        1000,
+                        None::<&gio::Cancellable>,
+                    );
+                }
+            }
         }
         let _ = self.connection.close_sync(None::<&gio::Cancellable>);
     }
@@ -509,3 +592,7 @@ impl Drop for Portal {
 #[cfg(test)]
 #[path = "shortcuts_gnome_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "shortcuts_gnome_cleanup_tests.rs"]
+mod cleanup_tests;

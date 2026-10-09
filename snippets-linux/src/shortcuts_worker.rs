@@ -52,6 +52,12 @@ impl Drop for Native {
     }
 }
 trait Backend {
+    fn can_reconnect(&self) -> bool {
+        false
+    }
+    fn reconnect(self: Box<Self>, _guard: &dyn Fn() -> Result<()>) -> Result<Box<dyn Backend>> {
+        Err(UNAVAILABLE)
+    }
     fn can_configure(&self) -> bool {
         false
     }
@@ -131,6 +137,8 @@ pub(crate) struct Event {
     session: SessionWitness,
     epoch: u64,
     deadline: Duration,
+    registration: Option<Arc<AtomicBool>>,
+    stopped: Option<Arc<AtomicBool>>,
 }
 impl Event {
     fn new(action: Action, age: Duration, session: SessionWitness) -> Option<Self> {
@@ -142,6 +150,8 @@ impl Event {
             action,
             target: None,
             activation_token: None,
+            registration: None,
+            stopped: None,
             epoch,
             session,
             deadline: crate::clock::uptime()?
@@ -149,8 +159,29 @@ impl Event {
         })
     }
     pub fn valid(&self) -> bool {
-        self.session.snapshot() == (SessionState::Unlocked, self.epoch)
+        self.registration
+            .as_ref()
+            .is_none_or(|live| live.load(Ordering::Acquire))
+            && self
+                .stopped
+                .as_ref()
+                .is_none_or(|stop| !stop.load(Ordering::Acquire))
+            && self.session.snapshot() == (SessionState::Unlocked, self.epoch)
             && crate::clock::uptime().is_some_and(|now| now < self.deadline)
+    }
+}
+struct Registration(Arc<AtomicBool>);
+impl Registration {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(true)))
+    }
+    fn revoke(&self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+impl Drop for Registration {
+    fn drop(&mut self) {
+        self.revoke();
     }
 }
 pub(crate) struct Handle {
@@ -212,6 +243,7 @@ impl Handle {
                 let result: Result<()> = (|| {
                     guard()?;
                     let mut backend = open(&guard)?;
+                    let mut registration = Registration::new();
                     configuration_capability.store(backend.can_configure(), Ordering::Release);
                     *state.lock().map_err(|_| UNAVAILABLE)? = Status::Registered;
                     loop {
@@ -219,9 +251,33 @@ impl Handle {
                         if configuring.swap(false, Ordering::AcqRel) {
                             backend.configure(&guard)?;
                         }
-                        if let Some((action, age)) = backend.next(&guard)?
+                        let next = match backend.next(&guard) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                registration.revoke();
+                                guard()?;
+                                if error == STOPPED || !backend.can_reconnect() {
+                                    return Err(error);
+                                }
+                                configuration_capability.store(false, Ordering::Release);
+                                *state.lock().map_err(|_| UNAVAILABLE)? = Status::Starting;
+                                // Only a backend-confirmed service disappearance
+                                // permits recovery. Denial or Session.Closed must
+                                // never cause another permission request.
+                                backend = backend.reconnect(&guard)?;
+                                guard()?;
+                                registration = Registration::new();
+                                configuration_capability
+                                    .store(backend.can_configure(), Ordering::Release);
+                                *state.lock().map_err(|_| UNAVAILABLE)? = Status::Registered;
+                                continue;
+                            }
+                        };
+                        if let Some((action, age)) = next
                             && let Some(mut event) = Event::new(action, age, session.clone())
                         {
+                            event.registration = Some(registration.0.clone());
+                            event.stopped = Some(ending.clone());
                             event.activation_token = backend.activation_token();
                             if action == Action::Picker {
                                 event.target = PasteTarget::capture();
