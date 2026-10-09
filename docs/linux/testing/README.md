@@ -250,3 +250,31 @@ The installer regression can also run on Omarchy with `--desktop hyprland` and
 that build's target directory. Both variants validate the actual Release files,
 independent installation copies, desktop/action launch with a fictional receiver,
 and preservation of data/preferences on reinstall.
+
+## Native GNOME candidate panel
+
+With an installed-prefix `gnome_session.py` lab running:
+
+```sh
+python3 docs/linux/testing/gnome_popup.py /tmp/snippets-gnome-owned \
+  /tmp/snippets-gnome-installed/share/snippets-linux \
+  --chromium /path/to/chromium
+```
+
+This requires Python GI and pyatspi. It refuses a Shell that is not headless or
+does not belong to the lab runtime. It creates a temporary fictional library and
+browser profile, uses a retained virtual keyboard, and never moves a pointer.
+The Screenshot portal's initial permission dialog is approved only after checking
+its visible title and keyboard-focused Allow button in the owned Shell. A denied
+permission fails the screenshot check; use a fresh lab to retry. Later screenshots
+must complete without a permission dialog, preserving the composition's focus.
+
+The test asserts real visible candidate labels, selected text, panel dismissal,
+password suppression, and (for Chromium) ordered DOM observations with composition
+finished. Row order is read from the actual panel because usage can reorder it.
+Screenshots `candidates.png`, `candidates_selected.png`, and
+`chromium_candidates.png` stay in the lab. Inspect them for caret anchoring,
+readable rows, highlight and screen-edge placement; the text assertions alone do
+not qualify appearance. Reviewed examples are in `evidence/`. Chromium uses native
+Wayland IME/text-input-v3 flags; the default/confined launcher remains a separate
+qualification. All failures are fatal and the owned app/browser are stopped.

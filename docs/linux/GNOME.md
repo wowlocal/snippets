@@ -28,7 +28,8 @@ Implemented:
   metadata with Fcitx, but commits through an IBus input context. The Fcitx path
   still requires its original Hyprland window/process witness.
 
-Not yet qualified: IBus expansion and caret suggestions across applications.
+IBus expansion and caret suggestions have real GTK4 and native Wayland Chromium
+coverage below; other application input paths remain unqualified.
 An experimental GNOME GlobalShortcuts portal adapter registers Open, Picker and
 Capture actions through the system permission dialog. Shortcut delivery and the
 associated capture or insertion operation are verified separately.
@@ -218,9 +219,30 @@ It additionally passed real GTK4 input-source switch
 and IBus-daemon restart checks: old preedit was cancelled, suffix-only typing
 stayed literal, and a fresh query expanded after reconnection. The owned
 supervisor stops and recreates only its private daemon; this is not a test of
-the user's systemd service or login flow. Popup presentation and complete
-activation/onboarding remain outstanding. Ordinary picker insertion has the
-separate coverage below.
+the user's systemd service or login flow. The separate Settings/systemd setup
+check is described above. Ordinary picker insertion has the separate coverage
+below.
+
+**Native candidate panel:** `gnome_popup.py` passed with the installed Release
+on GNOME 50.1 and Chromium 155.0.8059.39. It checks actual visible Shell candidate
+rows through AT-SPI, rather than just an IBus lookup-table signal. GTK coverage
+includes Down/Enter and Tab selecting the expected body, Escape preserving the
+literal query, and panel cancellation on field change and disabled expansion.
+Both GTK and Chromium password fields remain literal with no candidate panel.
+Chromium additionally asserts the exact resulting DOM value and finished
+composition after selection, Escape and cross-field cancellation. It uses the
+same explicit native Wayland flags and direct-binary limitation described above.
+
+Screenshots are acquired through the public Screenshot portal after approving
+the owned lab's permission dialog with its virtual keyboard. No Shell Eval,
+service impersonation, screenshot API bypass or pointer movement is used. Visual
+inspection confirmed legible name/keyword rows, the selected-row highlight and
+caret placement (including placement above the caret near the screen edge).
+The styling follows the GNOME Shell theme, independently of Hyprland's panel.
+
+![GNOME GTK candidate selection](testing/evidence/gnome50-gtk-candidates.png)
+
+![GNOME Chromium candidate placement](testing/evidence/gnome50-chromium-candidates.png)
 
 The shortcut adapter owns a private portal connection and session. It registers
 the native desktop application identity before other portal calls, checks sender
