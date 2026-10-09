@@ -1,5 +1,63 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=SNIPPETS_GTK_RUNTIME_DIR");
+    println!("cargo:rerun-if-changed=src/inline_rows.h");
+    if std::env::var_os("CARGO_FEATURE_IBUS").is_some() {
+        let ibus = pkg_config::Config::new()
+            .cargo_metadata(false)
+            .atleast_version("1.5.20")
+            .probe("ibus-1.0")
+            .expect("IBus development files are required for GNOME inline expansion");
+        let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+        let executable = output.join("snippets-ibus");
+        let mut compiler = cc::Build::new().cpp(true).get_compiler().to_command();
+        compiler
+            .args([
+                "-std=c++20",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "src/inline_ibus.cpp",
+                "-o",
+            ])
+            .arg(&executable);
+        for path in ibus.include_paths {
+            compiler.arg("-I").arg(path);
+        }
+        for path in ibus.link_paths {
+            compiler.arg("-L").arg(path);
+        }
+        for library in ibus.libs {
+            compiler.arg(format!("-l{library}"));
+        }
+        let compose = pkg_config::Config::new()
+            .cargo_metadata(false)
+            .probe("xkbcommon")
+            .expect("xkbcommon development files are required for Compose/dead keys");
+        for path in compose.include_paths {
+            compiler.arg("-I").arg(path);
+        }
+        for path in compose.link_paths {
+            compiler.arg("-L").arg(path);
+        }
+        for library in compose.libs {
+            compiler.arg(format!("-l{library}"));
+        }
+        assert!(
+            compiler.status().expect("C++ compiler required").success(),
+            "IBus engine build failed"
+        );
+        std::fs::copy(
+            &executable,
+            output.ancestors().nth(3).unwrap().join("snippets-ibus"),
+        )
+        .expect("Copy installable IBus engine");
+        println!(
+            "cargo:rustc-env=SNIPPETS_IBUS_ENGINE={}",
+            executable.display()
+        );
+        println!("cargo:rerun-if-changed=src/inline_ibus.cpp");
+    }
     if std::env::var_os("CARGO_FEATURE_FCITX").is_some() {
         let fcitx = pkg_config::Config::new()
             .cargo_metadata(false)

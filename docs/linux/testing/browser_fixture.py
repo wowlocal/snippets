@@ -84,7 +84,7 @@ class State:
             return True
 
 
-def server(state):
+def server(state, html=HTML):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -94,7 +94,7 @@ def server(state):
                 data = json.dumps({'seq': state.sequence()}).encode()
                 mime = 'application/json'
             elif self.path == '/':
-                data, mime = HTML.encode(), 'text/html; charset=utf-8'
+                data, mime = html.encode(), 'text/html; charset=utf-8'
             else:
                 self.send_error(404)
                 return

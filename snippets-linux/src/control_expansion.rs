@@ -44,6 +44,7 @@ pub enum ExpansionState {
     Stopped,
     Unavailable,
     WaitingForFcitx,
+    WaitingForIBus,
     UnsupportedDesktop,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

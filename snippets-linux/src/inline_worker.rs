@@ -17,9 +17,9 @@ use std::{
 const STOPPED: Error = Error("Inline expansion stopped. Check the text field before trying again.");
 const CLIPBOARD: Error =
     Error("The clipboard placeholder could not be read safely within its size and time limits.");
-#[cfg(feature = "fcitx")]
-#[path = "inline_fcitx.rs"]
-mod fcitx;
+#[cfg(any(feature = "fcitx", feature = "ibus"))]
+#[path = "inline_bridge.rs"]
+mod bridge;
 #[cfg(test)]
 #[path = "inline_live_tests.rs"]
 mod live_tests;
@@ -107,10 +107,12 @@ mod tests {
     }
     #[test]
     fn locked_worker_never_connects_and_explicit_stop_or_revocation_joins() {
+        let expected = Status::WaitingForUnlock;
+        #[cfg(not(feature = "ibus"))]
         let expected = if crate::desktop::environment() == crate::desktop::Environment::Gnome {
             Status::UnsupportedDesktop
         } else {
-            Status::WaitingForUnlock
+            expected
         };
         for explicit in [true, false] {
             let temporary = tempfile::tempdir().unwrap();
@@ -150,9 +152,20 @@ pub(crate) enum Status {
     Unavailable,
     #[cfg(feature = "fcitx")]
     WaitingForFcitx,
+    #[cfg(feature = "ibus")]
+    WaitingForIBus,
+    #[cfg(not(feature = "ibus"))]
     UnsupportedDesktop,
 }
 impl Status {
+    pub fn is_terminal(self) -> bool {
+        match self {
+            Self::Stopped | Self::Unavailable => true,
+            #[cfg(not(feature = "ibus"))]
+            Self::UnsupportedDesktop => true,
+            _ => false,
+        }
+    }
     pub fn text(self) -> &'static str {
         match self {
             Self::WaitingForUnlock => "Enabled; waiting for an observable unlocked desktop.",
@@ -160,12 +173,15 @@ impl Status {
             Self::Listening => "Expanding enabled ordinary keywords in this text field.",
             Self::Stopped => "Expansion stopped; check the text field before trying again.",
             Self::Unavailable => {
-                "Inline expansion could not connect. Check that Fcitx and the Snippets addon are installed, then retry."
+                "Inline expansion could not connect to its input method. Check the Snippets input integration, then retry."
             }
             #[cfg(feature = "fcitx")]
             Self::WaitingForFcitx => {
                 "Enabled; waiting for the Snippets Fcitx addon. Restart Fcitx after installing Snippets."
             }
+            #[cfg(feature = "ibus")]
+            Self::WaitingForIBus => "Enabled; select Snippets in GNOME Input Sources.",
+            #[cfg(not(feature = "ibus"))]
             Self::UnsupportedDesktop => {
                 "Inline expansion is not available on this desktop yet. Your saved snippets remain available in the app."
             }
@@ -329,12 +345,15 @@ fn run(
     // Native GNOME input is owned by IBus. Do not claim its seat with the
     // wlroots fallback or select Fcitx merely because its executable exists.
     if crate::desktop::environment() == crate::desktop::Environment::Gnome {
+        #[cfg(feature = "ibus")]
+        bridge::run(bridge::Backend::IBus, root, witness, stop, sender, usage);
+        #[cfg(not(feature = "ibus"))]
         let _ = sender.try_send(Status::UnsupportedDesktop);
         return;
     }
     #[cfg(feature = "fcitx")]
     if Path::new("/usr/bin/fcitx5").is_file() {
-        fcitx::run(root, witness, stop, sender, usage);
+        bridge::run(bridge::Backend::Fcitx, root, witness, stop, sender, usage);
         return;
     }
     let library = match Library::prepare(root.clone()) {

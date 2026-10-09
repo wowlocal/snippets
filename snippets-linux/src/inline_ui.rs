@@ -56,12 +56,7 @@ impl Service {
                 while let Ok(status) = worker.receiver.try_recv() {
                     this.status.set(status);
                 }
-                if worker.finished()
-                    && !matches!(
-                        this.status.get(),
-                        Status::Stopped | Status::Unavailable | Status::UnsupportedDesktop
-                    )
-                {
+                if worker.finished() && !this.status.get().is_terminal() {
                     this.status.set(Status::Unavailable);
                 }
             }
@@ -171,6 +166,9 @@ impl Service {
                 Status::Unavailable => ExpansionState::Unavailable,
                 #[cfg(feature = "fcitx")]
                 Status::WaitingForFcitx => ExpansionState::WaitingForFcitx,
+                #[cfg(feature = "ibus")]
+                Status::WaitingForIBus => ExpansionState::WaitingForIBus,
+                #[cfg(not(feature = "ibus"))]
                 Status::UnsupportedDesktop => ExpansionState::UnsupportedDesktop,
             }
         };

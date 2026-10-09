@@ -19,12 +19,18 @@ Implemented:
   cannot authorize protected operations. Lock/unlock cycles revoke in-flight
   work even when both signals arrive between UI ticks.
 - A GNOME install mode which neither requires nor installs the Fcitx addon.
-- An explicit `unsupportedDesktop` expansion status on GNOME.
+- An explicit `unsupportedDesktop` expansion status in the desktop-only build.
+- An experimental `ibus` feature with a separate native engine built against
+  public libibus and xkbcommon APIs. It shares matching and bounded candidate
+  metadata with Fcitx, but commits through an IBus input context. The Fcitx path
+  still requires its original Hyprland window/process witness.
 
-Not implemented: IBus expansion, caret suggestions, GNOME global shortcuts,
+Not yet qualified: IBus expansion and caret suggestions across applications.
+Not implemented: GNOME global shortcuts,
 clipboard-history capture and cross-application insertion. Existing Hyprland
 window-target and Wayland peer checks remain required for those mechanisms.
-The preview is not a claim that the full application has passed GNOME UI testing.
+The installer still builds only the desktop preview. The `ibus` feature is an
+engineering opt-in until the browser and lifecycle acceptance cases are complete.
 
 ## Build and install
 
@@ -93,12 +99,42 @@ test concurrency for the expensive restoration fixtures on this VM. Strict
 
 ## Next implementation boundary
 
-IBus needs its own engine/focus lifecycle and popup integration. The existing
-Fcitx bridge also depends on a fresh Hyprland window/process target; routing IBus
-into it without that target would weaken the insertion checks. Share the snippet
-matching/expansion logic, while keeping input-context ownership and cancellation
-specific to each backend. Add GTK and Chromium end-to-end insertion, focus loss,
-password-field, lock and restart tests before claiming GNOME expansion support.
+The IBus prototype owns composition generations across reset, focus and content
+type changes; drops pending work on connection loss or consent revocation; and
+checks GNOME Shell's unlocked state through its unique bus owner before delivering
+a reply. Candidate rows contain ordinary-snippet metadata, never vault bodies.
+Its popup currently uses GNOME's native IBus candidate presentation.
+
+The owned GTK4/Wayland receiver passed exact expansion, password pass-through,
+cross-field cancellation and screen-shield activation/deactivation. The last case
+uses a headless Shell with authentication locking disabled; it is not a test of
+an authenticated unlock or logind session suspension.
+
+Chromium 155.0.8059.39 currently fails the exact-expansion case: the native Wayland
+input path resets the active composition during its first key. The underlying
+cause is still being investigated; omitting the lookup table or using auxiliary
+text instead of inline preedit did not resolve it.
+This failure remains an acceptance blocker. Do not ignore focus/reset events to
+make that case pass: a real focus transition must still cancel pending delivery.
+Browser checks, input-source/IBus restart coverage, popup presentation, installation,
+global shortcuts and cross-application insertion remain outstanding.
+
+The experimental feature's build, four Rust bridge tests, 27 filtered worker
+tests, native IBus protocol smoke and GTK4 receiver passed in the Ubuntu VM.
+The protocol smoke includes application stop/restart and reconnect. The shared
+refactor also passed strict all-target Clippy and five bridge tests on Omarchy,
+including the native Fcitx state fixture. These targeted checks do not replace
+the remaining GNOME acceptance cases.
+
+Privacy detection depends on the application's input-purpose/hint declarations.
+GTK's visual `visibility=false` alone does **not** declare a password field; GTK
+documents that applications must also set password/PIN input-purpose. IBus cannot
+distinguish such an undeclared masked widget from an ordinary field. Password,
+PIN, PRIVATE, HIDDEN_TEXT and unknown hint bits are rejected when reported.
+See [GtkText visibility](https://docs.gtk.org/gtk4/method.Text.set_visibility.html).
+
+For reproducible, isolated engineering runs, see
+[the GNOME test harness](testing/README.md#owned-gnome-session).
 
 Reference: GNOME Shell implements the read-only ScreenSaver interface at
 `/org/gnome/ScreenSaver` on its own bus connection. Modern GNOME can also expose

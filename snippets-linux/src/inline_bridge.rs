@@ -1,4 +1,4 @@
-//! Ordinary-only Fcitx bridge. The addon owns a backslash-started preedit;
+//! Ordinary-only input-method bridge. The authenticated helper owns preedit;
 //! The transport retains no surrounding text, key stream or vault bodies.
 //! Successful choices follow the existing bounded local prefix-learning policy.
 use super::*;
@@ -18,13 +18,52 @@ const MAGIC: &[u8; 4] = b"SNI3";
 const QUERY_LIMIT: usize = 480;
 const FAILED: Error = Error("The inline input context is no longer available.");
 
+#[derive(Clone, Copy)]
+pub(super) enum Backend {
+    #[cfg(feature = "fcitx")]
+    Fcitx,
+    #[cfg(feature = "ibus")]
+    IBus,
+}
+impl Backend {
+    fn socket_name(self) -> &'static str {
+        match self {
+            #[cfg(feature = "fcitx")]
+            Self::Fcitx => "snippets-inline.sock",
+            #[cfg(feature = "ibus")]
+            Self::IBus => "snippets-ibus.sock",
+        }
+    }
+    fn executable(self) -> Option<PathBuf> {
+        match self {
+            #[cfg(feature = "fcitx")]
+            Self::Fcitx => Some("/usr/bin/fcitx5".into()),
+            #[cfg(feature = "ibus")]
+            Self::IBus => Some(
+                std::env::current_exe()
+                    .ok()?
+                    .parent()?
+                    .join("snippets-ibus"),
+            ),
+        }
+    }
+    fn waiting(self) -> Status {
+        match self {
+            #[cfg(feature = "fcitx")]
+            Self::Fcitx => Status::WaitingForFcitx,
+            #[cfg(feature = "ibus")]
+            Self::IBus => Status::WaitingForIBus,
+        }
+    }
+}
+
 struct Socket {
     listener: UnixListener,
     path: PathBuf,
     identity: (u64, u64),
 }
 impl Socket {
-    fn bind() -> Result<Self> {
+    fn bind(backend: Backend) -> Result<Self> {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or(FAILED)?;
         let root = PathBuf::from(runtime);
         let metadata = fs::symlink_metadata(&root).map_err(|_| FAILED)?;
@@ -34,7 +73,7 @@ impl Socket {
         {
             return Err(FAILED);
         }
-        let path = root.join("snippets-inline.sock");
+        let path = root.join(backend.socket_name());
         if let Ok(metadata) = fs::symlink_metadata(&path) {
             if !metadata.file_type().is_socket()
                 || metadata.uid() != unsafe { libc::geteuid() }
@@ -63,7 +102,7 @@ impl Drop for Socket {
         }
     }
 }
-fn trusted_peer(stream: &UnixStream) -> bool {
+fn trusted_peer(stream: &UnixStream, backend: Backend) -> bool {
     let mut peer = libc::ucred {
         pid: 0,
         uid: 0,
@@ -85,7 +124,10 @@ fn trusted_peer(stream: &UnixStream) -> bool {
     {
         return false;
     }
-    let expected = fs::metadata("/usr/bin/fcitx5");
+    let Some(expected) = backend.executable() else {
+        return false;
+    };
+    let expected = fs::metadata(expected);
     let actual = fs::metadata(format!("/proc/{}/exe", peer.pid));
     matches!((expected,actual), (Ok(a),Ok(b)) if a.is_file() && (a.dev(),a.ino())==(b.dev(),b.ino()))
 }
@@ -284,6 +326,7 @@ fn deliver(
     response(stream, 2, body.as_bytes(), guard)
 }
 fn serve(
+    backend: Backend,
     stream: &mut UnixStream,
     library: &Library,
     suggestions: bool,
@@ -297,10 +340,21 @@ fn serve(
     if kind != 1 {
         return Err(FAILED);
     }
-    let target = crate::desktop::PasteTarget::capture().ok_or(FAILED)?;
+    let target = match backend {
+        #[cfg(feature = "fcitx")]
+        Backend::Fcitx => Some(crate::desktop::PasteTarget::capture().ok_or(FAILED)?),
+        // The authenticated IBus helper commits through its engine's focused
+        // input context, guarded by a generation across focus/reset/content-type
+        // changes. It never asks this process to type into an arbitrary window.
+        #[cfg(feature = "ibus")]
+        Backend::IBus => None::<crate::desktop::PasteTarget>,
+    };
     let checked = || {
         guard()?;
-        if target.is_fresh() && target.is_active_unlocked() {
+        if target
+            .as_ref()
+            .is_none_or(|target| target.is_fresh() && target.is_active_unlocked())
+        {
             Ok(())
         } else {
             Err(FAILED)
@@ -367,6 +421,7 @@ fn serve(
     }
 }
 pub(super) fn run(
+    backend: Backend,
     root: PathBuf,
     witness: SessionWitness,
     stop: Arc<AtomicBool>,
@@ -408,15 +463,15 @@ pub(super) fn run(
                 Ok(())
             }
         };
-        let Ok(socket) = Socket::bind() else {
+        let Ok(socket) = Socket::bind(backend) else {
             report(Status::Unavailable);
             return;
         };
-        report(Status::WaitingForFcitx);
+        report(backend.waiting());
         while guard().is_ok() {
             match socket.listener.accept() {
                 Ok((mut stream, _)) => {
-                    if !trusted_peer(&stream) {
+                    if !trusted_peer(&stream, backend) {
                         continue;
                     }
                     if stream
@@ -428,7 +483,16 @@ pub(super) fn run(
                     {
                         continue;
                     }
-                    if serve(&mut stream, &library, suggestions, &guard, usage.as_ref()).is_ok() {
+                    if serve(
+                        backend,
+                        &mut stream,
+                        &library,
+                        suggestions,
+                        &guard,
+                        usage.as_ref(),
+                    )
+                    .is_ok()
+                    {
                         report(Status::WaitingForField);
                     }
                 }
@@ -448,6 +512,7 @@ pub(super) fn run(
 mod tests {
     use super::*;
     #[test]
+    #[cfg(feature = "fcitx")]
     fn native_fcitx_state_preserves_public_preedit_and_releases_private_fields() {
         let temporary = tempfile::tempdir().unwrap();
         let result = std::process::Command::new(env!("SNIPPETS_FCITX_STATE_FIXTURE"))
@@ -514,9 +579,12 @@ mod tests {
         assert_eq!(palette("accent='bad'")[7..], [0, 122, 255]);
     }
     #[test]
-    fn bridge_authenticates_the_fcitx_process_and_refuses_large_frames() {
+    fn bridge_authenticates_the_backend_process_and_refuses_large_frames() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
-        assert!(!trusted_peer(&server));
+        #[cfg(feature = "fcitx")]
+        assert!(!trusted_peer(&server, Backend::Fcitx));
+        #[cfg(feature = "ibus")]
+        assert!(!trusted_peer(&server, Backend::IBus));
         client.write_all(b"SNI3\x01\xff\xff\xff\xff").unwrap();
         assert!(request(&mut server, &|| Ok(())).is_err());
     }

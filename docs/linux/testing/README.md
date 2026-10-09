@@ -61,3 +61,47 @@ Do not repeat the temporary startup-tracing FIFO approach. Chromium replaces tha
 path with a regular trace file rather than streaming into the pipe; those owned
 temporary traces were sanitized and removed. No raw browser trace is retained in
 app diagnostics or packaged artifacts.
+
+## Owned GNOME session
+
+`gnome_session.py` starts a headless GNOME Shell, a private session bus and a
+separate IBus daemon. All runtime sockets, preferences and application data stay
+under a new owned directory. It never uses `--replace`, changes the user's input
+sources or sends input to their desktop. Stop its supervisor with SIGTERM to
+clean up its process groups.
+
+In an Ubuntu guest with GNOME Shell, Python GI, IBus development headers and the
+normal Snippets development dependencies:
+
+```sh
+cargo build --locked --manifest-path snippets-linux/Cargo.toml \
+  --no-default-features --features desktop,ibus --bins
+python3 docs/linux/testing/gnome_session.py /tmp/snippets-gnome-owned
+# In another shell, while that supervisor is running:
+python3 docs/linux/testing/ibus_engine_smoke.py \
+  /tmp/snippets-gnome-owned snippets-linux/target/debug
+python3 docs/linux/testing/ibus_engine_smoke.py \
+  /tmp/snippets-gnome-owned snippets-linux/target/debug --gtk
+python3 docs/linux/testing/ibus_engine_smoke.py \
+  /tmp/snippets-gnome-owned snippets-linux/target/debug --chromium /path/to/chromium
+```
+
+The first check uses a real IBus client context and fictional library. It covers
+exact expansion, Enter/Tab selection, candidate publication, Compose/dead keys,
+level modifiers, private fields, reset, focus/content-type changes, consent
+revocation and application restart. Ubuntu's current Python
+GI/IBus bindings emit floating-object warnings in this protocol fixture; these
+are retained in its output. The native engine and GTK receiver do not use those
+Python IBus signal callbacks.
+
+`--gtk` sends a virtual keyboard through the owned Mutter RemoteDesktop session
+to actual GTK4 entries over Wayland. It asserts resulting text, password handling,
+cross-field cancellation and headless screen-shield cancellation. The headless
+shield has authentication disabled; it does not qualify an authenticated unlock.
+
+The Chromium receiver uses a fresh disposable profile, virtual keyboard events
+and ordered observations from a loopback page. It requires both the expected DOM
+value and the end of composition. `--chromium-ime gtk` tests the alternative GTK
+IBus client path; it must be reported separately from the default native Wayland
+path. Neither uses DevTools or inserts text through JavaScript. Browser failures
+are fatal, not skipped. See `../GNOME.md` for the current qualification gap.
