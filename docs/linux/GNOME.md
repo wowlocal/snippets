@@ -256,7 +256,8 @@ for other portal backends. See the [GNOME implementation](https://gitlab.gnome.o
 GNOME Shell 50. The app pins its companion calls to the issuing Shell's unique
 D-Bus owner. The companion admits only the connection owning the primary
 `com.khm.snippets.linux` application name; it has no arbitrary window selector,
-generic key-injection method, or clipboard reader.
+or generic key-injection method. A separate, bounded text reader supports
+explicit clipboard Capture and the inline `{clipboard}` placeholder.
 
 Capture produces a random, memory-only ticket for the active foreign window and
 current Mutter input focus. It binds the ticket to the calling application owner
@@ -321,3 +322,47 @@ The adapter therefore resolves `org.gnome.Shell`, calls its unique owner, checks
 ownership again after the reply and accepts signals only from that owner.
 See the [upstream implementation](https://github.com/GNOME/gnome-shell/blob/main/js/ui/shellDBus.js)
 and [interface definition](https://github.com/GNOME/gnome-shell/blob/main/data/dbus-interfaces/org.gnome.ScreenSaver.xml).
+
+
+## Explicit clipboard Capture and inline placeholders
+
+The GNOME adapter reads text through Mutter's public selection API, using
+`Meta.SelectionType.SELECTION_CLIPBOARD`. It never falls back to primary selection
+or reads an unknown selection type. Only the primary application's connection is
+admitted, and the Rust caller checks the Shell's unique owner before and after
+reading. A normal declared text focus is required. Password/private/unknown
+contexts and advertised sensitive, internal or file-selection MIME hints are
+refused before requesting bytes.
+
+Transfers are limited to 256 KiB plus one overflow-detection byte, one pending
+request, and 1.5 seconds in Shell (with a separate caller deadline). Invalid UTF-8,
+NUL, overflow and failed/cancelled transfers cannot become partial success.
+Selection replacement, window focus change, shield/sleep signals, owner loss and
+companion disable cancel pending reads. No clipboard content is cached, logged,
+written to disk by the reader, or written back to the clipboard. Explicit Capture
+creates an ordinary draft using the existing editor; `{clipboard}` supplies only
+the current explicitly requested expansion. Empty text is valid for a placeholder
+but cannot create an empty Capture draft. Portal window activation happens after
+acquisition so the app does not move focus during its own read.
+
+The installed Release passed actual GTK global Capture with exact multiline
+Unicode, sensitive-hint/password/oversize/empty refusal and unchanged clipboard,
+and GTK IBus expansion of `Before {clipboard} After`. Chromium passed physical
+Copy followed by the real Capture shortcut, producing an exact multiline Unicode
+draft; its native Wayland/snap-launcher limits remain as described above.
+A separate real Mutter
+protocol client with a native delayed GTK content provider passed cancellation
+on clipboard replacement, shield transition and companion disable. It claims
+only an unused primary name on the private lab bus; it does not substitute for
+the actual application UI check. No Shell Eval or user pointer is used.
+
+```sh
+python3 docs/linux/testing/gnome_clipboard_protocol.py LAB
+python3 docs/linux/testing/gnome_picker.py LAB PREFIX/share/snippets-linux --clipboard --chromium /path/to/chromium
+python3 docs/linux/testing/ibus_engine_smoke.py LAB PREFIX/share/snippets-linux --installed --gtk --clipboard
+```
+
+These explicit reads do not enable background history. GNOME background clipboard
+history remains unimplemented. MIME privacy markers depend on what the producing
+application advertises; unmarked secret text cannot be identified reliably.
+The native-focus contract and browser qualification limits above still apply.

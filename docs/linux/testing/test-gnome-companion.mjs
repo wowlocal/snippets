@@ -22,7 +22,14 @@ function fixture() {
     const inputManager = {inputSources: {}, currentSource: null};
     const inputSource = {type: 'ibus', id: 'snippets', activate() {inputManager.currentSource = this;}};
     const focus = {is_focused: () => true};
-    const display = signals({focus_window: null});
+    let formats = ['text/plain;charset=utf-8'], transfer, readCount = 0;
+    const selection = signals({get_mimetypes: type => {assert.equal(type, 1); return formats;},
+        transfer_async(type, mime, size, output, cancel, callback) {
+            assert.equal(type, 1); assert.ok(formats.includes(mime)); assert.equal(size, 256 * 1024 + 1);
+            readCount++; transfer = {output, cancel, callback};
+        }, transfer_finish() {return true;}});
+    const timers = new Map(); let nextTimer = 10;
+    const display = signals({focus_window: null, get_selection: () => selection});
     const stage = signals();
     const Main = {
         screenShield: signals({active: false}),
@@ -55,15 +62,17 @@ function fixture() {
         EVENT_PROPAGATE: false,
     };
     let sequence = 0, sleep;
-    const sandbox = {TextEncoder, Clutter, Main,
+    const sandbox = {TextEncoder, Clutter, Main, Meta: {SelectionType: {SELECTION_CLIPBOARD: 1}},
         Keyboard: {getInputSourceManager: () => inputManager},
         IBusManager: {getIBusManager: () => ({getEngineDesc: () => engine ? {} : null})},
         Shell: {ActionMode: {NORMAL: 1}}, Extension: class {},
         global: {display, stage, get_pointer: () => [0, 0, modifiers], get_current_time: () => 1},
         GLib: {Variant: class {constructor(_type, value) { this.value = value; }}, VariantType: class {},
             get_monotonic_time: () => time, uuid_string_random: () => `ticket-${++sequence}`,
-            timeout_add_seconds: () => 1, source_remove() {}, PRIORITY_DEFAULT: 0, SOURCE_CONTINUE: true},
-        Gio: {Settings: class {
+            timeout_add_seconds: () => 1, timeout_add(_priority, _duration, callback) {const id = nextTimer++; timers.set(id, callback); return id;}, source_remove(id) {timers.delete(id);}, PRIORITY_DEFAULT: 0, SOURCE_CONTINUE: true},
+        Gio: {Cancellable: class {cancel() {this.cancelled = true;} is_cancelled() {return !!this.cancelled;}},
+            MemoryOutputStream: {new_resizable: () => ({bytes: [], close() {}, get_data_size() {return this.bytes.length;}, steal_as_bytes() {return {get_data: () => this.bytes};}})},
+            Settings: class {
                 get_value() { return {deep_unpack: () => sources}; }
                 is_writable() {return writable;}
                 set_value(_key, value) {sources = value.value; inputManager.inputSources = {0: inputSource}; return true;}
@@ -85,6 +94,10 @@ function fixture() {
     const capture = () => invoke('Capture').value?.[0];
     const switchTo = w => { display.focus_window = w; display.emit('notify::focus-window'); };
     return {extension, invoke, capture, switchTo, target, panel, other, Main, Clutter, committed,
+        formats(value) {formats = value;}, readCount: () => readCount,
+        clipboard(bytes) {transfer.output.bytes = bytes; transfer.callback(selection, {});},
+        selectionChanged() {selection.emit('owner-changed', 1);},
+        timeout() {for (const [id, callback] of [...timers]) {timers.delete(id); callback();}},
         sources: () => sources, inputManager, noEngine() {engine = false;}, readOnly() {writable = false;},
         key(type = 1) {stage.emit('captured-event', {type: () => type});},
         advance(us) {time += us;}, modifiers(value) {modifiers = value;},
@@ -169,3 +182,36 @@ for (const change of [f => f.switchTo(f.other), f => f.ownerChanged(),
     assert.equal(f.inputManager.currentSource, null);
 }
 console.log('GNOME input setup: preserves sources, idempotent activation, owner/focus/lock and unavailable engine checks passed');
+
+{
+    const f = fixture();
+    assert.equal(f.invoke('ReadClipboard', [], ':1.666').error, 'com.khm.Snippets.Unavailable');
+    assert.equal(f.readCount(), 0);
+    const response = f.invoke('ReadClipboard');
+    assert.equal(f.invoke('ReadClipboard').value[0], false);
+    f.clipboard([80, 117, 98]);
+    assert.equal(response.value[0], true);
+    assert.deepEqual(response.value[1], [80, 117, 98]);
+}
+for (const format of ['application/x-keepassxc', 'x-kde-passwordmanagerhint',
+    'application/x-snippets-clipboard-history', 'text/uri-list', 'com.apple.is-sensitive', 'x'.repeat(257)]) {
+    const f = fixture(); f.formats(['text/plain', format]);
+    assert.equal(f.invoke('ReadClipboard').value[0], false);
+    assert.equal(f.readCount(), 0);
+}
+for (const cancel of [f => f.selectionChanged(), f => f.switchTo(f.other),
+    f => {f.switchTo(f.other); f.switchTo(f.target);}, f => f.ownerGone(),
+    f => f.sleep(), f => f.Main.screenShield.emit('active-changed'),
+    f => {f.extension.disable(); f.extension.enable();}, f => f.timeout(),
+    f => f.advance(1500000),
+    f => {f.Main.inputMethod.content_purpose = f.Clutter.InputContentPurpose.PASSWORD;}]) {
+    const f = fixture(), response = f.invoke('ReadClipboard'); cancel(f);
+    f.clipboard([80]); assert.equal(response.value[0], false); assert.equal(response.value[1].length, 0);
+}
+{
+    const f = fixture(), response = f.invoke('ReadClipboard');
+    f.clipboard(new Uint8Array(256 * 1024 + 1)); assert.equal(response.value[0], false);
+    const g = fixture(); g.Main.inputMethod.content_purpose = g.Clutter.InputContentPurpose.PASSWORD;
+    assert.equal(g.invoke('ReadClipboard').value[0], false); assert.equal(g.readCount(), 0);
+}
+console.log('GNOME clipboard: primary-only, bounded transfer, sensitive formats, single read and lifecycle cancellation passed');

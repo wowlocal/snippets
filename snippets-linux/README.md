@@ -14,7 +14,8 @@ The experimental IBus path now passes owned GTK4 and Chromium Wayland expansion
 checks. An experimental GlobalShortcuts portal adapter opens the app and picker
 through real GNOME bindings and recovers after a portal frontend crash.
 **Full GNOME support is not qualified:** popup presentation, a complete fresh-login
-check and clipboard capture remain outstanding. Settings now offers explicit
+check and background clipboard history remain outstanding. Explicit Capture
+and the IBus `{clipboard}` placeholder now use the companion. Settings now offers explicit
 GNOME preparation and input-source activation. An experimental Shell companion
 now passes ordinary picker insertion in owned GTK4 and Chromium native Wayland
 receivers; broader client coverage is still incomplete. The existing

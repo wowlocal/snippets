@@ -284,6 +284,9 @@ fn clipboard(guard: &dyn Fn() -> Result<()>) -> Result<Zeroizing<String>> {
             Ok(())
         }
     };
+    if crate::desktop::environment() == crate::desktop::Environment::Gnome {
+        return crate::gnome_clipboard::read(&checked);
+    }
     let mut reader = crate::clipboard_history::wayland::Reader::open(&checked)?;
     if !crate::desktop::wayland_peer_matches(reader.peer_process()) {
         return Err(CLIPBOARD);

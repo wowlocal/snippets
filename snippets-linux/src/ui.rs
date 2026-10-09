@@ -316,10 +316,7 @@ impl App {
                         crate::global_shortcuts::Action::Capture
                             if app.application.is_action_enabled("capture") =>
                         {
-                            if let Some(token) = token.as_deref() {
-                                app.main().window.set_startup_id(token);
-                            }
-                            app.capture()
+                            app.capture_with_activation(token)
                         }
                         _ => (),
                     }
@@ -764,6 +761,9 @@ impl App {
         self.toast("Copied. The original window could not receive the paste.");
     }
     fn capture(self: &Rc<Self>) {
+        self.capture_with_activation(None);
+    }
+    fn capture_with_activation(self: &Rc<Self>, token: Option<String>) {
         if !self.ensure_library() {
             return;
         }
@@ -773,6 +773,11 @@ impl App {
             let result = gio::spawn_blocking(crate::clipboard_history::wayland::capture_text).await;
             if app.is_quitting() || app.library.borrow().root != root || !app.ensure_library() {
                 return;
+            }
+            // Applying a portal activation token may move focus. Acquire the
+            // original clipboard first, then activate the destination editor.
+            if let Some(token) = token.as_deref() {
+                app.main().window.set_startup_id(token);
             }
             match result {
                 Ok(Ok(text)) => {

@@ -15,6 +15,7 @@ def main():
     parser.add_argument('lab', type=Path)
     parser.add_argument('binaries', type=Path)
     parser.add_argument('--chromium', type=Path)
+    parser.add_argument('--clipboard', action='store_true')
     args = parser.parse_args()
     root = args.lab.absolute()
     lab = json.loads((root / 'environment.json').read_text())
@@ -154,7 +155,7 @@ def main():
             settle(0.4)
             wait(window.is_active, 'receiver never gained focus before picker')
             try:
-                for method, parameters in [('Capture', None),
+                for method, parameters in [('Capture', None), ('ReadClipboard', None),
                         ('Focus', GLib.Variant('(s)', ('public-invalid-ticket',))),
                         ('Commit', GLib.Variant('(ss)', ('public-invalid-ticket', 'Public rejected text')))]:
                     try:
@@ -233,11 +234,18 @@ def main():
                 settle(0.4)
                 assert plain.get_text() == ''
                 print('GTK picker: screen-shield cycle cancels pending insertion', flush=True)
+                if args.clipboard:
+                    chord(1)
+                    settle(2)  # Respect the post-shield session revocation interval.
+                    from gnome_clipboard import run as clipboard_test
+                    clipboard_test(Gtk, Gdk, GObject, GLib, pyatspi, window, plain, password, settle, wait, chord)
                 if args.chromium:
                     chord(1)
                     window.destroy()
                     window = None
                     settle(0.2)
+                    if args.clipboard:
+                        chord(125, 35)  # Minimize the library left by the GTK Capture check.
                     body = 'Первая строка\nSecond line — ✓'
                     result = subprocess.run([str(installed / 'snippets-cli'), 'add', '--name', 'Public Unicode picker',
                                              '--keyword', 'unicodefixture', '--content', body, '--enabled'],
@@ -253,7 +261,11 @@ def main():
                         settle(0.3)
                         assert 'Public Unicode picker' in {node.name for node in descendants(picker())}
                     from gnome_picker_browser import run
-                    run(args.chromium, root, settle, wait, unicode_picker, chord, picker, body)
+                    capture_browser = None
+                    if args.clipboard:
+                        from gnome_clipboard import capture_browser as capture_test
+                        capture_browser = lambda text: capture_test(pyatspi, settle, wait, chord, text)
+                    run(args.chromium, root, settle, wait, unicode_picker, chord, picker, body, capture_browser)
             finally:
                 subprocess.run([str(installed / 'snippets'), '--quit'], env=env,
                                stdout=log, stderr=log, timeout=10, check=True)

@@ -26,7 +26,10 @@ def main():
     parser.add_argument("--chromium-ime", choices=("wayland", "gtk"), default="wayland")
     parser.add_argument("--installed", action="store_true", help="use binaries at their installed location")
     parser.add_argument("--restart-ibus", action="store_true", help="GTK: restart only the owned lab input daemon")
+    parser.add_argument("--clipboard", action="store_true", help="GTK: check clipboard placeholder through the enabled companion")
     args = parser.parse_args()
+    if args.clipboard and not args.gtk:
+        parser.error("--clipboard requires --gtk")
     if args.restart_ibus and not args.gtk:
         parser.error("--restart-ibus requires --gtk")
     lab = json.loads((args.lab / "environment.json").read_text())
@@ -119,7 +122,7 @@ def main():
                                  bus.get_global_engine().get_name() == "snippets")
                         finally:
                             bus.disconnect(signal)
-                    gtk_smoke(settle, wait, cli, restart_ibus if args.restart_ibus else None)
+                    gtk_smoke(settle, wait, cli, restart_ibus if args.restart_ibus else None, args.clipboard)
                 subprocess.run([str(installed / "snippets"), "--quit"], env=env, check=True, timeout=8)
                 gui.wait(timeout=8)
                 return
@@ -257,14 +260,14 @@ def main():
                 engine_link.unlink()
 
 
-def gtk_smoke(settle, wait, cli, restart_ibus=None):
+def gtk_smoke(settle, wait, cli, restart_ibus=None, check_clipboard=False):
     # The caller has checked both private runtime and IBus addresses before any
     # GTK or D-Bus connection is opened. No real desktop input is reachable here.
     os.environ["GTK_IM_MODULE"] = "wayland"
     os.environ["GDK_BACKEND"] = "wayland"
     import gi
     gi.require_version("Gtk", "4.0")
-    from gi.repository import Gio, GLib, Gtk, IBus
+    from gi.repository import Gio, GLib, Gtk, IBus, Gdk, GObject
     connection = Gio.bus_get_sync(Gio.BusType.SESSION)
     destination = "org.gnome.Mutter.RemoteDesktop"
     path = connection.call_sync(destination, "/org/gnome/Mutter/RemoteDesktop", destination,
@@ -313,6 +316,17 @@ def gtk_smoke(settle, wait, cli, restart_ibus=None):
             print("GTK fixture state:", repr(entry.get_text()), window.is_active(),
                   cli("expansion", "status"), flush=True)
             raise
+        if check_clipboard:
+            cli("add", "--name", "Public clipboard placeholder", "--keyword", "clipfixture",
+                "--content", "Before {clipboard} After", "--enabled")
+            clipboard = window.get_display().get_clipboard()
+            assert clipboard.set_content(Gdk.ContentProvider.new_for_value(
+                GObject.Value(GObject.TYPE_STRING, "Public clipboard ✓")))
+            entry.set_text("")
+            settle(0.3)
+            type_text("\\clipfixture")
+            wait(lambda: entry.get_text() == "Before Public clipboard ✓ After")
+            print("GTK IBus: clipboard placeholder reads exact text through companion", flush=True)
         password.grab_focus()
         settle()
         type_text("\\gnometest")

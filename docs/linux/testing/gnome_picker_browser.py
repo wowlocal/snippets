@@ -9,7 +9,7 @@ from browser_fixture import State, server
 from gnome_browser import HTML
 
 
-def run(binary, lab, settle, wait, open_picker, chord, picker, body):
+def run(binary, lab, settle, wait, open_picker, chord, picker, body, capture=None):
     root = Path(lab).absolute()
     assert os.environ['XDG_RUNTIME_DIR'] == str(root / 'runtime')
     state = State()
@@ -44,6 +44,8 @@ def run(binary, lab, settle, wait, open_picker, chord, picker, body):
             wait(lambda: state.observation().get('first') and not state.observation().get('composing', True),
                  'picker did not commit exact text into Chromium')
             print('Chromium picker: exact multiline Unicode DOM text with composition finished', flush=True)
+            if capture:
+                capture(body)
             advance()
             open_picker(False)
             chord(28)

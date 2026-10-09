@@ -58,6 +58,14 @@ pub(crate) fn capture_text() -> Result<Zeroizing<String>> {
         }
         deadline.validate()
     };
+    if crate::desktop::environment() == crate::desktop::Environment::Gnome {
+        let text = crate::gnome_clipboard::read(&guard)?;
+        return if accepts(&text) {
+            Ok(text)
+        } else {
+            Err(CANCELLED)
+        };
+    }
     let mut reader = Reader::open(&guard)?;
     if !crate::desktop::wayland_peer_matches(reader.peer_process()) {
         return Err(CANCELLED);

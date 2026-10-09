@@ -2,6 +2,7 @@ import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
+import Meta from 'gi://Meta';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Keyboard from 'resource:///org/gnome/shell/ui/status/keyboard.js';
@@ -10,6 +11,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 const APP = 'com.khm.snippets.linux';
 const PATH = '/com/khm/Snippets/Gnome';
 const XML = `<node><interface name="com.khm.Snippets.Gnome1">
+<method name="ReadClipboard"><arg type="b" direction="out"/><arg type="ay" direction="out"/></method>
 <method name="EnableInput"><arg type="b" direction="out"/></method>
 <method name="Capture"><arg type="s" direction="out"/><arg type="s" direction="out"/></method>
 <method name="Check"><arg type="s" direction="in"/><arg type="b" direction="out"/><arg type="b" direction="out"/></method>
@@ -39,6 +41,7 @@ function ordinaryFocus() {
 export default class SnippetsExtension extends Extension {
     enable() {
         this._tickets = new Map();
+        this._clipboardRead = null;
         this._owner = null;
         // Keep epochs monotonic across disable/enable on the same extension.
         this._generation = (this._generation ?? 0) + 1;
@@ -46,7 +49,8 @@ export default class SnippetsExtension extends Extension {
         this._exported = Gio.DBusExportedObject.wrapJSObject(XML, this);
         this._exported.export(Gio.DBus.session, PATH);
         // Only the primary GTK application connection may issue commands. There
-        // is no arbitrary window selector or generic input/clipboard endpoint.
+        // is no arbitrary window selector or key injection. Clipboard reads
+        // are explicit, bounded text-only requests.
         this._watch = Gio.bus_watch_name(Gio.BusType.SESSION, APP,
             Gio.BusNameWatcherFlags.NONE,
             (_connection, _name, owner) => {
@@ -58,6 +62,10 @@ export default class SnippetsExtension extends Extension {
                 this._owner = null;
                 this._generation++;
             });
+        this._selectionSignal = global.display.get_selection().connect('owner-changed', (_selection, type) => {
+            if (type === Meta.SelectionType.SELECTION_CLIPBOARD)
+                this._clipboardRead?.cancel();
+        });
         this._focusSignal = global.display.connect('notify::focus-window', () => this._focusChanged());
         this._lockSignal = Main.screenShield.connect('active-changed', () => this._cancelOperations());
         this._modeSignal = Main.sessionMode.connect('updated', () => this._cancelOperations());
@@ -93,6 +101,9 @@ export default class SnippetsExtension extends Extension {
             GLib.source_remove(this._timer);
         if (this._watch)
             Gio.bus_unwatch_name(this._watch);
+        if (this._selectionSignal)
+            global.display.get_selection().disconnect(this._selectionSignal);
+        this._selectionSignal = 0;
         if (this._focusSignal)
             global.display.disconnect(this._focusSignal);
         if (this._lockSignal)
@@ -112,6 +123,7 @@ export default class SnippetsExtension extends Extension {
 
     _cancelOperations() {
         this._tickets?.clear();
+        this._clipboardRead?.cancel();
         this._setupGeneration++;
     }
 
@@ -150,6 +162,7 @@ export default class SnippetsExtension extends Extension {
     }
 
     _focusChanged() {
+        this._clipboardRead?.cancel();
         this._setupGeneration++;
         const window = global.display.focus_window;
         for (const [id, ticket] of this._tickets) {
@@ -163,6 +176,79 @@ export default class SnippetsExtension extends Extension {
             } else if (window !== null) {
                 this._tickets.delete(id);
             }
+        }
+    }
+
+    ReadClipboardAsync(_parameters, invocation) {
+        if (!this._caller(invocation))
+            return;
+        const rejected = () => invocation.return_value(new GLib.Variant('(bay)', [false, []]));
+        const focus = ordinaryFocus();
+        const window = global.display.focus_window;
+        if (!Number.isInteger(Meta.SelectionType.SELECTION_CLIPBOARD) || this._clipboardRead || !focus || !window) {
+            rejected();
+            return;
+        }
+        const selection = global.display.get_selection();
+        const formats = selection.get_mimetypes(Meta.SelectionType.SELECTION_CLIPBOARD) ?? [];
+        // Same advertised-hint policy as native clipboard history. Inspect
+        // metadata before requesting bytes; never cache clipboard contents.
+        const forbidden = ['x-kde-passwordmanagerhint', 'application/x-kde-passwordmanagerhint',
+            'application/x-keepassxc', 'application/x-snippets-clipboard-history', 'text/uri-list',
+            'org.nspasteboard.concealedtype', 'org.nspasteboard.transienttype',
+            'org.nspasteboard.autogeneratedtype', 'org.nspasteboard.sensitivetype', 'com.apple.is-sensitive'];
+        const mime = ['text/plain;charset=utf-8', 'text/plain'].map(wanted =>
+            formats.find(value => value.toLowerCase() === wanted)).find(Boolean);
+        if (!mime || formats.length > 256 || formats.some(value => value.length > 256 || forbidden.includes(value.toLowerCase()))) {
+            rejected();
+            return;
+        }
+        const owner = this._owner;
+        const generation = this._generation;
+        const setupGeneration = this._setupGeneration;
+        const created = GLib.get_monotonic_time();
+        const cancel = new Gio.Cancellable();
+        this._clipboardRead = cancel;
+        const output = Gio.MemoryOutputStream.new_resizable();
+        let timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+            timer = 0;
+            cancel.cancel();
+            return GLib.SOURCE_REMOVE;
+        });
+        const complete = (selection, result) => {
+            let bytes = [];
+            let ok = false;
+            try {
+                if (result === null)
+                    throw new Error('unavailable');
+                selection.transfer_finish(result);
+                output.close(null);
+                const now = GLib.get_monotonic_time();
+                if (cancel.is_cancelled() || !this._ready() || this._owner !== owner ||
+                    this._generation !== generation || this._setupGeneration !== setupGeneration ||
+                    global.display.focus_window !== window || ordinaryFocus() !== focus ||
+                    now < created || now - created >= 1500000 || output.get_data_size() > 256 * 1024)
+                    throw new Error('unavailable');
+                bytes = output.steal_as_bytes().get_data();
+                ok = true;
+            } catch {
+                // A cancelled, replaced, private, oversized or slow offer
+                // never returns a prefix as successful clipboard text.
+            } finally {
+                if (timer)
+                    GLib.source_remove(timer);
+                if (this._clipboardRead === cancel)
+                    this._clipboardRead = null;
+                try { output.close(null); } catch {}
+            }
+            invocation.return_value(new GLib.Variant('(bay)', [ok, bytes]));
+        };
+        try {
+            selection.transfer_async(Meta.SelectionType.SELECTION_CLIPBOARD, mime, 256 * 1024 + 1,
+                output, cancel, complete);
+        } catch {
+            cancel.cancel();
+            complete(selection, null);
         }
     }
 
