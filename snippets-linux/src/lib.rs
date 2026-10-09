@@ -26,6 +26,8 @@ pub mod diagnostics;
 mod diagnostics_service;
 pub mod editor_assistance;
 pub mod global_shortcuts;
+#[cfg(feature = "ibus")]
+mod gnome_setup;
 pub mod inbound;
 #[cfg(any(test, feature = "desktop"))]
 pub mod inline_expansion;

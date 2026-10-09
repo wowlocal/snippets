@@ -191,5 +191,5 @@ if [[ $TASK_DESKTOP == hyprland ]]; then
   echo 'Restart Fcitx once after installation to load the Snippets addon. Expansion remains opt-in in Snippets Settings.'
 else
   echo 'Experimental GNOME components installed. Desktop preferences and input sources were preserved.'
-  echo 'IBus registration and Shell companion activation are separate steps; see docs/linux/GNOME.md.'
+  echo 'Open Settings → GNOME Integration to prepare setup, sign out and back in, then enable integration. See docs/linux/GNOME.md.'
 fi

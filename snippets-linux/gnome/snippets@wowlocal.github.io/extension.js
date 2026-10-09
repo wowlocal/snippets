@@ -4,10 +4,13 @@ import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as Keyboard from 'resource:///org/gnome/shell/ui/status/keyboard.js';
+import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 
 const APP = 'com.khm.snippets.linux';
 const PATH = '/com/khm/Snippets/Gnome';
 const XML = `<node><interface name="com.khm.Snippets.Gnome1">
+<method name="EnableInput"><arg type="b" direction="out"/></method>
 <method name="Capture"><arg type="s" direction="out"/><arg type="s" direction="out"/></method>
 <method name="Check"><arg type="s" direction="in"/><arg type="b" direction="out"/><arg type="b" direction="out"/></method>
 <method name="Focus"><arg type="s" direction="in"/><arg type="b" direction="out"/></method>
@@ -37,7 +40,9 @@ export default class SnippetsExtension extends Extension {
     enable() {
         this._tickets = new Map();
         this._owner = null;
-        this._generation = 0;
+        // Keep epochs monotonic across disable/enable on the same extension.
+        this._generation = (this._generation ?? 0) + 1;
+        this._setupGeneration = (this._setupGeneration ?? 0) + 1;
         this._exported = Gio.DBusExportedObject.wrapJSObject(XML, this);
         this._exported.export(Gio.DBus.session, PATH);
         // Only the primary GTK application connection may issue commands. There
@@ -45,21 +50,21 @@ export default class SnippetsExtension extends Extension {
         this._watch = Gio.bus_watch_name(Gio.BusType.SESSION, APP,
             Gio.BusNameWatcherFlags.NONE,
             (_connection, _name, owner) => {
-                this._tickets.clear();
+                this._cancelOperations();
                 this._owner = owner;
                 this._generation++;
             }, () => {
-                this._tickets.clear();
+                this._cancelOperations();
                 this._owner = null;
                 this._generation++;
             });
         this._focusSignal = global.display.connect('notify::focus-window', () => this._focusChanged());
-        this._lockSignal = Main.screenShield.connect('active-changed', () => this._tickets.clear());
-        this._modeSignal = Main.sessionMode.connect('updated', () => this._tickets.clear());
-        this._overviewSignal = Main.overview.connect('showing', () => this._tickets.clear());
+        this._lockSignal = Main.screenShield.connect('active-changed', () => this._cancelOperations());
+        this._modeSignal = Main.sessionMode.connect('updated', () => this._cancelOperations());
+        this._overviewSignal = Main.overview.connect('showing', () => this._cancelOperations());
         this._sleepSignal = Gio.DBus.system.signal_subscribe('org.freedesktop.login1',
             'org.freedesktop.login1.Manager', 'PrepareForSleep', '/org/freedesktop/login1',
-            null, Gio.DBusSignalFlags.NONE, () => this._tickets.clear());
+            null, Gio.DBusSignalFlags.NONE, () => this._cancelOperations());
         this._inputSignal = global.stage.connect('captured-event', (_stage, event) => {
             const type = event.type();
             if ([Clutter.EventType.KEY_PRESS, Clutter.EventType.BUTTON_PRESS,
@@ -81,7 +86,7 @@ export default class SnippetsExtension extends Extension {
     }
 
     disable() {
-        this._tickets?.clear();
+        this._cancelOperations();
         this._generation++;
         this._owner = null;
         if (this._timer)
@@ -103,6 +108,11 @@ export default class SnippetsExtension extends Extension {
         this._exported?.unexport();
         this._exported = null;
         this._timer = this._watch = this._focusSignal = this._lockSignal = this._modeSignal = this._inputSignal = this._overviewSignal = this._sleepSignal = 0;
+    }
+
+    _cancelOperations() {
+        this._tickets?.clear();
+        this._setupGeneration++;
     }
 
     _ready() {
@@ -140,6 +150,7 @@ export default class SnippetsExtension extends Extension {
     }
 
     _focusChanged() {
+        this._setupGeneration++;
         const window = global.display.focus_window;
         for (const [id, ticket] of this._tickets) {
             if (!this._valid(ticket)) {
@@ -153,6 +164,48 @@ export default class SnippetsExtension extends Extension {
                 this._tickets.delete(id);
             }
         }
+    }
+
+    EnableInputAsync(_parameters, invocation) {
+        if (!this._caller(invocation))
+            return;
+        const owner = this._owner;
+        const generation = this._generation;
+        const setupGeneration = this._setupGeneration;
+        const window = global.display.focus_window;
+        // Setup is only accepted while the primary application's own window
+        // has focus. A delayed PID reply must not apply after focus/owner loss.
+        Gio.DBus.session.call('org.freedesktop.DBus', '/org/freedesktop/DBus',
+            'org.freedesktop.DBus', 'GetConnectionUnixProcessID',
+            new GLib.Variant('(s)', [owner]), new GLib.VariantType('(u)'),
+            Gio.DBusCallFlags.NO_AUTO_START, 1000, null, (connection, result) => {
+                let ok = false;
+                try {
+                    const [pid] = connection.call_finish(result).deep_unpack();
+                    if (!this._ready() || owner !== this._owner || generation !== this._generation ||
+                        this._setupGeneration !== setupGeneration || global.display.focus_window !== window || !pid || !this._appWindow(window, pid) ||
+                        !IBusManager.getIBusManager().getEngineDesc('snippets'))
+                        throw new Error('unavailable');
+                    const settings = new Gio.Settings({schema_id: 'org.gnome.desktop.input-sources'});
+                    const sources = settings.get_value('sources').deep_unpack();
+                    if (!sources.some(([type, id]) => type === 'ibus' && id === 'snippets')) {
+                        if (!settings.is_writable('sources') || sources.length >= 64 ||
+                            !settings.set_value('sources', new GLib.Variant('a(ss)', [...sources, ['ibus', 'snippets']])))
+                            throw new Error('unavailable');
+                    }
+                    const manager = Keyboard.getInputSourceManager();
+                    const source = Object.values(manager.inputSources).find(s => s.type === 'ibus' && s.id === 'snippets');
+                    // GSettings changes can arrive on the next main-loop tick.
+                    // The caller may retry; no delayed Shell mutation is queued.
+                    if (source) {
+                        source.activate(true);
+                        ok = manager.currentSource === source;
+                    }
+                } catch {
+                    // Keep other sources and report the actual activation state.
+                }
+                invocation.return_value(new GLib.Variant('(b)', [ok]));
+            });
     }
 
     CaptureAsync(_parameters, invocation) {
@@ -178,7 +231,7 @@ export default class SnippetsExtension extends Extension {
                     const label = window.get_wm_class() ?? '';
                     if (label.length > 256 || /[\x00-\x1f\x7f]/.test(label))
                         throw new Error('unavailable');
-                    this._tickets.clear(); // At most one pending selection per primary application.
+                    this._cancelOperations(); // At most one pending selection per primary application.
                     const id = GLib.uuid_string_random();
                     this._tickets.set(id, {window, focus, pid, owner, generation,
                         created: GLib.get_monotonic_time(), phase: 'captured'});

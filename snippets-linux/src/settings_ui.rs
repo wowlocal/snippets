@@ -19,6 +19,8 @@ pub(super) struct Settings {
     loading: Cell<bool>,
     quitting: Cell<bool>,
     diagnostics: Rc<diagnostic_controls::Controls>,
+    #[cfg(feature = "ibus")]
+    gnome: Option<(adw::ActionRow, gtk::Button, gtk::Button)>,
 }
 type SettingsLink = (&'static str, &'static str, &'static str);
 type SettingsPage = (&'static str, &'static str, &'static [SettingsLink]);
@@ -188,6 +190,33 @@ impl Settings {
             page.add(&group);
             window.add(&page);
         }
+        #[cfg(feature = "ibus")]
+        let gnome = if desktop::environment() == desktop::Environment::Gnome {
+            let page = adw::PreferencesPage::builder()
+                .title("GNOME Integration")
+                .icon_name("input-keyboard-symbolic")
+                .build();
+            let group = adw::PreferencesGroup::builder().title("Input and Picker Integration")
+                .description("1. Prepare integration for this installation. 2. Sign out and back in. 3. Enable the companion and Snippets input source. Your existing input sources are preserved.").build();
+            let status = adw::ActionRow::builder().use_markup(false).title("Setup")
+                .subtitle("Preparation adds a user IBus configuration and installs the Snippets Shell companion. It does not restart input or enable expansion.").build();
+            group.add(&status);
+            let prepare = gtk::Button::with_label("Prepare Integration");
+            let activate = gtk::Button::with_label("Enable Integration");
+            for button in [&prepare, &activate] {
+                let row = adw::ActionRow::new();
+                row.set_title(button.label().as_deref().unwrap_or_default());
+                button.set_valign(gtk::Align::Center);
+                row.add_suffix(button);
+                row.set_activatable_widget(Some(button));
+                group.add(&row);
+            }
+            page.add(&group);
+            window.add(&page);
+            Some((status, prepare, activate))
+        } else {
+            None
+        };
         let diagnostics = diagnostic_controls::Controls::new(&window, diagnostics);
         window.add(&diagnostics.page);
         let this = Rc::new(Self {
@@ -207,6 +236,8 @@ impl Settings {
             loading: Cell::new(false),
             quitting: Cell::new(false),
             diagnostics,
+            #[cfg(feature = "ibus")]
+            gnome,
         });
         let weak = Rc::downgrade(&this);
         this.startup.connect_active_notify(move |row| {
@@ -234,6 +265,17 @@ impl Settings {
                 })
             }
         });
+        #[cfg(feature = "ibus")]
+        if let Some((_, prepare, activate)) = &this.gnome {
+            for (button, activating) in [(prepare, false), (activate, true)] {
+                let weak = Rc::downgrade(&this);
+                button.connect_clicked(move |_| {
+                    if let Some(this) = weak.upgrade() {
+                        this.setup_gnome(activating);
+                    }
+                });
+            }
+        }
         this.refresh();
         this
     }
@@ -274,6 +316,12 @@ impl Settings {
     }
     fn refresh(&self) {
         self.window.set_sensitive(!self.quitting.get());
+        #[cfg(feature = "ibus")]
+        if let Some((_, prepare, activate)) = &self.gnome {
+            for button in [prepare, activate] {
+                button.set_sensitive(!self.busy.get() && !self.quitting.get());
+            }
+        }
         self.loading.set(true);
         let snapshot = self.snapshot.borrow();
         self.startup
@@ -309,6 +357,41 @@ impl Settings {
             "Settings are local to this device."
         });
         self.loading.set(false);
+    }
+    #[cfg(feature = "ibus")]
+    fn setup_gnome(self: &Rc<Self>, activating: bool) {
+        if self.quitting.get() || self.busy.replace(true) {
+            return;
+        }
+        if let Some((status, _, _)) = &self.gnome {
+            status.set_subtitle(if activating {
+                "Enabling integration…"
+            } else {
+                "Preparing integration…"
+            });
+        }
+        self.refresh();
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(move || {
+                if activating {
+                    crate::gnome_setup::activate()
+                } else {
+                    crate::gnome_setup::prepare()
+                }
+            })
+            .await
+            .unwrap_or(Err(Error("GNOME setup could not finish. Try again.")));
+            if let Some((status, _, _)) = &this.gnome {
+                status.set_subtitle(match result {
+                    Ok(()) if activating => "Snippets input is selected and the companion is enabled. Enable Inline Expansion separately in Input & Clipboard.",
+                    Ok(()) => "Integration is prepared. Sign out and back in, then return here and choose Enable Integration.",
+                    Err(error) => error.0,
+                });
+            }
+            this.busy.set(false);
+            this.refresh();
+        });
     }
     fn set_login(self: &Rc<Self>, enabled: bool) {
         if self.quitting.get() || self.busy.replace(true) {

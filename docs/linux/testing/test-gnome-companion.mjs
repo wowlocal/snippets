@@ -18,6 +18,9 @@ function signals(extra = {}) {
 function fixture() {
     let time = 1000000, modifiers = 0, appeared, vanished, pending, defer = false;
     const committed = [];
+    let sources = [['xkb', 'us'], ['xkb', 'ru']], engine = true, writable = true;
+    const inputManager = {inputSources: {}, currentSource: null};
+    const inputSource = {type: 'ibus', id: 'snippets', activate() {inputManager.currentSource = this;}};
     const focus = {is_focused: () => true};
     const display = signals({focus_window: null});
     const stage = signals();
@@ -52,12 +55,19 @@ function fixture() {
         EVENT_PROPAGATE: false,
     };
     let sequence = 0, sleep;
-    const sandbox = {TextEncoder, Clutter, Main, Shell: {ActionMode: {NORMAL: 1}}, Extension: class {},
+    const sandbox = {TextEncoder, Clutter, Main,
+        Keyboard: {getInputSourceManager: () => inputManager},
+        IBusManager: {getIBusManager: () => ({getEngineDesc: () => engine ? {} : null})},
+        Shell: {ActionMode: {NORMAL: 1}}, Extension: class {},
         global: {display, stage, get_pointer: () => [0, 0, modifiers], get_current_time: () => 1},
         GLib: {Variant: class {constructor(_type, value) { this.value = value; }}, VariantType: class {},
             get_monotonic_time: () => time, uuid_string_random: () => `ticket-${++sequence}`,
             timeout_add_seconds: () => 1, source_remove() {}, PRIORITY_DEFAULT: 0, SOURCE_CONTINUE: true},
-        Gio: {DBus: {session: connection, system: {signal_subscribe(...args) {sleep = args.at(-1); return 1;}, signal_unsubscribe() {}}},
+        Gio: {Settings: class {
+                get_value() { return {deep_unpack: () => sources}; }
+                is_writable() {return writable;}
+                set_value(_key, value) {sources = value.value; inputManager.inputSources = {0: inputSource}; return true;}
+            }, DBus: {session: connection, system: {signal_subscribe(...args) {sleep = args.at(-1); return 1;}, signal_unsubscribe() {}}},
             DBusExportedObject: {wrapJSObject: () => ({export() {}, unexport() {}})},
             BusType: {SESSION: 0}, BusNameWatcherFlags: {NONE: 0}, DBusCallFlags: {NO_AUTO_START: 0}, DBusSignalFlags: {NONE: 0},
             bus_watch_name(_type, _name, _flags, on, off) {appeared = on; vanished = off; on(null, null, ':1.42'); return 1;},
@@ -75,6 +85,7 @@ function fixture() {
     const capture = () => invoke('Capture').value?.[0];
     const switchTo = w => { display.focus_window = w; display.emit('notify::focus-window'); };
     return {extension, invoke, capture, switchTo, target, panel, other, Main, Clutter, committed,
+        sources: () => sources, inputManager, noEngine() {engine = false;}, readOnly() {writable = false;},
         key(type = 1) {stage.emit('captured-event', {type: () => type});},
         advance(us) {time += us;}, modifiers(value) {modifiers = value;},
         ownerGone() {vanished();}, ownerChanged() {appeared(null, null, ':1.99');}, sleep() {sleep();},
@@ -115,7 +126,8 @@ for (const modify of [
     modify(g); assert.equal(g.invoke('Commit', [ticket, 'Rejected']).value[0], false);
     assert.equal(g.committed.length, 0);
 }
-for (const change of [f => f.switchTo(f.other), f => f.ownerChanged(), f => f.extension.disable()]) {
+for (const change of [f => f.switchTo(f.other), f => f.ownerChanged(), f => f.extension.disable(),
+    f => {f.extension.disable(); f.extension.enable();}]) {
     const f = fixture(); f.defer(); const response = f.invoke('Capture'); change(f); f.finish();
     assert.equal(response.value[0], '');
 }
@@ -133,3 +145,27 @@ for (const modifier of [4, 8, 64, 128]) {
     assert.equal(f.invoke('Commit', [ticket, 'Interrupted']).value[0], false);
 }
 console.log('GNOME companion policy: identity, single use, focus, privacy, lock/sleep, restart and payload bounds passed');
+
+{
+    const f = fixture();
+    assert.equal(f.invoke('EnableInput', [], ':1.666').error, 'com.khm.Snippets.Unavailable');
+    assert.equal(f.invoke('EnableInput').value[0], false); // Another app has focus.
+    f.switchTo(f.panel);
+    assert.equal(f.invoke('EnableInput').value[0], true);
+    assert.deepEqual(JSON.parse(JSON.stringify(f.sources())), [['xkb', 'us'], ['xkb', 'ru'], ['ibus', 'snippets']]);
+    assert.equal(f.inputManager.currentSource.id, 'snippets');
+    assert.equal(f.invoke('EnableInput').value[0], true);
+    assert.equal(f.sources().length, 3);
+}
+for (const change of [f => f.switchTo(f.other), f => f.ownerChanged(),
+    f => f.extension.disable(), f => {f.extension.disable(); f.extension.enable();}, f => f.noEngine(), f => f.readOnly(),
+    f => {f.Main.screenShield.active = true;}, f => f.sleep(),
+    f => {f.switchTo(f.other); f.switchTo(f.panel);},
+    f => {f.Main.screenShield.emit('active-changed');}]) {
+    const f = fixture(); f.switchTo(f.panel); f.defer();
+    const response = f.invoke('EnableInput'); change(f); f.finish();
+    assert.equal(response.value[0], false);
+    assert.equal(f.sources().length, 2);
+    assert.equal(f.inputManager.currentSource, null);
+}
+console.log('GNOME input setup: preserves sources, idempotent activation, owner/focus/lock and unavailable engine checks passed');

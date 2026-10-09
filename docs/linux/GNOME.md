@@ -6,7 +6,8 @@ The first GNOME milestone targets stock Ubuntu GNOME on Wayland, preserving its
 IBus input system. It shares the GTK application and library with the Hyprland
 build. It does not replace input methods or enable Shell Eval. An experimental
 Shell companion now supplies ordinary picker insertion. The installer stages
-the components; activation/onboarding is still a separate, unfinished step.
+the components; Settings now offers explicit per-user preparation and activation.
+A complete fresh-login test remains outstanding.
 
 Implemented:
 
@@ -66,20 +67,49 @@ Installed GNOME files include `share/snippets-linux/snippets-ibus`,
 desktop actions contain the actual absolute installation path. Reinstallation
 preserves library data, opt-in preferences and desktop/input configuration.
 
-**Activation is not yet automated.** Stock IBus reads its compiled system
-component directory, not `~/.local/share/ibus/component`; merely installing the
-XML in a user prefix does not register the engine. Its `IBUS_COMPONENT_PATH`
-override replaces the search list, so any eventual per-user service setup must
-retain the system component directory and existing custom directories. See the
-[IBus registry implementation](https://github.com/ibus/ibus/blob/main/src/ibusregistry.c).
-The owned test session supplies this path only to its separate daemon. Do not
-copy user-owned executable references into a machine-wide registry or replace
-the running user's input daemon to reproduce the test.
+Open **Settings → GNOME Integration → Prepare Integration** after installation.
+This adds a managed per-user drop-in for
+`org.freedesktop.IBus.session.GNOME.service` and stages the companion under the
+user's GNOME extension directory. It preserves existing effective custom IBus
+component paths and the compiled system component directory. It reloads the
+user service configuration without restarting the running input daemon.
+Unknown/edited managed service drop-ins, foreign or newer companion metadata,
+custom service environment files, explicit removal of `IBUS_COMPONENT_PATH`,
+and unapplied service changes are refused with a
+message; existing files are preserved.
 
-The Shell companion also requires discovery and explicit enablement. GNOME
-Wayland reloads installed extension code in a new session; the test uses a new
-headless Shell. See the [GNOME extension guide](https://gjs.guide/extensions/development/creating.html).
-Input-source onboarding and the complete installed user flow remain outstanding.
+Sign out and back in, then choose **Enable Integration**. This explicitly enables
+only the Snippets companion, appends the Snippets IBus input source if absent,
+and selects it through GNOME's input-source manager. Existing layouts remain
+available. Globally disabled user extensions are not silently re-enabled.
+Expansion and suggestions remain separate opt-ins in **Input & Clipboard**.
+The companion accepts input setup only from the primary application while its
+window is focused. Owner/focus changes, lock, sleep and companion disable cancel
+pending setup authorization. Repeating preparation or activation does not add
+duplicate paths or sources. A failed activation is not presented as ready.
+
+Stock IBus does not discover a user-prefix component XML without a search-path
+configuration; its `IBUS_COMPONENT_PATH` replaces the default list. See the
+[IBus registry implementation](https://github.com/ibus/ibus/blob/main/src/ibusregistry.c).
+New GNOME Wayland extension code is loaded at the next login. See the
+[GNOME extension guide](https://gjs.guide/extensions/development/creating.html).
+Do not replace the running user's input daemon to reproduce an isolated test.
+Moving the installation requires repeating preparation and signing in again.
+To remove this integration, deselect/remove the Snippets source in GNOME Keyboard
+settings, disable the Snippets extension, remove the managed
+`~/.config/systemd/user/org.freedesktop.IBus.session.GNOME.service.d/90-snippets.conf`,
+and sign out and back in (or restart). Other input sources and extension settings
+must be retained. Respect `XDG_CONFIG_HOME` when it differs from the default.
+
+Five preparation tests passed, covering idempotence, preserved custom component
+paths, changed/foreign/linked files and exact path decoding by native systemd in
+`--test` mode (no services started). The owned session runner
+`docs/linux/testing/gnome_setup.py LAB PREFIX` exercises the actual installed
+Settings window and real Shell/IBus input-source activation. Its private bus uses
+a narrow systemd protocol fixture because the headless session has no user
+service manager. The installed Release passed this UI flow with US/RU sources
+preserved, followed by the real GTK picker privacy/cancellation regression; this
+is not a qualification of a complete systemd-managed login.
 
 The real Ubuntu Release artifacts passed the isolated installer check below.
 The equivalent Hyprland Release check passed on Omarchy with `--desktop hyprland`:

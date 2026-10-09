@@ -7,6 +7,10 @@ fn main() {
             .atleast_version("1.5.20")
             .probe("ibus-1.0")
             .expect("IBus development files are required for GNOME inline expansion");
+        println!(
+            "cargo:rustc-env=SNIPPETS_IBUS_COMPONENT_DIR={}/ibus/component",
+            pkg_config::get_variable("ibus-1.0", "datadir").expect("IBus component directory")
+        );
         let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
         let executable = output.join("snippets-ibus");
         let mut compiler = cc::Build::new().cpp(true).get_compiler().to_command();
