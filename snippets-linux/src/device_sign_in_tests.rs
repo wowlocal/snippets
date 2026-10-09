@@ -63,6 +63,11 @@ fn approved_claim() -> Vec<u8> {
 }
 fn claim(store: &mut Store<Memory>, client: &CloudClient, approved: bool) -> Result<Claim> {
     store.transaction_with(|owner| {
+        // The fictional server retains the expiry it issued at creation.
+        // Recomputing now + 600 made a pending reply invalid whenever this
+        // helper crossed a wall-clock second after begin().
+        let expires_at = Document::load(owner)?
+            .and_then(|document| document.request.map(|request| request.expires_at));
         claim_locked(owner, client, &|| Ok(()), &|id, poll| {
             assert!(id == receipt(0).request && poll.for_secure_storage() == POLL);
             if approved {
@@ -71,7 +76,7 @@ fn claim(store: &mut Store<Memory>, client: &CloudClient, approved: bool) -> Res
                 )))
             } else {
                 Ok(DeviceClaim::Pending {
-                    expires_at: receipt(600).expires_at,
+                    expires_at: expires_at.expect("pending fixture request"),
                 })
             }
         })
@@ -117,6 +122,20 @@ fn request_persists_recipient_material_and_token_before_display_and_resumes_with
     assert!(
         matches!(claim(&mut store, &client, false).unwrap(), Claim::Pending(p) if p == payload)
     );
+    assert!(saved(&mut store).unwrap() == document);
+    // A server that changes the original expiry is still refused. Correcting
+    // the fixture must not weaken the production response check.
+    assert!(matches!(
+        store.transaction_with(|owner| {
+            let expires_at = Document::load(owner)?.unwrap().request.unwrap().expires_at;
+            claim_locked(owner, &client, &|| Ok(()), &|_, _| {
+                Ok(DeviceClaim::Pending {
+                    expires_at: expires_at + 1,
+                })
+            })
+        }),
+        Err(Failure::Cloud(cloud::Failure::InvalidResponse))
+    ));
     assert!(saved(&mut store).unwrap() == document);
     // Another deployment never receives this token.
     let foreign = CloudClient::test_with_agent(
