@@ -10,8 +10,11 @@ and an encrypted vault workspace; [the full desktop port remains in development]
 
 The first GNOME backend builds on stock Ubuntu without Fcitx. It adds native
 session-lock observation and isolated background app/CLI lifecycle coverage.
-**Inline expansion, the caret popup, global shortcuts, clipboard history and
-cross-application insertion are not supported on GNOME yet.** The existing
+The experimental IBus path now passes owned GTK4 and Chromium Wayland expansion
+checks. An experimental GlobalShortcuts portal adapter opens the app and picker
+through real GNOME bindings. **Full GNOME support is not qualified:** input-service
+and portal restart cases, popup presentation, onboarding, clipboard capture and
+cross-application insertion remain outstanding. The existing
 Hyprland/Fcitx build remains the default Cargo configuration.
 
 Use `./scripts/install-linux.sh --desktop gnome` for the preview; the installer

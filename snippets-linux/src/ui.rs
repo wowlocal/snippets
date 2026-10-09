@@ -295,27 +295,37 @@ impl App {
             return;
         }
         let weak = Rc::downgrade(self);
-        let service =
-            shortcuts::Service::new(self.library.borrow().root.clone(), move |action, target| {
+        let service = shortcuts::Service::new(
+            self.library.borrow().root.clone(),
+            move |action, target, token| {
                 if let Some(app) = weak.upgrade()
                     && !app.is_quitting()
                 {
                     match action {
-                        crate::global_shortcuts::Action::Open => app.present(),
+                        crate::global_shortcuts::Action::Open => {
+                            if let Some(token) = token.as_deref() {
+                                app.main().window.set_startup_id(token);
+                            }
+                            app.present()
+                        }
                         crate::global_shortcuts::Action::Picker
                             if app.application.is_action_enabled("picker") =>
                         {
-                            app.open_picker(target)
+                            app.open_picker_with_activation(target, token.as_deref())
                         }
                         crate::global_shortcuts::Action::Capture
                             if app.application.is_action_enabled("capture") =>
                         {
+                            if let Some(token) = token.as_deref() {
+                                app.main().window.set_startup_id(token);
+                            }
                             app.capture()
                         }
                         _ => (),
                     }
                 }
-            });
+            },
+        );
         *self.shortcuts.borrow_mut() = Some(service);
     }
     fn open_shortcuts(self: &Rc<Self>) {
@@ -597,6 +607,13 @@ impl App {
         *self.last_theme.borrow_mut() = text;
     }
     fn open_picker(self: &Rc<Self>, target: Option<PasteTarget>) {
+        self.open_picker_with_activation(target, None);
+    }
+    fn open_picker_with_activation(
+        self: &Rc<Self>,
+        target: Option<PasteTarget>,
+        token: Option<&str>,
+    ) {
         if !self.ensure_library() {
             return;
         }
@@ -616,6 +633,9 @@ impl App {
             previous.window.close();
         }
         let picker = Picker::new(self, target);
+        if let Some(token) = token {
+            picker.window.set_startup_id(token);
+        }
         picker.window.present();
         picker.query.grab_focus();
         *self.picker.borrow_mut() = Some(picker);

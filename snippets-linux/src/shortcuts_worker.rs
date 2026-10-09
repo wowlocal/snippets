@@ -12,9 +12,10 @@ use std::{
     thread,
     time::Duration,
 };
-const UNAVAILABLE: Error =
-    Error("Global shortcuts are unavailable. Hyprland global-shortcuts-v1 support is required.");
+const UNAVAILABLE: Error = Error("Global shortcuts could not be registered with the desktop.");
 const STOPPED: Error = Error("Global shortcuts were stopped.");
+#[path = "shortcuts_gnome.rs"]
+mod gnome;
 unsafe extern "C" {
     fn snip_shortcuts_connect(
         check: unsafe extern "C" fn(*mut c_void) -> c_int,
@@ -51,7 +52,16 @@ impl Drop for Native {
     }
 }
 trait Backend {
+    fn can_configure(&self) -> bool {
+        false
+    }
     fn next(&mut self, guard: &dyn Fn() -> Result<()>) -> Result<Option<(Action, Duration)>>;
+    fn activation_token(&mut self) -> Option<String> {
+        None
+    }
+    fn configure(&mut self, _guard: &dyn Fn() -> Result<()>) -> Result<()> {
+        Ok(())
+    }
 }
 impl Native {
     fn open(guard: &dyn Fn() -> Result<()>) -> Result<Self> {
@@ -117,6 +127,7 @@ pub(crate) enum Status {
 pub(crate) struct Event {
     pub action: Action,
     pub target: Option<PasteTarget>,
+    pub activation_token: Option<String>,
     session: SessionWitness,
     epoch: u64,
     deadline: Duration,
@@ -130,6 +141,7 @@ impl Event {
         Some(Self {
             action,
             target: None,
+            activation_token: None,
             epoch,
             session,
             deadline: crate::clock::uptime()?
@@ -146,6 +158,8 @@ pub(crate) struct Handle {
     thread: thread::JoinHandle<()>,
     events: mpsc::Receiver<Event>,
     status: Arc<Mutex<Status>>,
+    configure: Arc<AtomicBool>,
+    configurable: Arc<AtomicBool>,
 }
 impl Handle {
     pub fn start(root: PathBuf) -> Result<Self> {
@@ -154,7 +168,10 @@ impl Handle {
         }
         let session = SessionMonitor::new().ok_or(UNAVAILABLE)?;
         Self::start_with(root, session.witness(), Some(session), |guard| {
-            Ok(Box::new(Native::open(guard)?))
+            match crate::desktop::environment() {
+                crate::desktop::Environment::Gnome => Ok(Box::new(gnome::Portal::open(guard)?)),
+                _ => Ok(Box::new(Native::open(guard)?)),
+            }
         })
     }
     fn start_with(
@@ -171,6 +188,10 @@ impl Handle {
         let status = Arc::new(Mutex::new(Status::Starting));
         let state = status.clone();
         let (sender, events) = mpsc::sync_channel(3);
+        let configure = Arc::new(AtomicBool::new(false));
+        let configuring = configure.clone();
+        let configurable = Arc::new(AtomicBool::new(false));
+        let configuration_capability = configurable.clone();
         let signature = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE");
         let display = std::env::var_os("WAYLAND_DISPLAY");
         let thread = thread::Builder::new()
@@ -191,12 +212,17 @@ impl Handle {
                 let result: Result<()> = (|| {
                     guard()?;
                     let mut backend = open(&guard)?;
+                    configuration_capability.store(backend.can_configure(), Ordering::Release);
                     *state.lock().map_err(|_| UNAVAILABLE)? = Status::Registered;
                     loop {
                         guard()?;
+                        if configuring.swap(false, Ordering::AcqRel) {
+                            backend.configure(&guard)?;
+                        }
                         if let Some((action, age)) = backend.next(&guard)?
                             && let Some(mut event) = Event::new(action, age, session.clone())
                         {
+                            event.activation_token = backend.activation_token();
                             if action == Action::Picker {
                                 event.target = PasteTarget::capture();
                             }
@@ -228,6 +254,8 @@ impl Handle {
             thread,
             events,
             status,
+            configure,
+            configurable,
         })
     }
     pub fn status(&self) -> Status {
@@ -235,6 +263,14 @@ impl Handle {
     }
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
+    }
+    pub fn configure(&self) {
+        if self.can_configure() {
+            self.configure.store(true, Ordering::Release);
+        }
+    }
+    pub fn can_configure(&self) -> bool {
+        self.status() == Status::Registered && self.configurable.load(Ordering::Acquire)
     }
     pub fn is_finished(&self) -> bool {
         self.thread.is_finished()

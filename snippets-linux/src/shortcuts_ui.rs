@@ -2,6 +2,7 @@
 use super::*;
 use crate::global_shortcuts::{Action, BINDINGS, Handle, Preference, Status};
 use std::path::PathBuf;
+type ActivationHandler = dyn Fn(Action, Option<PasteTarget>, Option<String>);
 pub(super) struct Service {
     root: PathBuf,
     worker: RefCell<Option<Handle>>,
@@ -12,7 +13,7 @@ pub(super) struct Service {
     loading: Cell<bool>,
     quitting: Cell<bool>,
     restart: Cell<bool>,
-    activate: Box<dyn Fn(Action, Option<PasteTarget>)>,
+    activate: Box<ActivationHandler>,
 }
 struct View {
     window: adw::PreferencesWindow,
@@ -23,7 +24,7 @@ struct View {
 impl Service {
     pub fn new(
         root: PathBuf,
-        activate: impl Fn(Action, Option<PasteTarget>) + 'static,
+        activate: impl Fn(Action, Option<PasteTarget>, Option<String>) + 'static,
     ) -> Rc<Self> {
         let preference = Preference::read(&root);
         let this = Rc::new(Self {
@@ -61,7 +62,7 @@ impl Service {
                     && event.valid()
                     && Preference::read(&this.root).is_ok_and(|p| p.enabled)
                 {
-                    (this.activate)(event.action, event.target);
+                    (this.activate)(event.action, event.target, event.activation_token);
                 }
             }
             if this.restart.get() && this.finished() && !this.busy.get() {
@@ -163,8 +164,10 @@ impl Service {
                 .title("Keyboard Shortcuts")
                 .icon_name("input-keyboard-symbolic")
                 .build();
+            let gnome = crate::desktop::environment() == crate::desktop::Environment::Gnome;
             let group = adw::PreferencesGroup::builder().title("Use Snippets from Other Applications")
-                .description("Register actions with Hyprland, then choose unused keys in your desktop bindings. Snippets must be running.").build();
+                .description(if gnome { "Choose shortcuts in the GNOME system dialog. Snippets must be running." }
+                    else { "Register actions with Hyprland, then choose unused keys in your desktop bindings. Snippets must be running." }).build();
             let enabled = adw::SwitchRow::builder()
                 .title("Enable Global Shortcuts")
                 .subtitle("Open Snippets, open its paste picker, or capture clipboard text.")
@@ -207,7 +210,9 @@ impl Service {
             row.add_suffix(&copy);
             row.set_activatable_widget(Some(&copy));
             setup.add(&row);
-            page.add(&setup);
+            if !gnome {
+                page.add(&setup);
+            }
             window.add(&page);
             let weak = Rc::downgrade(self);
             enabled.connect_active_notify(move |row| {
@@ -223,9 +228,21 @@ impl Service {
                     && !this.busy.get()
                     && !this.quitting.get()
                 {
-                    this.stop();
-                    this.error.set(None);
-                    this.restart.set(true);
+                    if gnome
+                        && this
+                            .worker
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(Handle::can_configure)
+                    {
+                        if let Some(worker) = this.worker.borrow().as_ref() {
+                            worker.configure();
+                        }
+                    } else {
+                        this.stop();
+                        this.error.set(None);
+                        this.restart.set(true);
+                    }
                 }
             });
             copy.connect_clicked(move |button| {
@@ -260,17 +277,34 @@ impl Service {
                 .as_ref()
                 .map_or(Status::Off, Handle::status)
         };
+        let gnome = crate::desktop::environment() == crate::desktop::Environment::Gnome;
+        let configurable = self
+            .worker
+            .borrow()
+            .as_ref()
+            .is_some_and(Handle::can_configure);
         view.status.set_subtitle(if self.busy.get() { "Saving shortcut settings…" }
             else if let Some(error) = self.error.get() { error }
             else { match status {
                 Status::Off => "Global shortcuts are off.",
+                Status::Starting if gnome => "Waiting for GNOME shortcut setup…",
                 Status::Starting => "Connecting to Hyprland…",
+                Status::Registered if gnome && configurable => "Shortcuts are registered with GNOME. Use Change Keys to edit them.",
+                Status::Registered if gnome => "Shortcuts are registered with GNOME. Edit them in the Snippets page in system Settings.",
                 Status::Registered => "Actions are registered. Choose keys in your Omarchy bindings.",
                 Status::Unavailable => "Registration failed. Check compositor support and duplicate shortcut registrations, then retry.",
                 Status::Stopping => "Stopping global shortcuts…",
             }});
+        view.retry.set_label(if gnome && configurable {
+            "Change Keys…"
+        } else {
+            "Retry Connection"
+        });
         view.retry.set_sensitive(
-            self.enabled.get() && !self.busy.get() && !self.quitting.get() && self.finished(),
+            self.enabled.get()
+                && !self.busy.get()
+                && !self.quitting.get()
+                && (self.finished() || (gnome && configurable)),
         );
         view.window.set_sensitive(!self.quitting.get());
         self.loading.set(false);
@@ -291,7 +325,7 @@ mod tests {
             .flags(gio::ApplicationFlags::NON_UNIQUE)
             .build();
         application.register(None::<&gio::Cancellable>).unwrap();
-        let service = Service::new(root.clone(), |_, _| {
+        let service = Service::new(root.clone(), |_, _, _| {
             panic!("no actions in the settings fixture")
         });
         assert!(service.worker.borrow().is_none());

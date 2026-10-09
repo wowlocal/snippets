@@ -1,5 +1,5 @@
-//! Explicit local consent and closed native Omarchy action vocabulary.
-//! No compositor configuration is written. Registration conveys public labels only.
+//! Explicit local consent and a closed desktop action vocabulary.
+//! Registration conveys public labels only; the desktop owns physical bindings.
 use crate::model::{Error, Library, Result, atomic_write};
 use serde::{Deserialize, Serialize};
 use std::{

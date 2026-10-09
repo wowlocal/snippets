@@ -77,6 +77,12 @@ def run(binary, lab, settle, wait, ime="wayland"):
     browser = None
     try:
         remote("Start")
+        # Mutter creates the session's virtual keyboard lazily on its first
+        # event. Prime it before launching the receiver: hot-plugging a keyboard
+        # while Chromium starts a composition resets that composition.
+        for pressed in (True, False):
+            remote("NotifyKeyboardKeycode", GLib.Variant("(ub)", (42, pressed)))
+        settle(0.2)
         ime_flags = (["--enable-wayland-ime", "--wayland-text-input-version=3"] if ime == "wayland"
                      else ["--gtk-version=4", "--disable-features=WaylandTextInputV3"])
         environment = dict(os.environ)

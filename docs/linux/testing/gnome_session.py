@@ -45,6 +45,7 @@ def main():
         env[key] = str(path)
     env.update(XDG_CURRENT_DESKTOP="GNOME", XDG_SESSION_TYPE="wayland",
                GSETTINGS_BACKEND="keyfile", GNOME_SHELL_SESSION_MODE="user",
+               WAYLAND_DISPLAY="snippets-lab",
                IBUS_ADDRESS=f"unix:path={root}/runtime/ibus-bus")
     components = root / "data/ibus/component"
     components.mkdir(parents=True)

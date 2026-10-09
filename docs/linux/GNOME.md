@@ -26,11 +26,13 @@ Implemented:
   still requires its original Hyprland window/process witness.
 
 Not yet qualified: IBus expansion and caret suggestions across applications.
-Not implemented: GNOME global shortcuts,
-clipboard-history capture and cross-application insertion. Existing Hyprland
+An experimental GNOME GlobalShortcuts portal adapter registers Open, Picker and
+Capture actions through the system permission dialog. Receiving these actions is
+separate from the unfinished GNOME capture and insertion mechanisms.
+Not implemented: GNOME clipboard-history capture and cross-application insertion. Existing Hyprland
 window-target and Wayland peer checks remain required for those mechanisms.
 The installer still builds only the desktop preview. The `ibus` feature is an
-engineering opt-in until the browser and lifecycle acceptance cases are complete.
+engineering opt-in until the remaining lifecycle and installation acceptance cases are complete.
 
 ## Build and install
 
@@ -110,14 +112,49 @@ cross-field cancellation and screen-shield activation/deactivation. The last cas
 uses a headless Shell with authentication locking disabled; it is not a test of
 an authenticated unlock or logind session suspension.
 
-Chromium 155.0.8059.39 currently fails the exact-expansion case: the native Wayland
-input path resets the active composition during its first key. The underlying
-cause is still being investigated; omitting the lookup table or using auxiliary
-text instead of inline preedit did not resolve it.
-This failure remains an acceptance blocker. Do not ignore focus/reset events to
-make that case pass: a real focus transition must still cancel pending delivery.
-Browser checks, input-source/IBus restart coverage, popup presentation, installation,
-global shortcuts and cross-application insertion remain outstanding.
+Chromium 155.0.8059.39 passed exact expansion, password pass-through and cross-field
+cancellation with composition finished, using native Wayland text-input-v3 and a
+fresh profile. The Ubuntu snap's binary was launched directly with the guest's
+system libraries; this does not qualify the confined snap launcher or default
+browser flags. The runner explicitly enables Wayland IME and text-input-v3.
+
+The earlier first-key failure came from the test keyboard: Mutter creates its
+virtual keyboard lazily, and hot-plugging it during the first composition caused
+Chromium to reset that composition. The runner now primes the keyboard before
+starting Chromium and retains it throughout the run. No product-code focus/reset
+checks were relaxed. The alternate GTK IME browser path remains unqualified.
+Input-source/IBus restart coverage, popup presentation, installation and
+cross-application insertion remain outstanding.
+
+The shortcut adapter owns a private portal connection and session. It registers
+the native desktop application identity before other portal calls, checks sender
+and session identity, bounds and expires queued activations, and discards sessions
+when their portal owner disappears. Permission revocation and existing lock-epoch
+checks still apply in the common worker. Wayland activation tokens are passed only
+to the window opening for that event. The adapter supports portal version 1; on
+version 2 it additionally exposes Change Keys through ConfigureShortcuts. On
+version 1, bindings are edited in the application's page in GNOME Settings.
+
+The real portal fixture passed all three action bindings, clean disconnect and
+reconnect, explicit session closure, and opening/activating the actual GTK main
+window and picker. The targeted shortcut suite passed 12 tests (two separate
+native fixtures ignored by default) on both Ubuntu and Omarchy. Strict all-target
+Clippy passed for `desktop,ibus` on Ubuntu and the default Fcitx build on Omarchy.
+
+**Open restart failure:** terminating the owned `xdg-desktop-portal` frontend
+correctly revokes the existing adapter. A replacement frontend then accepts a new
+registration but does not deliver its real shortcut on this Ubuntu image. The
+`--restart-portal` fixture requires delivery and fails; registration alone is not
+counted as recovery. Restarting only the owned GNOME portal backend restored
+normal delivery in the test lab. This suggests stale backend bindings after a
+frontend crash, but the upstream cause is not yet fully established. The app does
+not restart desktop services as a workaround. This remains a qualification gap.
+
+See the public [GlobalShortcuts interface](https://github.com/flatpak/xdg-desktop-portal/blob/main/data/org.freedesktop.portal.GlobalShortcuts.xml)
+and [native application registry](https://github.com/flatpak/xdg-desktop-portal/blob/main/data/org.freedesktop.host.portal.Registry.xml).
+The event age check is GNOME-specific: its backend forwards Mutter's wrapping
+32-bit monotonic millisecond timestamp; it is not assumed to be a portable clock
+for other portal backends. See the [GNOME implementation](https://gitlab.gnome.org/GNOME/xdg-desktop-portal-gnome/-/blob/main/src/globalshortcuts.c).
 
 The experimental feature's build, four Rust bridge tests, 27 filtered worker
 tests, native IBus protocol smoke and GTK4 receiver passed in the Ubuntu VM.

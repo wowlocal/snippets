@@ -104,4 +104,32 @@ and ordered observations from a loopback page. It requires both the expected DOM
 value and the end of composition. `--chromium-ime gtk` tests the alternative GTK
 IBus client path; it must be reported separately from the default native Wayland
 path. Neither uses DevTools or inserts text through JavaScript. Browser failures
-are fatal, not skipped. See `../GNOME.md` for the current qualification gap.
+are fatal, not skipped. The runner primes Mutter's lazily-created virtual keyboard
+before launching Chromium; attaching it during the first composition causes a
+keyboard-focus reset. See `../GNOME.md` for the qualified flags and remaining gaps.
+
+`gnome_shortcuts.py` requires `python3-pyatspi`. It stages a fictional desktop
+entry inside the lab, runs the Rust portal fixture, approves its three known
+bindings in the real GNOME Settings dialog through AT-SPI, and sends real modifier
+chords through the lab's virtual keyboard. It checks action routing, reconnection,
+and explicit session closure. `--restart-portal` additionally tests real delivery
+after disappearance/replacement of the owned portal frontend; this currently
+exposes a qualification failure on Ubuntu (see `../GNOME.md`). The process is
+stopped only after verifying its private bus environment.
+It never approves dialogs on the user's session. A missing case or failed Rust
+fixture returns nonzero.
+Run the crash case last and recreate the owned lab afterwards: a failed recovery
+can leave the lab backend holding stale bindings. Do not restart services on the
+user's desktop to clean up this fixture.
+
+```sh
+python3 docs/linux/testing/gnome_shortcuts.py /tmp/snippets-gnome-owned "$PWD" \
+  --application snippets-linux/target/debug/snippets
+```
+
+The optional `--application` phase also launches the actual GTK app with a fresh
+library, sends Open and Picker shortcuts, and requires each resulting window to
+be active and visible through AT-SPI before quitting the app.
+
+This tests shortcut delivery, not successful clipboard capture or insertion from
+the app's picker. Those operations need separate receiver assertions.
