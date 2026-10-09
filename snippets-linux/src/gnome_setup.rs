@@ -12,7 +12,8 @@ pub(crate) const UNIT: &str = "org.freedesktop.IBus.session.GNOME.service";
 #[path = "gnome_setup_runtime.rs"]
 mod runtime;
 pub(crate) use runtime::{activate, prepare};
-const HEADER: &str = "# Snippets GNOME integration v1\n# ";
+const HEADER: &str = "# Snippets GNOME integration v2\n# ";
+const LEGACY_HEADER: &str = "# Snippets GNOME integration v1\n# ";
 const CHANGED: Error = Error("GNOME configuration changed. Reopen setup and try again.");
 const FOREIGN: Error =
     Error("An existing GNOME integration file could not be updated safely. It was preserved.");
@@ -83,6 +84,9 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     Ok(Some(data))
 }
 fn unit_bytes(paths: &[String]) -> Result<Vec<u8>> {
+    unit_bytes_version(paths, true)
+}
+fn unit_bytes_version(paths: &[String], refresh_cache: bool) -> Result<Vec<u8>> {
     if paths.is_empty() || paths.len() > 64 {
         return Err(FOREIGN);
     }
@@ -100,20 +104,31 @@ fn unit_bytes(paths: &[String]) -> Result<Vec<u8>> {
         .replace('"', "\\\"")
         .replace('%', "%%");
     let receipt = serde_json::to_string(paths).map_err(|_| FOREIGN)?;
-    Ok(
-        format!("{HEADER}{receipt}\n[Service]\nEnvironment=\"IBUS_COMPONENT_PATH={escaped}\"\n")
-            .into_bytes(),
+    let header = if refresh_cache { HEADER } else { LEGACY_HEADER };
+    // IBus's registry cache tracks old component directories, not changes to
+    // IBUS_COMPONENT_PATH. Refresh under the service's effective environment
+    // on each new session. Cache failure must not prevent ordinary input from
+    // starting; activation still requires actual engine discovery in Shell.
+    let refresh = if refresh_cache {
+        "ExecStartPre=-/usr/bin/ibus write-cache\n"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "{header}{receipt}\n[Service]\nEnvironment=\"IBUS_COMPONENT_PATH={escaped}\"\n{refresh}"
     )
+    .into_bytes())
 }
 fn previous_paths(bytes: &[u8]) -> Result<Vec<String>> {
     let text = std::str::from_utf8(bytes).map_err(|_| FOREIGN)?;
+    let current = text.starts_with(HEADER);
     let receipt = text
-        .strip_prefix(HEADER)
+        .strip_prefix(if current { HEADER } else { LEGACY_HEADER })
         .and_then(|v| v.split_once('\n'))
         .ok_or(FOREIGN)?
         .0;
     let paths: Vec<String> = serde_json::from_str(receipt).map_err(|_| FOREIGN)?;
-    if unit_bytes(&paths)? != bytes {
+    if unit_bytes_version(&paths, current)? != bytes {
         return Err(FOREIGN);
     }
     Ok(paths)

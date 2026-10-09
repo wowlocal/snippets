@@ -64,6 +64,54 @@ app diagnostics or packaged artifacts.
 
 ## Owned GNOME session
 
+`gnome_login_setup.py` is a separate two-phase check for real user systemd and
+GNOME session startup. It refuses any account except `snippets-gnome-test` with
+home `/var/lib/snippets-gnome-test`, its own `/run/user/UID/bus`, and a systemd
+Shell process with `--headless`. Create that locked disposable account in the
+test VM; never adapt this check to a normal user's account. Start its real
+`user@UID.service`, using the UID discovered from the account database.
+
+For this account only, add
+`~/.config/systemd/user/org.gnome.Shell@ubuntu.service.d/headless-test.conf`:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/gnome-shell --mode=ubuntu --headless --no-x11 --virtual-monitor 1280x800 --wayland-display snippets-lab
+```
+
+Run `/usr/bin/gnome-session --session=ubuntu --no-reexec` as that account, with its
+own HOME, runtime and session bus, `XDG_CURRENT_DESKTOP=ubuntu:GNOME`,
+`XDG_SESSION_TYPE=wayland`, `GNOME_SHELL_SESSION_MODE=ubuntu`, and
+`GSETTINGS_BACKEND=keyfile`. Keep the session leader alive. Do not set
+`IBUS_COMPONENT_PATH`: discovery must come from the product's actual drop-in.
+Before launch, set only this account's idle delay to zero, disable its screen
+lock/animations, and initialize its input sources to US/RU. Mark this account's
+GNOME initial setup done. The test changes no system service units and does not
+use a mock systemd manager, manually start IBus, or replace its ExecStart.
+
+Install the Release GNOME build into that account's default `~/.local` using
+`scripts/install-linux.sh --desktop gnome --no-build`; give it a readable staging
+copy of the installer inputs rather than opening the normal user's home.
+With the same environment plus `WAYLAND_DISPLAY=snippets-lab`, run:
+
+```sh
+python3 gnome_login_setup.py prepare
+# As this disposable account only:
+systemctl --user start gnome-session-shutdown.target
+# Wait for the old session leader to exit, then launch gnome-session again.
+python3 gnome_login_setup.py enable
+```
+
+Preparation asserts that the live IBus PID and US/RU sources remain unchanged.
+Activation requires new Shell/IBus PIDs, the actual daemon's component-path
+environment, real registry discovery, the Settings success state and selected
+engine. `upgrade` replaces `prepare` when reproducing a previously prepared v1
+installation whose old IBus cache omitted Snippets. It validates the migration
+through the actual Settings UI. Stop the owned GNOME session and user manager
+after testing. This qualifies session restart and systemd startup, not GDM
+authentication, physical-seat input, suspend or authenticated unlock.
+
 `gnome_session.py` starts a headless GNOME Shell, a private session bus and a
 separate IBus daemon. All runtime sockets, preferences and application data stay
 under a new owned directory. It never uses `--replace`, changes the user's input

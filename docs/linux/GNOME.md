@@ -7,7 +7,8 @@ IBus input system. It shares the GTK application and library with the Hyprland
 build. It does not replace input methods or enable Shell Eval. An experimental
 Shell companion now supplies ordinary picker insertion. The installer stages
 the components; Settings now offers explicit per-user preparation and activation.
-A complete fresh-login test remains outstanding.
+Real systemd-managed session restart is now checked in a disposable headless
+Ubuntu account; GDM authentication and a physical-seat login remain unqualified.
 
 Implemented:
 
@@ -73,6 +74,12 @@ This adds a managed per-user drop-in for
 user's GNOME extension directory. It preserves existing effective custom IBus
 component paths and the compiled system component directory. It reloads the
 user service configuration without restarting the running input daemon.
+The managed drop-in refreshes IBus's registry cache with `ibus write-cache`
+before subsequent daemon starts, using the effective component search path.
+Without this, an existing registry cache can hide the newly installed engine
+even after a new session. A cache-refresh failure does not prevent the ordinary
+input daemon from starting; activation still requires actual engine discovery.
+Unmodified v1 Snippets drop-ins are upgraded to v2 on preparation.
 Unknown/edited managed service drop-ins, foreign or newer companion metadata,
 custom service environment files, explicit removal of `IBUS_COMPONENT_PATH`,
 and unapplied service changes are refused with a
@@ -101,15 +108,27 @@ settings, disable the Snippets extension, remove the managed
 and sign out and back in (or restart). Other input sources and extension settings
 must be retained. Respect `XDG_CONFIG_HOME` when it differs from the default.
 
-Five preparation tests passed, covering idempotence, preserved custom component
+Six preparation tests passed, covering idempotence, preserved custom component
 paths, changed/foreign/linked files and exact path decoding by native systemd in
-`--test` mode (no services started). The owned session runner
+`--test` mode (no services started), plus exact v1 migration. The owned session runner
 `docs/linux/testing/gnome_setup.py LAB PREFIX` exercises the actual installed
 Settings window and real Shell/IBus input-source activation. Its private bus uses
 a narrow systemd protocol fixture because the headless session has no user
 service manager. The installed Release passed this UI flow with US/RU sources
 preserved, followed by the real GTK picker privacy/cancellation regression; this
 is not a qualification of a complete systemd-managed login.
+
+The separate `docs/linux/testing/gnome_login_setup.py` regression passed using a
+real systemd user manager and `gnome-session --session=ubuntu` under a disposable
+account. Only that account's Shell launch was changed to a virtual headless
+monitor; the stock IBus service and GNOME targets were retained. The initial v1
+run reproduced missing engine discovery after session restart despite the
+correct daemon environment. The fixed installed Release upgraded the drop-in
+through Settings, preserved the running IBus PID during preparation, and passed
+discovery and Settings activation after restarting the owned session. Actual
+daemon environment, new Shell/IBus PIDs, selected engine and preserved US/RU
+sources were asserted. This covers stale-cache startup and setup migration;
+it does not cover GDM authentication, suspend or authenticated unlock.
 
 The real Ubuntu Release artifacts passed the isolated installer check below.
 The equivalent Hyprland Release check passed on Omarchy with `--desktop hyprland`:

@@ -78,6 +78,31 @@ fn setup_is_explicit_preserves_custom_components_and_is_idempotent() {
     assert!(!fixture.config.join("dconf").exists());
 }
 #[test]
+fn legacy_setup_upgrades_cache_refresh_without_discarding_custom_paths() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.unit().parent().unwrap()).unwrap();
+    let paths = vec![
+        "/opt/old-snippets/component".into(),
+        "/opt/custom/component".into(),
+    ];
+    let legacy = unit_bytes_version(&paths, false).unwrap();
+    fs::write(fixture.unit(), &legacy).unwrap();
+    fixture.plan(&paths).unwrap().apply().unwrap();
+    let updated = fs::read(fixture.unit()).unwrap();
+    assert!(updated.starts_with(HEADER.as_bytes()));
+    let text = std::str::from_utf8(&updated).unwrap();
+    assert!(text.contains("ExecStartPre=-/usr/bin/ibus write-cache\n"));
+    let updated_paths = previous_paths(&updated).unwrap();
+    assert!(updated_paths.contains(&paths[1]));
+    assert!(!updated_paths.contains(&paths[0]));
+    let mut edited = legacy;
+    edited.extend_from_slice(b"ExecStartPre=/bin/false\n");
+    fs::write(fixture.unit(), &edited).unwrap();
+    assert!(fixture.plan(&[]).is_err());
+    assert_eq!(fs::read(fixture.unit()).unwrap(), edited);
+}
+
+#[test]
 fn linked_foreign_and_concurrently_changed_configuration_is_preserved() {
     let fixture = Fixture::new();
     fs::create_dir_all(fixture.unit().parent().unwrap()).unwrap();
