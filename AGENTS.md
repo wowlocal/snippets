@@ -166,6 +166,89 @@ For a Production-connected iOS build, the second command must show all of:
   `SyncJournal` remains the only outbound source of truth; tombstones are record saves,
   never CloudKit physical deletes. A remote zone deletion/reset is a review-required halt.
 
+### Git sync transport
+
+`snippets/Core/Git/` implements `GitSyncTransport`, serverless sync through any
+git host (GitHub, GitLab, Gitea, GitVerse) over smart HTTP or SSH. It is compiled into both apps
+and CorePackage, not `snippets-cli`. The app layer is `snippets/Sync/GitSyncSetup.swift`
+(onboarding), `snippets/Sync/GitSyncKeyStore.swift` (per-library keys) and the Git
+provider in `SyncBackendSelectionStore`; Settings UI is
+`snippets/GitSyncSettingsViewController.swift` and
+`snippets-ios/GitSyncSettingsViewController.swift`. New Core or Sync files must also be
+added to the iOS target explicitly in the Xcode project. The design, repository layout,
+key handling and failure codes are in `docs/git-sync.md`.
+
+- The record version is the record file's git blob id; the cursor names the dataset and
+  commit; the ref update (`old` → `new`) in receive-pack is the batch compare-and-swap.
+  Do not replace any of these with timestamps, commit counts or host APIs.
+- Never create, overwrite or force-push a branch implicitly. Only
+  `initializeRepository()` creates one, and only when it is absent. A branch without the
+  manifest marker is foreign data.
+- Tombstones are record saves. A removed record file or replaced manifest is a
+  `remoteDataReset` that requires review.
+- Commits carry fixed authorship and only a record count. Never add device, account,
+  path or other stable identifiers to commits, file names or failure details.
+- The snapshot cache is disposable and content-addressed. Do not store credentials,
+  cursors or plaintext there.
+- Each Git library has its own key, bound to repository, branch and dataset id.
+  `SyncKeyStore` must never mint one for Git; a missing key is `git_key_required`. The
+  key is installed before the creating push, and coordinates and token are saved only
+  after both the library and its key exist. Rewriting the active provider's
+  coordinates must happen inside `withQuiescedCloudTransport`.
+- The recovery code is shown once and never stored. Copy it only with the concealed
+  markers (macOS) or as local-only, expiring (iOS). Never log it, the token, or the
+  repository URL.
+- SSH reuses the same wire requests (`GitSSHClient`). macOS runs the system
+  `/usr/bin/ssh` with `BatchMode=yes` and the user's agent, config and known_hosts;
+  Snippets stores no SSH secret there and must never prompt, accept a host key, or
+  pass `-o` options that override the user's identity choices. iOS uses SwiftNIO SSH
+  (`snippets-ios/GitNIOSSHConnector.swift`) with one per-device P-256 key
+  (`GitSSHDeviceIdentity`, Secure Enclave when available, never synced) and host keys
+  trusted only after the user confirms the fingerprint; a changed key is never
+  accepted silently. Repository identity is `GitRepositoryLocation.canonicalIdentity`
+  (lowercase host + path, no scheme/user/port/`.git`), shared with Linux.
+- SSH tests must pin ssh to a private config (`-F`), `known_hosts` and an agent on a
+  short socket path set explicitly; never reach the user's real agent or keys. Use
+  `GitSSHServer` / the fake `ssh` in `Tests/Core/GitTestServer.swift`.
+- `snippets-linux/src/git_layout.rs`, `git_location.rs` and `git_recovery.rs` mirror
+  `snippets/Core/Git/` byte for byte: manifest, README and record bytes,
+  `canonicalIdentity`, key scope, digests, the recovery envelope, and SSH value
+  rules. Change both sides together and keep `cargo test --lib git_tests` passing
+  on Linux.
+- Linux uses the system git with a cleared environment. Never pass a token in
+  argv, a URL or a file, never follow redirects, and never auto-accept SSH host
+  keys. stderr is classified into closed codes and discarded.
+- Linux live checks run on Omarchy: `tests/git-sync-live.sh` (loopback
+  http-backend, plus private sshd and a throwaway key in a private ssh-agent on a
+  short /tmp socket), `tests/git-sync-desktop-live.sh` and
+  `tests/git-sync-cli-live.sh`. A fixture `gnome-keyring-daemon` must start only
+  after `XDG_DATA_HOME` points inside the fixture. The harnesses fail if
+  `~/.local/share/keyrings` changes.
+- Keep polling cheap (`docs/git-sync.md`, "Cost and performance"): an idle round is
+  one discovery request, incremental fetches send plain `have`s (only an empty cache
+  asks for `deepen 1`), and macOS ssh shares connections. `GitIncrementalFetchTests`
+  guards the first two; measure real hosts with `GitSyncHostBenchmarkTests` and
+  `scripts/test-git-sync-hosted.sh owner/scratch-repo` (opt-in, writes to that repo).
+- Each device pins the library mode (encrypted or plain text) the user agreed to.
+  A manifest naming another mode stops sync with `git_library_mode_changed`; never
+  follow a changed mode silently, and never give an encrypted library's transport the
+  plain-text codec. A plain-text file's identity comes from the file alone (its
+  hash-covered `sync` id), never from a device's history.
+- iOS may tell the user that a host key matches the fingerprint GitHub, GitLab,
+  Codeberg or Bitbucket publishes, but the user still confirms it. Update
+  `GitSSHHostKeyStore.publishedFingerprints` only from the host's documentation,
+  checked against a live scan.
+- Plain `http://` is a test seam: loopback only, DEBUG only, behind
+  `SNIPPETS_GIT_ALLOW_LOOPBACK_HTTP=1` or iOS `--ui-testing-reset`, whose launches keep
+  Git keys and tokens in memory and reset the Git preferences.
+- For changes to the Git provider, run `GitSyncSettingsMacTests` and
+  `scripts/test-git-sync-integration.sh` (HTTPS, SSH and UI stages) in addition to the
+  CorePackage tests.
+- Tests run the real `git http-backend` through `Tests/Core/GitTestServer.swift`; keep
+  new transport tests on that harness. Run CorePackage tests with `xcrun swift test`:
+  the swiftly toolchain pinned by `.swift-version` cannot load CryptoKit from Xcode 27's
+  SDK.
+
 ### Production versus Development
 
 This distinction is easy to miss and produces a convincing false success:

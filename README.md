@@ -91,6 +91,7 @@ authenticated copy, and small edits available when you are away from your desk.
 | Secure bodies with authenticated access | Vault, protected editor, Secure Paste | Vault, protected editor, expiring secure copy | Secure records preserved, opening them not yet supported |
 | Date, time, and clipboard placeholders | Yes | Yes, resolved on copy | Not yet |
 | Encrypted iCloud sync | Opt-in | Opt-in | Not available |
+| Sync through your own Git repository (GitHub, GitLab, Gitea, GitVerse), encrypted or as plain-text Markdown | Opt-in; HTTPS token or SSH with your ssh-agent | Opt-in; HTTPS token or SSH with a per-device key | Not yet |
 | Encrypted clipboard history | Opt-in | — | — |
 | JSON / Raycast import and encrypted library backups | Yes | Yes | Not yet |
 | CLI for scripts and agents | Bundled | — | — |
