@@ -1342,6 +1342,18 @@ impl ServerRecord {
         }
         Ok(())
     }
+    /// A record a non-HTTP transport (Git) read from its own storage.
+    pub(crate) fn from_parts(record: WireRecord, record_version: RecordVersion) -> Result<Self> {
+        let record = Self {
+            id: record.id,
+            rev: record.rev,
+            deleted: record.deleted,
+            blob: record.blob,
+            record_version,
+        };
+        record.validate()?;
+        Ok(record)
+    }
     pub fn into_parts(self) -> (WireRecord, RecordVersion) {
         (
             WireRecord {

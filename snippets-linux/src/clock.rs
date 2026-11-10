@@ -61,6 +61,19 @@ impl Hlc {
             device: "00000000".into(),
         }
     }
+    /// The next reading after this one on the foreign device: one counter
+    /// tick, or the next millisecond with counter 0 when the counter is full
+    /// (Apple `GitPlainSnippetFile.bumped`).
+    pub(crate) fn bumped_foreign(&self) -> Self {
+        match self.counter.checked_add(1) {
+            Some(counter) => Self {
+                wall: self.wall,
+                counter,
+                device: "00000000".into(),
+            },
+            None => Self::foreign(self.wall.saturating_add(1)),
+        }
+    }
     pub(crate) fn projected(
         wall: u64,
         stored: Option<&Self>,

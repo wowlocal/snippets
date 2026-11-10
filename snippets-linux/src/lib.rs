@@ -25,6 +25,18 @@ pub mod diagnostics;
 #[cfg(feature = "desktop")]
 mod diagnostics_service;
 pub mod editor_assistance;
+pub mod git_layout;
+pub mod git_location;
+pub mod git_plain;
+pub mod git_recovery;
+pub mod git_repo;
+pub mod git_setup;
+#[cfg(test)]
+#[path = "git_tests.rs"]
+mod git_tests;
+pub mod git_transport;
+#[cfg(feature = "desktop")]
+mod git_ui;
 pub mod global_shortcuts;
 #[cfg(feature = "desktop")]
 mod gnome_clipboard;

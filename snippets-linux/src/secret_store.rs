@@ -48,6 +48,11 @@ pub enum Slot {
     /// A signed-out device's pending device-approved sign-in (ADR 0007): its
     /// pairing recipient material, request ID and poll token.
     DeviceSignIn,
+    /// Git sync library keys (sync-v1 bundles), keyed by repository/library scope.
+    GitLibraryKeys,
+    /// The HTTPS access token for the configured Git repository, bound to its
+    /// canonical location and user name. SSH needs none.
+    GitCredential,
 }
 impl Slot {
     #[cfg(feature = "secret-service")]
@@ -68,6 +73,8 @@ impl Slot {
             Self::AutomaticSync => c"automatic-sync-v1",
             Self::ClipboardHistory => c"clipboard-history-key-v1",
             Self::DeviceSignIn => c"device-sign-in-v1",
+            Self::GitLibraryKeys => c"git-library-keys-v1",
+            Self::GitCredential => c"git-credential-v1",
         }
     }
 }

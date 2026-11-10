@@ -331,7 +331,7 @@ type CreatedNext = (Option<Box<Reply>>, Option<Failure>);
 /// Copies the key with the internal history marker and the password-manager hint
 /// so clipboard managers skip it, then clears it after two minutes only if the
 /// clipboard still holds this exact copy.
-fn copy_account_key(widget: &impl IsA<gtk::Widget>, text: &str) -> Result<()> {
+pub(crate) fn copy_account_key(widget: &impl IsA<gtk::Widget>, text: &str) -> Result<()> {
     let clipboard = widget.clipboard();
     let provider = gtk::gdk::ContentProvider::new_union(&[
         crate::ui::internal_clipboard_provider(text),

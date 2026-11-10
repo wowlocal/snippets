@@ -410,6 +410,18 @@ authenticated source and current vaults. Its native dialog still needs live
 display verification. Startup stays offline unless automatic
 sync was explicitly enabled for a verified saved library.
 
+## Git sync
+
+**Git Repository…** in the main menu (or `snippets-cli git …`) syncs the library through a
+git repository you own: GitHub, GitLab, Gitea, GitVerse or any git host. It works
+over HTTPS with an access token or over SSH with your own agent and configuration,
+and it is compatible with the Mac and iPhone/iPad apps. An encrypted library gives
+the host only end-to-end encrypted records; a plain-text library keeps ordinary
+snippets as readable Markdown files you can browse and edit in the repository, with
+secure snippets still encrypted. Create a library and keep its one-time recovery code,
+or join an existing library with that code. Details, safety rules and verification
+are in [docs/linux/GIT_SYNC.md](../docs/linux/GIT_SYNC.md).
+
 ## Account and library recovery
 
 Open **Account & Recovery…** from the menu. Opening the window reads saved account

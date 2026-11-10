@@ -493,6 +493,10 @@ impl App {
             window.present();
         }
     }
+    fn open_git_sync(self: &Rc<Self>) {
+        let root = self.library.borrow().root.clone();
+        crate::git_ui::present(&self.application, &self.main().window, root);
+    }
     fn catalogue(&self) -> model::Result<Vec<Snippet>> {
         if self.recovery_required.get() {
             return Err(Error(
@@ -570,6 +574,7 @@ impl App {
         if let Some(worker) = self.account_worker.borrow().as_ref() {
             worker.wake(reason);
         }
+        crate::git_ui::wake(reason);
     }
     fn toast(self: &Rc<Self>, message: &str) {
         if let Some(picker) = self
@@ -892,6 +897,7 @@ impl App {
             return;
         }
         self.quit_pending.set(true);
+        crate::git_ui::shutdown();
         if let Some(main) = self.main.borrow().as_ref() {
             main.assistance.invalidate();
         }
@@ -1148,6 +1154,7 @@ impl App {
             "about",
             "secure",
             "account",
+            "git-sync",
             "backup",
             "restore-backup",
         ] {
@@ -1162,6 +1169,7 @@ impl App {
                         "quit",
                         "about",
                         "account",
+                        "git-sync",
                         "restore-backup",
                         "history",
                         "inline",
@@ -1184,6 +1192,7 @@ impl App {
                     }
                     match name {
                         "account" => app.open_account(),
+                        "git-sync" => app.open_git_sync(),
                         "history" => app.open_history(),
                         "inline" => app.open_inline(),
                         "usage" => app.open_usage(),
@@ -1340,6 +1349,7 @@ impl MainWindow {
         for (title, action) in [
             ("Settings…", "settings"),
             ("Account & Recovery…", "account"),
+            ("Git Repository…", "git-sync"),
             ("Secure Snippets…", "secure"),
             ("Capture Clipboard", "capture"),
             ("Clipboard History…", "history"),
@@ -2406,6 +2416,9 @@ pub fn run() -> glib::ExitCode {
             }
             // Usage is local and its worker is started only by the primary desktop owner.
             *app.usage.borrow_mut() = Some(crate::usage_store::Handle::start(root.clone()));
+            // Git sync is owned by this primary process only; it does nothing
+            // until a repository is connected.
+            crate::git_ui::start(root.clone());
             match AccountWorker::new(root) {
                 Ok(worker) => *app.account_worker.borrow_mut() = Some(Rc::new(worker)),
                 Err(failure) => eprintln!("{}", failure.message()),

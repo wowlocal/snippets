@@ -38,6 +38,17 @@ condition. `starting` is transient. A stopped app can still report stored settin
 with `appAvailable: false` and `state: null`; that read creates no library files.
 Mutations require the background app. Exit code 3 means it is not running.
 
+## Git sync
+
+`snippets-cli git status|inspect|create|join|sync|deletion-review|snapshot-review|replace-recovery-code|automatic|disconnect`
+connects and syncs a library through your own git repository, over HTTPS (token) or SSH
+(your ssh-agent, `~/.ssh/config` and `known_hosts`). Tokens and recovery codes are
+read only from stdin; a new recovery code is printed once on stdout. `git create
+--plain-text` creates a plain-text library (ordinary snippets as readable Markdown); it
+is refused for a public repository, and where Snippets cannot check the repository it
+needs `--confirm-private`. Joining one needs `git join --accept-plain-text`. These commands work headless, with
+no window. See [GIT_SYNC.md](GIT_SYNC.md).
+
 ## Coverage and remaining work
 
 This table keeps the full CLI request visible. Launching a GUI window from a

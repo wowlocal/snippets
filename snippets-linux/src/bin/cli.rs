@@ -1,3 +1,5 @@
+mod cli_git;
+
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 use snippets_linux::{
@@ -60,6 +62,11 @@ enum Operation {
     },
     Import {
         file: PathBuf,
+    },
+    /// Serverless sync through your own git repository (HTTPS token or SSH).
+    Git {
+        #[command(subcommand)]
+        command: cli_git::GitOperation,
     },
 }
 #[derive(Subcommand)]
@@ -251,6 +258,7 @@ fn execute(command: Operation, library: &mut Library) -> Result<Value> {
         Operation::Reveal { .. } | Operation::SecureStatus => {
             Err(Error("Secure commands require the running desktop app."))
         }
+        Operation::Git { .. } => unreachable!("git routing"),
     }
 }
 fn private_add(values: &Edit) -> Result<(Addition, Source)> {
@@ -428,6 +436,32 @@ fn expansion_command(root: &std::path::Path, command: control::ExpansionCommand)
         }
     }
 }
+fn git_command(root: PathBuf, command: cli_git::GitOperation) -> u8 {
+    match cli_git::run(root, command) {
+        cli_git::Outcome::Value(value) => match print_json(&value) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("{error}");
+                1
+            }
+        },
+        cli_git::Outcome::FailureWithCode(failure, code) => {
+            // The library may exist; the only copy of its code must not be lost.
+            let _ = print_json(&json!({"error": failure.code(), "recoveryCode": code.as_str()}));
+            eprintln!("{} ({})", failure.message(), failure.code());
+            1
+        }
+        cli_git::Outcome::Failure(failure) => {
+            eprintln!("{} ({})", failure.message(), failure.code());
+            1
+        }
+        cli_git::Outcome::FailureWithHint(failure, hint) => {
+            eprintln!("{} ({})", failure.message(), failure.code());
+            eprintln!("hint: {hint}");
+            1
+        }
+    }
+}
 fn main() -> std::process::ExitCode {
     let options = Options::parse();
     if matches!(&options.command, Operation::Update { edit, .. } if edit.secure) {
@@ -460,6 +494,12 @@ fn main() -> std::process::ExitCode {
     if let Some(command) = configuration {
         return std::process::ExitCode::from(expansion_command(&root, command));
     }
+    let options = match options.command {
+        Operation::Git { command } => {
+            return std::process::ExitCode::from(git_command(root, command));
+        }
+        command => Options { command },
+    };
     if matches!(
         &options.command,
         Operation::Reveal { .. } | Operation::SecureStatus

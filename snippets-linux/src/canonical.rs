@@ -215,6 +215,16 @@ fn swift_float(value: f64) -> Result<String> {
     })
 }
 pub fn parse(bytes: &[u8]) -> Result<Value> {
+    parse_with(bytes, false)
+}
+/// Apple `CanonicalJSON.value` number semantics for text people may edit (a
+/// plain-text library's front matter): an integer beyond Int64 becomes a
+/// double, and a non-finite double is kept, so emitting it fails exactly as
+/// it does on Apple instead of the value being refused while parsing.
+pub(crate) fn parse_lenient_numbers(bytes: &[u8]) -> Result<Value> {
+    parse_with(bytes, true)
+}
+fn parse_with(bytes: &[u8], lenient_numbers: bool) -> Result<Value> {
     if bytes.len() > MAX_BYTES || std::str::from_utf8(bytes).is_err() {
         return Err(INVALID);
     }
@@ -222,6 +232,7 @@ pub fn parse(bytes: &[u8]) -> Result<Value> {
         bytes,
         position: 0,
         nodes: 0,
+        lenient_numbers,
     };
     let value = parser.value(0)?;
     parser.whitespace();
@@ -237,6 +248,7 @@ struct Parser<'a> {
     bytes: &'a [u8],
     position: usize,
     nodes: usize,
+    lenient_numbers: bool,
 }
 impl Parser<'_> {
     fn peek(&self) -> Option<u8> {
@@ -361,12 +373,18 @@ impl Parser<'_> {
         let text = std::str::from_utf8(&self.bytes[start..self.position]).map_err(|_| INVALID)?;
         if float {
             let value = text.parse::<f64>().map_err(|_| INVALID)?;
-            if !value.is_finite() {
+            if !value.is_finite() && !self.lenient_numbers {
                 return Err(INVALID);
             }
             Ok(Value::Float(value))
         } else {
-            text.parse::<i64>().map(Value::Int).map_err(|_| INVALID)
+            match text.parse::<i64>() {
+                Ok(value) => Ok(Value::Int(value)),
+                Err(_) if self.lenient_numbers => {
+                    text.parse::<f64>().map(Value::Float).map_err(|_| INVALID)
+                }
+                Err(_) => Err(INVALID),
+            }
         }
     }
     fn hex4(&mut self) -> Result<u32> {

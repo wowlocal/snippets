@@ -116,3 +116,16 @@ regenerates/checks this fixture and independently authenticates actual restored
 current-vault bodies, both disabled preserved versions and unchanged current
 wraps/header before and after native synchronization. It is development tooling;
 Cargo and the app consume the checked-in fixture without Python.
+
+`git-plain-v1.json` holds plain-text Git library vectors generated from the Apple
+reference by [`../reference/git-plain-vectors.swift`](../reference/git-plain-vectors.swift)
+through `CorePackage` (`@testable import SnippetsCore`, unmodified sources): the
+Markdown rendered for 15 envelopes (multi-line, empty, non-ASCII, trailing newline,
+CRLF and lone `\r` bodies, escaped metadata, signed zero and exponent timestamps, a
+foreign origin, and one with extension data that must not render), the envelope,
+edit flag, normalized rewrite, hand-deletion tombstone and declared id read back from
+about 100 edited or hand-made files (body, name, tags, CRLF, BOM, YAML tag lists,
+comments, quoting, invalid ids, broken or missing front matter, crafted `sync`
+values), reads under an assigned id, path-derived ids, file names, tag
+normalization, and the plain README and manifest bytes. All identifiers and texts
+are fictional.

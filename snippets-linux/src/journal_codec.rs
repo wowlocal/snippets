@@ -585,6 +585,21 @@ fn encode_schema(journal: &Journal, schema: u8) -> Result<Zeroizing<Vec<u8>>> {
     }
     Ok(w.0)
 }
+/// The scope bindings in an authenticated checkpoint's fixed header.
+pub(super) fn stored_scope(bytes: &[u8]) -> Result<Scope> {
+    let mut r = Reader(bytes);
+    let schema = r.take(4)?;
+    let supported: [&[u8]; 6] = [b"JNL1", b"JNL2", b"JNL3", b"JNL4", b"JNL5", b"JNL6"];
+    if !supported.contains(&schema) {
+        return Err(INVALID);
+    }
+    let membership: [u8; 32] = r.take(32)?.try_into().map_err(|_| INVALID)?;
+    let dataset: [u8; 32] = r.take(32)?.try_into().map_err(|_| INVALID)?;
+    Ok(Scope {
+        membership: crate::cloud::Binding::from_checkpoint(membership),
+        dataset: crate::cloud::Binding::from_checkpoint(dataset),
+    })
+}
 pub(super) fn decode(bytes: &[u8], scope: Scope) -> Result<Journal> {
     decode_level(bytes, scope, true)
 }

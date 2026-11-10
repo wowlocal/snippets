@@ -1468,6 +1468,33 @@ impl Checkpoint {
     pub(crate) fn same_snapshot(&self, other: &Self) -> bool {
         self.snapshot == other.snapshot
     }
+    /// The authenticated scope and key epoch of the saved checkpoint, if any.
+    /// A provider switch reads this only to name the previous scope for its
+    /// journal-first review; it grants no admission and changes nothing.
+    pub(crate) fn stored_scope(
+        library: &Library,
+        key: &RootKey,
+        salt: &[u8; 32],
+    ) -> Result<Option<(Scope, Option<u64>)>> {
+        let _guard = library.lock().map_err(|_| Failure::Storage)?;
+        let directory = library.root.join("Sync");
+        match std::fs::symlink_metadata(&directory) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            _ => check_directory(&directory)?,
+        }
+        let Some(bytes) = model::read_regular_bounded(
+            &directory.join("journal.bin"),
+            crypto::MAX_CHECKPOINT_BYTES + 32,
+        )
+        .map_err(|_| Failure::Storage)?
+        else {
+            return Ok(None);
+        };
+        let plaintext = crypto::open_checkpoint(&bytes, key, salt)?;
+        let scope = codec::stored_scope(&plaintext)?;
+        let journal = codec::decode(&plaintext, scope.clone())?;
+        Ok(Some((scope, journal.key_epoch)))
+    }
     pub fn load(library: &Library, key: &RootKey, salt: &[u8; 32], scope: Scope) -> Result<Self> {
         let _guard = library.lock().map_err(|_| Failure::Storage)?;
         Self::load_locked(library, key, salt, scope)
