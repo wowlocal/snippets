@@ -464,46 +464,59 @@ Each side served the same bare repository from its own loopback
   decrypted Unicode content, then edited, added and deleted. Linux received all
   three.
 
-### Plain-text interop (2026-11-09, before the `sync` id)
+### Plain-text interop (2026-11-10, current format)
 
 The same approach, with a second scratch driver over `GitSyncTransport` in plain-text
-mode (`GitPlainCodec`) and `GitPlainSnippetFile`, and Linux through `snippets-cli` in
-private bus/keyring fixtures:
+mode (`GitPlainCodec`, `expectedMode: .plainText`) and `GitPlainSnippetFile`, and
+Linux through `snippets-cli` in private bus/keyring fixtures. Both sides ran the
+code at `5877578`, with the `id` key in `sync` and the file-only identity rules. An
+earlier run on 2026-11-09 predated those rules; this one replaces it.
 
 - **Apple creates, Linux joins.** Linux refused to join without
-  `--accept-plain-text`, joined with it (`"mode": "plain_text"`), received the Swift
-  snippet, merged a local one, and edited the Swift snippet: Markdown at the Swift path.
-  Swift read both Linux-written files as exact (not edited), and re-rendering them gave
-  byte-identical files.
+  `--accept-plain-text` (`plain_text_consent_required`), joined with it
+  (`"mode": "plain_text"`), received the Swift snippet, merged a local one, and edited
+  the Swift snippet: Markdown at the Swift path. Swift read both Linux-written files as
+  exact (not edited) with the same ids, re-rendering them gave byte-identical files,
+  and a full fetch added no commit.
 - **Hand edit, Linux first.** A body and tag edit committed with plain `git` (tags
-  `[integration, Plain, plain, hand]`). Swift derived revision `786e8911…`, clock
-  `…-0001-00000000`, without fetching. Linux synced: one `Normalize 1 file(s) edited
-  outside Snippets` commit, tags normalized to `["integration","Plain","hand"]`, and no
-  commit from a second cycle. Swift read Linux's rewrite as exact with revision
-  `786e8911…`, and its full fetch added no commit.
+  `[integration, Plain, plain, hand]`). Swift derived revision `ee5cca2b…`, clock
+  `…-0001-00000000` and the file's own id, without fetching. Linux synced: one
+  `Normalize 1 file(s) edited outside Snippets` commit, tags normalized to
+  `["integration","Plain","hand"]`, and no commit from a second cycle. Swift read
+  Linux's rewrite as exact with revision `ee5cca2b…`, and its full fetch added no
+  commit.
 - **Hand edit, Apple first.** A CRLF rewrite of the Linux snippet: Swift fetched and
-  normalized (revision `68d469e2…`); Linux then took the body with its inner `\r\n`
+  normalized (revision `46f70f82…`); Linux then took the body with its inner `\r\n`
   and wrote nothing.
+- **Renamed by hand.** `git mv` of a Linux-written file to `renamed-by-hand.md`: Swift
+  read it as exact with the same id, and Linux kept the snippet with no deletion
+  review and no commit.
+- **Copied by hand, Linux first.** A copy of the Swift file (`…-617a0011.md`) with a
+  new keyword and body, still carrying the original's `sync` id. Linux kept the id on
+  the file whose name ends in that id and gave the copy its path-derived id
+  (`db223717…`) in one normalize commit. Swift read the rewritten copy as exact with
+  that id, and its ids for all snippets matched Linux's.
+- **Copied by hand, Apple first.** A copy of `renamed-by-hand.md` (no id suffix in
+  either name) as `zz-copy-two.md`. Swift kept the id on the first name and gave the
+  copy `0949e1e9…` in one normalize commit. Linux reported the same ids for every
+  snippet and wrote nothing.
 - **Linux creates, Apple joins.** The plain README is byte-identical to the
-  Swift-created library's. Swift read both Linux files (one with a Cyrillic name that
-  Linux slugs `snippet-…`) as exact with byte-identical re-rendering, edited one (path
-  kept) and added one; Linux received both. A Markdown file deleted with plain `git`
-  was reviewed on Linux as `remote_deletion` and recorded under `records/` in a
-  normalize commit; Swift read the tombstone one tick after the deleted file's clock,
-  origin `00000000`, without the user-deletion marker.
+  Swift-created library's, and the manifest matches apart from the dataset id. Swift
+  read both Linux files (one with a Cyrillic name that Linux slugs `snippet-…`) as
+  exact with byte-identical re-rendering, edited one (path kept) and added one; Linux
+  received both. A Markdown file deleted with plain `git` was reviewed on Linux as
+  `remote_deletion` and recorded under `records/` in a normalize commit; Swift read
+  the tombstone one tick after the deleted file's clock, origin `00000000`, without
+  the user-deletion marker, and added no commit.
 - **Secure snippets.** A Swift secure snippet in a plain-text library is a
   `records/` file; neither its secret nor its name occurs in any repository object.
   Linux reports `vault_locked` for it (below).
 
-This run predates the `id` key in `sync` and the file-only identity rules, and was not
-repeated. The current format is pinned by the regenerated vectors (render, read,
-assigned reads, scans); CAS versions never leave a device, so the `git-md-blob-sha1:`
-change has no cross-device bytes.
+Every phase checked that `~/.local/share/keyrings` was unchanged. CAS versions never
+leave a device, so the `git-md-blob-sha1:` version has no cross-device bytes.
 
 ## Not done yet
 
-- The two-machine Apple/Linux plain-text interop was not rerun after the `sync` id
-  change (see above).
 - Plain-text libraries: an unreadable Markdown file omitted from a full snapshot leads
   to the missing-records review (see above), and file names transliterate non-Latin
   names less than Apple (`Привет` becomes `snippet`, not `privet`; paths are cosmetic
