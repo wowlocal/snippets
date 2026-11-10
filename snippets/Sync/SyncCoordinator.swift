@@ -346,6 +346,9 @@ final class SyncCoordinator {
         case checkpointUnreadable
         case authenticationRequired
         case cloudKeyRequired
+        case gitKeyRequired
+        case gitCredentialRequired
+        case gitConfigurationRequired
         case syncKeyUnreadable
         case cloudCredentialsUnreadable
         case providerSwitchUnreadable
@@ -361,6 +364,12 @@ final class SyncCoordinator {
                 "Sign in to the selected cloud service again."
             case .cloudKeyRequired:
                 "Approve this device from a trusted device or restore the Snippets Cloud recovery kit."
+            case .gitKeyRequired:
+                "This device does not have the Git library’s key yet. Open Git in Sync settings and enter the library’s recovery code."
+            case .gitCredentialRequired:
+                "The Git access token is missing on this device. Open Git in Sync settings and enter it again."
+            case .gitConfigurationRequired:
+                "Git is selected, but no repository is connected on this device. Open Git in Sync settings to connect it, or choose another provider."
             case .syncKeyUnreadable:
                 "The stored sync encryption key could not be verified. Repair or restore the library key, then choose Check Again."
             case .cloudCredentialsUnreadable:
@@ -386,6 +395,12 @@ final class SyncCoordinator {
                 .needsAuthentication("sign_in_required")
             case .cloudKeyRequired:
                 .needsAttention("cloud_key_required")
+            case .gitKeyRequired:
+                .needsAttention("git_key_required")
+            case .gitCredentialRequired:
+                .needsAuthentication("git_credential_required")
+            case .gitConfigurationRequired:
+                .needsAttention("git_configuration_required")
             case .syncKeyUnreadable:
                 .needsAttention("sync_key_unreadable")
             case .cloudCredentialsUnreadable:
@@ -403,6 +418,7 @@ final class SyncCoordinator {
             case .syncKeyUnreadable: .checkAgain
             case .retryablePrerequisite: .retrySync
             case .schemaTooNew, .authenticationRequired, .cloudKeyRequired,
+                 .gitKeyRequired, .gitCredentialRequired, .gitConfigurationRequired,
                  .cloudCredentialsUnreadable, .providerSwitchUnreadable: nil
             }
         }
@@ -411,7 +427,8 @@ final class SyncCoordinator {
             switch self {
             case .retryablePrerequisite: true
             case .schemaTooNew, .checkpointUnreadable, .authenticationRequired,
-                 .cloudKeyRequired, .syncKeyUnreadable,
+                 .cloudKeyRequired, .gitKeyRequired, .gitCredentialRequired,
+                 .gitConfigurationRequired, .syncKeyUnreadable,
                  .cloudCredentialsUnreadable, .providerSwitchUnreadable: false
             }
         }
@@ -610,7 +627,8 @@ final class SyncCoordinator {
             let issue = Self.startIssue(for: error)
             let diagnosticArea: DiagnosticStorageArea = switch issue {
             case .schemaTooNew, .checkpointUnreadable, .providerSwitchUnreadable: .syncState
-            case .authenticationRequired, .cloudKeyRequired, .syncKeyUnreadable,
+            case .authenticationRequired, .cloudKeyRequired, .gitKeyRequired,
+                 .gitCredentialRequired, .gitConfigurationRequired, .syncKeyUnreadable,
                  .cloudCredentialsUnreadable, .retryablePrerequisite: .syncKey
             }
             Diagnostics.record(.storageFailure(
@@ -842,6 +860,10 @@ final class SyncCoordinator {
             if !backendSelection.syncEnabled {
                 backendSelection.setSyncEnabled(true)
             }
+            #if DEBUG
+            // Isolated debug launches keep on/off in process; honour the same promise.
+            if Self.runtimeEnabledOverride != nil { Self.storeEnabledPreference(true) }
+            #endif
         } catch {
             cloudMutationInProgress = false
             if Self.isEnabled { start() }
@@ -1199,12 +1221,14 @@ final class SyncCoordinator {
             case .missingCredential, .invalidCredential,
                  .postAuthorizationMembershipMismatch: .authenticationRequired
             case .credentialResetRequired: .cloudCredentialsUnreadable
+            case .gitCredentialRequired: .gitCredentialRequired
+            case .gitConfigurationRequired: .gitConfigurationRequired
             case .invalidProviderSelection, .switchStateUnreadable:
                 .providerSwitchUnreadable
             case .featureDisabled, .missingConfiguration,
                  .credentialCleanupRequired, .credentialStoreUnavailable,
                  .postAuthorizationSetupRequired, .postAuthorizationStateUnavailable,
-                 .preferenceStoreUnavailable:
+                 .preferenceStoreUnavailable, .gitConfigurationInUse:
                 .retryablePrerequisite
             }
         }
@@ -1212,7 +1236,8 @@ final class SyncCoordinator {
             return switch failure {
             case .keychainUnavailable: .retryablePrerequisite
             case .cloudBootstrapRequired: .cloudKeyRequired
-            case .malformedMaterial, .cloudRecordUnreadable: .syncKeyUnreadable
+            case .gitKeyRequired: .gitKeyRequired
+            case .malformedMaterial, .cloudRecordUnreadable, .gitRecordUnreadable: .syncKeyUnreadable
             }
         }
         return .retryablePrerequisite
@@ -1847,6 +1872,10 @@ final class SyncCoordinator {
                         + "approve this device from a trusted device or restore the "
                         + "Snippets Cloud recovery kit. Check Again only rechecks the "
                         + "key; it does not repair or replace it."
+                case .git:
+                    "The Git library key saved on this device could not be verified. "
+                        + "Reconnect the repository in Sync settings with its recovery "
+                        + "code. Check Again only rechecks the key; it does not repair it."
                 }
             }
             return startIssue.description
@@ -1872,6 +1901,10 @@ final class SyncCoordinator {
             guard let lastSync else { return "On. Nothing synced yet." }
             let formatter = DateFormatter()
             formatter.timeStyle = .short
+            guard Calendar.current.isDateInToday(lastSync) else {
+                formatter.dateStyle = .medium
+                return "On. Last synced \(formatter.string(from: lastSync))."
+            }
             return "On. Last synced at \(formatter.string(from: lastSync))."
         case .syncing:
             return "Syncing\u{2026}"
@@ -1917,6 +1950,27 @@ final class SyncCoordinator {
             return "Sign in to continue"
         case "invalid_access_token", "reauthentication_required":
             return "Your sign-in expired; sign in again"
+        case "git_http_401", "git_http_403":
+            return "The Git host didn’t accept the access token. It may have expired; enter a new "
+                + "one in Sync settings"
+        case "git_credential_required":
+            return "The Git access token is missing on this device. Enter it in Sync settings"
+        case "git_ssh_host_key_unknown":
+            #if os(macOS)
+            return "The Git host’s SSH key isn’t in known_hosts. Connect once with ssh -T in Terminal"
+            #else
+            return "The Git host’s SSH key isn’t trusted on this device. Reconnect in Sync settings"
+            #endif
+        case "git_ssh_host_key_changed":
+            return "The Git host’s SSH key changed. Check it before reconnecting in Sync settings"
+        case "git_ssh_permission_denied":
+            #if os(macOS)
+            return "The Git host didn’t accept a key from your ssh-agent, or the key can’t write"
+            #else
+            return "The Git host didn’t accept this device’s SSH key, or the key can’t write"
+            #endif
+        case "git_repository_not_found":
+            return "The Git repository was not found, or the token or SSH key can’t see it"
         default:
             return "Sign in again to continue"
         }
@@ -1938,6 +1992,36 @@ final class SyncCoordinator {
             return "Another Snippets process completed recovery; reconnecting sync"
         case "cloud_key_required":
             return "Approve this device or restore the Snippets Cloud recovery kit"
+        case "git_key_required":
+            return "Enter the Git library’s recovery code in Sync settings"
+        case "git_configuration_required":
+            return "Connect the Git repository in Sync settings, or choose another provider"
+        case "git_library_replaced":
+            return "The Git repository now holds a different Snippets library. Reconnect it in "
+                + "Sync settings"
+        case "git_repository_not_initialized":
+            return "The Git branch no longer holds a Snippets library. Reconnect it in Sync settings"
+        case "git_branch_not_snippets_library":
+            return "The Git branch contains files that are not a Snippets library"
+        case "git_sync_schema_unsupported":
+            return "A newer Snippets version wrote this Git library; update Snippets"
+        case "git_push_rejected":
+            return "The Git host refused the update. Check that the branch is not protected and "
+                + "that the token or SSH key can write to it"
+        case "git_response_too_large":
+            return "The Git repository is larger than Snippets accepts"
+        case "git_library_mode_changed":
+            return "The Git library’s storage mode changed in the repository. Reconnect in Sync settings to review it"
+        case "git_push_too_large":
+            return "The Git host refused an upload as too large. Raise its request size limit"
+        case "git_unsupported_ssh_algorithms", "git_unsupported_ssh_handshake":
+            return "The Git host’s SSH server offers no settings this device supports. Use its HTTPS address"
+        case "git_unsupported_ssh_no_git", "git_unsupported_ssh_exec":
+            return "The Git host accepted the SSH login but runs no git for it"
+        case "git_unsupported_ssh_unavailable", "git_unsupported_ssh":
+            return "SSH isn’t available here. Use the repository’s HTTPS address in Sync settings"
+        case let detail where detail.hasPrefix("git_unsupported_"):
+            return "This address isn’t a git repository Snippets can use"
         case "sync_key_unreadable":
             return "The stored sync encryption key could not be verified"
         case "not_found":

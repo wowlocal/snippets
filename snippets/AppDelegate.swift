@@ -166,7 +166,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 try controller.flushPendingSecureEditForSync()
             }
         })
-    lazy var backendSelection = SyncBackendSelectionStore()
+    lazy var backendSelection = SyncBackendSelectionStore(
+        gitAllowsInsecureLoopback: Self.gitAllowsInsecureLoopback)
+
+    /// Debug builds may be pointed at a disposable loopback git server for integration
+    /// testing. Release builds accept HTTPS repositories only.
+    private static var gitAllowsInsecureLoopback: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["SNIPPETS_GIT_ALLOW_LOOPBACK_HTTP"] == "1"
+        #else
+        false
+        #endif
+    }
     lazy var cloudBootstrap = SnippetsCloudAccountBootstrap(selection: backendSelection)
 
     /// Owns whether sync runs, and runs it. Opt-in: constructing this costs nothing and
@@ -184,6 +195,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             cloudKeys: backendSelection.cloudKeys,
             usesSnippetsCloud: { [unowned self] in
                 self.backendSelection.provider == .snippetsCloud
+            },
+            gitKeys: backendSelection.gitKeys,
+            gitScope: { [unowned self] in
+                self.backendSelection.provider == .git
+                    ? .some(self.backendSelection.gitCoordinates?.keyScope) : nil
             }),
         device: store.deviceID,
         backendSelection: backendSelection)

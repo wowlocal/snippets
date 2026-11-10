@@ -198,7 +198,9 @@ nonisolated enum SettingsCatalog {
         entry(.clearClipboardHistory, "Clear Clipboard History", .clipboardHistory, ["delete", "remove", "privacy", "copied text"], macOSOnly),
         entry(.clipboardExcludedApps, "Excluded Apps", .clipboardHistory, ["ignore", "exclude", "applications", "clipboard"], macOSOnly),
 
-        entry(.cloudProvider, "Cloud Provider", .sync, ["icloud", "snippets cloud", "backend"], allPlatforms),
+        entry(.cloudProvider, "Cloud Provider", .sync,
+              ["icloud", "snippets cloud", "backend", "git", "github", "gitlab", "gitea", "gitverse", "repository"],
+              allPlatforms),
         entry(.cloudAccount, "Cloud Account", .sync, ["sign in", "sign out", "account", "create account", "account key"], allPlatforms),
         entry(.syncEnabled, "Sync This Library", .sync, ["enable", "icloud", "cloud"], allPlatforms),
         entry(.syncStatus, "Sync Status", .sync, ["last sync", "state", "health"], allPlatforms),

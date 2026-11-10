@@ -63,6 +63,8 @@ final class SyncKeyStore {
         case keychainUnavailable
         case cloudBootstrapRequired
         case cloudRecordUnreadable
+        case gitKeyRequired
+        case gitRecordUnreadable
 
         var description: String {
             switch self {
@@ -74,6 +76,10 @@ final class SyncKeyStore {
                 return "approve this device or restore the Snippets Cloud recovery kit first"
             case .cloudRecordUnreadable:
                 return "the stored Snippets Cloud library key could not be verified"
+            case .gitKeyRequired:
+                return "enter this Git library’s recovery code on this device first"
+            case .gitRecordUnreadable:
+                return "the stored Git library key could not be verified"
             }
         }
     }
@@ -83,15 +89,40 @@ final class SyncKeyStore {
     private let keychain: KeychainSecretStore
     private let cloudKeys: SnippetsCloudKeyStore?
     private let usesSnippetsCloud: () -> Bool
+    private let gitKeys: GitSyncKeyStore?
+    /// Non-nil exactly when Git is the selected provider. The inner nil means Git is
+    /// selected but no library is configured, which can only be fixed in Settings.
+    private let gitScope: () -> GitSyncKeyStore.Scope??
 
     init(
         keychain: KeychainSecretStore,
         cloudKeys: SnippetsCloudKeyStore? = nil,
-        usesSnippetsCloud: @escaping () -> Bool = { false }
+        usesSnippetsCloud: @escaping () -> Bool = { false },
+        gitKeys: GitSyncKeyStore? = nil,
+        gitScope: @escaping () -> GitSyncKeyStore.Scope?? = { nil }
     ) {
         self.keychain = keychain
         self.cloudKeys = cloudKeys
         self.usesSnippetsCloud = usesSnippetsCloud
+        self.gitKeys = gitKeys
+        self.gitScope = gitScope
+    }
+
+    /// A Git library's key is never minted here: it either came with the library from
+    /// the device that created it, or from that library's recovery code.
+    private var usesGit: Bool { gitScope() != nil }
+
+    private func gitMaterial() throws -> Data? {
+        guard let gitKeys, case .some(.some(let scope)) = gitScope() else {
+            throw Failure.gitKeyRequired
+        }
+        do {
+            return try gitKeys.material(for: scope)
+        } catch GitSyncKeyStore.Failure.malformedRecord {
+            throw Failure.gitRecordUnreadable
+        } catch {
+            throw Failure.keychainUnavailable
+        }
     }
 
     /// The stored key material, or `nil` when this Mac has none yet.
@@ -100,6 +131,7 @@ final class SyncKeyStore {
     /// against what its engine was built with. A `SymmetricKey` is not `Equatable` in a
     /// way that helps, and the comparison is the whole point.
     func material() throws -> Data? {
+        if usesGit { return try gitMaterial() }
         if usesSnippetsCloud() {
             guard let cloudKeys else { throw Failure.cloudBootstrapRequired }
             do {
@@ -138,6 +170,7 @@ final class SyncKeyStore {
     /// whatever the user is actually doing.
     func materialMintingIfNeeded() throws -> Data {
         if let existing = try material() { return existing }
+        if usesGit { throw Failure.gitKeyRequired }
         if usesSnippetsCloud() { throw Failure.cloudBootstrapRequired }
 
         var minted = Data(capacity: Self.materialByteCount)
@@ -161,6 +194,22 @@ final class SyncKeyStore {
     /// Capture the selected provider before leaving the actor; the coordinator rejects
     /// the result if its lifecycle changes while this worker is running.
     func prepareMaterialInBackground(mintingIfNeeded: Bool) async throws -> Data? {
+        if usesGit {
+            // Capture the scope here; only the Keychain read leaves MainActor.
+            guard let gitKeys, case .some(.some(let scope)) = gitScope() else {
+                throw Failure.gitKeyRequired
+            }
+            let material: Data?
+            do {
+                material = try await gitKeys.materialInBackground(for: scope)
+            } catch GitSyncKeyStore.Failure.malformedRecord {
+                throw Failure.gitRecordUnreadable
+            } catch {
+                throw Failure.keychainUnavailable
+            }
+            if material == nil, mintingIfNeeded { throw Failure.gitKeyRequired }
+            return material
+        }
         if usesSnippetsCloud() {
             return try mintingIfNeeded ? materialMintingIfNeeded() : material()
         }

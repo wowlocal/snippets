@@ -382,7 +382,8 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
             keychain: credentials,
             snippetsCloudEnabled: false)
 
-        XCTAssertEqual(selection.availableProviders, [.iCloud])
+        // Git needs no server, so it stays available while Snippets Cloud is gated.
+        XCTAssertEqual(selection.availableProviders, [.iCloud, .git])
         XCTAssertEqual(selection.provider, .snippetsCloud)
         XCTAssertFalse(defaults.bool(
             forKey: SyncBackendSelectionStore.legacyICloudEnabledDefaultsKey))

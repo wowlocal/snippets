@@ -354,12 +354,46 @@ final class SyncBackendSelectionStore {
     enum Provider: String, CaseIterable, Codable, Sendable {
         case iCloud = "icloud"
         case snippetsCloud = "snippets-cloud"
+        /// A user-chosen repository on any HTTPS git host. No Snippets server.
+        case git = "git"
 
         var displayName: String {
             switch self {
             case .iCloud: "iCloud"
             case .snippetsCloud: "Snippets Cloud"
+            case .git: "Git"
             }
+        }
+    }
+
+    /// Where the Git library lives. Non-secret; an HTTPS access token is a device-only
+    /// Keychain item and the library key lives in `GitSyncKeyStore`. SSH needs no
+    /// stored secret on macOS (ssh-agent) and uses the device key on iOS.
+    struct GitCoordinates: Equatable {
+        var repository: GitRepositoryLocation
+        var branch: String
+        /// The HTTPS user name; empty for SSH.
+        var username: String
+        /// The library this device holds the key for. A repository whose manifest
+        /// names another dataset stops sync until it is reconnected.
+        var datasetID: UUID
+        /// How the library stores records, as the user agreed when creating or joining it.
+        /// The transport refuses a manifest that names another mode.
+        var mode: GitLibraryMode = .encrypted
+
+        var usesSSH: Bool { repository.isSSH }
+
+        var canonicalLocation: String { repository.canonicalIdentity }
+
+        var keyScope: GitSyncKeyStore.Scope {
+            GitSyncKeyStore.Scope(
+                location: canonicalLocation, refName: "refs/heads/\(branch)", datasetID: datasetID)
+        }
+
+        /// The repository as people write it, for display: `github.com/me/library`,
+        /// or the SSH address as entered.
+        var displayLocation: String {
+            usesSSH ? repository.spec : repository.canonicalIdentity
         }
     }
 
@@ -385,9 +419,15 @@ final class SyncBackendSelectionStore {
         case preferenceStoreUnavailable
         case invalidProviderSelection
         case switchStateUnreadable
+        case gitCredentialRequired
+        case gitConfigurationInUse
+        case gitConfigurationRequired
 
         var description: String {
             switch self {
+            case .gitCredentialRequired: "the Git access token is missing on this device"
+            case .gitConfigurationInUse: "a provider switch involving Git is still finishing"
+            case .gitConfigurationRequired: "no Git repository is connected on this device"
             case .featureDisabled: "Snippets Cloud is disabled in this build"
             case .missingConfiguration: "Snippets Cloud is not configured"
             case .missingCredential: "Snippets Cloud needs sign-in"
@@ -435,6 +475,13 @@ final class SyncBackendSelectionStore {
     private static let serverInstanceDefaultsKey = "SnippetsCloudServerInstanceID"
     private static let protocolMajorDefaultsKey = "SnippetsCloudProtocolMajor"
     private static let tokenAccount = "oidc-access-token-v1"
+    static let gitRepositoryDefaultsKey = "SnippetsGitSyncRepositoryURL"
+    static let gitBranchDefaultsKey = "SnippetsGitSyncBranch"
+    static let gitUsernameDefaultsKey = "SnippetsGitSyncUsername"
+    static let gitDatasetDefaultsKey = "SnippetsGitSyncDatasetID"
+    static let gitModeDefaultsKey = "SnippetsGitSyncMode"
+    static let gitTokenAccount = "git-access-token-v1"
+    static let gitCredentialService = "com.khm.snippets.git-sync.credentials"
     static let oauthSessionAccount = "oidc-session-v1"
     static let oauthSessionReplacementAccount = "oidc-session-replacement-journal-v1"
     static let oauthRevocationAccount = "oidc-revocation-journal-v1"
@@ -460,6 +507,17 @@ final class SyncBackendSelectionStore {
     private let nativeAuthSessionConfiguration: URLSessionConfiguration
     let snippetsCloudEnabled: Bool
     let cloudKeys: SnippetsCloudKeyStore
+    let gitSyncEnabled: Bool
+    let gitKeys: GitSyncKeyStore
+    /// Device-only; separate from the Snippets Cloud credential service so neither
+    /// provider's cleanup can touch the other's secrets.
+    private let gitCredentials: KeychainSecretStore
+    /// Test seams. Production uses the transport's hardened ephemeral session and
+    /// accepts HTTPS only.
+    let gitSessionConfiguration: URLSessionConfiguration?
+    let gitAllowsInsecureLoopback: Bool
+    /// How SSH remotes are reached; nil where this build cannot use them.
+    let gitSSH: GitSSHSupport?
     private(set) var providerSelectionFailure: Failure?
 
     init(
@@ -469,10 +527,29 @@ final class SyncBackendSelectionStore {
         bootstrapSecrets: KeychainSecretStore? = nil,
         snippetsCloudEnabled: Bool = SnippetsCloudFeature.isEnabled,
         defersCredentialRecovery: Bool = false,
-        nativeAuthSessionConfiguration: URLSessionConfiguration = .ephemeral
+        nativeAuthSessionConfiguration: URLSessionConfiguration = .ephemeral,
+        gitSyncEnabled: Bool = true,
+        gitKeys: GitSyncKeyStore? = nil,
+        gitCredentials: KeychainSecretStore? = nil,
+        gitSessionConfiguration: URLSessionConfiguration? = nil,
+        gitAllowsInsecureLoopback: Bool = false,
+        gitSSH: GitSSHSupport? = nil
     ) {
         self.defaults = defaults
         self.snippetsCloudEnabled = snippetsCloudEnabled
+        self.gitSyncEnabled = gitSyncEnabled
+        self.gitKeys = gitKeys ?? GitSyncKeyStore()
+        self.gitCredentials = gitCredentials ?? KeychainSecretStore(
+            tier: .deviceOnly,
+            service: Self.gitCredentialService,
+            itemAccessibility: .afterFirstUnlock)
+        self.gitSessionConfiguration = gitSessionConfiguration
+        self.gitAllowsInsecureLoopback = gitAllowsInsecureLoopback
+        #if os(macOS)
+        self.gitSSH = gitSSH ?? .systemSSH
+        #else
+        self.gitSSH = gitSSH
+        #endif
         self.nativeAuthSessionConfiguration = nativeAuthSessionConfiguration
         self.keychain = keychain ?? KeychainSecretStore(
             tier: .deviceOnly,
@@ -596,7 +673,164 @@ final class SyncBackendSelectionStore {
     }
 
     var availableProviders: [Provider] {
-        snippetsCloudEnabled ? Provider.allCases : [.iCloud]
+        [.iCloud] + (snippetsCloudEnabled ? [.snippetsCloud] : []) + (gitSyncEnabled ? [.git] : [])
+    }
+
+    // MARK: - Git
+
+    var gitCoordinates: GitCoordinates? {
+        guard let raw = defaults.string(forKey: Self.gitRepositoryDefaultsKey),
+              let repository = try? GitRepositoryLocation.parse(
+                  raw, allowsInsecureLoopback: gitAllowsInsecureLoopback),
+              repository.spec == raw,
+              let branch = defaults.string(forKey: Self.gitBranchDefaultsKey),
+              GitRemote.isValidBranch(branch),
+              let rawDataset = defaults.string(forKey: Self.gitDatasetDefaultsKey),
+              let datasetID = UUID(uuidString: rawDataset) else { return nil }
+        let username: String
+        if repository.isSSH {
+            username = ""
+        } else {
+            guard let saved = defaults.string(forKey: Self.gitUsernameDefaultsKey),
+                  GitRemote.isValidUsername(saved) else { return nil }
+            username = saved
+        }
+        let mode = defaults.string(forKey: Self.gitModeDefaultsKey).flatMap(GitLibraryMode.init(rawValue:))
+            ?? .encrypted
+        return GitCoordinates(
+            repository: repository, branch: branch, username: username, datasetID: datasetID, mode: mode)
+    }
+
+    /// The access token is stored with the repository and user it was saved for. If the
+    /// process dies between saving a token and its coordinates, the old coordinates find
+    /// no matching token instead of sending another host's credential.
+    private struct GitCredentialRecord: Codable {
+        let schemaVersion: Int
+        let location: String
+        let username: String
+        let token: String
+    }
+
+    /// The configured repository can authenticate: SSH needs nothing stored, HTTPS needs
+    /// its token.
+    var hasGitCredential: Bool {
+        if gitCoordinates?.usesSSH == true { return gitSSH != nil }
+        return (try? storedGitToken()) != nil
+    }
+
+    /// The token saved for the configured HTTPS repository and user, or nil.
+    func storedGitToken() throws -> String? {
+        guard let coordinates = gitCoordinates, !coordinates.usesSSH else { return nil }
+        let data: Data?
+        do { data = try gitCredentials.loadItem(account: Self.gitTokenAccount) }
+        catch { throw Failure.credentialStoreUnavailable }
+        guard let data else { return nil }
+        guard data.count <= 8_192,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == ["schemaVersion", "location", "username", "token"],
+              let record = try? JSONDecoder().decode(GitCredentialRecord.self, from: data),
+              record.schemaVersion == 1, GitRemote.isValidToken(record.token) else {
+            throw Failure.invalidCredential
+        }
+        // The exact address, port included: the token belongs to that endpoint, not to
+        // every spelling of the repository's identity.
+        guard record.location == coordinates.repository.spec,
+              record.username == coordinates.username else { return nil }
+        return record.token
+    }
+
+    /// An HTTPS token is saved for the configured repository (never for SSH).
+    var hasStoredGitToken: Bool { (try? storedGitToken()) != nil }
+
+    /// Records the repository this device is connected to.
+    ///
+    /// Refused while an unfinished provider switch names Git at a different location:
+    /// its receipt pins the old location, and moving it would make the switch
+    /// unrecoverable at the next launch.
+    func configureGit(_ coordinates: GitCoordinates, token: String?) throws {
+        guard gitSyncEnabled else { throw Failure.featureDisabled }
+        _ = try gitRemote(for: coordinates, token: token)
+        // The target's location matters until the switch completes; the source's only
+        // until the target is selected, after which recovery never consults it.
+        if let receipt = interruptedProviderSwitch {
+            let pinned: String? = if receipt.target == .git {
+                receipt.targetLocationID
+            } else if receipt.source == .git, receipt.phase == .prepared {
+                receipt.sourceLocationID
+            } else {
+                nil
+            }
+            if let pinned, Self.gitProtocolLocations(for: coordinates)?.identifier != pinned {
+                throw Failure.gitConfigurationInUse
+            }
+        }
+        do {
+            if coordinates.usesSSH {
+                // No token belongs to an SSH connection; never leave one behind.
+                try gitCredentials.deleteItem(account: Self.gitTokenAccount)
+            } else {
+                guard let token else { throw Failure.missingCredential }
+                let record = GitCredentialRecord(
+                    schemaVersion: 1, location: coordinates.repository.spec,
+                    username: coordinates.username, token: token)
+                try gitCredentials.storeItem(try JSONEncoder().encode(record), account: Self.gitTokenAccount)
+            }
+        } catch Failure.missingCredential {
+            throw Failure.missingCredential
+        } catch {
+            throw Failure.credentialStoreUnavailable
+        }
+        defaults.set(coordinates.repository.spec, forKey: Self.gitRepositoryDefaultsKey)
+        defaults.set(coordinates.branch, forKey: Self.gitBranchDefaultsKey)
+        if coordinates.usesSSH {
+            defaults.removeObject(forKey: Self.gitUsernameDefaultsKey)
+        } else {
+            defaults.set(coordinates.username, forKey: Self.gitUsernameDefaultsKey)
+        }
+        defaults.set(coordinates.datasetID.uuidString.lowercased(), forKey: Self.gitDatasetDefaultsKey)
+        defaults.set(coordinates.mode.rawValue, forKey: Self.gitModeDefaultsKey)
+        guard defaults.synchronize() else { throw Failure.preferenceStoreUnavailable }
+    }
+
+    /// Forgets the repository coordinates and access token on this device. The library
+    /// key stays, so reconnecting needs no recovery code; the remote is never touched.
+    func removeGitConfiguration() throws {
+        guard provider != .git,
+              interruptedProviderSwitch.map({
+                  $0.target != .git && ($0.source != .git || $0.phase == .targetSelected)
+              }) ?? true else {
+            throw Failure.gitConfigurationInUse
+        }
+        do { try gitCredentials.deleteItem(account: Self.gitTokenAccount) }
+        catch { throw Failure.credentialStoreUnavailable }
+        for key in [Self.gitRepositoryDefaultsKey, Self.gitBranchDefaultsKey,
+                    Self.gitUsernameDefaultsKey, Self.gitDatasetDefaultsKey, Self.gitModeDefaultsKey] {
+            defaults.removeObject(forKey: key)
+        }
+        _ = defaults.synchronize()
+    }
+
+    func gitRemote(for coordinates: GitCoordinates, token: String?) throws -> GitRemote {
+        switch coordinates.repository {
+        case .ssh(let location):
+            return try GitRemote(ssh: location, branch: coordinates.branch)
+        case .https(let url):
+            guard let token else { throw GitRemote.Failure.invalidCredential }
+            return try GitRemote(
+                url: url, branch: coordinates.branch,
+                username: coordinates.username, password: token,
+                allowsInsecureLoopback: gitAllowsInsecureLoopback)
+        }
+    }
+
+    /// The configured repository is usable on this device: coordinates, token and key.
+    var gitIsReady: Bool {
+        guard let coordinates = gitCoordinates else { return false }
+        return hasGitCredential && gitKeys.hasMaterial(for: coordinates.keyScope)
+    }
+
+    func makeGitSession() -> URLSession? {
+        gitSessionConfiguration.map { URLSession(configuration: $0) }
     }
 
     var cloudCoordinates: CloudCoordinates? {
@@ -1148,6 +1382,38 @@ final class SyncBackendSelectionStore {
     func makeTransport() throws -> any SyncTransport {
         if let providerSelectionFailure { throw providerSelectionFailure }
         switch provider {
+        case .git:
+            guard gitSyncEnabled else { throw Failure.featureDisabled }
+            guard let coordinates = gitCoordinates else { throw Failure.gitConfigurationRequired }
+            let token: String?
+            if coordinates.usesSSH {
+                guard gitSSH != nil else { throw Failure.gitCredentialRequired }
+                token = nil
+            } else {
+                guard let stored = try storedGitToken() else { throw Failure.gitCredentialRequired }
+                token = stored
+            }
+            let remote: GitRemote
+            do { remote = try gitRemote(for: coordinates, token: token) }
+            catch { throw Failure.invalidCredential }
+            let locations = try protocolLocations(for: .git)
+            // A plain-text library's Markdown files are opened and sealed by the
+            // transport, under the same library key the engine uses.
+            let plainText = coordinates.mode != .plainText ? nil
+                : (try? gitKeys.material(for: coordinates.keyScope)).flatMap { material in
+                    (try? SyncKeyStore.keyring(from: material)).map {
+                        GitPlainCodec(sealer: SnippetCryptoSealer(keyring: $0, scopeID: SyncKeyStore.account))
+                    }
+                }
+            return GitSyncTransport(
+                configuration: .init(
+                    remote: remote,
+                    cacheDirectory: Self.gitCacheDirectory(in: locations),
+                    expectedDatasetID: coordinates.datasetID,
+                    sshConnector: gitSSH?.connector,
+                    plainText: plainText,
+                    expectedMode: coordinates.mode),
+                session: makeGitSession())
         case .iCloud:
             // Snippets Cloud journals authorize and fence only that provider's local
             // root and credentials. `resumePendingLocalErase()` already attempts their
@@ -1269,6 +1535,15 @@ final class SyncBackendSelectionStore {
         if let providerSelectionFailure { throw providerSelectionFailure }
         let requestedProvider = requestedProvider ?? provider
         switch requestedProvider {
+        case .git:
+            // One base/journal per connected library: reconnecting to a replaced or
+            // different library starts a fresh, loss-preserving merge instead of
+            // reusing another library's record versions.
+            guard let coordinates = gitCoordinates,
+                  let locations = Self.gitProtocolLocations(for: coordinates) else {
+                throw Failure.gitConfigurationRequired
+            }
+            return locations
         case .iCloud:
             return .legacyICloud
         case .snippetsCloud:
@@ -1291,6 +1566,37 @@ final class SyncBackendSelectionStore {
         }
     }
 
+    static func gitProtocolLocations(for coordinates: GitCoordinates) -> SyncProtocolLocations? {
+        let material = [
+            "snippets.sync.provider.v1", "git", coordinates.canonicalLocation,
+            "refs/heads/\(coordinates.branch)", coordinates.datasetID.uuidString.lowercased(),
+        ].joined(separator: "\u{0}")
+        let opaqueKey = SHA256.hash(data: Data(material.utf8)).prefix(16)
+            .map { String(format: "%02x", $0) }.joined()
+        return SyncProtocolLocations.http(opaqueProviderKey: opaqueKey)
+    }
+
+    /// Git selected without a readable repository has no protocol state to preserve, so
+    /// a switch away from it records this sentinel instead of being impossible.
+    static let unconfiguredGitLocationID = "git-unconfigured"
+
+    private func switchLocationID(for provider: Provider) throws -> String {
+        if provider == .git, gitCoordinates == nil { return Self.unconfiguredGitLocationID }
+        return try protocolLocations(for: provider).identifier
+    }
+
+    /// The git transport's disposable snapshot cache, inside the library's own sync
+    /// folder and excluded from backups.
+    static func gitCacheDirectory(in locations: SyncProtocolLocations) -> URL {
+        var url = locations.folderURL.appending(path: "GitCache", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(
+            at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
+        return url
+    }
+
     var interruptedProviderSwitch: ProviderSwitchReceipt? {
         guard case .loaded(let receipt) = loadProviderSwitchReceipt() else { return nil }
         return receipt
@@ -1302,14 +1608,14 @@ final class SyncBackendSelectionStore {
         }
         let source = provider
         guard source != target else { throw Failure.invalidProviderSelection }
-        let sourceLocations = try protocolLocations(for: source)
+        let sourceLocationID = try switchLocationID(for: source)
         let targetLocations = try protocolLocations(for: target)
         try targetLocations.createDirectories()
         let receipt = ProviderSwitchReceipt(
             id: UUID(),
             source: source,
             target: target,
-            sourceLocationID: sourceLocations.identifier,
+            sourceLocationID: sourceLocationID,
             targetLocationID: targetLocations.identifier,
             phase: .prepared)
         try writeProviderSwitchReceipt(receipt)
@@ -1407,10 +1713,13 @@ final class SyncBackendSelectionStore {
             providerSelectionFailure = .switchStateUnreadable
             defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
         case .loaded(let receipt):
-            guard let source = try? protocolLocations(for: receipt.source),
-                  let target = try? protocolLocations(for: receipt.target),
-                  source.identifier == receipt.sourceLocationID,
-                  target.identifier == receipt.targetLocationID else {
+            // Once the target is selected the source is history: Git may legitimately
+            // have been reconnected elsewhere since.
+            let sourceMatches = receipt.phase == .targetSelected
+                || (try? switchLocationID(for: receipt.source)) == receipt.sourceLocationID
+            guard sourceMatches,
+                  let target = try? switchLocationID(for: receipt.target),
+                  target == receipt.targetLocationID else {
                 providerSelectionFailure = .switchStateUnreadable
                 defaults.set(false, forKey: Self.legacyICloudEnabledDefaultsKey)
                 return
@@ -3273,5 +3582,38 @@ private extension Data {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+// MARK: - Copy shared by the Mac and iOS Sync settings
+
+extension SyncBackendSelectionStore {
+    /// True when sync goes to a plain-text Git library, where ordinary snippets are
+    /// readable in the repository.
+    var syncsPlainText: Bool { provider == .git && gitCoordinates?.mode == .plainText }
+
+    nonisolated static let plainTextSummary =
+        "Ordinary snippets are saved as readable Markdown files in your Git repository. Secure snippets stay encrypted."
+
+    /// The confirmation before Switch and Sync. `device` is "Mac", "iPhone" or "iPad".
+    func switchConfirmation(
+        to provider: Provider, snippetCount: Int, syncEnabled: Bool, device: String,
+        snippetsCloudLibraryID: String?
+    ) -> (title: String, message: String) {
+        let count = snippetCount == 1 ? "1 snippet" : "\(snippetCount) snippets"
+        let destination = switch provider {
+        case .git: gitCoordinates.map { "\($0.displayLocation) (\($0.branch))" } ?? "the Git repository"
+        case .snippetsCloud: "Snippets Cloud (Library ID \(snippetsCloudLibraryID ?? "—"))"
+        case .iCloud: "iCloud"
+        }
+        let plainNote = provider == .git && gitCoordinates?.mode == .plainText
+            ? "\n\nThis is a plain-text library: ordinary snippets will be readable in the repository." : ""
+        guard syncEnabled else {
+            return ("Start Syncing with \(provider.displayName)?",
+                    "The \(count) on this \(device) will be merged with \(destination), and sync will turn on.\(plainNote)")
+        }
+        return ("Switch Sync to \(provider.displayName)?",
+                "Snippets merges the \(count) on this \(device) with \(destination), then syncs only with "
+                    + "\(provider.displayName). Your \(self.provider.displayName) copy is kept.\(plainNote)")
     }
 }

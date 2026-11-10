@@ -527,13 +527,21 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         case .syncProvider:
             let selection = environment.backendSelection
             cell.textLabel?.text = "Cloud Provider"
-            cell.detailTextLabel?.text = selection.provider.displayName
+            cell.detailTextLabel?.text = if selection.provider == .git,
+                                           let coordinates = selection.gitCoordinates {
+                "Git · \(coordinates.displayLocation)"
+            } else {
+                selection.provider.displayName
+            }
             cell.accessoryType = .disclosureIndicator
+            cell.accessibilityIdentifier = "sync-provider"
         case .syncToggle:
             cell.textLabel?.text = "Sync this library"
-            cell.detailTextLabel?.text = environment.backendSelection.snippetsCloudEnabled
-                ? "Encrypted before it is sent. Only one cloud provider is writable at a time."
-                : "Encrypted before it is sent to iCloud."
+            cell.detailTextLabel?.text = environment.backendSelection.syncsPlainText
+                ? SyncBackendSelectionStore.plainTextSummary
+                : (environment.backendSelection.availableProviders.count > 1
+                    ? "Encrypted before it is sent. Only one cloud provider is writable at a time."
+                    : "Encrypted before it is sent to iCloud.")
             let control = UISwitch()
             control.isOn = SyncCoordinator.isEnabled
             control.accessibilityIdentifier = "icloud-sync"
@@ -654,7 +662,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
     private func rows(in section: Section) -> [Row] {
         switch section {
         case .sync:
-            var rows: [Row] = environment.backendSelection.snippetsCloudEnabled
+            var rows: [Row] = environment.backendSelection.availableProviders.count > 1
                 ? [.syncProvider, .syncToggle, .syncStatus]
                 : [.syncToggle, .syncStatus]
             if environment.syncCoordinator.recoveryAction != nil {
@@ -731,18 +739,36 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
 
     private func chooseSyncProvider() {
         let selection = environment.backendSelection
-        guard selection.snippetsCloudEnabled else { return }
+        guard selection.availableProviders.count > 1 else { return }
+        let current = selection.provider
         let alert = UIAlertController(
             title: "Cloud Provider",
-            message: "Switch and Sync preserves your local library and the other cloud. Switching back to iCloud keeps your existing iCloud library.",
+            message: "Now syncing with \(current.displayName)."
+                + (selection.gitSyncEnabled
+                    ? " A Git repository syncs through GitHub, GitLab, Gitea or any git host, with no Snippets server."
+                    : "")
+                + " Switching keeps your library and the other provider’s copy.",
             preferredStyle: .actionSheet)
-        alert.addAction(UIAlertAction(title: "iCloud", style: .default) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: current == .iCloud ? "iCloud ✓" : "iCloud", style: .default) { [weak self] _ in
             self?.confirmProviderSwitch(to: .iCloud)
         })
-        alert.addAction(UIAlertAction(title: "Snippets Cloud…", style: .default) { [weak self] _ in
-            self?.showSnippetsCloudAccount()
-        })
-        if selection.cloudCredentialResetRequired {
+        if selection.snippetsCloudEnabled {
+            alert.addAction(UIAlertAction(
+                title: current == .snippetsCloud ? "Snippets Cloud ✓" : "Snippets Cloud…", style: .default
+            ) { [weak self] _ in
+                self?.showSnippetsCloudAccount()
+            })
+        }
+        if selection.gitSyncEnabled {
+            alert.addAction(UIAlertAction(
+                title: current == .git ? "Git Repository ✓" : "Git Repository…", style: .default
+            ) { [weak self] _ in
+                self?.showGitRepository()
+            })
+        }
+        if !selection.snippetsCloudEnabled {
+            // Snippets Cloud credential maintenance belongs to builds that offer it.
+        } else if selection.cloudCredentialResetRequired {
             alert.addAction(UIAlertAction(
                 title: "Reset Unreadable Cloud Sign-In",
                 style: .destructive
@@ -767,8 +793,14 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         if let popover = alert.popoverPresentationController {
-            popover.sourceView = view
-            popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            // Anchored to the Cloud Provider row when it is on screen.
+            if let row = tableView.visibleCells.first(where: { $0.accessibilityIdentifier == "sync-provider" }) {
+                popover.sourceView = row
+                popover.sourceRect = row.bounds
+            } else {
+                popover.sourceView = view
+                popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            }
         }
         present(alert, animated: true)
     }
@@ -815,6 +847,13 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         navigationController?.pushViewController(controller, animated: true)
     }
 
+    private func showGitRepository() {
+        let controller = GitSyncSettingsViewController(
+            environment: environment,
+            requestProviderSwitch: { [weak self] in self?.confirmProviderSwitch(to: .git) })
+        navigationController?.pushViewController(controller, animated: true)
+    }
+
     private func confirmProviderSwitch(to provider: SyncBackendSelectionStore.Provider) {
         let current = environment.backendSelection.provider
         guard current != provider else { return }
@@ -824,16 +863,23 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
                 return
             }
         }
-        let alert = UIAlertController(
-            title: "Switch Sync to \(provider.displayName)?",
-            message: "Current provider: \(current.displayName)\nNew provider: \(provider.displayName)\(provider == .snippetsCloud ? " · Library ID \(cloudBootstrap.libraryID ?? "—")" : "")\nOn this device: \(environment.store.snippets.count) snippets\n\nThe current cloud library will not be deleted. Changes from both copies are compared and merged before sync is verified.",
-            preferredStyle: .alert)
+        if provider == .git, !environment.backendSelection.gitIsReady {
+            showGitRepository()
+            return
+        }
+        let copy = environment.backendSelection.switchConfirmation(
+            to: provider, snippetCount: environment.store.snippets.count, syncEnabled: SyncCoordinator.isEnabled,
+            device: UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone",
+            snippetsCloudLibraryID: cloudBootstrap.libraryID)
+        let alert = UIAlertController(title: copy.title, message: copy.message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Switch and Sync", style: .default) {
+        let switchAction = UIAlertAction(title: "Switch and Sync", style: .default) {
             [weak self] _ in
             guard let self else { return }
             syncSelectedProviderAfterSwitch(provider)
-        })
+        }
+        alert.addAction(switchAction)
+        alert.preferredAction = switchAction
         present(alert, animated: true)
     }
 
@@ -849,17 +895,15 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
             progress?.dismiss(animated: true) { [weak self] in
                 guard let self else { return }
                 tableView.reloadData()
-                let succeeded: Bool
+                // Success shows in the status line; only a problem needs an alert.
                 if case .completed(.idle(let lastSync)) = result, lastSync != nil {
-                    succeeded = true
-                } else {
-                    succeeded = false
+                    UIAccessibility.post(
+                        notification: .announcement, argument: "\(provider.displayName) is active and up to date.")
+                    return
                 }
                 let done = UIAlertController(
-                    title: succeeded ? "Switch Complete" : "Switch Needs Attention",
-                    message: succeeded
-                        ? "\(provider.displayName) is active and the library is up to date."
-                        : "Your libraries were not deleted. \(environment.syncCoordinator.statusDescription)",
+                    title: "Switch Needs Attention",
+                    message: "Your libraries were not deleted. \(environment.syncCoordinator.statusDescription)",
                     preferredStyle: .alert)
                 done.addAction(UIAlertAction(title: "OK", style: .default))
                 present(done, animated: true)
@@ -1886,7 +1930,7 @@ private final class SnippetsCloudAccountViewController: UITableViewController {
 }
 
 @MainActor
-private func requireDeviceOwnerAuthentication(reason: String) async throws {
+func requireDeviceOwnerAuthentication(reason: String) async throws {
     let context = LAContext()
     context.touchIDAuthenticationAllowableReuseDuration = 0
     var error: NSError?

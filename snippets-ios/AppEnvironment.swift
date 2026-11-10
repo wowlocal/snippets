@@ -1,3 +1,4 @@
+import UIKit
 import Darwin
 import Foundation
 
@@ -54,7 +55,15 @@ final class AppEnvironment {
                 try? FileManager.default.removeItem(at: root)
             }
             setenv(SnippetStorageLocations.rootOverrideEnvironmentKey, root.path, 1)
-            UserDefaults.standard.set(false, forKey: SyncCoordinator.enabledDefaultsKey)
+            if isUITestReset {
+                // Sync on/off is process-only and the provider choice lives in a
+                // disposable suite, so a fixture that connects and switches providers
+                // cannot change the next normal launch of this Debug app or the unit
+                // tests hosted in it.
+                SyncCoordinator.runtimeEnabledOverride = false
+            } else {
+                UserDefaults.standard.set(false, forKey: SyncCoordinator.enabledDefaultsKey)
+            }
         } else if CommandLine.arguments.contains(Self.emptyLibraryLaunchArgument) {
             // Device-only visual verification must never erase or overwrite the real
             // Debug library. Redirect every store to a clean process-local root and
@@ -77,11 +86,45 @@ final class AppEnvironment {
         self.keychain = keychain ?? KeychainSecretStore()
         #endif
         let keychain = self.keychain
+        #if DEBUG
+        // UI fixtures talk to a disposable loopback git server and keep the Git key and
+        // token in memory, never in the simulator's Keychain.
+        let gitKeys = isUITestReset
+            ? GitSyncKeyStore(keychain: KeychainSecretStore(tier: .deviceOnly, inMemory: true)) : nil
+        let gitCredentials = isUITestReset
+            ? KeychainSecretStore(tier: .deviceOnly, inMemory: true) : nil
+        let gitAllowsInsecureLoopback = isUITestReset
+            || ProcessInfo.processInfo.environment["SNIPPETS_GIT_ALLOW_LOOPBACK_HTTP"] == "1"
+        let selectionDefaults: UserDefaults
+        if isUITestReset, let suite = UserDefaults(suiteName: "SnippetsUITestSelection") {
+            suite.removePersistentDomain(forName: "SnippetsUITestSelection")
+            selectionDefaults = suite
+        } else {
+            selectionDefaults = .standard
+        }
+        // The device's SSH key and trusted host keys; UI fixtures keep both disposable.
+        let sshIdentity = isUITestReset
+            ? GitSSHDeviceIdentity(
+                keychain: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+                hostKeys: GitSSHHostKeyStore(defaults: selectionDefaults), comment: Self.sshKeyComment)
+            : GitSSHDeviceIdentity(comment: Self.sshKeyComment)
+        #else
+        let gitKeys: GitSyncKeyStore? = nil
+        let gitCredentials: KeychainSecretStore? = nil
+        let gitAllowsInsecureLoopback = false
+        let selectionDefaults = UserDefaults.standard
+        let sshIdentity = GitSSHDeviceIdentity(comment: Self.sshKeyComment)
+        #endif
         backendSelection = SyncBackendSelectionStore(
+            defaults: selectionDefaults,
             keychain: cloudCredentialStore,
             bootstrapSecrets: cloudBootstrapSecrets,
             snippetsCloudEnabled: snippetsCloudEnabled,
-            defersCredentialRecovery: true)
+            defersCredentialRecovery: true,
+            gitKeys: gitKeys,
+            gitCredentials: gitCredentials,
+            gitAllowsInsecureLoopback: gitAllowsInsecureLoopback,
+            gitSSH: GitSSHSupport(connector: GitNIOSSHConnector(identity: sshIdentity), device: sshIdentity))
         cloudBootstrap = SnippetsCloudAccountBootstrap(
             selection: backendSelection, secrets: cloudBootstrapSecrets)
         #if DEBUG
@@ -115,7 +158,12 @@ final class AppEnvironment {
             keys: SyncKeyStore(
                 keychain: keychain,
                 cloudKeys: backendSelection.cloudKeys,
-                usesSnippetsCloud: { selectedBackend.provider == .snippetsCloud }),
+                usesSnippetsCloud: { selectedBackend.provider == .snippetsCloud },
+                gitKeys: backendSelection.gitKeys,
+                gitScope: {
+                    selectedBackend.provider == .git
+                        ? .some(selectedBackend.gitCoordinates?.keyScope) : nil
+                }),
             device: store.deviceID,
             transportFactory: syncTransportFactory,
             preparesKeyInBackground: true,
@@ -213,5 +261,12 @@ final class AppEnvironment {
         localEditorChangeDepth += 1
         defer { localEditorChangeDepth -= 1 }
         return try change()
+    }
+}
+
+extension AppEnvironment {
+    /// Labels this device's SSH key in the host's key list.
+    static var sshKeyComment: String {
+        UIDevice.current.userInterfaceIdiom == .pad ? "snippets-ipad" : "snippets-iphone"
     }
 }

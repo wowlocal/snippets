@@ -537,7 +537,10 @@ private struct MacSettingsSearchEntry {
               terms: ["cloud sync", "turn on", "devices"],
               needles: ["Cloud Sync"]),
         .init(title: "Cloud Provider", pane: .sync,
-              terms: ["icloud", "snippets cloud", "server"],
+              terms: ["icloud", "snippets cloud", "server", "git"],
+              needles: ["Cloud provider"]),
+        .init(title: "Git Repository Sync", pane: .sync,
+              terms: ["git", "github", "gitlab", "gitea", "gitverse", "repository", "access token"],
               needles: ["Cloud provider"]),
         .init(title: "Sync Now", pane: .sync,
               terms: ["refresh", "download", "upload", "cloud"],
@@ -2272,6 +2275,9 @@ private final class SyncSettingsViewController: NSViewController {
     private let syncNowButton = NSButton(title: "Sync Now", target: nil, action: nil)
     private let recoveryButton = NSButton(title: "", target: nil, action: nil)
     private let secondMacLabel = NSTextField(wrappingLabelWithString: "")
+    /// The pane's privacy sentence: it changes when sync goes to a plain-text Git library.
+    private var introLabel: NSTextField?
+    private var introText: (encrypted: String, plainText: String) = ("", "")
     private lazy var actionRow = NSStackView(views: [
         syncNowButton,
         recoveryButton,
@@ -2294,15 +2300,22 @@ private final class SyncSettingsViewController: NSViewController {
         let title = NSTextField(labelWithString: "Cloud Sync")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
 
-        let cloudFeatureEnabled = backendSelection.snippetsCloudEnabled
-        let intro = makeSecondaryLabel(cloudFeatureEnabled
-            ? "Choose iCloud or Snippets Cloud without migrating away from either one. "
-                + "Only the selected provider is writable. Every snippet is encrypted on this Mac "
-                + "before it leaves; both providers carry the same opaque wire records."
-            : "Snippets are encrypted on this Mac before iCloud sync sends them. "
-                + "How often you use each snippet always remains local.")
-
         let providers = backendSelection.availableProviders
+        let choosesProvider = providers.count > 1
+        let alternatives = providers.filter { $0 != .iCloud }.map { provider in
+            provider == .git ? "a Git repository you own" : provider.displayName
+        }
+        let choice = "Choose iCloud or \(alternatives.joined(separator: " or ")) without migrating away "
+            + "from any of them. Only the selected provider is writable. "
+        introText = choosesProvider
+            ? (choice + "Every snippet is encrypted on this Mac before it leaves; each provider stores "
+                + "the same opaque records.",
+               choice + SyncBackendSelectionStore.plainTextSummary)
+            : ("Snippets are encrypted on this Mac before iCloud sync sends them. "
+                + "How often you use each snippet always remains local.", "")
+        let intro = makeSecondaryLabel(backendSelection.syncsPlainText ? introText.plainText : introText.encrypted)
+        introLabel = intro
+
         providerPopup.addItems(withTitles: providers.map(\.displayName))
         for (index, provider) in providers.enumerated() {
             providerPopup.item(at: index)?.representedObject = provider.rawValue
@@ -2310,7 +2323,7 @@ private final class SyncSettingsViewController: NSViewController {
         providerPopup.target = self
         providerPopup.action = #selector(handleProviderChanged(_:))
         configureCloudButton.target = self
-        configureCloudButton.action = #selector(showSnippetsCloudAccount)
+        configureCloudButton.action = #selector(configureSelectedProvider)
         LiquidGlassDesign.configureActionButton(configureCloudButton, symbolName: "server.rack")
         let providerLabel = NSTextField(labelWithString: "Cloud provider:")
         providerLabel.textColor = .secondaryLabelColor
@@ -2318,9 +2331,9 @@ private final class SyncSettingsViewController: NSViewController {
         providerRow.orientation = .horizontal
         providerRow.alignment = .centerY
         providerRow.spacing = 8
-        providerRow.isHidden = !cloudFeatureEnabled
+        providerRow.isHidden = !choosesProvider
 
-        if !cloudFeatureEnabled {
+        if !choosesProvider {
             enableCheckbox.title = "Sync snippets with iCloud"
         }
 
@@ -2389,14 +2402,19 @@ private final class SyncSettingsViewController: NSViewController {
 
         enableCheckbox.state = SyncCoordinator.isEnabled ? .on : .off
         let selection = backendSelection
+        if !introText.plainText.isEmpty {
+            introLabel?.stringValue = selection.syncsPlainText ? introText.plainText : introText.encrypted
+        }
         if let item = providerPopup.itemArray.first(where: {
             ($0.representedObject as? String) == selection.provider.rawValue
         }) {
             providerPopup.select(item)
         }
-        configureCloudButton.isHidden = !selection.snippetsCloudEnabled
-            || selection.provider != .snippetsCloud
-        configureCloudButton.title = if selection.cloudCredentialResetRequired {
+        configureCloudButton.isHidden = !(selection.provider == .git
+            || (selection.snippetsCloudEnabled && selection.provider == .snippetsCloud))
+        configureCloudButton.title = if selection.provider == .git {
+            "Repository…"
+        } else if selection.cloudCredentialResetRequired {
             "Reset Cloud Sign-In…"
         } else if selection.hasPendingRemoteRevocation || selection.hasPendingLocalErase {
             "Retry Sign Out…"
@@ -2432,6 +2450,14 @@ private final class SyncSettingsViewController: NSViewController {
     /// worth naming precisely rather than covering with one paragraph of hedging.
     private func secondMacAdvice() -> String {
         guard SyncCoordinator.isEnabled, let app = NSApp.delegate as? AppDelegate else { return "" }
+        if backendSelection.provider == .git {
+            return backendSelection.gitKeys.syncsBetweenDevices
+                ? "Another Apple device signed in to the same iCloud account receives the library "
+                    + "key through iCloud Keychain: connect it to the same repository and branch. "
+                    + "Any other device needs the library’s recovery code."
+                : "Another device connects to the same repository and branch with an access token "
+                    + "and the library’s recovery code. The Git host never receives your key."
+        }
         if backendSelection.provider == .snippetsCloud {
             return "Another device joins this library through approved pairing or recovery. "
                 + "The server never receives your library’s encryption key. Switching back to "
@@ -2477,7 +2503,43 @@ private final class SyncSettingsViewController: NSViewController {
         case .snippetsCloud:
             guard backendSelection.snippetsCloudEnabled else { return }
             showSnippetsCloudAccount()
+        case .git:
+            showGitRepository()
         }
+    }
+
+    @objc private func configureSelectedProvider() {
+        if backendSelection.provider == .git {
+            showGitRepository()
+        } else {
+            showSnippetsCloudAccount()
+        }
+    }
+
+    private weak var gitSheet: NSWindow?
+
+    @objc private func showGitRepository() {
+        guard gitSheet == nil, cloudAccountSheet == nil, let parent = view.window else {
+            reloadFromStorage()
+            return
+        }
+        let controller = MacGitSyncViewController(
+            selection: backendSelection,
+            coordinator: Self.coordinator,
+            requestProviderSwitch: { [weak self] in
+                self?.confirmProviderSwitch(to: .git)
+            })
+        let sheet = NSWindow(contentViewController: controller)
+        sheet.title = "Git Repository"
+        sheet.styleMask = [.titled, .closable]
+        // The sheet sizes itself to its content (and follows it as sections appear).
+        controller.close = { [weak self, weak sheet] in
+            guard let sheet, let parent = sheet.sheetParent else { return }
+            parent.endSheet(sheet)
+            self?.reloadFromStorage()
+        }
+        gitSheet = sheet
+        parent.beginSheet(sheet) { [weak self] _ in self?.reloadFromStorage() }
     }
 
     @objc private func showSnippetsCloudAccount() {
@@ -2559,10 +2621,17 @@ private final class SyncSettingsViewController: NSViewController {
             configureSnippetsCloud()
             return
         }
+        if provider == .git, !backendSelection.gitIsReady {
+            showGitRepository()
+            return
+        }
         let alert = NSAlert()
-        alert.messageText = "Switch Sync to \(provider.displayName)?"
         let count = (NSApp.delegate as? AppDelegate)?.store.snippets.count ?? 0
-        alert.informativeText = "Current provider: \(current.displayName)\nNew provider: \(provider.displayName)\(provider == .snippetsCloud ? " · Library ID \(cloudBootstrap.libraryID ?? "—")" : "")\nOn this Mac: \(count) snippets\n\nThe current cloud library will not be deleted. Changes from both copies are compared and merged before sync is verified."
+        let copy = backendSelection.switchConfirmation(
+            to: provider, snippetCount: count, syncEnabled: SyncCoordinator.isEnabled, device: "Mac",
+            snippetsCloudLibraryID: cloudBootstrap.libraryID)
+        alert.messageText = copy.title
+        alert.informativeText = copy.message
         alert.addButton(withTitle: "Switch and Sync")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else {
@@ -2589,15 +2658,12 @@ private final class SyncSettingsViewController: NSViewController {
                 sheetParent.endSheet(progressWindow)
             }
             reloadFromStorage()
+            // Success shows in the pane's status line; only a problem needs an alert.
+            if case .completed(.idle(let lastSync)) = result, lastSync != nil { return }
             let done = NSAlert()
-            if case .completed(.idle(let lastSync)) = result, lastSync != nil {
-                done.messageText = "Switch Complete"
-                done.informativeText = "\(provider.displayName) is active and the library is up to date."
-            } else {
-                done.alertStyle = .warning
-                done.messageText = "Switch Needs Attention"
-                done.informativeText = "Your libraries were not deleted. \(coordinator.statusDescription)"
-            }
+            done.alertStyle = .warning
+            done.messageText = "Switch Needs Attention"
+            done.informativeText = "Your libraries were not deleted. \(coordinator.statusDescription)"
             done.runModal()
         }
     }
@@ -3918,7 +3984,7 @@ private final class MacRecoveryKitViewController: NSViewController, NSTextFieldD
 }
 
 @MainActor
-private func requireMacOwnerAuthentication(reason: String) async throws {
+func requireMacOwnerAuthentication(reason: String) async throws {
     let context = LAContext()
     context.touchIDAuthenticationAllowableReuseDuration = 0
     var error: NSError?
