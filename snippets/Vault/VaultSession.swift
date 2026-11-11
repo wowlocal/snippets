@@ -137,11 +137,22 @@ final class VaultSession {
         if self.keyID == keyID,
            let keyID,
            keychain.hasKey(keyID: keyID) {
+            // The same vault whose key has just been restored (a recovery code) is no
+            // longer keyless; say so without disturbing an open or prompting session.
+            if case .noKey = state { transition(to: .locked) }
             return
         }
         self.keyID = keyID
         lock()
         refreshAvailability()
+    }
+
+    /// Records what a caller has just read from the Keychain about this session's key,
+    /// so state does not wait for the background check (iOS) to say the same thing. An
+    /// open session is left alone: its key is in memory, whatever the Keychain says.
+    func keyAvailabilityKnown(_ available: Bool, for keyID: String) {
+        guard self.keyID == keyID, !state.isUnlocked else { return }
+        transition(to: available ? .locked : .noKey)
     }
 
     private func adoptWithBackgroundAvailability(keyID: String?) {

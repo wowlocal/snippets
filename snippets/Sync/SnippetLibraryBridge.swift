@@ -24,6 +24,8 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
 
     private let store: SnippetStore
     private let secureStore: SecureSnippetStore
+    /// The vault a Git library's setup adopts or publishes (`GitSyncSetup`).
+    var libraryVault: SecureSnippetStore { secureStore }
     private let lockTimeout: TimeInterval
     private let metadataURL: URL
     private let temporaryDirectory: URL

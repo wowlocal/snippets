@@ -14,6 +14,10 @@ import Foundation
 /// 3. An existing library is joined with a key this device already holds (an earlier
 ///    connection, or iCloud Keychain), or with that library's recovery code.
 ///
+/// A library also owns its secure-snippet vault. Creating one publishes the vault's
+/// identity and its key under the same recovery code (`GitSyncVault`); joining adopts
+/// that vault instead of ever minting another, so one code opens the whole library.
+///
 /// Only after the library and its key are both in place are the coordinates and token
 /// saved. Selecting Git as the provider is a separate, explicit Switch and Sync.
 @MainActor
@@ -236,6 +240,33 @@ final class GitSyncSetup {
         case switchInProgress
         case saveFailed
         case removeWhileActive
+        /// This device's secure snippets are sealed under another vault's key.
+        case differentVault(secureCount: Int)
+        /// This device cannot open the vault, so it cannot wrap its key under a code.
+        case vaultKeyUnavailable
+        /// Device-owner authentication for the vault did not complete.
+        case vaultAuthentication
+        /// `keys/vault.json` cannot be read: damaged, or written by a newer build.
+        case vaultUnavailable
+        /// This device's own `vault.json` cannot be read.
+        case localVaultUnreadable
+        /// The code is well formed but does not open the library's vault key.
+        case incorrectVaultRecoveryCode
+        /// Secure snippets in the library are sealed under a vault another device holds.
+        case vaultHeldElsewhere
+        /// A vault may be created for an older library only after a completed sync.
+        case syncBeforeSecureSetup
+        /// Keys are replaced only for the library Git is syncing, right after a round
+        /// that left nothing pending.
+        case syncBeforeRotation
+        /// A secure sync conflict is still held as ciphertext under the current key.
+        case pendingSecureConflicts
+        /// The repository holds the new keys, but this device did not finish switching
+        /// to them. The code must still be shown: nothing else ever will.
+        case rotatedButNotSaved(recoveryCode: String)
+        /// The replacing push may or may not have landed and the repository could not be
+        /// checked. The new keys are kept; the code opens the library if it was replaced.
+        case rotationUncertain(recoveryCode: String)
 
         /// The SSH host's key needs the user's confirmation (iOS) or known_hosts (macOS).
         var isUntrustedSSHHostKey: Bool {
@@ -321,15 +352,71 @@ final class GitSyncSetup {
                 "This device could not save the repository settings. Try again."
             case .removeWhileActive:
                 "Git is in use. Switch sync to another provider before removing the repository."
+            case .differentVault(let count):
+                GitSyncSetup.differentVaultMessage(count)
+            case .vaultKeyUnavailable:
+                "Secure snippets on this device are locked without their key, so a recovery code made here could not open them. Unlock them first with Set Up Secure Snippets here or Restore with Recovery Key in Settings, or do this on a device that can open them."
+            case .vaultAuthentication:
+                "Snippets couldn’t confirm it’s you, so your secure snippets were left as they are. Nothing was changed."
+            case .vaultUnavailable:
+                "This library’s secure-snippet key file can’t be read. Update Snippets on this device, or create a new recovery code on a device that can open the secure snippets."
+            case .localVaultUnreadable:
+                "Secure snippets on this device can’t be read, so nothing was changed. Check Secure Snippets in Settings."
+            case .incorrectVaultRecoveryCode:
+                "That recovery code does not open this library’s secure snippets. If the code was replaced, enter the newest one."
+            case .vaultHeldElsewhere:
+                "Another device holds the key to this library’s secure snippets. Update Snippets on that device, create a new recovery code there, then enter that code here."
+            case .syncBeforeSecureSetup:
+                "Switch sync to this Git library and let it finish syncing, then set up secure snippets."
+            case .syncBeforeRotation:
+                "Keys can be replaced only while Git sync is on and up to date. Use Sync Now, fix anything it reports, then try again."
+            case .pendingSecureConflicts:
+                "A secure snippet on this device still has an unresolved sync conflict, so its key can’t be replaced yet. Unlock your secure snippets and use Sync Now, then try again. If sync can’t run, \(GitSyncSetup.forgetVaultAction), then connect again."
+            case .rotatedButNotSaved:
+                "The repository now uses the new keys, but this device could not finish switching to them. Keep the new recovery code, then \(GitSyncSetup.press) \(GitSyncSetup.reconnect)."
+            case .rotationUncertain:
+                "Snippets couldn’t confirm whether the keys were replaced. Keep the new recovery code: if the library asks for one, this is it. Use Sync Now; if it asks you to reconnect, \(GitSyncSetup.press) \(GitSyncSetup.reconnect)."
             }
         }
     }
+
+    #if os(macOS)
+    nonisolated private static let forgetVaultAction = "choose Forget Secure Snippets in Settings"
+    #else
+    nonisolated private static let forgetVaultAction = "choose Remove Secure Snippets from This Device in Settings"
+    #endif
+
+    nonisolated private static func differentVaultMessage(_ count: Int) -> String {
+        guard count > 0 else {
+            return "This device has synced secure snippets under a different key than this library’s. To use the library’s, \(forgetVaultAction), then connect again."
+        }
+        let them = count == 1 ? "it" : "them"
+        return "This device has \(count) secure snippet\(count == 1 ? "" : "s") protected by a different key than this library’s. Turn \(them) into ordinary snippets or delete \(them), \(forgetVaultAction), then connect again."
+    }
+
+    nonisolated static let newCodeReason = "Create a new recovery code for your Git library"
+    nonisolated static let rotateReason = "Replace the keys of your Git library"
+
+    /// What replacing the keys does, for the confirmation on both platforms.
+    nonisolated static let keyRotationExplanation =
+        "Snippets makes a new library key, a new key for secure snippets and a new recovery code, then "
+        + "uploads your library again under them. The old recovery code and keys open nothing written "
+        + "from now on.\n\n"
+        + "Your other devices stop syncing until you reconnect each one with the new code (Sync settings, "
+        + "Git Repository, Update). Sync them first if you can: changes they haven’t uploaded are merged "
+        + "in when they reconnect, and a snippet deleted since their last sync can come back.\n\n"
+        + "Earlier versions stay in the repository’s history and can still be read with the old code. If "
+        + "that code may have leaked, also change the passwords you keep in secure snippets."
+    nonisolated private static let resealReason = "Move your secure snippets to the library’s new key"
+    nonisolated private static let createLibraryReason = "Include your secure snippets in the new library’s recovery code"
 
     #if os(macOS)
     nonisolated private static let press = "click"
     #else
     nonisolated private static let press = "tap"
     #endif
+    /// The connect button's title once a repository is saved, on both platforms.
+    nonisolated private static let reconnect = "Update"
 
     #if os(macOS)
     nonisolated private static let sshUnavailableMessage =
@@ -366,15 +453,20 @@ final class GitSyncSetup {
     private let selection: SyncBackendSelectionStore
     private let keys: GitSyncKeyStore
     private weak var coordinator: SyncCoordinator?
+    /// The device's secure-snippet store. Nil only where there is none to publish.
+    private let vault: SecureSnippetStore?
     private let scratchDirectory: URL
     private var session: URLSession?
     /// The SSH host of the step in progress, for failure messages.
     private var activeSSHHost: SSHHost?
 
-    init(selection: SyncBackendSelectionStore, coordinator: SyncCoordinator?) {
+    init(
+        selection: SyncBackendSelectionStore, coordinator: SyncCoordinator?, vault: SecureSnippetStore? = nil
+    ) {
         self.selection = selection
         keys = selection.gitKeys
         self.coordinator = coordinator
+        self.vault = vault ?? coordinator?.libraryVault
         scratchDirectory = FileManager.default.temporaryDirectory
             .appending(path: "SnippetsGitSetup-\(UUID().uuidString)", directoryHint: .isDirectory)
     }
@@ -451,38 +543,54 @@ final class GitSyncSetup {
         let datasetID = UUID()
         let material = GitSyncKeyStore.mintMaterial()
         let kit = GitSyncRecovery.Kit(datasetID: datasetID)
-        let envelope = try GitSyncRecovery.seal(material: material, kit: kit)
+        var files = [GitSyncRecovery.path: try GitSyncRecovery.seal(material: material, kit: kit)]
+        // The library's vault, its key under the same code. Prepared before any key is
+        // stored or anything is pushed: it may ask for the owner, and a refusal must
+        // leave nothing behind.
+        let prepared = try await prepareVault(under: kit, reason: Self.createLibraryReason)
+        if let prepared {
+            files[GitSyncVault.path] = try GitSyncVault.seal(
+                prepared.identity, material: material, datasetID: datasetID)
+        }
         let scope = GitSyncKeyStore.Scope(remote: remote, datasetID: datasetID)
         // The key exists before the library does: a crash after the push leaves a
         // library this device can still open (and a recovery code it can replace).
-        do { try keys.install(material, for: scope) } catch { throw Failure.keyUnavailable }
+        do {
+            try keys.install(material, for: scope)
+        } catch {
+            discard(prepared)
+            throw Failure.keyUnavailable
+        }
         let created: UUID
         do {
             created = try await mapped {
                 try await setupTransport(remote).initializeRepository(
-                    datasetID: datasetID, files: [GitSyncRecovery.path: envelope], mode: mode)
+                    datasetID: datasetID, files: files, mode: mode)
             }
         } catch {
-            // A lost response can hide a push that landed. Forget the key only once the
-            // repository proves this library does not exist; otherwise keep it (an
+            // A lost response can hide a push that landed. Forget the keys only once the
+            // repository proves this library does not exist; otherwise keep them (an
             // orphaned key is harmless, a library without its key is not).
             switch try? await setupTransport(remote).inspectRepository() {
             case .library(let existing, _) where existing == datasetID:
                 created = datasetID
             case .some:
                 try? keys.forget(scope)
+                discard(prepared)
                 throw error
             case nil:
-                // Neither outcome is known. Keep the key and hand out the code, which
+                // Neither outcome is known. Keep the keys and hand out the code, which
                 // opens the library if it was created.
                 throw Failure.creationUncertain(recoveryCode: kit.code)
             }
         }
         guard created == datasetID else {
             try? keys.forget(scope)
+            discard(prepared)
             throw Failure.libraryExists(datasetID: created)
         }
         do {
+            try adopt(prepared)
             try await save(remote: remote, token: token, datasetID: datasetID, mode: mode)
         } catch {
             throw Failure.createdButNotSaved(recoveryCode: kit.code)
@@ -504,32 +612,334 @@ final class GitSyncSetup {
               current == datasetID, mode == agreedMode else { throw Failure.libraryChanged }
         try requireReconnectable(remote: remote)
         try await mapped { try await transport.verifyWriteAccess() }
-        if !keys.hasMaterial(for: scope) {
-            guard let recoveryCode, !recoveryCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else { throw Failure.recoveryCodeRequired }
-            let kit: GitSyncRecovery.Kit
+        // The code's secret opens the vault key too, so it is read whenever one was
+        // entered, even by a device that already holds the library key.
+        var kit: GitSyncRecovery.Kit?
+        if let recoveryCode, !recoveryCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             do { kit = try GitSyncRecovery.Kit(code: recoveryCode, datasetID: datasetID) }
             catch { throw Failure.invalidRecoveryCode }
+        }
+        // Set only when the library key comes from the recovery code in this call.
+        var recovered: Data?
+        if !keys.hasMaterial(for: scope) {
+            guard let kit else { throw Failure.recoveryCodeRequired }
             guard let envelope = try await mapped({ try await transport.readFile(GitSyncRecovery.path) })
             else { throw Failure.recoveryUnavailable }
-            let material: Data
             do {
-                material = try GitSyncRecovery.open(envelope, kit: kit)
+                recovered = try GitSyncRecovery.open(envelope, kit: kit)
             } catch GitSyncRecovery.Failure.incorrectCode {
                 throw Failure.incorrectRecoveryCode
             } catch {
                 throw Failure.recoveryUnavailable
             }
-            do { try keys.install(material, for: scope) } catch { throw Failure.keyUnavailable }
+        }
+        // The library that replaced the one Git was syncing on this branch: its keys
+        // were rotated, or it was created anew.
+        let replaced = replacedLibrary(by: remote, datasetID: datasetID)
+        // The library's vault, checked before anything is saved: a device whose secure
+        // snippets belong to another vault is told now, not by a halted sync later. A
+        // file this build cannot read does not block ordinary snippets; secure ones
+        // then wait for `setUpSecureSnippets`.
+        var identity: GitSyncVault.Identity?
+        var reseals = false
+        if let vault {
+            let material: Data
+            if let recovered {
+                material = recovered
+            } else if let stored = try? keys.material(for: scope) {
+                material = stored
+            } else {
+                throw Failure.keyUnavailable
+            }
+            if case .identity(let published) = try await publishedVault(
+                transport, material: material, datasetID: datasetID) {
+                // Only a device following its library to that library's replacement
+                // moves its secure snippets under the new vault key. Anywhere else a
+                // vault in use may be shared with another provider's devices, and is
+                // never re-pointed.
+                if replaced != nil, vault.libraryVaultNeedsReseal(published) {
+                    try await vaultStep { try vault.checkCanResealIntoLibraryVault(published) }
+                    reseals = true
+                } else {
+                    try await vaultStep { try vault.checkCanJoinLibraryVault(published) }
+                }
+                identity = published
+            }
+        }
+        if let recovered {
+            do { try keys.install(recovered, for: scope) } catch { throw Failure.keyUnavailable }
+        }
+        if let identity, let vault {
+            try await vaultStep {
+                if reseals {
+                    try await vault.resealIntoLibraryVault(
+                        identity, recoveryKey: kit?.secret, reason: Self.resealReason)
+                    return
+                }
+                do {
+                    try vault.joinLibraryVault(identity, recoveryKey: kit?.secret)
+                } catch SecureSnippetStore.LibraryVaultFailure.incorrectRecoveryCode {
+                    // A code issued by a build that predates `keys/vault.json` opens the
+                    // library but not its vault. Join anyway; secure snippets wait for a
+                    // code that does.
+                    try vault.joinLibraryVault(identity)
+                }
+            }
         }
         try await save(remote: remote, token: token, datasetID: datasetID, mode: mode)
+        // The replaced library is gone from the branch; its key opens only history.
+        if let replaced { try? keys.forget(replaced) }
         return .connected
     }
 
     /// Seals the current library key under a new code and replaces the repository's
-    /// envelope. Earlier envelopes remain in git history, so this replaces a lost code;
-    /// it cannot revoke a leaked one.
+    /// envelope. When this device holds the library's vault, its key is wrapped under
+    /// the same code in the same commit, so one code keeps opening everything. Earlier
+    /// envelopes remain in git history, so this replaces a lost code; it cannot revoke
+    /// a leaked one.
     func replaceRecoveryCode() async throws -> String {
+        try await issueRecoveryCode(mintingVault: false)
+    }
+
+    /// Replaces every key of the connected library and returns its new recovery code.
+    ///
+    /// A new library takes the old one's place on the branch in one commit: a new
+    /// dataset id, a new library key, a new vault key (this device's secure snippets
+    /// are re-sealed under it) and a new recovery code. This device then uploads its
+    /// library again under the new keys. Every other device stops with
+    /// `git_library_replaced` and reconnects with the new code, which re-seals its own
+    /// secure snippets (`connect`).
+    ///
+    /// The old code, library key and vault key open nothing written from now on. They
+    /// still open the commits before this one: history is not rewritten.
+    ///
+    /// The library must be the one Git is syncing, and exactly as this device last
+    /// synced it: the replacing commit is refused if the branch moved since, and the
+    /// round is repeated. The new keys are stored before the push, so a crash after it
+    /// leaves a library this device can still open by reconnecting.
+    func rotateKeys() async throws -> String {
+        guard selection.provider == .git, let coordinator else { throw Failure.syncBeforeRotation }
+        // An unfinished provider switch pins the library's location; moving it now
+        // would leave the repository on new keys this device could not save.
+        guard selection.interruptedProviderSwitch == nil else { throw Failure.switchInProgress }
+        let old = try activeLibrary()
+        let coordinates = old.coordinates
+        if let waiting = waitingFailure(coordinator) { throw waiting }
+        if let vault {
+            switch try await publishedVault(old.transport, material: old.material, datasetID: coordinates.datasetID) {
+            case .tooNew:
+                throw Failure.vaultUnavailable
+            case .identity(let identity):
+                try await vaultStep { try vault.checkCanJoinLibraryVault(identity) }
+            case .absent, .unreadable:
+                break
+            }
+        }
+
+        let datasetID = UUID()
+        let material = GitSyncKeyStore.mintMaterial()
+        let kit = GitSyncRecovery.Kit(datasetID: datasetID)
+        var next = coordinates
+        next.datasetID = datasetID
+        var files = [GitSyncRecovery.path: try GitSyncRecovery.seal(material: material, kit: kit)]
+        // Asks for the owner and opens every secure snippet once, before any key is
+        // stored or anything is pushed: a refusal must leave nothing behind.
+        let rotation = try await vaultStep {
+            try await vault?.prepareVaultRotation(wrappingUnder: kit.secret, reason: Self.rotateReason)
+        }
+        func forgetNewKeys() {
+            try? keys.forget(next.keyScope)
+            if let rotation { vault?.discardVaultRotation(rotation) }
+        }
+        do {
+            if let rotation {
+                files[GitSyncVault.path] = try GitSyncVault.seal(
+                    rotation.identity, material: material, datasetID: datasetID)
+            }
+            try keys.install(material, for: next.keyScope)
+        } catch {
+            forgetNewKeys()
+            throw Failure.keyUnavailable
+        }
+
+        for attempt in 1...3 {
+            // Everything this device has must be in the repository, and everything in
+            // the repository on this device, before the old library is dropped.
+            guard case .completed(.idle) = await coordinator.requestSync(trigger: .manual) else {
+                forgetNewKeys()
+                throw waitingFailure(coordinator) ?? Failure.syncBeforeRotation
+            }
+            do {
+                return try await coordinator.withQuiescedCloudTransport { [self] in
+                    try await replaceLibrary(
+                        old, with: next, files: files, rotation: rotation, code: kit.code)
+                }
+            } catch RotationStep.branchMoved where attempt < 3 {
+                continue
+            } catch RotationStep.branchMoved {
+                forgetNewKeys()
+                throw Failure.unreachable
+            } catch RotationStep.notReplaced(let failure) {
+                forgetNewKeys()
+                throw failure
+            } catch let failure as Failure {
+                throw failure
+            } catch {
+                // Sync was busy with another account change; nothing was pushed.
+                forgetNewKeys()
+                throw Failure.busy
+            }
+        }
+        forgetNewKeys()
+        throw Failure.unreachable
+    }
+
+    /// Why the keys cannot be replaced while sync holds secure snippets back. Whatever
+    /// waits is not in this device's library, so it would not be uploaded again.
+    private func waitingFailure(_ coordinator: SyncCoordinator) -> Failure? {
+        guard coordinator.isWaitingForVault else { return nil }
+        // With the key here, what waits is a secure conflict that needs the vault open.
+        return vault?.libraryVaultAvailability == .ready ? .pendingSecureConflicts : .vaultHeldElsewhere
+    }
+
+    private enum RotationStep: Error {
+        /// The branch changed after the last round; sync again and retry.
+        case branchMoved
+        /// The repository provably still holds the old library.
+        case notReplaced(Failure)
+    }
+
+    /// The replacing push and, once the repository holds the new library, this
+    /// device's move to it. Runs with sync stopped.
+    private func replaceLibrary(
+        _ old: ActiveLibrary, with next: SyncBackendSelectionStore.GitCoordinates,
+        files: [String: Data], rotation: SecureSnippetStore.PendingVaultRotation?, code: String
+    ) async throws -> String {
+        let current = old.coordinates
+        // The commit the engine last fetched is the library this device has merged.
+        guard let locations = try? selection.protocolLocations(),
+              case .loaded(let base) = SyncBaseFile.load(from: locations.baseURL),
+              let cursor = base.cursor,
+              let head = GitSyncTransport.commit(of: cursor, datasetID: current.datasetID) else {
+            throw RotationStep.notReplaced(.syncBeforeRotation)
+        }
+        do {
+            try await old.transport.replaceLibrary(
+                current.datasetID, with: next.datasetID, files: files, mode: current.mode,
+                expectedHead: head)
+        } catch {
+            // A lost response can hide a push that landed. Give up the new keys only
+            // once the repository proves it still holds the old library.
+            switch try? await setupTransport(old.remote).inspectRepository() {
+            case .library(let existing, _) where existing == next.datasetID:
+                break
+            case .library(let existing, _) where existing == current.datasetID:
+                if case SyncTransportFailure.unreachable(detail: "git_ref_moved") = error {
+                    throw RotationStep.branchMoved
+                }
+                let failure = (error as? Failure)
+                    ?? (error as? SyncTransportFailure).map { Self.failure(for: $0, host: activeSSHHost ?? .unknown) }
+                    ?? .unreachable
+                throw RotationStep.notReplaced(failure)
+            case .some:
+                throw RotationStep.notReplaced(.libraryChanged)
+            case nil:
+                throw Failure.rotationUncertain(recoveryCode: code)
+            }
+        }
+        // The repository holds the new library and only `code` opens its envelopes.
+        // Whatever fails from here, the code is handed out; reconnecting finishes the
+        // move with the keys already in the Keychain.
+        do {
+            if let rotation, let vault { try vault.commitVaultRotation(rotation) }
+            try selection.configureGit(next, token: old.token)
+        } catch {
+            throw Failure.rotatedButNotSaved(recoveryCode: code)
+        }
+        try? keys.forget(current.keyScope)
+        return code
+    }
+
+    /// True when a new recovery code is authorized by unlocking the vault (it has to
+    /// be, to wrap the vault key), so the caller need not ask for the owner as well.
+    var newRecoveryCodeUnlocksVault: Bool { vault?.libraryVaultDisplayAvailability == .ready }
+
+    /// Where secure snippets stand on this device for the connected library.
+    enum SecureSnippetsStatus: Equatable {
+        /// Nothing is connected, or this build has no vault to offer.
+        case unavailable
+        case ready
+        /// No vault on this device yet.
+        case needsSetup
+        /// The library's vault is here; its key is not.
+        case needsRecoveryCode
+    }
+
+    var secureSnippetsStatus: SecureSnippetsStatus {
+        guard let vault, selection.gitCoordinates != nil, selection.gitIsReady else { return .unavailable }
+        switch vault.libraryVaultDisplayAvailability {
+        case .ready: return .ready
+        case .none: return .needsSetup
+        case .keyMissing: return .needsRecoveryCode
+        }
+    }
+
+    /// Makes secure snippets work on this device for the connected library.
+    ///
+    /// The library's vault is adopted, with its key taken from the Keychain or from
+    /// `recoveryCode`; `recoveryCodeRequired` asks for the code. A library created
+    /// before `keys/vault.json` has no vault yet: it gets one, together with a new
+    /// recovery code that opens both (`.created`), after `authenticateOwner`.
+    func setUpSecureSnippets(
+        recoveryCode: String? = nil, authenticateOwner: (String) async throws -> Void
+    ) async throws -> Outcome {
+        guard let vault else { throw Failure.notConfigured }
+        let library = try activeLibrary()
+        let datasetID = library.coordinates.datasetID
+        switch try await publishedVault(library.transport, material: library.material, datasetID: datasetID) {
+        case .tooNew, .unreadable:
+            throw Failure.vaultUnavailable
+        case .identity(let identity):
+            var secret: Data?
+            if let recoveryCode, !recoveryCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                do { secret = try GitSyncRecovery.Kit(code: recoveryCode, datasetID: datasetID).secret }
+                catch { throw Failure.invalidRecoveryCode }
+            }
+            let availability = try await vaultStep { try vault.joinLibraryVault(identity, recoveryKey: secret) }
+            guard availability == .ready else { throw Failure.recoveryCodeRequired }
+            return .connected
+        case .absent:
+            switch vault.libraryVaultAvailability {
+            case .keyMissing:
+                throw Failure.vaultKeyUnavailable
+            case .ready:
+                // Publishing an existing vault authenticates by unlocking it.
+                break
+            case .none:
+                // A vault minted here must be the library's only one. Secure snippets
+                // another device already uploaded are sealed under that device's vault,
+                // and only a finished round shows there are none.
+                if coordinator?.isWaitingForVault == true { throw Failure.vaultHeldElsewhere }
+                guard selection.provider == .git, let coordinator,
+                      case .idle(let lastSync) = coordinator.state, lastSync != nil else {
+                    throw Failure.syncBeforeSecureSetup
+                }
+                try await authenticateOwner(Self.newCodeReason)
+            }
+            return .created(recoveryCode: try await issueRecoveryCode(mintingVault: true))
+        }
+    }
+
+    private struct ActiveLibrary {
+        let coordinates: SyncBackendSelectionStore.GitCoordinates
+        let remote: GitRemote
+        let token: String?
+        let material: Data
+        let transport: GitSyncTransport
+    }
+
+    /// The saved library with its key and a transport pinned to its dataset.
+    private func activeLibrary() throws -> ActiveLibrary {
         guard let coordinates = selection.gitCoordinates else { throw Failure.notConfigured }
         if case .ssh(let ssh) = coordinates.repository { activeSSHHost = SSHHost(ssh) } else { activeSSHHost = nil }
         let token = coordinates.usesSSH ? nil : try? selection.storedGitToken()
@@ -540,28 +950,137 @@ final class GitSyncSetup {
         guard let material = try? keys.material(for: coordinates.keyScope) else {
             throw Failure.keyUnavailable
         }
-        let kit = GitSyncRecovery.Kit(datasetID: coordinates.datasetID)
-        let envelope = try GitSyncRecovery.seal(material: material, kit: kit)
         let transport = GitSyncTransport(
             configuration: .init(
                 remote: remote, cacheDirectory: scratchCache(),
                 expectedDatasetID: coordinates.datasetID, sshConnector: selection.gitSSH?.connector),
             session: setupSession())
+        return ActiveLibrary(
+            coordinates: coordinates, remote: remote, token: token, material: material, transport: transport)
+    }
+
+    private func issueRecoveryCode(mintingVault: Bool) async throws -> String {
+        let library = try activeLibrary()
+        let datasetID = library.coordinates.datasetID
+        let kit = GitSyncRecovery.Kit(datasetID: datasetID)
+        var files = [GitSyncRecovery.path: try GitSyncRecovery.seal(material: library.material, kit: kit)]
+        let prepared = try await vaultForNewCode(kit, library: library, minting: mintingVault)
+        if let prepared {
+            files[GitSyncVault.path] = try GitSyncVault.seal(
+                prepared.identity, material: library.material, datasetID: datasetID)
+        }
         do {
             try await mapped {
-                try await transport.writeFiles(
-                    [GitSyncRecovery.path: envelope], message: "Replace recovery envelope")
+                try await library.transport.writeFiles(files, message: "Replace recovery envelope")
             }
         } catch {
             // A lost response can hide a write that landed, after which only the new
-            // code opens the stored envelope. Show it whenever that is the case.
-            if let current = try? await transport.readFile(GitSyncRecovery.path),
-               (try? GitSyncRecovery.open(current, kit: kit)) != nil {
+            // code opens the stored envelopes. Show it whenever that is the case.
+            let current = try? await library.transport.readFile(GitSyncRecovery.path)
+            if let current, (try? GitSyncRecovery.open(current, kit: kit)) != nil {
+                try? adopt(prepared)
                 return kit.code
             }
+            // Forget a minted vault key only when the repository proves the write did
+            // not land. If it cannot be read, the key may be the library's only copy.
+            if current != nil { discard(prepared) }
             throw error
         }
+        // Both envelopes are in the repository and only this code opens them. A local
+        // write that fails now must not swallow it; `setUpSecureSnippets` repeats it.
+        try? adopt(prepared)
         return kit.code
+    }
+
+    /// The vault to publish with a new recovery code, or nil to leave `keys/vault.json`
+    /// alone. A published vault must be rewrapped, or the new code would open the
+    /// library without its secure snippets; only a device holding its key can do that.
+    private func vaultForNewCode(
+        _ kit: GitSyncRecovery.Kit, library: ActiveLibrary, minting: Bool
+    ) async throws -> SecureSnippetStore.PreparedLibraryVault? {
+        guard let vault else { return nil }
+        let published = try await publishedVault(
+            library.transport, material: library.material, datasetID: library.coordinates.datasetID)
+        let local = vault.libraryVaultAvailability
+        switch published {
+        case .tooNew:
+            throw Failure.vaultUnavailable
+        case .identity(let identity):
+            try await vaultStep { try vault.checkCanJoinLibraryVault(identity) }
+            guard local == .ready else { throw Failure.vaultKeyUnavailable }
+        case .absent, .unreadable:
+            switch local {
+            case .ready:
+                break
+            case .keyMissing:
+                if minting { throw Failure.vaultKeyUnavailable }
+                return nil
+            case .none:
+                guard minting else { return nil }
+            }
+        }
+        return try await prepareVault(under: kit, reason: Self.newCodeReason)
+    }
+
+    // MARK: - The library's vault
+
+    private enum PublishedVault {
+        case absent
+        case identity(GitSyncVault.Identity)
+        /// Damaged, or sealed under another key. Safe to replace.
+        case unreadable
+        /// Written by a newer build. Never replaced from this one.
+        case tooNew
+    }
+
+    private func publishedVault(
+        _ transport: GitSyncTransport, material: Data, datasetID: UUID
+    ) async throws -> PublishedVault {
+        guard let file = try await mapped({ try await transport.readFile(GitSyncVault.path) }) else {
+            return .absent
+        }
+        do {
+            return .identity(try GitSyncVault.open(file, material: material, datasetID: datasetID))
+        } catch GitSyncVault.Failure.unsupportedVersion {
+            return .tooNew
+        } catch {
+            return .unreadable
+        }
+    }
+
+    private func prepareVault(
+        under kit: GitSyncRecovery.Kit, reason: String
+    ) async throws -> SecureSnippetStore.PreparedLibraryVault? {
+        guard let vault else { return nil }
+        return try await vaultStep { try await vault.prepareLibraryVault(wrappingUnder: kit.secret, reason: reason) }
+    }
+
+    /// Writes the published vault's document on this device (a no-op for a vault that
+    /// was already here).
+    private func adopt(_ prepared: SecureSnippetStore.PreparedLibraryVault?) throws {
+        guard let prepared, let vault else { return }
+        try vault.joinLibraryVault(prepared.identity)
+    }
+
+    private func discard(_ prepared: SecureSnippetStore.PreparedLibraryVault?) {
+        guard let prepared else { return }
+        vault?.discardMintedLibraryVault(prepared)
+    }
+
+    private func vaultStep<T>(_ operation: () async throws -> T) async throws -> T {
+        do {
+            return try await operation()
+        } catch let failure as SecureSnippetStore.LibraryVaultFailure {
+            switch failure {
+            case .differentVault(let count): throw Failure.differentVault(secureCount: count)
+            case .keyUnavailable: throw Failure.vaultKeyUnavailable
+            case .authentication: throw Failure.vaultAuthentication
+            case .incorrectRecoveryCode: throw Failure.incorrectVaultRecoveryCode
+            case .unreadable: throw Failure.localVaultUnreadable
+            case .recoveryCodeRequired: throw Failure.recoveryCodeRequired
+            case .pendingConflicts: throw Failure.pendingSecureConflicts
+            }
+        }
     }
 
     /// Forgets the repository on this device. The library key stays in the Keychain so
@@ -625,6 +1144,15 @@ final class GitSyncSetup {
     nonisolated static let visibilityUnknownMessage =
         "Snippets couldn’t check whether this repository is private. Create a plain-text library only if it "
         + "is private: anyone who can read the repository can read your ordinary snippets."
+
+    /// The key scope of the library Git was syncing when `datasetID` has taken its
+    /// place on the same branch; nil when nothing active is being replaced.
+    private func replacedLibrary(by remote: GitRemote, datasetID: UUID) -> GitSyncKeyStore.Scope? {
+        guard selection.provider == .git, let active = selection.gitCoordinates,
+              Self.sameEndpoint(active.repository, remote.location),
+              active.branch == remote.branch, active.datasetID != datasetID else { return nil }
+        return active.keyScope
+    }
 
     /// True when `datasetID` at the active repository is not the library this device was
     /// syncing, so Settings must confirm the replacement before merging into it.

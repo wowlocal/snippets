@@ -33,9 +33,15 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
     private let recoveryButton = NSButton(title: "New Recovery Code…", target: nil, action: nil)
     private let removeButton = NSButton(title: "Remove from This Mac…", target: nil, action: nil)
     private let removeNote = NSTextField(labelWithString: "Switch sync away from Git first.")
+    private let rotateButton = NSButton(title: "Replace Keys…", target: nil, action: nil)
     private lazy var connectedActions = NSStackView(views: [
-        removeButton, removeNote, NSView(), recoveryButton, syncNowButton, switchButton,
+        removeButton, removeNote, NSView(), syncNowButton, switchButton,
     ])
+    /// What protects the library: its recovery code and its keys.
+    private lazy var keyActions = NSStackView(views: [NSView(), rotateButton, recoveryButton])
+    /// Shown only while secure snippets do not work on this Mac for the library.
+    private let secureButton = NSButton(title: "Set Up Secure Snippets…", target: nil, action: nil)
+    private lazy var secureActions = NSStackView(views: [secureButton, NSView()])
     private let tokenLinkButton = NSButton(title: "Create a Token…", target: nil, action: nil)
     private let deployKeyButton = NSButton(title: "Add Deploy Key…", target: nil, action: nil)
     private lazy var linkRow = NSStackView(views: [tokenLinkButton, deployKeyButton, NSView()])
@@ -50,6 +56,7 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
     /// Nil cancels; otherwise the library mode the user chose.
     var confirmCreation: (String) -> GitLibraryMode? = MacGitSyncViewController.runCreationAlert
     var confirmReplacement: () -> Bool = MacGitSyncViewController.runReplacementAlert
+    var confirmKeyRotation: () -> Bool = MacGitSyncViewController.runKeyRotationAlert
     /// Asked when a plain-text library's repository could not be checked for privacy.
     var confirmPrivateRepository: () -> Bool = MacGitSyncViewController.runConfirmPrivateAlert
     var confirmPlainTextJoin: () -> Bool = MacGitSyncViewController.runPlainTextJoinAlert
@@ -183,6 +190,8 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
         for (button, action) in [(switchButton, #selector(switchPressed)),
                                  (syncNowButton, #selector(syncNowPressed)),
                                  (recoveryButton, #selector(newRecoveryCodePressed)),
+                                 (rotateButton, #selector(rotateKeysPressed)),
+                                 (secureButton, #selector(secureSnippetsPressed)),
                                  (removeButton, #selector(removePressed))] {
             button.target = self
             button.action = action
@@ -191,10 +200,16 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
         removeButton.contentTintColor = .systemRed
         connectedActions.orientation = .horizontal
         connectedActions.spacing = 8
+        keyActions.orientation = .horizontal
+        keyActions.spacing = 8
+        rotateButton.setAccessibilityIdentifier("git-replace-keys")
+        secureButton.setAccessibilityIdentifier("git-secure-snippets")
+        secureActions.orientation = .horizontal
 
         separator.boxType = .separator
-        for view in [heading, intro, beforeYouStartLabel, connectedTitle, connectedDetail, connectedActions,
-                     separator, changeHeading, grid, hint, linkRow, buttons, statusLabel] as [NSView] {
+        for view in [heading, intro, beforeYouStartLabel, connectedTitle, connectedDetail, secureActions,
+                     keyActions, connectedActions, separator, changeHeading, grid, hint, linkRow, buttons,
+                     statusLabel] as [NSView] {
             stack.addArrangedSubview(view)
         }
         stack.setCustomSpacing(4, after: connectedTitle)
@@ -213,6 +228,8 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
             buttons.widthAnchor.constraint(equalTo: stack.widthAnchor),
             separator.widthAnchor.constraint(equalTo: stack.widthAnchor),
             connectedActions.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            keyActions.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            secureActions.widthAnchor.constraint(equalTo: stack.widthAnchor),
             linkRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
 
@@ -288,6 +305,7 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
     }
 
     var statusText: String { statusLabel.stringValue }
+    var setupStatus: GitSyncSetup.SecureSnippetsStatus { setup.secureSnippetsStatus }
     var connectedText: String {
         connectedTitle.isHidden ? "" : [connectedTitle.stringValue, connectedDetail.stringValue].joined(separator: "\n")
     }
@@ -319,6 +337,14 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
             if !selection.hasGitCredential {
                 lines.append("Access token: missing. Enter it and click Update.")
             }
+            switch setup.secureSnippetsStatus {
+            case .needsSetup:
+                lines.append("Secure snippets: not set up on this Mac for this library.")
+            case .needsRecoveryCode:
+                lines.append("Secure snippets: locked. This Mac needs the library’s recovery code.")
+            case .ready, .unavailable:
+                break
+            }
             lines.append(active
                 ? "Git is the active sync provider. \(coordinator?.statusDescription ?? "")"
                 : "Active sync provider: \(selection.provider.displayName)")
@@ -327,6 +353,12 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
         switchButton.isHidden = active || !ready
         syncNowButton.isHidden = !active || !ready
         recoveryButton.isHidden = !ready
+        // Replacing the keys re-uploads the library, so it needs Git to be syncing it.
+        rotateButton.isHidden = !ready || !active
+        keyActions.isHidden = configured == nil || !ready
+        let secureStatus = setup.secureSnippetsStatus
+        secureActions.isHidden = configured == nil
+            || !(secureStatus == .needsSetup || secureStatus == .needsRecoveryCode)
         // Shown but disabled while Git is in use, with the reason beside it.
         removeNote.isHidden = !active
         // The next step is the default button: Switch and Sync once it is offered.
@@ -336,7 +368,8 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
         // An empty status line takes no room in a sheet sized to its content.
         statusLabel.isHidden = statusLabel.stringValue.isEmpty
         let enabled = !isBusy
-        for control in [connectButton, doneButton, switchButton, syncNowButton, recoveryButton,
+        for control in [connectButton, doneButton, switchButton, syncNowButton, recoveryButton, rotateButton,
+                        secureButton,
                         urlField, branchField, usernameField, tokenField] as [NSControl] {
             control.isEnabled = enabled
         }
@@ -437,7 +470,16 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
                     }
                     if keyAvailable {
                         setBusy(true, "Connecting…")
-                        _ = try await setup.connect(form, datasetID: datasetID, mode: mode)
+                        do {
+                            _ = try await setup.connect(form, datasetID: datasetID, mode: mode)
+                        } catch GitSyncSetup.Failure.recoveryCodeRequired {
+                            // The library key is here (iCloud Keychain); moving this Mac's
+                            // secure snippets to the library's new key takes the code.
+                            guard try await joinWithRecoveryCode(form, datasetID: datasetID, mode: mode) else {
+                                statusLabel.stringValue = "Not connected. This Mac needs the library’s recovery code."
+                                return
+                            }
+                        }
                     } else {
                         guard recoveryAvailable else { throw GitSyncSetup.Failure.recoveryUnavailable }
                         guard try await joinWithRecoveryCode(form, datasetID: datasetID, mode: mode) else {
@@ -449,7 +491,9 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
                 break
             }
             tokenField.stringValue = ""
-            statusLabel.stringValue = "Connected."
+            statusLabel.stringValue = setup.secureSnippetsStatus == .needsRecoveryCode
+                ? "Connected. Secure snippets still need the recovery code: click Set Up Secure Snippets."
+                : "Connected."
             await connected()
         } catch {
             statusLabel.stringValue = ""
@@ -479,7 +523,8 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
                 _ = try await setup.connect(form, datasetID: datasetID, recoveryCode: code, mode: mode)
                 return true
             } catch let failure as GitSyncSetup.Failure
-                        where [.invalidRecoveryCode, .incorrectRecoveryCode, .recoveryCodeRequired].contains(failure) {
+                        where [.invalidRecoveryCode, .incorrectRecoveryCode, .recoveryCodeRequired,
+                               .incorrectVaultRecoveryCode].contains(failure) {
                 problem = failure.errorDescription
             }
         }
@@ -524,13 +569,95 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
         setBusy(true, "Creating a new recovery code…")
         defer { setBusy(false, nil) }
         do {
-            try await authenticateOwner("Create a new recovery code for your Git library")
+            // A vault on this Mac is unlocked to wrap its key under the new code, which
+            // is the owner check; asking twice would be one prompt too many.
+            if !setup.newRecoveryCodeUnlocksVault {
+                try await authenticateOwner(GitSyncSetup.newCodeReason)
+            }
             let code = try await setup.replaceRecoveryCode()
             presentRecoveryCode(code, selection.gitKeys.syncsBetweenDevices)
         } catch where Self.isAuthenticationCancel(error) {
             statusLabel.stringValue = ""
         } catch {
             presentError("Couldn’t Create a Recovery Code", Self.message(for: error))
+        }
+    }
+
+    @objc private func rotateKeysPressed() {
+        guard confirmKeyRotation() else { return }
+        Task { await rotateKeys() }
+    }
+
+    /// Replaces the library's keys and shows the new recovery code.
+    func rotateKeys() async {
+        guard !isBusy else { return }
+        setBusy(true, "Replacing the library’s keys…")
+        defer { setBusy(false, nil) }
+        do {
+            // Re-sealing the secure snippets unlocks the vault, which is the owner check.
+            // A Mac without one is asked here instead.
+            if !setup.newRecoveryCodeUnlocksVault {
+                try await authenticateOwner(GitSyncSetup.rotateReason)
+            }
+            let code = try await setup.rotateKeys()
+            presentRecoveryCode(code, selection.gitKeys.syncsBetweenDevices)
+            statusLabel.stringValue = "Keys replaced. Reconnect your other devices with the new recovery code."
+            _ = await coordinator?.requestSync(trigger: .manual)
+        } catch where Self.isAuthenticationCancel(error) {
+            statusLabel.stringValue = ""
+        } catch {
+            statusLabel.stringValue = ""
+            if let failure = error as? GitSyncSetup.Failure {
+                switch failure {
+                case .rotatedButNotSaved(let code), .rotationUncertain(let code):
+                    presentRecoveryCode(code, selection.gitKeys.syncsBetweenDevices)
+                default:
+                    break
+                }
+            }
+            presentError("Couldn’t Replace the Keys", Self.message(for: error))
+        }
+    }
+
+    @objc private func secureSnippetsPressed() {
+        Task { await setUpSecureSnippets() }
+    }
+
+    /// Makes secure snippets work on this Mac for the connected library: with the
+    /// recovery code when the library has a vault, or with a new vault and a new code
+    /// when it was created before libraries had one.
+    func setUpSecureSnippets() async {
+        guard !isBusy else { return }
+        setBusy(true, "Checking the library…")
+        defer { setBusy(false, nil) }
+        var code: String?
+        var problem: String?
+        do {
+            while true {
+                do {
+                    if case .created(let newCode) = try await setup.setUpSecureSnippets(
+                        recoveryCode: code, authenticateOwner: authenticateOwner) {
+                        presentRecoveryCode(newCode, selection.gitKeys.syncsBetweenDevices)
+                    }
+                    break
+                } catch let failure as GitSyncSetup.Failure
+                            where [.recoveryCodeRequired, .invalidRecoveryCode, .incorrectVaultRecoveryCode]
+                                .contains(failure) {
+                    if code != nil { problem = failure.errorDescription }
+                    guard let entered = promptForRecoveryCode(problem) else {
+                        statusLabel.stringValue = "Secure snippets are still locked on this Mac."
+                        return
+                    }
+                    code = entered
+                    setBusy(true, "Opening secure snippets…")
+                }
+            }
+            statusLabel.stringValue = "Secure snippets are ready on this Mac."
+            if selection.provider == .git { _ = await coordinator?.requestSync(trigger: .manual) }
+        } catch where Self.isAuthenticationCancel(error) {
+            statusLabel.stringValue = ""
+        } catch {
+            presentError("Couldn’t Set Up Secure Snippets", Self.message(for: error))
         }
     }
 
@@ -642,11 +769,25 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
     private static func runReplacementAlert() -> Bool {
         let alert = NSAlert()
         alert.messageText = "Connect to the Library Now in This Repository?"
-        alert.informativeText = "The branch no longer holds the library this Mac was syncing. "
-            + "Connecting merges this Mac’s snippets into the library that is there now. Nothing "
-            + "on this Mac is deleted."
+        alert.informativeText = "The branch no longer holds the library this Mac was syncing: its keys "
+            + "were replaced on another device, or a new library was created there. Connecting merges "
+            + "this Mac’s snippets into the library that is there now and moves its secure snippets to "
+            + "that library’s key. Nothing on this Mac is deleted."
         alert.addButton(withTitle: "Connect and Merge")
         alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private static func runKeyRotationAlert() -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Replace This Library’s Keys?"
+        alert.informativeText = GitSyncSetup.keyRotationExplanation
+        alert.addButton(withTitle: "Replace Keys")
+        alert.addButton(withTitle: "Cancel")
+        // Return cancels: every other device has to be reconnected afterwards.
+        alert.buttons[0].keyEquivalent = ""
+        alert.buttons[1].keyEquivalent = "\r"
         return alert.runModal() == .alertFirstButtonReturn
     }
 
@@ -655,7 +796,7 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
         alert.messageText = "Enter the Recovery Code"
         alert.informativeText = (problem.map { $0 + "\n\n" } ?? "")
             + "This library was created on another device. Enter the recovery code that was shown "
-            + "when it was created, or the newest one made since."
+            + "when it was created, or the newest one made since (a new code, or new keys)."
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         field.placeholderString = "XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXX"
         field.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
@@ -669,8 +810,8 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
     private static func runRecoveryCodePresentation(_ code: String, _ keychainSyncs: Bool) {
         let alert = NSAlert()
         alert.messageText = "Save Your Recovery Code"
-        alert.informativeText = "This code opens your library on a new device. Snippets can’t show it again. "
-            + "Store it in your password manager."
+        alert.informativeText = "This code opens your library on a new device, secure snippets included. "
+            + "Snippets can’t show it again. Store it in your password manager."
             + (keychainSyncs
                 ? " Your Apple devices with iCloud Keychain get the key automatically."
                 : "")

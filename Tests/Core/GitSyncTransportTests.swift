@@ -897,6 +897,135 @@ struct GitSyncRecoveryTests {
         }
     }
 
+    /// Rotating a library's keys: one commit puts a new, empty library in the old
+    /// one's place. Nothing of the old library stays in the tree, files that are not
+    /// ours do, and every device connected to the old library stops.
+    @Test func replacingALibraryLeavesNothingOfTheOldOneInTheTree() async throws {
+        for mode in GitLibraryMode.allCases {
+            let fixture = try GitFixture()
+            let setup = try fixture.transport("setup")
+            let old = UUID()
+            let oldEnvelope = try GitSyncRecovery.seal(material: Self.material, kit: .init(datasetID: old))
+            _ = try await setup.initializeRepository(
+                datasetID: old, files: [GitSyncRecovery.path: oldEnvelope, "keys/extra.json": Data("x".utf8)],
+                mode: mode)
+            let connected = GitSyncTransport(
+                configuration: .init(
+                    remote: try fixture.remote(), cacheDirectory: fixture.cacheDirectory("connected"),
+                    expectedDatasetID: old),
+                session: fixture.session)
+            _ = try await connected.preflightScope()
+            let stale = GitSyncLayout.recordPath(UUID())
+            try fixture.commitAsAnotherWriter { work in
+                try Data("notes\n".utf8).write(to: work.appending(path: "NOTES.md"))
+                try FileManager.default.createDirectory(
+                    at: work.appending(path: "records/\(stale.prefix)"), withIntermediateDirectories: true)
+                try GitRecordFile.encode(WireRecord(id: UUID(), rev: "r1", deleted: false, blob: Data("x".utf8)))
+                    .write(to: work.appending(path: "records/\(stale.prefix)/\(stale.name)"))
+                if mode == .plainText {
+                    try FileManager.default.createDirectory(
+                        at: work.appending(path: "snippets"), withIntermediateDirectories: true)
+                    try Data("Hello\n".utf8).write(to: work.appending(path: "snippets/hello.md"))
+                }
+            }
+            let head = try #require(GitObjectID(hex: try fixture.git(
+                ["--git-dir", fixture.bare.path, "rev-parse", "main"])))
+
+            let new = UUID()
+            let envelope = try GitSyncRecovery.seal(material: Self.material, kit: .init(datasetID: new))
+            // A library that is not the one named, or stored another way, is left alone.
+            await #expect(throws: SyncTransportFailure.rejected(.permanent(detail: "git_library_replaced"))) {
+                try await setup.replaceLibrary(
+                    UUID(), with: new, files: [GitSyncRecovery.path: envelope], mode: mode)
+            }
+            let otherMode = GitLibraryMode.allCases.first { $0 != mode }!
+            await #expect(throws: SyncTransportFailure.rejected(.permanent(detail: "git_library_mode_changed"))) {
+                try await setup.replaceLibrary(
+                    old, with: new, files: [GitSyncRecovery.path: envelope], mode: otherMode)
+            }
+            await #expect(throws: SyncTransportFailure.rejected(.permanent(detail: "git_invalid_path"))) {
+                try await setup.replaceLibrary(old, with: new, files: ["README.md": Data()], mode: mode)
+            }
+            try await setup.replaceLibrary(
+                old, with: new, files: [GitSyncRecovery.path: envelope], mode: mode, expectedHead: head)
+
+            let files = try fixture.git(["--git-dir", fixture.bare.path, "ls-tree", "-r", "--name-only", "main"])
+            #expect(files.split(separator: "\n") == ["NOTES.md", "README.md", "keys/recovery.json", "snippets-sync.json"])
+            #expect(try fixture.git(["--git-dir", fixture.bare.path, "log", "-1", "--format=%s", "main"])
+                    == "Replace library keys")
+            #expect(try fixture.git(["--git-dir", fixture.bare.path, "rev-parse", "main^"]) == head.hex,
+                    "an ordinary commit on top of the old head, never a rewrite")
+            let manifest = try GitSyncManifest.decode(Data(try fixture.git(
+                ["--git-dir", fixture.bare.path, "show", "main:snippets-sync.json"]).utf8))
+            #expect(manifest == GitSyncManifest(
+                datasetID: new, mode: mode, schemaVersion: GitSyncManifest.rotatedSchemaVersion))
+
+            // The new library is empty and opens only with its own envelope.
+            let joined = GitSyncTransport(
+                configuration: .init(
+                    remote: try fixture.remote(), cacheDirectory: fixture.cacheDirectory("joined"),
+                    expectedDatasetID: new),
+                session: fixture.session)
+            #expect(try await joined.readFile(GitSyncRecovery.path) == envelope)
+            #expect(try await joined.readFile("keys/extra.json") == nil)
+            if mode == .encrypted {
+                #expect(try await joined.fetchChanges(since: nil).records.isEmpty)
+                let value = WireRecord(id: UUID(), rev: "r1", deleted: false, blob: Data("y".utf8))
+                #expect(try await joined.submit([value], at: nil).results.count == 1)
+            }
+            // Every device of the old library stops instead of writing under its key.
+            await #expect(throws: SyncTransportFailure.rejected(.permanent(detail: "git_library_replaced"))) {
+                _ = try await connected.preflightScope()
+            }
+            // A repeated call (a lost response) is success and writes nothing.
+            let before = try fixture.git(["--git-dir", fixture.bare.path, "rev-parse", "main"])
+            try await setup.replaceLibrary(old, with: new, files: [GitSyncRecovery.path: envelope], mode: mode)
+            #expect(try fixture.git(["--git-dir", fixture.bare.path, "rev-parse", "main"]) == before)
+        }
+    }
+
+    /// The caller replaces only the library it has fully synced: a branch that moved
+    /// since holds changes it has not merged.
+    @Test func replacingALibraryIsRefusedWhenTheBranchMoved() async throws {
+        let fixture = try GitFixture()
+        let a = try fixture.transport("a")
+        let old = try await a.initializeRepository()
+        let synced = try #require(GitObjectID(hex: try fixture.git(
+            ["--git-dir", fixture.bare.path, "rev-parse", "main"])))
+        _ = try await fixture.transport("b").submit(
+            [WireRecord(id: UUID(), rev: "r1", deleted: false, blob: Data("x".utf8))], at: nil)
+        let envelope = try GitSyncRecovery.seal(material: Self.material, kit: .init(datasetID: old))
+        await #expect(throws: SyncTransportFailure.unreachable(detail: "git_ref_moved")) {
+            try await a.replaceLibrary(
+                old, with: UUID(), files: [GitSyncRecovery.path: envelope], mode: .encrypted, expectedHead: synced)
+        }
+        // A writer that gets in between discovery and the push loses nothing either.
+        let head = try #require(GitObjectID(hex: try fixture.git(
+            ["--git-dir", fixture.bare.path, "rev-parse", "main"])))
+        fixture.beforeNextReceivePack {
+            try fixture.commitAsAnotherWriter { work in
+                try Data("notes\n".utf8).write(to: work.appending(path: "NOTES.md"))
+            }
+        }
+        await #expect(throws: SyncTransportFailure.unreachable(detail: "git_ref_moved")) {
+            try await a.replaceLibrary(
+                old, with: UUID(), files: [GitSyncRecovery.path: envelope], mode: .encrypted, expectedHead: head)
+        }
+        #expect(try await fixture.transport("c").fetchChanges(since: nil).records.count == 1)
+        #expect(try await fixture.transport("c").inspectRepository() == .library(datasetID: old))
+    }
+
+    @Test func aRotatedLibrarysManifestKeepsOlderBuildsOut() throws {
+        let rotated = GitSyncManifest(
+            datasetID: UUID(), mode: .plainText, schemaVersion: GitSyncManifest.rotatedSchemaVersion)
+        let text = String(decoding: try rotated.encoded(), as: UTF8.self)
+        #expect(text.contains("\"schemaVersion\" : 2"))
+        #expect(try GitSyncManifest.decode(Data(text.utf8)) == rotated)
+        #expect(GitSyncManifest(datasetID: rotated.datasetID, mode: .plainText) != rotated)
+        let future = text.replacingOccurrences(of: "\"schemaVersion\" : 2", with: "\"schemaVersion\" : 3")
+        #expect(throws: GitSyncLayoutError.incompatibleSchema) { _ = try GitSyncManifest.decode(Data(future.utf8)) }
+    }
+
     @Test func connectedLibraryReplacedUnderneathStopsTheDataPlane() async throws {
         let fixture = try GitFixture()
         let setup = try fixture.transport("setup")

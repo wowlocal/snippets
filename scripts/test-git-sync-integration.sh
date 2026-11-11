@@ -8,13 +8,17 @@
 #   SKIP_SSH=1 / SKIP_UI=1 leave out those stages.
 #
 # HTTPS phases: mac-create (new library + recovery code) → ios-join (recovery code,
-# edits) → mac-join (fresh install, recovery code, deletion) → ios-verify.
+# edits) → mac-join (fresh install, recovery code, deletion) → ios-verify → mac-rotate
+# (replaces the library's keys, new recovery code) → ios-rotated (the old code is
+# refused, the new one opens everything).
 # SSH phases, through a throwaway loopback sshd that only runs git services inside this
 # run's directory: mac-ssh-create (system ssh, key held only by a private ssh-agent) →
 # ios-ssh-join (SwiftNIO SSH, device key, host key confirmed by fingerprint) →
 # mac-ssh-verify. Nothing reads or changes the user's own ssh configuration, keys or
 # agent.
-# Afterwards each bare repository itself is checked: record count, key envelope,
+# Each platform also adds a secure snippet that the other must open with nothing but
+# the recovery code (the vault key travels in keys/vault.json).
+# Afterwards each bare repository itself is checked: record count, key envelopes,
 # fixed commit authorship, and no plaintext marker anywhere in its history.
 set -euo pipefail
 umask 077
@@ -55,6 +59,7 @@ cleanup() {
   if [[ -n "$IOS_UDID" ]]; then
     for name in SNIPPETS_GIT_E2E SNIPPETS_GIT_E2E_URL SNIPPETS_GIT_E2E_USERNAME \
       SNIPPETS_GIT_E2E_TOKEN SNIPPETS_GIT_E2E_PHASE SNIPPETS_GIT_E2E_RECOVERY_CODE \
+      SNIPPETS_GIT_E2E_PREVIOUS_CODE \
       SNIPPETS_GIT_E2E_SSH_DEVICE_KEY SNIPPETS_GIT_E2E_SSH_HOST_FINGERPRINT; do
       xcrun simctl spawn "$IOS_UDID" launchctl unsetenv "$name" >/dev/null 2>&1
     done
@@ -156,6 +161,7 @@ run_ios_phase() {
   xcrun simctl spawn "$IOS_UDID" launchctl setenv SNIPPETS_GIT_E2E_TOKEN "$TOKEN"
   xcrun simctl spawn "$IOS_UDID" launchctl setenv SNIPPETS_GIT_E2E_PHASE "$phase"
   xcrun simctl spawn "$IOS_UDID" launchctl setenv SNIPPETS_GIT_E2E_RECOVERY_CODE "$RECOVERY_CODE"
+  xcrun simctl spawn "$IOS_UDID" launchctl setenv SNIPPETS_GIT_E2E_PREVIOUS_CODE "${PREVIOUS_CODE:-}"
   xcrun simctl spawn "$IOS_UDID" launchctl setenv SNIPPETS_GIT_E2E_SSH_DEVICE_KEY "${SSH_DEVICE_KEY:-}"
   xcrun simctl spawn "$IOS_UDID" launchctl setenv SNIPPETS_GIT_E2E_SSH_HOST_FINGERPRINT "${SSH_HOST_FINGERPRINT:-}"
   xcodebuild -project "$CLIENT_DIR/Snippets.xcodeproj" -scheme 'Snippets iOS' \
@@ -182,6 +188,7 @@ check_repository() {
   files="$(git --git-dir "$bare" ls-tree -r --name-only main)"
   grep -qx 'snippets-sync.json' <<<"$files"
   grep -qx 'keys/recovery.json' <<<"$files"
+  grep -qx 'keys/vault.json' <<<"$files"
   records="$(grep -c '^records/' <<<"$files" || true)"
   [[ "$records" == "$expected_records" ]] || { echo "expected $expected_records record files, found $records" >&2; exit 1; }
   authors="$(git --git-dir "$bare" log --format='%an <%ae>' main | sort -u)"
@@ -195,9 +202,33 @@ check_repository() {
   done
   echo "Repository $(basename "$bare"): $records records, $(git --git-dir "$bare" rev-list --count main) commits, ciphertext only"
 }
-# mac-git, plus ios-git kept as a tombstone record.
-check_repository "$BARE" 2 snippets-git-macos-initial-5c2e91d0 snippets-git-ios-initial-7f03ab64 \
-  snippets-git-macos-edited-on-ios-0d6e44a9 "$RECOVERY_CODE" "macOS Git" "iOS Git"
+# mac-git, ios-git kept as a tombstone record, and the two secure snippets.
+check_repository "$BARE" 4 snippets-git-macos-initial-5c2e91d0 snippets-git-ios-initial-7f03ab64 \
+  snippets-git-macos-edited-on-ios-0d6e44a9 "$RECOVERY_CODE" "macOS Git" "iOS Git" \
+  snippets-git-macos-secure-b41f07c6 snippets-git-ios-secure-e95a3d28 mac-secure ios-secure
+
+echo "Replacing the keys"
+PREVIOUS_CODE="$RECOVERY_CODE"
+OLD_DATASET="$(git --git-dir "$BARE" show main:snippets-sync.json | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["datasetID"])')"
+run_mac_phase mac-rotate
+RECOVERY_CODE="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["recoveryCode"])' \
+  "$RUN_ROOT/handoff.json")"
+[[ "$RECOVERY_CODE" =~ ^[0-9A-Z]{4}(-[0-9A-Z]{1,4}){6}$ && "$RECOVERY_CODE" != "$PREVIOUS_CODE" ]] \
+  || { echo "replacing the keys did not hand over a new recovery code" >&2; exit 1; }
+run_ios_phase ios-rotated
+PREVIOUS_CODE=""
+# One commit replaced the library: a new dataset under schema 2, and only what the
+# rotating device holds was uploaded again (mac-git and the two secure snippets; the
+# old tombstone is gone with the old library).
+git --git-dir "$BARE" show main:snippets-sync.json | python3 -I -c 'import json, sys
+manifest = json.load(sys.stdin)
+assert manifest["schemaVersion"] == 2, manifest
+assert manifest["datasetID"] != sys.argv[1], "the dataset id did not change"' "$OLD_DATASET"
+[[ "$(git --git-dir "$BARE" log --format=%s main | grep -c '^Replace library keys$')" == 1 ]] \
+  || { echo "expected exactly one key-replacing commit" >&2; exit 1; }
+check_repository "$BARE" 3 snippets-git-macos-initial-5c2e91d0 snippets-git-ios-initial-7f03ab64 \
+  snippets-git-macos-edited-on-ios-0d6e44a9 "$RECOVERY_CODE" "macOS Git" "iOS Git" \
+  snippets-git-macos-secure-b41f07c6 snippets-git-ios-secure-e95a3d28 mac-secure ios-secure
 
 if [[ "${SKIP_PLAIN:-0}" != 1 ]]; then
   echo "Plain-text library"
@@ -222,7 +253,10 @@ open(p, "w", encoding="utf-8").write(t.replace("snippets-git-macos-initial-5c2e9
   run_mac_phase mac-plain-verify
   PLAIN_FILES="$(git --git-dir "$PLAIN_BARE" ls-tree -r --name-only main)"
   [[ "$(grep -c '^snippets/.*\.md$' <<<"$PLAIN_FILES")" == 2 ]] || { echo "expected 2 Markdown snippets" >&2; exit 1; }
-  ! grep -q '^records/' <<<"$PLAIN_FILES" || { echo "ordinary snippets must not be ciphertext records" >&2; exit 1; }
+  # The one ciphertext record is the secure snippet; ordinary snippets are Markdown only.
+  [[ "$(grep -c '^records/' <<<"$PLAIN_FILES")" == 1 ]] \
+    || { echo "expected exactly the secure snippet under records/" >&2; exit 1; }
+  grep -qx 'keys/vault.json' <<<"$PLAIN_FILES" || { echo "the library has no vault file" >&2; exit 1; }
   # Output captured first: with pipefail, `git … | grep -q` can fail on SIGPIPE.
   IOS_PLAIN_TEXT="$(git --git-dir "$PLAIN_BARE" show "main:$(grep '^snippets/ios-plain-' <<<"$PLAIN_FILES")")"
   grep -q 'snippets-git-ios-plain-2d8b5f13' <<<"$IOS_PLAIN_TEXT" \
@@ -232,6 +266,9 @@ open(p, "w", encoding="utf-8").write(t.replace("snippets-git-macos-initial-5c2e9
     || { echo "the hand edit was not normalized; history:" >&2; echo "$PLAIN_SUBJECTS" >&2; exit 1; }
   PLAIN_HISTORY="$(git --git-dir "$PLAIN_BARE" log -p main)"
   ! grep -qF -- "$RECOVERY_CODE" <<<"$PLAIN_HISTORY" || { echo "recovery code in history" >&2; exit 1; }
+  for marker in snippets-git-macos-secure-b41f07c6 mac-secure; do
+    ! grep -qF -- "$marker" <<<"$PLAIN_HISTORY" || { echo "secure snippet readable in history: $marker" >&2; exit 1; }
+  done
   echo "Repository plain.git: readable Markdown, hand edit adopted and normalized"
   URL="http://127.0.0.1:$PORT/library.git"
 fi

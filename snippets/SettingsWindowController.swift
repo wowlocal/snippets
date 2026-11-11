@@ -2056,7 +2056,15 @@ private final class VaultSettingsViewController: NSViewController {
             primaryButton.isHidden = true
             lockButton.isHidden = true
         } else {
+            // A Git library owns its vault: it is set up from the library, never minted
+            // here, and its key comes back with the library's recovery code.
+            let usesGitLibraryVault = app.backendSelection.provider == .git
             switch session.state {
+            case .noKey where !secure.hasVault && usesGitLibraryVault:
+                statusLabel.stringValue = "Not set up on this Mac. With Git sync, secure snippets belong "
+                    + "to your library: open Sync, then Git Repository, and choose Set Up Secure Snippets."
+                primaryButton.isHidden = true
+                lockButton.isHidden = true
             case .noKey where !secure.hasVault:
                 statusLabel.stringValue = "Not set up on this Mac."
                 primaryButton.title = "Set Up Secure Snippets"
@@ -2068,7 +2076,9 @@ private final class VaultSettingsViewController: NSViewController {
                 // Touch ID prompt that can never succeed.
                 statusLabel.stringValue =
                     "\(secure.count) secure snippet(s) are here, but the key for them is not on this Mac. "
-                    + "They cannot be read until the key is restored."
+                    + (usesGitLibraryVault
+                        ? "Your Git library’s recovery code restores it."
+                        : "They cannot be read until the key is restored.")
                 primaryButton.title = "Restore with Recovery Key"
                 primaryButton.isHidden = !secure.hasRecoveryKey
                 lockButton.isHidden = true
@@ -2157,7 +2167,9 @@ private final class VaultSettingsViewController: NSViewController {
     private func requestRecoveryKey() -> String? {
         let alert = NSAlert()
         alert.messageText = "Restore secure snippets"
-        alert.informativeText = "Enter the recovery key you saved when this vault was created."
+        alert.informativeText = (NSApp.delegate as? AppDelegate)?.backendSelection.provider == .git
+            ? "Enter your Git library’s recovery code, or the recovery key you saved when this vault was created."
+            : "Enter the recovery key you saved when this vault was created."
 
         let field = NSTextField(string: "")
         field.placeholderString = "XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXX"
@@ -2454,9 +2466,11 @@ private final class SyncSettingsViewController: NSViewController {
             return backendSelection.gitKeys.syncsBetweenDevices
                 ? "Another Apple device signed in to the same iCloud account receives the library "
                     + "key through iCloud Keychain: connect it to the same repository and branch. "
-                    + "Any other device needs the library’s recovery code."
+                    + "Any other device needs the library’s recovery code, which opens secure "
+                    + "snippets too."
                 : "Another device connects to the same repository and branch with an access token "
-                    + "and the library’s recovery code. The Git host never receives your key."
+                    + "and the library’s recovery code, which opens secure snippets too. The Git "
+                    + "host never receives your keys."
         }
         if backendSelection.provider == .snippetsCloud {
             return "Another device joins this library through approved pairing or recovery. "

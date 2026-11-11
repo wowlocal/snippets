@@ -14,7 +14,8 @@ import XCTest
 /// in-memory keychains) running the production store, bridge, coordinator and
 /// `GitSyncSetup` against one disposable repository served by the real
 /// `git http-backend`. A later phase therefore proves the other platform can consume
-/// the earlier one's durable result, including the recovery-code key handoff.
+/// the earlier one's durable result, including the recovery-code key handoff. Secure
+/// snippets take part: each platform reads the other's with nothing but that code.
 @MainActor
 final class GitSyncAppIntegrationTests: XCTestCase {
     private struct Configuration: Decodable {
@@ -23,6 +24,8 @@ final class GitSyncAppIntegrationTests: XCTestCase {
         let token: String
         let phase: String
         let recoveryCode: String?
+        /// The code `recoveryCode` replaced, which must no longer open the library.
+        var previousRecoveryCode: String? = nil
         let handoffPath: String?
         /// Defaults to `main`; hosted runs use a fresh branch per run.
         var branch: String? = nil
@@ -58,18 +61,25 @@ final class GitSyncAppIntegrationTests: XCTestCase {
         case macPlainCreate = "mac-plain-create"
         case iosPlainJoin = "ios-plain-join"
         case macPlainVerify = "mac-plain-verify"
+        /// Replacing the keys: a Mac joins, replaces them and hands over the new
+        /// recovery code; a fresh iOS installation is refused with the old code and
+        /// opens everything, secure snippets included, with the new one.
+        case macRotate = "mac-rotate"
+        case iosRotated = "ios-rotated"
     }
 
     func testGitSyncPhase() async throws {
         let configuration = try loadConfiguration()
         let phase = try XCTUnwrap(Phase(rawValue: configuration.phase))
         #if os(macOS)
-        guard [.macCreate, .macJoin, .macVerifyUI, .macSSHCreate, .macSSHVerify, .macPlainCreate, .macPlainVerify]
-            .contains(phase) else {
+        guard [.macCreate, .macJoin, .macVerifyUI, .macSSHCreate, .macSSHVerify, .macPlainCreate, .macPlainVerify,
+               .macRotate].contains(phase) else {
             throw XCTSkip("iOS phase")
         }
         #else
-        guard [.iosJoin, .iosVerify, .iosSSHJoin, .iosPlainJoin].contains(phase) else { throw XCTSkip("macOS phase") }
+        guard [.iosJoin, .iosVerify, .iosSSHJoin, .iosPlainJoin, .iosRotated].contains(phase) else {
+            throw XCTSkip("macOS phase")
+        }
         #endif
         let usesSSH = [.macSSHCreate, .iosSSHJoin, .macSSHVerify].contains(phase)
 
@@ -118,7 +128,9 @@ final class GitSyncAppIntegrationTests: XCTestCase {
         let store = SnippetStore(configuration: .iOS)
         #endif
         let vaultSession = VaultSession(keychain: keychain, authenticationEvaluator: { _ in true })
-        let secureStore = SecureSnippetStore(session: vaultSession, keychain: keychain, deviceID: store.deviceID)
+        let secureStore = SecureSnippetStore(
+            session: vaultSession, keychain: keychain,
+            selectedSyncProvider: { selection.provider }, deviceID: store.deviceID)
         store.secureProvider = secureStore
         let library = SnippetLibraryBridge(store: store, secureStore: secureStore)
         let coordinator = SyncCoordinator(
@@ -179,7 +191,8 @@ final class GitSyncAppIntegrationTests: XCTestCase {
             let handoff = try XCTUnwrap(configuration.handoffPath)
             try JSONEncoder().encode(["recoveryCode": code]).write(
                 to: URL(fileURLWithPath: handoff), options: .atomic)
-        case .iosJoin, .macJoin, .iosVerify, .macVerifyUI, .iosSSHJoin, .macSSHVerify, .iosPlainJoin, .macPlainVerify:
+        case .iosJoin, .macJoin, .iosVerify, .macVerifyUI, .iosSSHJoin, .macSSHVerify, .iosPlainJoin, .macPlainVerify,
+             .macRotate, .iosRotated:
             guard case .library(let datasetID, let keyAvailable, let recoveryAvailable, let mode) = inspection else {
                 return XCTFail("expected an existing library, found \(inspection)")
             }
@@ -193,6 +206,18 @@ final class GitSyncAppIntegrationTests: XCTestCase {
                 do {
                     _ = try await setup.connect(form, datasetID: datasetID, recoveryCode: wrong, mode: mode)
                     XCTFail("a wrong recovery code opened the library")
+                } catch let failure as GitSyncSetup.Failure {
+                    XCTAssertEqual(failure, .incorrectRecoveryCode)
+                }
+                XCTAssertNil(selection.gitCoordinates)
+            }
+            if phase == .iosRotated {
+                // The code the keys were replaced under opens nothing any more.
+                let previous = try XCTUnwrap(configuration.previousRecoveryCode)
+                XCTAssertNotEqual(previous, code)
+                do {
+                    _ = try await setup.connect(form, datasetID: datasetID, recoveryCode: previous, mode: mode)
+                    XCTFail("the replaced recovery code opened the library")
                 } catch let failure as GitSyncSetup.Failure {
                     XCTAssertEqual(failure, .incorrectRecoveryCode)
                 }
@@ -221,10 +246,15 @@ final class GitSyncAppIntegrationTests: XCTestCase {
         switch phase {
         case .macCreate:
             assertLibrary(store, ["mac-git": Self.macInitial])
+            try await addSecure("mac-secure", Self.macSecure, secureStore, vaultSession)
+            try await sync(coordinator)
             try await assertRemote(selection, ["mac-git": Self.macInitial])
 
         case .iosJoin:
             assertLibrary(store, ["mac-git": Self.macInitial])
+            // The recovery code alone brought the vault key: the Mac's secret opens here.
+            try await assertSecure(["mac-secure": Self.macSecure], secureStore, vaultSession)
+            try await addSecure("ios-secure", Self.iosSecure, secureStore, vaultSession)
             var snippet = try store.addSnippet(name: "iOS Git", content: Self.iosInitial, tags: ["git"])
             snippet.keyword = "ios-git"
             store.update(snippet)
@@ -237,6 +267,8 @@ final class GitSyncAppIntegrationTests: XCTestCase {
 
         case .macJoin:
             assertLibrary(store, ["mac-git": Self.macEditedOnIOS, "ios-git": Self.iosInitial])
+            try await assertSecure(
+                ["mac-secure": Self.macSecure, "ios-secure": Self.iosSecure], secureStore, vaultSession)
             let ios = try XCTUnwrap(store.snippets.first { $0.normalizedKeyword == "ios-git" })
             XCTAssertTrue(store.delete(snippetID: ios.id))
             try await sync(coordinator)
@@ -245,6 +277,8 @@ final class GitSyncAppIntegrationTests: XCTestCase {
 
         case .iosVerify:
             assertLibrary(store, ["mac-git": Self.macEditedOnIOS])
+            try await assertSecure(
+                ["mac-secure": Self.macSecure, "ios-secure": Self.iosSecure], secureStore, vaultSession)
 
         case .macVerifyUI:
             XCTAssertEqual(store.snippets.map(\.name), ["Git UI Greeting"])
@@ -267,10 +301,13 @@ final class GitSyncAppIntegrationTests: XCTestCase {
 
         case .macPlainCreate:
             assertLibrary(store, ["mac-git": Self.macInitial])
+            try await addSecure("mac-secure", Self.macSecure, secureStore, vaultSession)
+            try await sync(coordinator)
             try await assertRemote(selection, ["mac-git": Self.macInitial])
 
         case .iosPlainJoin:
             assertLibrary(store, ["mac-git": Self.macInitial])
+            try await assertSecure(["mac-secure": Self.macSecure], secureStore, vaultSession)
             var snippet = try store.addSnippet(name: "iOS Plain", content: Self.iosPlain, tags: ["git"])
             snippet.keyword = "ios-plain"
             store.update(snippet)
@@ -279,6 +316,29 @@ final class GitSyncAppIntegrationTests: XCTestCase {
 
         case .macPlainVerify:
             assertLibrary(store, ["mac-git": Self.macEditedInGit, "ios-plain": Self.iosPlain])
+            try await assertSecure(["mac-secure": Self.macSecure], secureStore, vaultSession)
+
+        case .macRotate:
+            assertLibrary(store, ["mac-git": Self.macEditedOnIOS])
+            let before = try XCTUnwrap(selection.gitCoordinates)
+            let oldVault = try XCTUnwrap(secureStore.document?.kid)
+            let newCode = try await setup.rotateKeys()
+            XCTAssertNotEqual(newCode, configuration.recoveryCode)
+            let after = try XCTUnwrap(selection.gitCoordinates)
+            XCTAssertNotEqual(after.datasetID, before.datasetID)
+            XCTAssertFalse(selection.gitKeys.hasMaterial(for: before.keyScope))
+            XCTAssertNotEqual(secureStore.document?.kid, oldVault)
+            try JSONEncoder().encode(["recoveryCode": newCode]).write(
+                to: URL(fileURLWithPath: try XCTUnwrap(configuration.handoffPath)), options: .atomic)
+            try await sync(coordinator)
+            try await assertRemote(selection, ["mac-git": Self.macEditedOnIOS])
+            try await assertSecure(
+                ["mac-secure": Self.macSecure, "ios-secure": Self.iosSecure], secureStore, vaultSession)
+
+        case .iosRotated:
+            assertLibrary(store, ["mac-git": Self.macEditedOnIOS])
+            try await assertSecure(
+                ["mac-secure": Self.macSecure, "ios-secure": Self.iosSecure], secureStore, vaultSession)
         }
     }
 
@@ -324,6 +384,7 @@ final class GitSyncAppIntegrationTests: XCTestCase {
             token: try XCTUnwrap(environment["SNIPPETS_GIT_E2E_TOKEN"]),
             phase: try XCTUnwrap(environment["SNIPPETS_GIT_E2E_PHASE"]),
             recoveryCode: environment["SNIPPETS_GIT_E2E_RECOVERY_CODE"],
+            previousRecoveryCode: environment["SNIPPETS_GIT_E2E_PREVIOUS_CODE"].flatMap { $0.isEmpty ? nil : $0 },
             handoffPath: nil,
             branch: environment["SNIPPETS_GIT_E2E_BRANCH"].flatMap { $0.isEmpty ? nil : $0 },
             sshDeviceKey: environment["SNIPPETS_GIT_E2E_SSH_DEVICE_KEY"],
@@ -336,6 +397,29 @@ final class GitSyncAppIntegrationTests: XCTestCase {
         guard case .completed(.idle(let lastSync)) = result, lastSync != nil else {
             return XCTFail("sync did not complete: \(result) · \(coordinator.statusDescription)")
         }
+    }
+
+    private func addSecure(
+        _ keyword: String, _ body: String, _ secureStore: SecureSnippetStore, _ session: VaultSession
+    ) async throws {
+        _ = try await session.unlock(reason: "integration test")
+        _ = try secureStore.addSecure(
+            name: "Secure \(keyword)", keyword: keyword, body: Data(body.utf8), tags: [],
+            isEnabled: true, isPinned: false)
+    }
+
+    /// Secure snippets by keyword, decrypted with the vault key this installation holds.
+    private func assertSecure(
+        _ expected: [String: String], _ secureStore: SecureSnippetStore, _ session: VaultSession,
+        file: StaticString = #filePath, line: UInt = #line
+    ) async throws {
+        XCTAssertEqual(secureStore.libraryVaultAvailability, .ready, file: file, line: line)
+        _ = try await session.unlock(reason: "integration test")
+        var actual: [String: String] = [:]
+        for shell in secureStore.shells {
+            actual[shell.normalizedKeyword] = try secureStore.content(for: shell.id)
+        }
+        XCTAssertEqual(actual, expected, file: file, line: line)
     }
 
     private func assertLibrary(
@@ -382,4 +466,6 @@ final class GitSyncAppIntegrationTests: XCTestCase {
     static let iosOverSSH = "snippets-git-ios-over-ssh-91b7e2c4"
     static let iosPlain = "snippets-git-ios-plain-2d8b5f13"
     static let macEditedInGit = "snippets-git-macos-edited-in-git-3a7c19e0"
+    static let macSecure = "snippets-git-macos-secure-b41f07c6"
+    static let iosSecure = "snippets-git-ios-secure-e95a3d28"
 }

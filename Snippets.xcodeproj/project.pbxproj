@@ -88,6 +88,7 @@
 		28A2000000000000000000A8 /* GitSSHClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A1000000000000000000A8 /* GitSSHClient.swift */; };
 		28A2000000000000000000A9 /* GitSSHSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A1000000000000000000A9 /* GitSSHSupport.swift */; };
 		28A2000000000000000000AA /* GitPlainText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A1000000000000000000AA /* GitPlainText.swift */; };
+		28A2000000000000000000AB /* GitSyncVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A1000000000000000000AB /* GitSyncVault.swift */; };
 		29N000000000000000000006 /* NIOSSH in Frameworks */ = {isa = PBXBuildFile; productRef = 29N000000000000000000003 /* NIOSSH */; };
 		29N000000000000000000007 /* NIOCore in Frameworks */ = {isa = PBXBuildFile; productRef = 29N000000000000000000004 /* NIOCore */; };
 		29N000000000000000000008 /* NIOPosix in Frameworks */ = {isa = PBXBuildFile; productRef = 29N000000000000000000005 /* NIOPosix */; };
@@ -232,6 +233,7 @@
 		28A1000000000000000000A8 /* GitSSHClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GitSSHClient.swift; path = snippets/Core/Git/GitSSHClient.swift; sourceTree = SOURCE_ROOT; };
 		28A1000000000000000000A9 /* GitSSHSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GitSSHSupport.swift; path = snippets/Sync/GitSSHSupport.swift; sourceTree = SOURCE_ROOT; };
 		28A1000000000000000000AA /* GitPlainText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GitPlainText.swift; path = snippets/Core/Git/GitPlainText.swift; sourceTree = SOURCE_ROOT; };
+		28A1000000000000000000AB /* GitSyncVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GitSyncVault.swift; path = snippets/Core/Git/GitSyncVault.swift; sourceTree = SOURCE_ROOT; };
 		28A10000000000000000009A /* SnippetsCloudAccountKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetsCloudAccountKey.swift; path = snippets/Core/SnippetsCloudAccountKey.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000031 /* SyncBackendSelectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncBackendSelectionStore.swift; path = snippets/Sync/SyncBackendSelectionStore.swift; sourceTree = SOURCE_ROOT; };
 		28A100000000000000000032 /* LibraryKeyBootstrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryKeyBootstrap.swift; path = snippets/Core/LibraryKeyBootstrap.swift; sourceTree = SOURCE_ROOT; };
@@ -436,6 +438,7 @@
 				28A1000000000000000000A8 /* GitSSHClient.swift */,
 				28A1000000000000000000A9 /* GitSSHSupport.swift */,
 				28A1000000000000000000AA /* GitPlainText.swift */,
+				28A1000000000000000000AB /* GitSyncVault.swift */,
 				28A10000000000000000009A /* SnippetsCloudAccountKey.swift */,
 				28A100000000000000000032 /* LibraryKeyBootstrap.swift */,
 				28A100000000000000000033 /* SnippetsCloudBootstrapClient.swift */,
@@ -792,6 +795,7 @@
 				28A2000000000000000000A8 /* GitSSHClient.swift in Sources */,
 				28A2000000000000000000A9 /* GitSSHSupport.swift in Sources */,
 				28A2000000000000000000AA /* GitPlainText.swift in Sources */,
+				28A2000000000000000000AB /* GitSyncVault.swift in Sources */,
 				28A20000000000000000009A /* SnippetsCloudAccountKey.swift in Sources */,
 				28A200000000000000000032 /* LibraryKeyBootstrap.swift in Sources */,
 				28A200000000000000000033 /* SnippetsCloudBootstrapClient.swift in Sources */,

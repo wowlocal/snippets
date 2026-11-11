@@ -465,6 +465,16 @@ final class SyncCoordinator {
         restoreLocalLibraryRecoveryIfNeeded()
     }
 
+    /// The secure-snippet store behind this coordinator's library, for Git setup. Nil
+    /// for a value-only library, which has no vault to publish.
+    var libraryVault: SecureSnippetStore? { (library as? SnippetLibraryBridge)?.libraryVault }
+
+    /// True while fetched secure snippets wait for a vault this device does not have.
+    var isWaitingForVault: Bool {
+        if case .waitingForVault = state { return true }
+        return false
+    }
+
     // MARK: - The preference
 
     static var isEnabled: Bool {
@@ -1922,6 +1932,18 @@ final class SyncCoordinator {
             if !sentence.hasSuffix(".") { sentence += "." }
             return sentence + " Fix the reported condition, then try again."
         case .waitingForVault(let detail):
+            // With Git the key does not arrive by itself: it comes with the library's
+            // recovery code, so say where to enter it instead of promising a wait.
+            if backendSelection.provider == .git {
+                // The key is here: what waits is a secure snippet changed on two
+                // devices, which only an unlocked vault can keep both versions of.
+                if libraryVault?.libraryVaultDisplayAvailability == .ready {
+                    return "Waiting: a secure snippet was changed on two devices. Open any secure "
+                        + "snippet to unlock them, then use Sync Now to keep both versions."
+                }
+                return "Waiting: \(detail). Open the Git repository in Sync settings and "
+                    + "choose Set Up Secure Snippets."
+            }
             return "Waiting: \(detail)."
         case .halted(let reason, let detail):
             return Self.userFacingHaltDescription(reason: reason, detail: detail)
@@ -1997,8 +2019,8 @@ final class SyncCoordinator {
         case "git_configuration_required":
             return "Connect the Git repository in Sync settings, or choose another provider"
         case "git_library_replaced":
-            return "The Git repository now holds a different Snippets library. Reconnect it in "
-                + "Sync settings"
+            return "The Git repository now holds a different Snippets library, or its keys were "
+                + "replaced on another device. Reconnect it in Sync settings with the newest recovery code"
         case "git_repository_not_initialized":
             return "The Git branch no longer holds a Snippets library. Reconnect it in Sync settings"
         case "git_branch_not_snippets_library":

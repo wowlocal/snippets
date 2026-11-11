@@ -316,6 +316,96 @@ actor GitSyncTransport: SyncTransport {
         } }
     }
 
+    /// Replaces the library `current` on the branch with a new, empty one named
+    /// `datasetID`, in one compare-and-swap commit on top of the current head: a new
+    /// manifest (same storage mode, `rotatedSchemaVersion`), `files` as the whole of
+    /// `keys/`, and no records. Files this client does not own are kept byte-for-byte.
+    /// This is how a library's keys are rotated: nothing sealed under the old library
+    /// key stays in the tree, and the creating device uploads its library again under
+    /// the new one.
+    ///
+    /// Every other device stops with `git_library_replaced` until it is reconnected.
+    /// The commit is an ordinary fast-forward, so earlier commits (and the old
+    /// ciphertext) remain in history.
+    ///
+    /// `expectedHead` is the commit the caller has fully synced. A head that moved
+    /// since holds changes the caller has not merged; the call fails with the
+    /// retryable `git_ref_moved` and writes nothing. A branch that already holds
+    /// `datasetID` is success, so a lost response can be retried.
+    func replaceLibrary(
+        _ current: UUID, with datasetID: UUID, files: [String: Data], mode: GitLibraryMode,
+        expectedHead: GitObjectID? = nil
+    ) async throws {
+        let paths = try Self.auxiliaryPaths(files)
+        try await serialized { try await healingCache {
+            let advertisement = try await mapped { try await client.discover(.receivePack) }
+            guard let headID = advertisement.refs[configuration.remote.refName] else {
+                throw SyncTransportFailure.rejected(.permanent(detail: "git_repository_not_initialized"))
+            }
+            let head: GitSnapshot
+            do {
+                head = try await snapshot(at: headID)
+            } catch GitSyncLayoutError.notALibrary {
+                throw SyncTransportFailure.rejected(.permanent(detail: "git_branch_not_snippets_library"))
+            }
+            if head.manifest.datasetID == datasetID { return }
+            guard head.manifest.datasetID == current else {
+                throw SyncTransportFailure.rejected(.permanent(detail: "git_library_replaced"))
+            }
+            guard head.manifest.mode == mode else {
+                throw SyncTransportFailure.rejected(.permanent(detail: "git_library_mode_changed"))
+            }
+            if let expectedHead, expectedHead != headID {
+                throw SyncTransportFailure.unreachable(detail: "git_ref_moved")
+            }
+            var blobs: [[String]: GitObject] = [
+                [GitSyncLayout.manifestName]: GitObject(type: .blob, content: try GitSyncManifest(
+                    datasetID: datasetID, mode: mode,
+                    schemaVersion: GitSyncManifest.rotatedSchemaVersion).encoded()),
+                [GitSyncLayout.readmeName]: GitObject(
+                    type: .blob, content: Data(GitSyncLayout.readme(for: mode).utf8)),
+            ]
+            for (components, data) in paths { blobs[components] = GitObject(type: .blob, content: data) }
+            var objects = Array(blobs.values)
+            // Everything the old library owned goes: its records, its key files and, in a
+            // plain-text library, its Markdown files (the new library writes them again).
+            var edits: [[String]: GitObjectID?] = [
+                [GitSyncLayout.recordsName]: nil,
+                [GitSyncLayout.keysName]: nil,
+            ]
+            if mode == .plainText { edits[[GitPlainSnippetFile.directoryName]] = .some(nil) }
+            for (components, blob) in blobs { edits[components] = .some(blob.id) }
+            guard let root = try editTree(head.tree, edits: edits, into: &objects) else {
+                throw SyncTransportFailure.rejected(.permanent(detail: "git_invalid_path"))
+            }
+            let commit = GitObject(type: .commit, content: GitCommit.serialize(
+                tree: root, parents: [head.commit], date: now(), message: "Replace library keys"))
+            objects.append(commit)
+            let outcome = try await mapped {
+                try await client.push(
+                    old: headID, new: commit.id, pack: try GitPack.build(objects),
+                    advertisement: advertisement)
+            }
+            if outcome == .updated {
+                _ = try? install(head: commit.id, objects: Self.index(objects))
+                return
+            }
+            // A head that did not move was refused by the host; one that moved has
+            // changes the caller must sync before trying again.
+            let after = try await mapped { try await client.discover(.receivePack) }
+            if after.refs[configuration.remote.refName] == headID {
+                throw SyncTransportFailure.rejected(.permanent(detail: "git_push_rejected"))
+            }
+            throw SyncTransportFailure.unreachable(detail: "git_ref_moved")
+        } }
+    }
+
+    /// The commit a cursor of `datasetID` names: what the engine last fetched.
+    nonisolated static func commit(of cursor: SyncCursor, datasetID: UUID) -> GitObjectID? {
+        guard let position = GitSyncCursor(cursor), position.datasetID == datasetID else { return nil }
+        return position.commit
+    }
+
     /// Validates auxiliary file paths: `keys/` plus plain, non-hidden components.
     private nonisolated static func auxiliaryPaths(_ files: [String: Data]) throws -> [[String]: Data] {
         var result: [[String]: Data] = [:]
@@ -1561,15 +1651,27 @@ nonisolated enum GitSyncLayout {
 
 nonisolated struct GitSyncManifest: Equatable, Sendable {
     static let format = "snippets-git-sync"
+    /// What `initializeRepository` writes. Every build that knows Git sync reads it.
     static let currentSchemaVersion = 1
+    /// A library whose keys were replaced (`replaceLibrary`). The layout is the same as
+    /// schema 1. The number exists to keep out builds from before `keys/vault.json`:
+    /// they would join with their old vault and upload secure snippets under the
+    /// retired vault key, which every other device refuses.
+    static let rotatedSchemaVersion = 2
+    static let supportedSchemaVersions = currentSchemaVersion...rotatedSchemaVersion
 
     let datasetID: UUID
     /// Named by `recordProfile`; an unknown profile is a newer format.
     let mode: GitLibraryMode
+    let schemaVersion: Int
 
-    init(datasetID: UUID, mode: GitLibraryMode = .encrypted) {
+    init(
+        datasetID: UUID, mode: GitLibraryMode = .encrypted,
+        schemaVersion: Int = GitSyncManifest.currentSchemaVersion
+    ) {
         self.datasetID = datasetID
         self.mode = mode
+        self.schemaVersion = schemaVersion
     }
 
     private struct File: Codable {
@@ -1584,7 +1686,7 @@ nonisolated struct GitSyncManifest: Equatable, Sendable {
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
         var data = try encoder.encode(File(
             datasetID: datasetID.uuidString.lowercased(), format: Self.format,
-            recordProfile: mode.rawValue, schemaVersion: Self.currentSchemaVersion))
+            recordProfile: mode.rawValue, schemaVersion: schemaVersion))
         data.append(UInt8(ascii: "\n"))
         return data
     }
@@ -1600,13 +1702,13 @@ nonisolated struct GitSyncManifest: Equatable, Sendable {
         }
         guard Set(object.keys) == ["datasetID", "format", "recordProfile", "schemaVersion"],
               let file = try? JSONDecoder().decode(File.self, from: data),
-              file.schemaVersion == currentSchemaVersion,
+              supportedSchemaVersions.contains(file.schemaVersion),
               let mode = GitLibraryMode(rawValue: file.recordProfile),
               let id = UUID(uuidString: file.datasetID),
               id.uuidString.lowercased() == file.datasetID else {
             throw GitSyncLayoutError.incompatibleSchema
         }
-        return GitSyncManifest(datasetID: id, mode: mode)
+        return GitSyncManifest(datasetID: id, mode: mode, schemaVersion: file.schemaVersion)
     }
 }
 

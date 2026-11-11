@@ -32,7 +32,9 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
             }
         }
     }
-    private enum ConnectedRow: Hashable { case summary, switchProvider, syncNow, newRecoveryCode, remove }
+    private enum ConnectedRow: Hashable {
+        case summary, secureSnippets, switchProvider, syncNow, newRecoveryCode, replaceKeys, remove
+    }
 
     private let environment: AppEnvironment
     private let setup: GitSyncSetup
@@ -251,8 +253,15 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
         let ready = selection.gitIsReady
         let active = selection.provider == .git
         var rows: [ConnectedRow] = [.summary]
+        // Only while secure snippets do not work here for this library.
+        switch setup.secureSnippetsStatus {
+        case .needsSetup, .needsRecoveryCode: rows.append(.secureSnippets)
+        case .ready, .unavailable: break
+        }
         if ready { rows.append(active ? .syncNow : .switchProvider) }
         if ready { rows.append(.newRecoveryCode) }
+        // Replacing the keys re-uploads the library, so it needs Git to be syncing it.
+        if ready, active { rows.append(.replaceKeys) }
         // Shown while Git is active too, disabled with the reason.
         rows.append(.remove)
         return rows
@@ -415,6 +424,14 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
                 cell.detailTextLabel?.text = lines.joined(separator: "\n")
                 cell.selectionStyle = .none
                 cell.accessibilityIdentifier = "git-connected"
+            case .secureSnippets:
+                cell.textLabel?.text = "Set Up Secure Snippets…"
+                cell.textLabel?.textColor = AppTheme.tint
+                cell.accessibilityTraits = .button
+                cell.accessibilityIdentifier = "git-secure-snippets"
+                cell.detailTextLabel?.text = setup.secureSnippetsStatus == .needsRecoveryCode
+                    ? "Locked. This \(deviceName) needs the library’s recovery code."
+                    : "Not set up on this \(deviceName) for this library."
             case .switchProvider:
                 cell.textLabel?.text = "Switch and Sync"
                 cell.textLabel?.textColor = AppTheme.tint
@@ -429,6 +446,12 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
                 cell.textLabel?.textColor = AppTheme.tint
                 cell.accessibilityTraits = .button
                 cell.detailTextLabel?.text = "For a lost code. The old code stops working in Snippets."
+            case .replaceKeys:
+                cell.textLabel?.text = "Replace Keys…"
+                cell.textLabel?.textColor = AppTheme.tint
+                cell.accessibilityTraits = .button
+                cell.accessibilityIdentifier = "git-replace-keys"
+                cell.detailTextLabel?.text = "For a leaked code or a lost device. New keys and a new code."
             case .remove:
                 let active = selection.provider == .git
                 cell.textLabel?.text = "Remove from This \(deviceName)…"
@@ -560,6 +583,8 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
             switch connectedRows[indexPath.row] {
             case .summary: break
             case .remove where selection.provider == .git: break
+            case .secureSnippets:
+                Task { await setUpSecureSnippets() }
             case .switchProvider:
                 popThenRequestSwitch()
             case .syncNow:
@@ -567,6 +592,8 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
                 reloadConnectedSection()
             case .newRecoveryCode:
                 Task { await replaceRecoveryCode() }
+            case .replaceKeys:
+                Task { await rotateKeys() }
             case .remove:
                 Task { await remove() }
             }
@@ -732,9 +759,11 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
                     if setup.replacesActiveLibrary(form, datasetID: datasetID) {
                         guard await confirm(
                             title: "Connect to the Library Now in This Repository?",
-                            message: "The branch no longer holds the library this device was syncing. "
+                            message: "The branch no longer holds the library this device was syncing: its "
+                                + "keys were replaced on another device, or a new library was created there. "
                                 + "Connecting merges this device’s snippets into the library that is there "
-                                + "now. Nothing on this device is deleted.",
+                                + "now and moves its secure snippets to that library’s key. Nothing on this "
+                                + "device is deleted.",
                             action: "Connect and Merge") else {
                             status = "Not connected."
                             return
@@ -742,7 +771,16 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
                     }
                     if keyAvailable {
                         setBusy(true, "Connecting…")
-                        _ = try await setup.connect(form, datasetID: datasetID, mode: mode)
+                        do {
+                            _ = try await setup.connect(form, datasetID: datasetID, mode: mode)
+                        } catch GitSyncSetup.Failure.recoveryCodeRequired {
+                            // The library key is here (iCloud Keychain); moving this device's
+                            // secure snippets to the library's new key takes the code.
+                            guard try await joinWithRecoveryCode(form, datasetID: datasetID, mode: mode) else {
+                                status = "Not connected. This device needs the library’s recovery code."
+                                return
+                            }
+                        }
                     } else {
                         guard recoveryAvailable else { throw GitSyncSetup.Failure.recoveryUnavailable }
                         guard try await joinWithRecoveryCode(form, datasetID: datasetID, mode: mode) else {
@@ -754,7 +792,9 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
                 break
             }
             fields[.token]?.text = ""
-            status = "Connected."
+            status = setup.secureSnippetsStatus == .needsRecoveryCode
+                ? "Connected. Secure snippets still need the recovery code: tap Set Up Secure Snippets."
+                : "Connected."
             if selection.provider == .git {
                 _ = await environment.syncCoordinator.requestSync(trigger: .manual)
             } else {
@@ -774,7 +814,8 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
                 _ = try await setup.connect(form, datasetID: datasetID, recoveryCode: code, mode: mode)
                 return true
             } catch let failure as GitSyncSetup.Failure
-                        where [.invalidRecoveryCode, .incorrectRecoveryCode, .recoveryCodeRequired].contains(failure) {
+                        where [.invalidRecoveryCode, .incorrectRecoveryCode, .recoveryCodeRequired,
+                               .incorrectVaultRecoveryCode].contains(failure) {
                 problem = failure.errorDescription
             }
         }
@@ -791,12 +832,90 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
         setBusy(true, "Creating a new recovery code…")
         defer { setBusy(false, nil) }
         do {
-            try await requireDeviceOwnerAuthentication(reason: "Create a new recovery code for your Git library")
+            // A vault on this device is unlocked to wrap its key under the new code,
+            // which is the owner check; asking twice would be one prompt too many.
+            if !setup.newRecoveryCodeUnlocksVault {
+                try await requireDeviceOwnerAuthentication(reason: GitSyncSetup.newCodeReason)
+            }
             await presentRecoveryCode(try await setup.replaceRecoveryCode())
         } catch where Self.isAuthenticationCancel(error) {
             status = ""
         } catch {
             await showError(title: "Couldn’t Create a Recovery Code", message: Self.message(for: error))
+        }
+    }
+
+    /// Replaces the library's keys and shows the new recovery code.
+    private func rotateKeys() async {
+        guard !isBusy else { return }
+        guard await confirm(
+            title: "Replace This Library’s Keys?", message: GitSyncSetup.keyRotationExplanation,
+            action: "Replace Keys", destructive: true) else { return }
+        setBusy(true, "Replacing the library’s keys…")
+        defer { setBusy(false, nil) }
+        do {
+            // Re-sealing the secure snippets unlocks the vault, which is the owner check.
+            // A device without one is asked here instead.
+            if !setup.newRecoveryCodeUnlocksVault {
+                try await requireDeviceOwnerAuthentication(reason: GitSyncSetup.rotateReason)
+            }
+            await presentRecoveryCode(try await setup.rotateKeys())
+            status = "Keys replaced. Reconnect your other devices with the new recovery code."
+            _ = await environment.syncCoordinator.requestSync(trigger: .manual)
+        } catch where Self.isAuthenticationCancel(error) {
+            status = ""
+        } catch {
+            status = ""
+            if let failure = error as? GitSyncSetup.Failure {
+                switch failure {
+                case .rotatedButNotSaved(let code), .rotationUncertain(let code):
+                    await presentRecoveryCode(code)
+                default:
+                    break
+                }
+            }
+            await showError(title: "Couldn’t Replace the Keys", message: Self.message(for: error))
+        }
+    }
+
+    /// Makes secure snippets work on this device for the connected library: with the
+    /// recovery code when the library has a vault, or with a new vault and a new code
+    /// when it was created before libraries had one.
+    private func setUpSecureSnippets() async {
+        guard !isBusy else { return }
+        setBusy(true, "Checking the library…")
+        defer { setBusy(false, nil) }
+        var code: String?
+        var problem: String?
+        do {
+            while true {
+                do {
+                    if case .created(let newCode) = try await setup.setUpSecureSnippets(
+                        recoveryCode: code,
+                        authenticateOwner: { try await requireDeviceOwnerAuthentication(reason: $0) }) {
+                        await presentRecoveryCode(newCode)
+                    }
+                    break
+                } catch let failure as GitSyncSetup.Failure
+                            where [.recoveryCodeRequired, .invalidRecoveryCode, .incorrectVaultRecoveryCode]
+                                .contains(failure) {
+                    if code != nil { problem = failure.errorDescription }
+                    guard let entered = await promptForRecoveryCode(problem: problem) else {
+                        status = "Secure snippets are still locked on this \(deviceName)."
+                        return
+                    }
+                    code = entered
+                    setBusy(true, "Opening secure snippets…")
+                }
+            }
+            status = "Secure snippets are ready on this \(deviceName)."
+            if selection.provider == .git {
+                _ = await environment.syncCoordinator.requestSync(trigger: .manual)
+            }
+        } catch where Self.isAuthenticationCancel(error) {
+            status = ""
+        } catch {
+            await showError(title: "Couldn’t Set Up Secure Snippets", message: Self.message(for: error))
         }
     }
 
@@ -1031,7 +1150,7 @@ private final class RecoveryCodeViewController: UIViewController {
         let title = label("Save Your Recovery Code", style: .title2, weight: .bold)
         title.accessibilityTraits = .header
         let body = label(
-            "This code opens your library on a new device. Snippets can’t show it again. Store it in your "
+            "This code opens your library on a new device, secure snippets included. Snippets can’t show it again. Store it in your "
                 + "password manager."
                 + (syncsThroughICloud ? " Your other Apple devices get the key through iCloud Keychain when it is on." : ""),
             style: .body)
