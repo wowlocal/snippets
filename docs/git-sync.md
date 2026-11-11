@@ -419,17 +419,20 @@ Settings → Sync → Cloud Provider → **Git Repository…** opens the same fl
 platforms (`MacGitSyncViewController`, iOS `GitSyncSettingsViewController`), driven by
 the shared `GitSyncSetup`:
 
-1. Before anything is connected the screen says to create a new private repository
-   without a README. The user enters the repository address, branch and, for HTTPS,
-   user name and access token (a missing `https://` is added). Guidance follows the
-   address as it is typed (`GitSyncSetup.tokenHelp`, `deployKeyLink`): for GitHub a
-   fine-grained token limited to the repository with Contents read and write, for
-   GitLab a project access token with `read_repository`/`write_repository`, each with a
-   link to create it. The user name is optional for github.com (`x-access-token`) and
-   gitlab.com (`oauth2`). An SSH address hides the token fields; on macOS the sheet
-   names the exact `ssh -T` command, on iOS the screen shows numbered deploy-key steps,
-   this device's public key (labelled `snippets-iphone` or `snippets-ipad`) and, for
-   GitHub and GitLab, a link to the repository's deploy-key page. On iOS the first
+1. Before anything is connected the screen says one thing: create a new private
+   repository without a README and paste its address. The user enters the address,
+   branch and, for HTTPS, an access token (a missing `https://` is added). Guidance
+   appears once an address is typed and follows it (`GitSyncSetup.tokenHelp`,
+   `deployKeyLink`): for GitHub a fine-grained token limited to the repository with
+   Contents read and write, for GitLab a project access token with
+   `read_repository`/`write_repository`, each with a link to create it. The user name
+   field is shown only where it is needed: github.com (`x-access-token`) and gitlab.com
+   (`oauth2`) accept any name with a token, so there it appears only when a name was
+   entered before. An SSH address hides the name and token fields; on macOS the sheet
+   names the exact `ssh -T` command, on iOS the screen shows one line on adding the
+   deploy key, this device's public key on one line (labelled `snippets-iphone` or
+   `snippets-ipad`) and, for GitHub and GitLab, a link to the repository's deploy-key
+   page. On iOS the first
    connection to a host asks the user to confirm its host key fingerprint and then
    repeats the step; for github.com, gitlab.com, codeberg.org and bitbucket.org on port
    22 the prompt says the key matches the one the host publishes
@@ -437,8 +440,11 @@ the shared `GitSyncSetup`:
 2. **Inspect** reports *empty*, *library* or *foreign*. Nothing is written. A foreign
    branch (a README, say) offers **Use Branch “snippets”**, which retries on that
    branch.
-3. An empty branch becomes a library only after the user chooses **Create Encrypted
-   Library** (the default) or **Create Plain-Text Library**. A plain-text library is
+3. An empty branch becomes a library only after the user chooses **Create Library**,
+   which creates an encrypted one. **Plain Text Instead…** leads to a second
+   confirmation that says what plain text costs (readable files, kept in history, no
+   way back) before **Create Plain-Text Library**; someone who never asks for plain
+   text never reads about it. A plain-text library is
    refused (`publicRepository`) when the repository can be cloned anonymously over
    HTTPS: 200 with the upload-pack advertisement is public, 401/403/404 private,
    anything else unknown. Redirects are followed only within the same origin. An SSH
@@ -474,9 +480,20 @@ the shared `GitSyncSetup`:
    with Git?" when sync is off) selects Git as the provider. Success shows in the status
    line; only a failed switch shows an alert.
 
+Once a library is connected the screen shows what is connected, not the form: the
+repository and branch, one line for the mode and transport (`Encrypted · HTTPS`), the
+sync status, and a line for anything that needs the user (a missing token or key,
+secure snippets that are not set up); facts that are simply true are not listed
+(`GitSyncSetup.connectedSummary`). The address and token fold away behind **Change
+Address or Token…**, and stay open only while the token is what is missing. When sync
+stops on something reconnecting fixes (`git_library_replaced`, a missing library key),
+a **Reconnect…** action appears and runs the same connect flow with the saved address
+(`GitSyncSetup.needsReconnect`). The texts both platforms show come from `GitSyncSetup`,
+so they cannot drift apart.
+
 When Git is already active, only its own repository and branch can be reconnected
 (inside `SyncCoordinator.withQuiescedCloudTransport`): a new token, a recovered key, or
-— after an explicit **Connect and Merge** confirmation — the library that replaced the
+— after an explicit **Reconnect and Merge** confirmation — the library that replaced the
 old one on that branch (its keys were replaced, say; the device's secure snippets are
 then re-sealed under the new vault key), or a new library created on the branch after
 it was deleted. A
@@ -644,7 +661,7 @@ Each attempt records one `git_key_rotation` diagnostics event with a closed outc
 reason (`docs/diagnostics.md`).
 
 **Other devices** stop with `git_library_replaced` and say so. Reconnecting in Settings
-(**Update**, then **Connect and Merge**) asks for the new recovery code, opens the
+(**Reconnect…**, then **Reconnect and Merge**) asks for the new recovery code, opens the
 library key and the vault key with it, and re-seals the device's own secure snippets
 from its old vault key to the library's (`SecureSnippetStore.resealIntoLibraryVault`,
 one device-owner prompt). The first round on the new dataset is the ordinary
