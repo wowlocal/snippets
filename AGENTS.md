@@ -217,7 +217,14 @@ key handling and failure codes are in `docs/git-sync.md`.
   `git_library_replaced` and re-seal on reconnect (`resealIntoLibraryVault`). Re-seal
   only when a device follows the library Git was syncing to its replacement: any other
   vault in use may be shared with another provider's devices. Never delete a retired
-  vault key from a synchronizable Keychain tier.
+  library key or vault key from a synchronizable Keychain tier: the deletion reaches
+  the user's other devices before they reconnect.
+- New Recovery Code and Replace Keys make their owner check inside `GitSyncSetup`:
+  the vault unlock when a vault key is wrapped or re-sealed, otherwise the
+  `authenticateOwner` the screen passes in. Never let a screen skip the prompt from
+  display state. New Recovery Code rewraps only the library's published vault
+  (`joinLibraryVault` first), and a vault is minted for an older library only after a
+  sync round run at that moment.
 - SSH reuses the same wire requests (`GitSSHClient`). macOS runs the system
   `/usr/bin/ssh` with `BatchMode=yes` and the user's agent, config and known_hosts;
   Snippets stores no SSH secret there and must never prompt, accept a host key, or

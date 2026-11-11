@@ -88,6 +88,18 @@ enter these events. The account key lives only in the device-only Keychain sessi
 item; it is not in credential journals, UserDefaults, files, exports, or OS logs.
 Export privacy copy on both platforms describes the accepted fields.
 
+Replacing a Git library's keys (`docs/git-sync.md`, "Replacing the keys") records one
+`git_key_rotation` event in the `sync` category when the attempt ends: a closed outcome
+(`replaced`, `not_replaced`, `replaced_not_saved`, `uncertain`), for `not_replaced` a
+closed reason (`not_syncing`, `pending_secure_conflicts`, `vault`, `authentication`,
+`key_storage`, `branch_moved`, `library_changed`, `rejected`, `unreachable`, `busy`,
+`other`), the number of replacing pushes tried (0 when it stopped before the first)
+and elapsed milliseconds (bounded to one day). `replaced_not_saved` and `uncertain`
+are errors written synchronously: until the device reconnects, the repository and the
+device may disagree about the library's keys. The repository's address, host, branch,
+dataset id, recovery code and keys never enter the event, and no other Git setup
+operation (creating, joining or removing a library, a new recovery code) records one.
+
 CloudKit ordering is recorded through `cloudkit_sync_event` and
 `cloudkit_scheduler_transition`. The former records only the closed callback kind, aggregate record
 count, fetch nesting depth, whether a submit overlapped, whether the scheduler epoch is a full

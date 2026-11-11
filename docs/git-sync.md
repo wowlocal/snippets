@@ -565,17 +565,25 @@ HKDF-SHA256(library key, salt = library salt, info = AAD), AAD
   every other device refuses.
 - **New Recovery Code** rewraps the vault key and replaces both envelopes in one
   commit. It needs the vault unlocked, which is also its owner check. A device that
-  cannot open the vault cannot issue a code (`vaultKeyUnavailable`). As with the
-  library key, history keeps earlier wraps: a leaked code is revoked only by replacing
-  the keys.
+  cannot open the vault cannot issue a code (`vaultKeyUnavailable`). Only the
+  library's published vault is rewrapped: a device that still holds an unused vault of
+  its own adopts the published one first, so the file never comes to name a second
+  vault. As with the library key, history keeps earlier wraps: a leaked code is
+  revoked only by replacing the keys.
+- **The owner check is made inside the operation**, for New Recovery Code and Replace
+  Keys alike: unlocking the vault when its key is wrapped or its records re-sealed,
+  otherwise the device-owner prompt the screen passes in (`authenticateOwner`). The
+  screen never decides from what it believes about the vault, which can be stale.
 - **Set Up Secure Snippets…** (Settings → Git, shown while secure snippets do not work
   on the device) adopts the published vault, asking for the recovery code when the key
   is not in the Keychain.
 - **Libraries created by 1.4.0** have no `keys/vault.json`. The device that holds the
   vault publishes it with New Recovery Code; other devices then enter that code under
   Set Up Secure Snippets. If no device has a vault, Set Up Secure Snippets mints one
-  with a new code, but only after a completed sync shows no secure snippet waiting
-  for a vault held elsewhere (`vaultHeldElsewhere`, `syncBeforeSecureSetup`).
+  with a new code, but only after a sync round it runs at that moment ends idle with
+  no secure snippet waiting for a vault held elsewhere (`vaultHeldElsewhere`,
+  `syncBeforeSecureSetup`). An idle state from an earlier round is not enough: another
+  device may have uploaded secure snippets since.
 - A file written by a newer build (`unsupportedVersion`) is never replaced. A damaged
   one does not block ordinary snippets and is replaced by the next New Recovery Code.
 
@@ -595,13 +603,17 @@ recovery code. Use it when a recovery code may have leaked or a device was lost.
 A library's key is bound to its dataset id, so new keys mean a new library in the old
 one's place (`GitSyncSetup.rotateKeys`, `GitSyncTransport.replaceLibrary`):
 
-1. Sync runs once and must end idle with no secure snippet waiting for a key.
-2. The vault is unlocked (the one device-owner prompt) and every secure snippet is
+1. The vault is unlocked (the one device-owner prompt) and every secure snippet is
    opened once, so one that cannot be re-sealed stops the rotation before anything
    changes. Unresolved secure sync conflicts stop it too (`pendingSecureConflicts`):
-   their losing sides are ciphertext under the old key.
-3. A new dataset id, library key, vault key and recovery code are minted. Both keys go
+   their losing sides are ciphertext under the old key. A device with no secure
+   snippets to re-seal unlocks nothing and asks the device owner directly instead.
+2. A new dataset id, library key, vault key and recovery code are minted. Both keys go
    into the Keychain before the push, as when a library is created.
+3. Sync runs and must end idle with no secure snippet waiting for a key. Then, with
+   sync stopped, the vault is checked once more (`checkVaultRotation`): a record that
+   no longer opens, or a conflict that arrived in that round, stops the rotation while
+   the old library still exists.
 4. One commit on top of the current head replaces the manifest (new dataset id, same
    mode, `schemaVersion` 2), writes `keys/recovery.json` and `keys/vault.json` as the
    whole of `keys/`, and removes `records/` and, in a plain-text library, `snippets/`.
@@ -613,16 +625,23 @@ one's place (`GitSyncSetup.rotateKeys`, `GitSyncTransport.replaceLibrary`):
    opened with the old key and sealed under the new one with the new `kid` in its
    associated data, and its keyed content hash is recomputed. The old passphrase and
    recovery wraps are dropped. The coordinates move to the new dataset, the old library
-   key is forgotten, and the new code is shown once.
+   key is forgotten (unless iCloud Keychain shares it, see below), and the new code is
+   shown once.
 6. Sync restarts on the new dataset, which has its own base and journal, and uploads
    the library again under the new keys.
 
 If the response to the push is lost, the repository is inspected: the new library
 there means the move is finished and the code shown; the old one means the new keys are
 forgotten. If it cannot be checked, the keys are kept and the code is shown with a
-warning (`rotationUncertain`). A crash after the push leaves the device on the old
-dataset with both new keys in its Keychain; reconnecting (below) completes the move
-without the code.
+warning (`rotationUncertain`). If the repository took the new library but the device
+could not save its own move, the code is shown with `rotatedButNotSaved`. In both
+cases, and after a crash following the push, the device is left on the old dataset
+with both new keys in its Keychain; reconnecting (below) completes the move without
+the code. When the push never arrived, the old library and its code go on working and
+the code that was shown opens nothing.
+
+Each attempt records one `git_key_rotation` diagnostics event with a closed outcome and
+reason (`docs/diagnostics.md`).
 
 **Other devices** stop with `git_library_replaced` and say so. Reconnecting in Settings
 (**Update**, then **Connect and Merge**) asks for the new recovery code, opens the
@@ -659,11 +678,12 @@ What replacing the keys does and does not do:
   repository. Secrets that may already have been read must be changed at their source.
   To remove the old ciphertext as well, create the library again in a new repository
   and delete the old one.
-- The retired vault key is deleted from a device-only Keychain once the vault is
-  re-sealed. A key that iCloud Keychain shares is left in place, because deleting it
-  would delete it on the user's other devices before they re-sealed their own secure
-  snippets. It opens nothing in the new library, and nothing in the repository without
-  the retired library key.
+- The retired library key and vault key are deleted from a device-only Keychain once
+  the device has moved. A key that iCloud Keychain shares is left in place, because
+  deleting it would delete it on the user's other devices before they reconnect: they
+  would ask for a recovery code instead of saying that the keys were replaced, and
+  could not re-seal their own secure snippets. The retired keys open nothing in the
+  new library, only the commits before the replacement.
 
 Linux reads a replaced library (`schemaVersion` 2) and reconnects to it with the new
 code, but cannot replace keys itself.
@@ -701,8 +721,8 @@ directory: macOS creates a library with the system ssh and a key held only by a 
 ssh-agent; a fresh iOS installation meets the untrusted host key, checks its
 fingerprint, trusts it, joins with the recovery code through SwiftNIO SSH and its device
 key, and adds a snippet; a fresh macOS installation sees it. Then the iOS UI test creates a library in a second repository
-through Settings, copies the code and switches sync, and a fresh macOS installation
-joins it. After each stage the bare repository is checked for the record count, the
+through Settings, switches sync, replaces the library's keys with Replace Keys and
+copies the new code, and a fresh macOS installation joins with that code. After each stage the bare repository is checked for the record count, the
 key envelope, the fixed commit authorship, and the absence of every plaintext marker
 and recovery code anywhere in its history.
 
