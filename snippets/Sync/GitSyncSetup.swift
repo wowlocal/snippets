@@ -459,6 +459,8 @@ final class GitSyncSetup {
     private var session: URLSession?
     /// The SSH host of the step in progress, for failure messages.
     private var activeSSHHost: SSHHost?
+    /// Where the outcome of replacing the keys is recorded. Tests read it here.
+    var recordDiagnostic: (DiagnosticEvent) -> Void = { Diagnostics.record($0) }
 
     init(
         selection: SyncBackendSelectionStore, coordinator: SyncCoordinator?, vault: SecureSnippetStore? = nil
@@ -688,8 +690,17 @@ final class GitSyncSetup {
         }
         try await save(remote: remote, token: token, datasetID: datasetID, mode: mode)
         // The replaced library is gone from the branch; its key opens only history.
-        if let replaced { try? keys.forget(replaced) }
+        if let replaced { forgetRetiredKey(replaced) }
         return .connected
+    }
+
+    /// Forgets the key of a library the branch no longer holds. A key that iCloud
+    /// Keychain shares stays: deleting it here deletes it on the user's other devices,
+    /// which would then ask for a recovery code instead of saying that the keys were
+    /// replaced, and could not re-seal what they hold.
+    private func forgetRetiredKey(_ scope: GitSyncKeyStore.Scope) {
+        guard !keys.syncsBetweenDevices else { return }
+        try? keys.forget(scope)
     }
 
     /// Seals the current library key under a new code and replaces the repository's
@@ -697,8 +708,11 @@ final class GitSyncSetup {
     /// the same code in the same commit, so one code keeps opening everything. Earlier
     /// envelopes remain in git history, so this replaces a lost code; it cannot revoke
     /// a leaked one.
-    func replaceRecoveryCode() async throws -> String {
-        try await issueRecoveryCode(mintingVault: false)
+    ///
+    /// The device owner is asked once: by unlocking the vault when its key is wrapped
+    /// under the new code, otherwise through `authenticateOwner`.
+    func replaceRecoveryCode(authenticateOwner: (String) async throws -> Void) async throws -> String {
+        try await issueRecoveryCode(mintingVault: false, askingOwnerWith: authenticateOwner)
     }
 
     /// Replaces every key of the connected library and returns its new recovery code.
@@ -717,7 +731,75 @@ final class GitSyncSetup {
     /// synced it: the replacing commit is refused if the branch moved since, and the
     /// round is repeated. The new keys are stored before the push, so a crash after it
     /// leaves a library this device can still open by reconnecting.
-    func rotateKeys() async throws -> String {
+    ///
+    /// The device owner is asked once: by unlocking the vault when there are secure
+    /// snippets to re-seal, otherwise through `authenticateOwner`.
+    func rotateKeys(authenticateOwner: (String) async throws -> Void) async throws -> String {
+        let started = ProcessInfo.processInfo.systemUptime
+        var progress = RotationProgress()
+        func record(_ outcome: DiagnosticGitKeyRotationOutcome, _ reason: DiagnosticGitKeyRotationReason?) {
+            recordDiagnostic(.gitKeyRotation(
+                outcome: outcome, reason: reason, attempts: progress.attempts,
+                durationMilliseconds: Int64(max(0, ProcessInfo.processInfo.systemUptime - started) * 1_000)))
+        }
+        do {
+            let code = try await replaceKeys(&progress, authenticateOwner: authenticateOwner)
+            record(.replaced, nil)
+            return code
+        } catch {
+            switch error as? Failure {
+            case .rotatedButNotSaved: record(.replacedNotSaved, nil)
+            case .rotationUncertain: record(.uncertain, nil)
+            case let failure:
+                let reason: DiagnosticGitKeyRotationReason =
+                    progress.ownerDeclined ? .authentication
+                    : progress.branchKeptMoving ? .branchMoved : Self.rotationReason(failure)
+                record(.notReplaced, reason)
+            }
+            throw error
+        }
+    }
+
+    /// What `rotateKeys` reports about its rounds; never part of an error.
+    private struct RotationProgress {
+        /// Replacing pushes tried.
+        var attempts = 0
+        /// Every try found the branch ahead of the round before it.
+        var branchKeptMoving = false
+        /// The device owner did not confirm.
+        var ownerDeclined = false
+    }
+
+    /// The closed reason diagnostics keep for a rotation that replaced nothing.
+    nonisolated private static func rotationReason(_ failure: Failure?) -> DiagnosticGitKeyRotationReason {
+        switch failure {
+        case .syncBeforeRotation, .switchInProgress, .notConfigured, .removeWhileActive:
+            .notSyncing
+        case .pendingSecureConflicts:
+            .pendingSecureConflicts
+        case .vaultAuthentication:
+            .authentication
+        case .differentVault, .vaultKeyUnavailable, .vaultUnavailable, .localVaultUnreadable, .vaultHeldElsewhere:
+            .vault
+        case .keyUnavailable:
+            .keyStorage
+        case .libraryChanged, .notALibrary, .foreignBranch:
+            .libraryChanged
+        case .authentication, .refused, .pushRejected, .pushTooLarge, .repositoryNotFound,
+             .sshPermissionDenied, .sshHostKeyUnknown, .sshHostKeyChanged:
+            .rejected
+        case .unreachable, .rateLimited, .unsupportedServer, .sshIncompatible, .sshNoGit, .sshUnavailable:
+            .unreachable
+        case .busy:
+            .busy
+        default:
+            .other
+        }
+    }
+
+    private func replaceKeys(
+        _ progress: inout RotationProgress, authenticateOwner: (String) async throws -> Void
+    ) async throws -> String {
         guard selection.provider == .git, let coordinator else { throw Failure.syncBeforeRotation }
         // An unfinished provider switch pins the library's location; moving it now
         // would leave the repository on new keys this device could not save.
@@ -751,6 +833,17 @@ final class GitSyncSetup {
             try? keys.forget(next.keyScope)
             if let rotation { vault?.discardVaultRotation(rotation) }
         }
+        // Unlocking the vault to re-seal it asked the owner. With nothing to re-seal
+        // nobody was asked yet, whatever the screen believed about the vault.
+        if rotation?.authenticatedOwner != true {
+            do {
+                try await authenticateOwner(Self.rotateReason)
+            } catch {
+                progress.ownerDeclined = true
+                forgetNewKeys()
+                throw error
+            }
+        }
         do {
             if let rotation {
                 files[GitSyncVault.path] = try GitSyncVault.seal(
@@ -769,6 +862,7 @@ final class GitSyncSetup {
                 forgetNewKeys()
                 throw waitingFailure(coordinator) ?? Failure.syncBeforeRotation
             }
+            progress.attempts = attempt
             do {
                 return try await coordinator.withQuiescedCloudTransport { [self] in
                     try await replaceLibrary(
@@ -777,6 +871,7 @@ final class GitSyncSetup {
             } catch RotationStep.branchMoved where attempt < 3 {
                 continue
             } catch RotationStep.branchMoved {
+                progress.branchKeptMoving = true
                 forgetNewKeys()
                 throw Failure.unreachable
             } catch RotationStep.notReplaced(let failure) {
@@ -798,8 +893,16 @@ final class GitSyncSetup {
     /// waits is not in this device's library, so it would not be uploaded again.
     private func waitingFailure(_ coordinator: SyncCoordinator) -> Failure? {
         guard coordinator.isWaitingForVault else { return nil }
-        // With the key here, what waits is a secure conflict that needs the vault open.
-        return vault?.libraryVaultAvailability == .ready ? .pendingSecureConflicts : .vaultHeldElsewhere
+        switch vault?.libraryVaultAvailability {
+        case .ready:
+            // With the key here, what waits is a secure conflict that needs the vault open.
+            return .pendingSecureConflicts
+        case .keyMissing:
+            // The vault is on this device without its key: the recovery code restores it.
+            return .vaultKeyUnavailable
+        case .some(.none), nil:
+            return .vaultHeldElsewhere
+        }
     }
 
     private enum RotationStep: Error {
@@ -822,6 +925,15 @@ final class GitSyncSetup {
               let cursor = base.cursor,
               let head = GitSyncTransport.commit(of: cursor, datasetID: current.datasetID) else {
             throw RotationStep.notReplaced(.syncBeforeRotation)
+        }
+        // Rounds ran since the vault was checked. With sync stopped, make sure what it
+        // holds now can still be re-sealed before the old library is dropped.
+        if let rotation, let vault {
+            do {
+                try await vaultStep { try vault.checkVaultRotation(rotation) }
+            } catch let failure as Failure {
+                throw RotationStep.notReplaced(failure)
+            }
         }
         do {
             try await old.transport.replaceLibrary(
@@ -856,13 +968,9 @@ final class GitSyncSetup {
         } catch {
             throw Failure.rotatedButNotSaved(recoveryCode: code)
         }
-        try? keys.forget(current.keyScope)
+        forgetRetiredKey(current.keyScope)
         return code
     }
-
-    /// True when a new recovery code is authorized by unlocking the vault (it has to
-    /// be, to wrap the vault key), so the caller need not ask for the owner as well.
-    var newRecoveryCodeUnlocksVault: Bool { vault?.libraryVaultDisplayAvailability == .ready }
 
     /// Where secure snippets stand on this device for the connected library.
     enum SecureSnippetsStatus: Equatable {
@@ -918,15 +1026,22 @@ final class GitSyncSetup {
             case .none:
                 // A vault minted here must be the library's only one. Secure snippets
                 // another device already uploaded are sealed under that device's vault,
-                // and only a finished round shows there are none.
-                if coordinator?.isWaitingForVault == true { throw Failure.vaultHeldElsewhere }
-                guard selection.provider == .git, let coordinator,
-                      case .idle(let lastSync) = coordinator.state, lastSync != nil else {
+                // and only a round that finishes now shows there are none: an idle
+                // state from earlier says nothing about what was uploaded since.
+                guard selection.provider == .git, let coordinator else {
+                    throw Failure.syncBeforeSecureSetup
+                }
+                let round = await coordinator.requestSync(trigger: .manual)
+                if coordinator.isWaitingForVault { throw Failure.vaultHeldElsewhere }
+                guard case .completed(.idle(let lastSync)) = round, lastSync != nil else {
                     throw Failure.syncBeforeSecureSetup
                 }
                 try await authenticateOwner(Self.newCodeReason)
+                return .created(recoveryCode: try await issueRecoveryCode(
+                    mintingVault: true, ownerAsked: true, askingOwnerWith: authenticateOwner))
             }
-            return .created(recoveryCode: try await issueRecoveryCode(mintingVault: true))
+            return .created(recoveryCode: try await issueRecoveryCode(
+                mintingVault: true, askingOwnerWith: authenticateOwner))
         }
     }
 
@@ -959,12 +1074,26 @@ final class GitSyncSetup {
             coordinates: coordinates, remote: remote, token: token, material: material, transport: transport)
     }
 
-    private func issueRecoveryCode(mintingVault: Bool) async throws -> String {
+    /// `authenticateOwner` is asked when wrapping the vault key did not unlock the
+    /// vault (there was none to wrap, or it was minted here), unless the caller says
+    /// it has asked already.
+    private func issueRecoveryCode(
+        mintingVault: Bool, ownerAsked: Bool = false,
+        askingOwnerWith authenticateOwner: (String) async throws -> Void
+    ) async throws -> String {
         let library = try activeLibrary()
         let datasetID = library.coordinates.datasetID
         let kit = GitSyncRecovery.Kit(datasetID: datasetID)
         var files = [GitSyncRecovery.path: try GitSyncRecovery.seal(material: library.material, kit: kit)]
         let prepared = try await vaultForNewCode(kit, library: library, minting: mintingVault)
+        if prepared?.minted != false, !ownerAsked {
+            do {
+                try await authenticateOwner(Self.newCodeReason)
+            } catch {
+                discard(prepared)
+                throw error
+            }
+        }
         if let prepared {
             files[GitSyncVault.path] = try GitSyncVault.seal(
                 prepared.identity, material: library.material, datasetID: datasetID)
@@ -1001,15 +1130,17 @@ final class GitSyncSetup {
         guard let vault else { return nil }
         let published = try await publishedVault(
             library.transport, material: library.material, datasetID: library.coordinates.datasetID)
-        let local = vault.libraryVaultAvailability
         switch published {
         case .tooNew:
             throw Failure.vaultUnavailable
         case .identity(let identity):
-            try await vaultStep { try vault.checkCanJoinLibraryVault(identity) }
-            guard local == .ready else { throw Failure.vaultKeyUnavailable }
+            // Only the library's own vault is rewrapped. A device still holding an
+            // unused vault of its own takes the library's here, as connecting would
+            // have: publishing its own would give the library a second vault.
+            let joined = try await vaultStep { try vault.joinLibraryVault(identity) }
+            guard joined == .ready else { throw Failure.vaultKeyUnavailable }
         case .absent, .unreadable:
-            switch local {
+            switch vault.libraryVaultAvailability {
             case .ready:
                 break
             case .keyMissing:

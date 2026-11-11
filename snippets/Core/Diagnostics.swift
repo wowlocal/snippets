@@ -253,6 +253,39 @@ nonisolated enum DiagnosticSyncHaltReason: String, Codable, Sendable {
     case other
 }
 
+/// How an attempt to replace a Git library's keys ended (`GitSyncSetup.rotateKeys`).
+nonisolated enum DiagnosticGitKeyRotationOutcome: String, Codable, Sendable, CaseIterable {
+    /// The repository holds the new library and this device moved to it.
+    case replaced
+    /// The repository still holds the old library and the new keys were given up.
+    case notReplaced = "not_replaced"
+    /// The repository holds the new library; this device did not finish moving to it.
+    case replacedNotSaved = "replaced_not_saved"
+    /// The push may have landed and the repository could not be checked.
+    case uncertain
+}
+
+/// Why a Git library's keys were not replaced. Closed: never a host, an address or
+/// error text.
+nonisolated enum DiagnosticGitKeyRotationReason: String, Codable, Sendable, CaseIterable {
+    /// Git is not the active provider, or its last round left something pending.
+    case notSyncing = "not_syncing"
+    case pendingSecureConflicts = "pending_secure_conflicts"
+    /// The device's vault or the library's vault file cannot be used.
+    case vault
+    /// The device owner did not confirm.
+    case authentication
+    case keyStorage = "key_storage"
+    /// The branch kept moving between the sync and the replacing push.
+    case branchMoved = "branch_moved"
+    case libraryChanged = "library_changed"
+    /// The host refused the credentials, the key or the push.
+    case rejected
+    case unreachable
+    case busy
+    case other
+}
+
 nonisolated enum DiagnosticCloudOperation: String, Codable, Sendable {
     case accountStatus = "account_status"
     case ensureZone = "ensure_zone"
@@ -818,6 +851,13 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         failure: DiagnosticFailure?
     )
     case cloudSignInPresentationAnchor(available: Bool)
+    /// One record per attempt to replace a Git library's keys, when it ends.
+    case gitKeyRotation(
+        outcome: DiagnosticGitKeyRotationOutcome,
+        reason: DiagnosticGitKeyRotationReason?,
+        attempts: Int,
+        durationMilliseconds: Int64
+    )
     case cloudKitFailure(operation: DiagnosticCloudOperation, failure: DiagnosticFailure)
     case cloudKitBatchSplit(recordCount: Int)
     case cloudKitRecordsIgnored(count: Int)
@@ -895,7 +935,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .appStarted, .lifecycle: .app
         case .storageFailure, .storageState, .libraryMerge: .persistence
         case .syncTriggered, .syncState, .syncRound,
-             .cloudSignIn, .cloudSignInRequest, .cloudSignInPresentationAnchor: .sync
+             .cloudSignIn, .cloudSignInRequest, .cloudSignInPresentationAnchor,
+             .gitKeyRotation: .sync
         case .cloudKitFailure, .cloudKitBatchSplit, .cloudKitRecordsIgnored,
              .cloudKitSyncEvent, .cloudKitSchedulerTransition: .cloudKit
         case .vaultAction, .secureReveal, .secureEditorTransition: .vault
@@ -920,6 +961,7 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
         case .cloudSignIn: "cloud_sign_in"
         case .cloudSignInRequest: "cloud_sign_in_request"
         case .cloudSignInPresentationAnchor: "cloud_sign_in_presentation_anchor"
+        case .gitKeyRotation: "git_key_rotation"
         case .cloudKitFailure: "cloudkit_failure"
         case .cloudKitBatchSplit: "cloudkit_batch_split"
         case .cloudKitRecordsIgnored: "cloudkit_records_ignored"
@@ -951,6 +993,11 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
             .error
         case .storageFailure, .cloudKitFailure:
             .error
+        // The repository and this device may disagree about the library's keys.
+        case .gitKeyRotation(.replacedNotSaved, _, _, _), .gitKeyRotation(.uncertain, _, _, _):
+            .error
+        case .gitKeyRotation(.notReplaced, _, _, _):
+            .warning
         case .expansionAccessibility:
             .debug
         case .accessibilityReplacement(let outcome, _, _):
@@ -985,6 +1032,8 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
              .syncState(.halted, _),
              .secureReveal,
              .metricKit:
+            true
+        case .gitKeyRotation(.replacedNotSaved, _, _, _), .gitKeyRotation(.uncertain, _, _, _):
             true
         case .pasteDelivery(_, .pending, _, _, _), .pasteboardRecovery(.pending):
             true
@@ -1069,6 +1118,14 @@ nonisolated enum DiagnosticEvent: Equatable, Sendable {
             return fields
         case .cloudSignInPresentationAnchor(let available):
             return ["available": .boolean(available)]
+        case .gitKeyRotation(let outcome, let reason, let attempts, let duration):
+            var fields: [String: DiagnosticJSONValue] = [
+                "outcome": .string(outcome.rawValue),
+                "attempts": .integer(Int64(min(max(attempts, 0), 16))),
+                "duration_ms": .integer(min(max(0, duration), 86_400_000)),
+            ]
+            if let reason { fields["reason"] = .string(reason.rawValue) }
+            return fields
         case .cloudKitFailure(let operation, let failure):
             var fields = failure.fields
             fields["operation"] = .string(operation.rawValue)

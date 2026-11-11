@@ -1998,6 +1998,64 @@ final class SnippetsIOSTests: XCTestCase {
         }
     }
 
+    func testGitKeyRotationDiagnosticsExportAndRejectUnsafeFields() async throws {
+        let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
+        for outcome in DiagnosticGitKeyRotationOutcome.allCases {
+            let event = DiagnosticEvent.gitKeyRotation(
+                outcome: outcome, reason: nil, attempts: 1, durationMilliseconds: 900)
+            service.emit(event, level: event.defaultLevel, synchronous: event.requiresSynchronousWrite)
+        }
+        for reason in DiagnosticGitKeyRotationReason.allCases {
+            let event = DiagnosticEvent.gitKeyRotation(
+                outcome: .notReplaced, reason: reason, attempts: 0, durationMilliseconds: 1)
+            service.emit(event, level: event.defaultLevel, synchronous: false)
+        }
+        let exportURL = rootURL.appendingPathComponent("git-key-rotation-export.jsonl")
+        _ = try await service.export(to: exportURL)
+        let exported = try String(contentsOf: exportURL, encoding: .utf8)
+        for outcome in DiagnosticGitKeyRotationOutcome.allCases {
+            XCTAssertTrue(exported.contains("\"outcome\":\"\(outcome.rawValue)\""))
+        }
+        for reason in DiagnosticGitKeyRotationReason.allCases {
+            XCTAssertTrue(exported.contains("\"reason\":\"\(reason.rawValue)\""))
+        }
+
+        let event = DiagnosticEvent.gitKeyRotation(
+            outcome: .notReplaced, reason: .rejected, attempts: 1, durationMilliseconds: 100)
+        let record = DiagnosticRecord(event: event, timestamp: "2026-11-11T10:00:00.000Z",
+            elapsedMilliseconds: 1, sessionIdentifier: UUID().uuidString.lowercased(), sequence: 1)
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+        for variant in 0..<9 {
+            var object = original
+            var fields = try XCTUnwrap(object["fields"] as? [String: Any])
+            switch variant {
+            case 0: fields["repository"] = "https://private.example.invalid/owner/library.git"
+            case 1: fields["outcome"] = "PRIVATE-HOST-NAME"
+            case 2: fields["reason"] = "PRIVATE-ERROR-TEXT"
+            case 3: fields["attempts"] = 100
+            case 4: fields["duration_ms"] = "100"
+            case 5: fields.removeValue(forKey: "outcome")
+            case 6: fields["duration_ms"] = -1
+            case 7: fields["attempts"] = 1.5
+            default: fields["keyword"] = "PRIVATE-RECOVERY-CODE"
+            }
+            object["fields"] = fields
+            var data = try JSONSerialization.data(withJSONObject: object)
+            data.append(0x0A)
+            let injected = SnippetStorageLocations.diagnosticsLogsFolderURL
+                .appendingPathComponent("snippets-injected.jsonl")
+            try data.write(to: injected)
+            let destination = rootURL.appendingPathComponent("rejected-git-key-rotation-\(variant).jsonl")
+            do {
+                _ = try await service.export(to: destination)
+                XCTFail("Unsafe key-rotation diagnostics must be rejected (variant \(variant))")
+            } catch DiagnosticsExportError.corruptLog {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+            }
+            try FileManager.default.removeItem(at: injected)
+        }
+    }
+
     func testAccessibilityReplacementDiagnosticsExportAndRejectUnsafeFields() async throws {
         let service = DiagnosticsService(registerGlobally: false, mirrorToOSLog: false)
         for outcome in DiagnosticPasteAccessibilityOutcome.allCases {

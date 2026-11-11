@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import LocalAuthentication
 import XCTest
 @testable import Snippets_Debug
 
@@ -817,9 +818,19 @@ final class GitSyncSettingsMacTests: XCTestCase {
         first.sheet.presentRecoveryCode = { newCode, _ in shown.append(newCode) }
         first.sheet.authenticateOwner = { _ in ownerPrompts += 1 }
         first.sheet.presentError = { title, message in XCTFail("\(title): \(message)") }
+        var events: [DiagnosticEvent] = []
+        first.sheet.recordDiagnostic = { events.append($0) }
         let prompts = first.vaultAuthentications
         await first.sheet.rotateKeys()
         XCTAssertEqual(shown.count, 1)
+        XCTAssertEqual(events.count, 1, "one record per rotation")
+        if case .gitKeyRotation(let outcome, let reason, let attempts, _)? = events.first {
+            XCTAssertEqual(outcome, .replaced)
+            XCTAssertNil(reason)
+            XCTAssertEqual(attempts, 1)
+        } else {
+            XCTFail("unexpected diagnostics: \(events)")
+        }
         let newCode = try XCTUnwrap(shown.first)
         XCTAssertNotEqual(newCode, code)
         XCTAssertEqual(first.vaultAuthentications, prompts + 1, "re-sealing the vault is the one owner check")
@@ -1104,6 +1115,403 @@ final class GitSyncSettingsMacTests: XCTestCase {
         await retire(first)
     }
 
+    /// The replacing push lands, its response is lost and the repository cannot be
+    /// asked. The device keeps the new keys and shows the code. Once the repository
+    /// answers again the device is told to reconnect, which needs no code and moves its
+    /// secure snippets under the new vault key.
+    func testAnUnconfirmedKeyReplacementIsFinishedByReconnecting() async throws {
+        let first = try makeDevice("first", seed: [Self.snippet])
+        let code = try await createLibrary(first)
+        try await switchToGit(first)
+        let secret = try await addSecure(first, name: "Server Password", keyword: "srvpw", body: Self.firstSecret)
+        try await sync(first)
+        let old = try XCTUnwrap(first.selection.gitCoordinates)
+        let oldVault = try XCTUnwrap(first.secureStore.document)
+
+        var shown: [String] = []
+        var errors: [String] = []
+        var events: [DiagnosticEvent] = []
+        first.sheet.presentRecoveryCode = { newCode, _ in shown.append(newCode) }
+        first.sheet.presentError = { _, message in errors.append(message) }
+        first.sheet.recordDiagnostic = { events.append($0) }
+        GitBackendURLProtocol.dropResponseOfNextPush(host: host)
+        GitBackendURLProtocol.afterNextPush(host: host) { [host = host!] in
+            GitBackendURLProtocol.setOffline(true, host: host)
+        }
+        await first.sheet.rotateKeys()
+        GitBackendURLProtocol.setOffline(false, host: host)
+        XCTAssertEqual(shown.count, 1)
+        let newCode = try XCTUnwrap(shown.first)
+        XCTAssertNotEqual(newCode, code)
+        XCTAssertEqual(errors, [GitSyncSetup.Failure.rotationUncertain(recoveryCode: newCode).localizedDescription])
+        XCTAssertEqual(rotationResults(events), [Rotation(.uncertain, nil, attempts: 1)])
+        // Nothing moved on the device, and it kept the key of the library it pushed.
+        XCTAssertEqual(first.selection.gitCoordinates, old)
+        XCTAssertEqual(first.secureStore.document, oldVault)
+        var next = old
+        next.datasetID = try repositoryDatasetID()
+        XCTAssertNotEqual(next.datasetID, old.datasetID)
+        XCTAssertTrue(first.selection.gitKeys.hasMaterial(for: next.keyScope))
+
+        _ = await first.coordinator.requestSync(trigger: .manual)
+        XCTAssertTrue(
+            first.coordinator.statusDescription.contains("Reconnect it in Sync settings"),
+            first.coordinator.statusDescription)
+        await reconnectToReplacedLibrary(first)
+        XCTAssertEqual(first.selection.gitCoordinates?.datasetID, next.datasetID)
+        XCTAssertFalse(first.selection.gitKeys.hasMaterial(for: old.keyScope))
+        XCTAssertNotEqual(first.secureStore.document?.kid, oldVault.kid)
+        try await sync(first)
+        let reopened = try await secureContent(first, secret)
+        XCTAssertEqual(reopened, Self.firstSecret)
+        XCTAssertEqual(try recordFiles().count, 2)
+        await retire(first)
+
+        // The code that was shown is the library's code.
+        let second = try makeDevice("second", seed: [])
+        await join(second, code: newCode)
+        try await switchToGit(second)
+        let joined = try await secureContent(second, secret)
+        XCTAssertEqual(joined, Self.firstSecret)
+        await retire(second)
+    }
+
+    /// The replacing push never arrives and the repository cannot be asked. The code
+    /// that was shown opens nothing: the old library and its code go on working, and
+    /// the keys can be replaced again.
+    func testAnUnconfirmedKeyReplacementThatNeverLandedChangesNothing() async throws {
+        let first = try makeDevice("first", seed: [Self.snippet])
+        let code = try await createLibrary(first)
+        try await switchToGit(first)
+        let secret = try await addSecure(first, name: "Server Password", keyword: "srvpw", body: Self.firstSecret)
+        try await sync(first)
+        let old = try XCTUnwrap(first.selection.gitCoordinates)
+        let oldVault = try XCTUnwrap(first.secureStore.document)
+        let before = try git(["--git-dir", bare.path, "rev-parse", "main"])
+
+        var shown: [String] = []
+        var errors: [String] = []
+        var events: [DiagnosticEvent] = []
+        first.sheet.presentRecoveryCode = { newCode, _ in shown.append(newCode) }
+        first.sheet.presentError = { _, message in errors.append(message) }
+        first.sheet.recordDiagnostic = { events.append($0) }
+        GitBackendURLProtocol.goOfflineAtNextPush(host: host)
+        await first.sheet.rotateKeys()
+        GitBackendURLProtocol.setOffline(false, host: host)
+        XCTAssertEqual(shown.count, 1)
+        let unused = try XCTUnwrap(shown.first)
+        XCTAssertEqual(errors, [GitSyncSetup.Failure.rotationUncertain(recoveryCode: unused).localizedDescription])
+        XCTAssertEqual(rotationResults(events), [Rotation(.uncertain, nil, attempts: 1)])
+        XCTAssertEqual(try git(["--git-dir", bare.path, "rev-parse", "main"]), before)
+        XCTAssertEqual(first.selection.gitCoordinates, old)
+        XCTAssertEqual(first.secureStore.document, oldVault)
+
+        // The library it has still syncs, and its keys can still be replaced.
+        try await sync(first)
+        let finalCode = try await replaceKeys(first)
+        XCTAssertFalse([code, unused].contains(finalCode))
+        try await sync(first)
+        let reopened = try await secureContent(first, secret)
+        XCTAssertEqual(reopened, Self.firstSecret)
+        await retire(first)
+
+        let second = try makeDevice("second", seed: [])
+        var asked: [String?] = []
+        second.sheet.promptForRecoveryCode = { problem in
+            asked.append(problem)
+            return [code, unused, finalCode][min(asked.count - 1, 2)]
+        }
+        second.sheet.confirmCreation = { _ in XCTFail("must join, not create"); return nil }
+        second.sheet.presentError = { title, message in XCTFail("\(title): \(message)") }
+        fill(second.sheet, token: Self.token)
+        await second.sheet.connect()
+        let refused = GitSyncSetup.Failure.incorrectRecoveryCode.localizedDescription
+        XCTAssertEqual(asked, [nil, refused, refused], "neither the old code nor the unused one opens the library")
+        try await switchToGit(second)
+        let joined = try await secureContent(second, secret)
+        XCTAssertEqual(joined, Self.firstSecret)
+        await retire(second)
+    }
+
+    /// The repository takes the new library, but the device cannot save its own move:
+    /// here its vault file cannot be written. The code is still shown, and reconnecting
+    /// finishes the move with the keys the device already stored.
+    func testAKeyReplacementTheDeviceCouldNotSaveIsFinishedByReconnecting() async throws {
+        let first = try makeDevice("first", seed: [Self.snippet])
+        let code = try await createLibrary(first)
+        try await switchToGit(first)
+        let secret = try await addSecure(first, name: "Server Password", keyword: "srvpw", body: Self.firstSecret)
+        try await sync(first)
+        let old = try XCTUnwrap(first.selection.gitCoordinates)
+        let oldVault = try XCTUnwrap(first.secureStore.document)
+
+        var shown: [String] = []
+        var errors: [String] = []
+        var events: [DiagnosticEvent] = []
+        first.sheet.presentRecoveryCode = { newCode, _ in shown.append(newCode) }
+        first.sheet.presentError = { _, message in errors.append(message) }
+        first.sheet.recordDiagnostic = { events.append($0) }
+        let vaultDirectory = SnippetStorageLocations.vaultFileURL.deletingLastPathComponent().path
+        defer { chmod(vaultDirectory, 0o700) }
+        GitBackendURLProtocol.afterNextPush(host: host) { chmod(vaultDirectory, 0o500) }
+        await first.sheet.rotateKeys()
+        XCTAssertEqual(chmod(vaultDirectory, 0o700), 0)
+        XCTAssertEqual(shown.count, 1)
+        let newCode = try XCTUnwrap(shown.first)
+        XCTAssertNotEqual(newCode, code)
+        XCTAssertEqual(errors, [GitSyncSetup.Failure.rotatedButNotSaved(recoveryCode: newCode).localizedDescription])
+        XCTAssertEqual(rotationResults(events), [Rotation(.replacedNotSaved, nil, attempts: 1)])
+        XCTAssertEqual(first.selection.gitCoordinates, old)
+        XCTAssertEqual(first.secureStore.document, oldVault)
+        XCTAssertNotEqual(try repositoryDatasetID(), old.datasetID)
+        let stillOpens = try await secureContent(first, secret)
+        XCTAssertEqual(stillOpens, Self.firstSecret, "the device still reads what it has")
+
+        _ = await first.coordinator.requestSync(trigger: .manual)
+        XCTAssertTrue(
+            first.coordinator.statusDescription.contains("Reconnect it in Sync settings"),
+            first.coordinator.statusDescription)
+        await reconnectToReplacedLibrary(first)
+        XCTAssertEqual(first.selection.gitCoordinates?.datasetID, try repositoryDatasetID())
+        XCTAssertNotEqual(first.secureStore.document?.kid, oldVault.kid)
+        try await sync(first)
+        let reopened = try await secureContent(first, secret)
+        XCTAssertEqual(reopened, Self.firstSecret)
+        XCTAssertEqual(try recordFiles().count, 2)
+        await retire(first)
+
+        let second = try makeDevice("second", seed: [])
+        await join(second, code: newCode)
+        try await switchToGit(second)
+        let joined = try await secureContent(second, secret)
+        XCTAssertEqual(joined, Self.firstSecret)
+        await retire(second)
+    }
+
+    /// A device that still holds an unused vault of its own must not publish it over
+    /// the library's with New Recovery Code. It takes the library's vault instead and
+    /// is told that it needs that vault's key.
+    func testANewRecoveryCodeNeverReplacesTheLibrarysVaultWithAnother() async throws {
+        let first = try makeDevice("holder", seed: [])
+        try first.secureStore.createVaultIfNeeded { _ in true }
+        let oldCode = try await createLibrary(first)
+        // As a library created before `keys/vault.json` existed.
+        try removeFromRepository("keys/vault.json")
+
+        let second = try makeDevice("rival", seed: [])
+        try second.secureStore.createVaultIfNeeded { _ in true }
+        let own = try XCTUnwrap(second.secureStore.document?.kid)
+        await join(second, code: oldCode)
+        XCTAssertEqual(second.secureStore.document?.kid, own, "the library published no vault to take")
+
+        // The holder publishes its vault with a new code.
+        use(first)
+        var published: String?
+        first.sheet.presentRecoveryCode = { issued, _ in published = issued }
+        first.sheet.presentError = { title, message in XCTFail("\(title): \(message)") }
+        first.sheet.authenticateOwner = { _ in XCTFail("the vault unlock is the owner check") }
+        await first.sheet.replaceRecoveryCode()
+        let code = try XCTUnwrap(published)
+        let head = try git(["--git-dir", bare.path, "rev-parse", "main"])
+        let vaultFile = try git(["--git-dir", bare.path, "show", "main:keys/vault.json"])
+
+        use(second)
+        var errors: [String] = []
+        second.sheet.presentRecoveryCode = { _, _ in XCTFail("no code may be issued over another vault") }
+        second.sheet.presentError = { _, message in errors.append(message) }
+        second.sheet.authenticateOwner = { _ in }
+        await second.sheet.replaceRecoveryCode()
+        XCTAssertEqual(errors, [GitSyncSetup.Failure.vaultKeyUnavailable.localizedDescription])
+        XCTAssertEqual(try git(["--git-dir", bare.path, "rev-parse", "main"]), head, "nothing was pushed")
+        XCTAssertEqual(try git(["--git-dir", bare.path, "show", "main:keys/vault.json"]), vaultFile)
+        XCTAssertEqual(second.secureStore.document?.kid, first.secureStore.document?.kid, "it took the library's vault")
+        XCTAssertEqual(second.sheet.setupStatus, .needsRecoveryCode)
+
+        // The library's code then opens its secure snippets on this device.
+        second.sheet.promptForRecoveryCode = { _ in code }
+        second.sheet.presentError = { title, message in XCTFail("\(title): \(message)") }
+        await second.sheet.setUpSecureSnippets()
+        XCTAssertEqual(second.sheet.setupStatus, .ready)
+    }
+
+    /// An older library without `keys/vault.json`. A device that last synced before
+    /// another one uploaded secure snippets must not mint the library's vault from what
+    /// it knew then: it syncs first, and finds that another device holds the key.
+    func testSettingUpSecureSnippetsSyncsBeforeItMintsAVault() async throws {
+        let first = try makeDevice("holder", seed: [Self.snippet])
+        try first.secureStore.createVaultIfNeeded { _ in true }
+        let code = try await createLibrary(first)
+        try removeFromRepository("keys/vault.json")
+        try await switchToGit(first)
+        await retire(first)
+
+        let second = try makeDevice("late", seed: [])
+        await join(second, code: code)
+        try await switchToGit(second)
+        XCTAssertNil(second.secureStore.document)
+        await retire(second)
+
+        // Uploaded after the second device's last round.
+        resume(first)
+        _ = try await addSecure(first, name: "Server Password", keyword: "srvpw", body: Self.firstSecret)
+        try await sync(first)
+        await retire(first)
+
+        resume(second)
+        var errors: [String] = []
+        second.sheet.presentError = { _, message in errors.append(message) }
+        second.sheet.presentRecoveryCode = { _, _ in XCTFail("this device must not mint a rival vault") }
+        second.sheet.authenticateOwner = { _ in XCTFail("there is nothing to authorize") }
+        await second.sheet.setUpSecureSnippets()
+        XCTAssertEqual(errors, [GitSyncSetup.Failure.vaultHeldElsewhere.localizedDescription])
+        XCTAssertNil(second.secureStore.document)
+        XCTAssertFalse(try treeFiles().contains("keys/vault.json"))
+        await retire(second)
+    }
+
+    /// With no secure snippets to re-seal, nothing unlocks a vault, so the owner is
+    /// asked directly: for a new recovery code and for new keys. Declining leaves the
+    /// library as it was.
+    func testReplacingTheKeysWithNothingToResealStillAsksTheOwner() async throws {
+        let first = try makeDevice("first", seed: [Self.snippet])
+        let code = try await createLibrary(first)
+        try removeFromRepository("keys/vault.json")
+
+        let second = try makeDevice("second", seed: [])
+        await join(second, code: code)
+        try await switchToGit(second)
+        XCTAssertNil(second.secureStore.document, "no vault on this device")
+        let old = try XCTUnwrap(second.selection.gitCoordinates)
+
+        var shown: [String] = []
+        var ownerPrompts = 0
+        var events: [DiagnosticEvent] = []
+        second.sheet.presentRecoveryCode = { issued, _ in shown.append(issued) }
+        second.sheet.presentError = { title, message in XCTFail("\(title): \(message)") }
+        second.sheet.recordDiagnostic = { events.append($0) }
+        second.sheet.authenticateOwner = { _ in ownerPrompts += 1 }
+        await second.sheet.replaceRecoveryCode()
+        XCTAssertEqual(ownerPrompts, 1, "a new code without a vault to unlock asks the owner")
+        XCTAssertEqual(shown.count, 1)
+
+        let head = try git(["--git-dir", bare.path, "rev-parse", "main"])
+        second.sheet.authenticateOwner = { _ in
+            ownerPrompts += 1
+            throw LAError(.userCancel)
+        }
+        await second.sheet.rotateKeys()
+        XCTAssertEqual(ownerPrompts, 2)
+        XCTAssertEqual(shown.count, 1, "declining shows no code")
+        XCTAssertEqual(try git(["--git-dir", bare.path, "rev-parse", "main"]), head)
+        XCTAssertEqual(second.selection.gitCoordinates, old)
+        XCTAssertNil(second.secureStore.document)
+        XCTAssertEqual(rotationResults(events), [Rotation(.notReplaced, .authentication, attempts: 0)])
+
+        second.sheet.authenticateOwner = { _ in ownerPrompts += 1 }
+        await second.sheet.rotateKeys()
+        XCTAssertEqual(ownerPrompts, 3)
+        XCTAssertEqual(second.vaultAuthentications, 0, "no vault was unlocked")
+        XCTAssertEqual(shown.count, 2)
+        XCTAssertNotEqual(second.selection.gitCoordinates?.datasetID, old.datasetID)
+        XCTAssertEqual(rotationResults(events).last, Rotation(.replaced, nil, attempts: 1))
+        // The new library has a vault of its own, and this device holds its key.
+        XCTAssertTrue(try treeFiles().contains("keys/vault.json"))
+        XCTAssertEqual(second.sheet.setupStatus, .ready)
+        try await sync(second)
+        await retire(second)
+    }
+
+    /// A library key that iCloud Keychain shares is not deleted when it is retired:
+    /// the deletion would reach the user's other devices before they reconnect.
+    func testALibraryKeySharedBetweenDevicesIsKeptWhenTheKeysAreReplaced() async throws {
+        let first = try makeDevice(
+            "first", seed: [Self.snippet], gitKeyTier: .synchronizable(accessGroup: "test.invalid"))
+        _ = try await createLibrary(first)
+        try await switchToGit(first)
+        let old = try XCTUnwrap(first.selection.gitCoordinates)
+        _ = try await replaceKeys(first)
+        let new = try XCTUnwrap(first.selection.gitCoordinates)
+        XCTAssertNotEqual(new.datasetID, old.datasetID)
+        XCTAssertTrue(first.selection.gitKeys.hasMaterial(for: new.keyScope))
+        XCTAssertTrue(first.selection.gitKeys.hasMaterial(for: old.keyScope), "other devices still need it")
+        try await sync(first)
+        await retire(first)
+    }
+
+    /// Sync rounds run between the vault check and the replacing push. What they
+    /// bring is checked again before the old library is dropped.
+    func testTheVaultIsCheckedAgainRightBeforeTheKeysAreReplaced() async throws {
+        let first = try makeDevice("first", seed: [])
+        _ = try await createLibrary(first)
+        _ = try await addSecure(first, name: "Server Password", keyword: "srvpw", body: Self.firstSecret)
+        let vault = try XCTUnwrap(first.secureStore.document)
+        let pending = try await first.secureStore.prepareVaultRotation(
+            wrappingUnder: GitSyncRecovery.Kit(datasetID: UUID()).secret, reason: "test")
+        XCTAssertTrue(pending.authenticatedOwner)
+        XCTAssertNoThrow(try first.secureStore.checkVaultRotation(pending))
+
+        // Sync state that cannot be read may hold a secure conflict under the old key.
+        let metadata = SnippetStorageLocations.syncLibraryMetadataFileURL
+        try FileManager.default.createDirectory(
+            at: metadata.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not a sync file".utf8).write(to: metadata)
+        XCTAssertThrowsError(try first.secureStore.checkVaultRotation(pending)) { error in
+            XCTAssertEqual(error as? SecureSnippetStore.LibraryVaultFailure, .pendingConflicts)
+        }
+        first.secureStore.discardVaultRotation(pending)
+        XCTAssertEqual(first.secureStore.document, vault, "nothing was re-sealed")
+        XCTAssertFalse(first.vaultKeychain.hasKey(keyID: pending.identity.kid), "the prepared key is gone")
+    }
+
+    /// Reconnects the live `device` after sync stopped on a replaced library, the way
+    /// Settings does. Its keys are already stored, so asking for a code is a failure.
+    private func reconnectToReplacedLibrary(
+        _ device: Device, file: StaticString = #filePath, line: UInt = #line
+    ) async {
+        var replacements = 0
+        device.sheet.promptForRecoveryCode = { problem in
+            XCTFail("asked for a code: \(problem ?? "none given")", file: file, line: line)
+            return nil
+        }
+        device.sheet.confirmReplacement = {
+            replacements += 1
+            return true
+        }
+        device.sheet.confirmCreation = { _ in XCTFail("must join, not create", file: file, line: line); return nil }
+        device.sheet.presentError = { title, message in XCTFail("\(title): \(message)", file: file, line: line) }
+        fill(device.sheet, token: Self.token)
+        await device.sheet.connect()
+        XCTAssertEqual(replacements, 1, file: file, line: line)
+        XCTAssertEqual(device.sheet.statusText, "Connected.", file: file, line: line)
+    }
+
+    /// The dataset id the repository's manifest names now.
+    private func repositoryDatasetID() throws -> UUID {
+        let manifest = try git(["--git-dir", bare.path, "show", "main:snippets-sync.json"])
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(manifest.utf8)) as? [String: Any])
+        return try XCTUnwrap(UUID(uuidString: try XCTUnwrap(object["datasetID"] as? String)))
+    }
+
+    /// What one attempt to replace the keys recorded in diagnostics, without its duration.
+    private struct Rotation: Equatable {
+        let outcome: DiagnosticGitKeyRotationOutcome
+        let reason: DiagnosticGitKeyRotationReason?
+        let attempts: Int
+
+        init(_ outcome: DiagnosticGitKeyRotationOutcome, _ reason: DiagnosticGitKeyRotationReason?, attempts: Int) {
+            self.outcome = outcome
+            self.reason = reason
+            self.attempts = attempts
+        }
+    }
+
+    private func rotationResults(_ events: [DiagnosticEvent]) -> [Rotation] {
+        events.compactMap { event in
+            guard case .gitKeyRotation(let outcome, let reason, let attempts, _) = event else { return nil }
+            return Rotation(outcome, reason, attempts: attempts)
+        }
+    }
+
     /// Keys are replaced only for the library Git is syncing, and nothing is minted
     /// or pushed when the owner does not confirm.
     func testReplacingTheKeysNeedsActiveSyncAndTheOwner() async throws {
@@ -1113,8 +1521,11 @@ final class GitSyncSettingsMacTests: XCTestCase {
         first.sheet.presentRecoveryCode = { _, _ in XCTFail("no code without a rotation") }
         first.sheet.presentError = { _, message in errors.append(message) }
         first.sheet.authenticateOwner = { _ in }
+        var events: [DiagnosticEvent] = []
+        first.sheet.recordDiagnostic = { events.append($0) }
         await first.sheet.rotateKeys()
         XCTAssertEqual(errors, [GitSyncSetup.Failure.syncBeforeRotation.localizedDescription])
+        XCTAssertEqual(rotationResults(events), [Rotation(.notReplaced, .notSyncing, attempts: 0)])
 
         try await switchToGit(first)
         _ = try await addSecure(first, name: "Server Password", keyword: "srvpw", body: Self.firstSecret)
@@ -1127,6 +1538,7 @@ final class GitSyncSettingsMacTests: XCTestCase {
         first.approvesVaultAuthentication = false
         await first.sheet.rotateKeys()
         XCTAssertEqual(errors, [GitSyncSetup.Failure.vaultAuthentication.localizedDescription])
+        XCTAssertEqual(rotationResults(events).last, Rotation(.notReplaced, .authentication, attempts: 0))
         XCTAssertEqual(try git(["--git-dir", bare.path, "rev-parse", "main"]), before)
         XCTAssertEqual(first.selection.gitCoordinates, coordinates)
         XCTAssertEqual(first.secureStore.document, vault)
@@ -1298,7 +1710,10 @@ final class GitSyncSettingsMacTests: XCTestCase {
         return GitSSHSupport(connector: connector, device: nil)
     }
 
-    private func makeDevice(_ name: String, seed: [Snippet], ssh: GitSSHSupport? = nil) throws -> Device {
+    private func makeDevice(
+        _ name: String, seed: [Snippet], ssh: GitSSHSupport? = nil,
+        gitKeyTier: KeychainSecretStore.Tier = .deviceOnly
+    ) throws -> Device {
         let support = root.appendingPathComponent("device-\(name)", isDirectory: true)
         setenv(SnippetStorageLocations.rootOverrideEnvironmentKey, support.path, 1)
         SnippetStorageLocations.createAllDirectories()
@@ -1313,7 +1728,7 @@ final class GitSyncSettingsMacTests: XCTestCase {
             keychain: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
             bootstrapSecrets: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
             snippetsCloudEnabled: false,
-            gitKeys: GitSyncKeyStore(keychain: KeychainSecretStore(tier: .deviceOnly, inMemory: true)),
+            gitKeys: GitSyncKeyStore(keychain: KeychainSecretStore(tier: gitKeyTier, inMemory: true)),
             gitCredentials: credentials,
             gitSessionConfiguration: sessionConfiguration,
             gitAllowsInsecureLoopback: true,
@@ -1404,8 +1819,29 @@ final class GitBackendURLProtocol: URLProtocol, @unchecked Sendable {
     /// Apply the next push, then drop its response: the "did it land?" ambiguity.
     nonisolated(unsafe) private static var dropNextPushResponse: Set<String> = []
 
+    /// Runs once when the next push to a host has been applied, before its response.
+    nonisolated(unsafe) private static var pushActions: [String: @Sendable () -> Void] = [:]
+    /// Hosts whose next push never arrives, and which answer nothing from then on.
+    nonisolated(unsafe) private static var offlineAtNextPush: Set<String> = []
+    /// Hosts that answer nothing, as with the network down.
+    nonisolated(unsafe) private static var offline: Set<String> = []
+
     static func dropResponseOfNextPush(host: String) {
         lock.withLock { _ = dropNextPushResponse.insert(host) }
+    }
+
+    static func afterNextPush(host: String, _ action: @escaping @Sendable () -> Void) {
+        lock.withLock { pushActions[host] = action }
+    }
+
+    static func goOfflineAtNextPush(host: String) {
+        lock.withLock { _ = offlineAtNextPush.insert(host) }
+    }
+
+    static func setOffline(_ isOffline: Bool, host: String) {
+        lock.withLock {
+            if isOffline { offline.insert(host) } else { offline.remove(host) }
+        }
     }
 
     static func register(host: String, projectRoot: URL, token: String) {
@@ -1413,7 +1849,13 @@ final class GitBackendURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     static func unregister(host: String) {
-        lock.withLock { repositories[host] = nil }
+        lock.withLock {
+            repositories[host] = nil
+            dropNextPushResponse.remove(host)
+            pushActions[host] = nil
+            offlineAtNextPush.remove(host)
+            offline.remove(host)
+        }
     }
 
     static func environment(home: URL) -> [String: String] {
@@ -1436,10 +1878,19 @@ final class GitBackendURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         DispatchQueue.global().async { [self] in
             do {
+                let host = request.url?.host ?? ""
+                let isPush = request.httpMethod == "POST" && request.url?.lastPathComponent == "git-receive-pack"
+                let unreachable = Self.lock.withLock { () -> Bool in
+                    if isPush, Self.offlineAtNextPush.remove(host) != nil { Self.offline.insert(host) }
+                    return Self.offline.contains(host)
+                }
+                if unreachable { throw URLError(.notConnectedToInternet) }
                 let (status, headers, body) = try respond()
+                if isPush, let action = Self.lock.withLock({ Self.pushActions.removeValue(forKey: host) }) {
+                    action()
+                }
                 let drop = Self.lock.withLock { () -> Bool in
-                    guard request.httpMethod == "POST", request.url?.lastPathComponent == "git-receive-pack",
-                          let host = request.url?.host, Self.dropNextPushResponse.contains(host) else { return false }
+                    guard isPush, Self.dropNextPushResponse.contains(host) else { return false }
                     Self.dropNextPushResponse.remove(host)
                     return true
                 }

@@ -833,11 +833,9 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
         defer { setBusy(false, nil) }
         do {
             // A vault on this device is unlocked to wrap its key under the new code,
-            // which is the owner check; asking twice would be one prompt too many.
-            if !setup.newRecoveryCodeUnlocksVault {
-                try await requireDeviceOwnerAuthentication(reason: GitSyncSetup.newCodeReason)
-            }
-            await presentRecoveryCode(try await setup.replaceRecoveryCode())
+            // which is the owner check; the setup asks through this only when it is not.
+            await presentRecoveryCode(try await setup.replaceRecoveryCode(
+                authenticateOwner: { try await requireDeviceOwnerAuthentication(reason: $0) }))
         } catch where Self.isAuthenticationCancel(error) {
             status = ""
         } catch {
@@ -855,11 +853,9 @@ final class GitSyncSettingsViewController: UITableViewController, UITextFieldDel
         defer { setBusy(false, nil) }
         do {
             // Re-sealing the secure snippets unlocks the vault, which is the owner check.
-            // A device without one is asked here instead.
-            if !setup.newRecoveryCodeUnlocksVault {
-                try await requireDeviceOwnerAuthentication(reason: GitSyncSetup.rotateReason)
-            }
-            await presentRecoveryCode(try await setup.rotateKeys())
+            // A device with none to re-seal is asked through this instead.
+            await presentRecoveryCode(try await setup.rotateKeys(
+                authenticateOwner: { try await requireDeviceOwnerAuthentication(reason: $0) }))
             status = "Keys replaced. Reconnect your other devices with the new recovery code."
             _ = await environment.syncCoordinator.requestSync(trigger: .manual)
         } catch where Self.isAuthenticationCancel(error) {

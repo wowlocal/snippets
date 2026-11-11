@@ -377,8 +377,9 @@ EOF_CLIENT
 fi
 
 if [[ "${SKIP_UI:-0}" != 1 ]]; then
-  # The iOS Settings UI connects an empty repository, creates the library, copies the
-  # recovery code and switches sync; a fresh macOS installation then joins with it.
+  # The iOS Settings UI connects an empty repository, creates the library, switches
+  # sync, replaces the library's keys and copies the new recovery code; a fresh macOS
+  # installation then joins with it.
   # `--ui-testing-reset` keeps the provider choice in a disposable defaults suite and
   # sync on/off in process, so the Debug app's own preferences are never changed.
   UI_BARE="$REPOS/ui.git"
@@ -404,6 +405,12 @@ if [[ "${SKIP_UI:-0}" != 1 ]]; then
   RECOVERY_CODE="$(xcrun simctl pbpaste "$IOS_UDID" | tr -d '[:space:]')"
   [[ "$RECOVERY_CODE" =~ ^[0-9A-Z]{4}(-[0-9A-Z]{1,4}){6}$ ]] || { echo "the UI did not copy a recovery code" >&2; exit 1; }
   xcrun simctl pbcopy "$IOS_UDID" <<<"" >/dev/null 2>&1 || true
+  # The UI replaced the library's keys after creating it; the code it copied last is
+  # the new library's, which the macOS join below then proves.
+  git --git-dir "$UI_BARE" show main:snippets-sync.json | python3 -I -c 'import json, sys
+assert json.load(sys.stdin)["schemaVersion"] == 2, "the UI did not replace the keys"'
+  [[ "$(git --git-dir "$UI_BARE" log --format=%s main | grep -c '^Replace library keys$')" == 1 ]] \
+    || { echo "expected exactly one key-replacing commit from the UI" >&2; exit 1; }
   run_mac_phase mac-verify-ui
   check_repository "$UI_BARE" 1 "Hello from the Git settings UI 4c9e" "Git UI Greeting" "$RECOVERY_CODE"
 fi

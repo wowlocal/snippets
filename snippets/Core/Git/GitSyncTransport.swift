@@ -210,13 +210,8 @@ actor GitSyncTransport: SyncTransport {
                         throw SyncTransportFailure.rejected(.permanent(detail: "git_branch_not_snippets_library"))
                     }
                 }
-                var blobs: [[String]: GitObject] = [
-                    [GitSyncLayout.manifestName]: GitObject(
-                        type: .blob, content: try GitSyncManifest(datasetID: datasetID, mode: mode).encoded()),
-                    [GitSyncLayout.readmeName]: GitObject(
-                        type: .blob, content: Data(GitSyncLayout.readme(for: mode).utf8)),
-                ]
-                for (components, data) in paths { blobs[components] = GitObject(type: .blob, content: data) }
+                let blobs = try Self.libraryFiles(
+                    GitSyncManifest(datasetID: datasetID, mode: mode), keys: paths)
                 var objects = Array(blobs.values)
                 let root = try rewriteTree(nil, setting: blobs.mapValues(\.id), into: &objects)
                 let commit = GitObject(type: .commit, content: GitCommit.serialize(
@@ -358,14 +353,10 @@ actor GitSyncTransport: SyncTransport {
             if let expectedHead, expectedHead != headID {
                 throw SyncTransportFailure.unreachable(detail: "git_ref_moved")
             }
-            var blobs: [[String]: GitObject] = [
-                [GitSyncLayout.manifestName]: GitObject(type: .blob, content: try GitSyncManifest(
-                    datasetID: datasetID, mode: mode,
-                    schemaVersion: GitSyncManifest.rotatedSchemaVersion).encoded()),
-                [GitSyncLayout.readmeName]: GitObject(
-                    type: .blob, content: Data(GitSyncLayout.readme(for: mode).utf8)),
-            ]
-            for (components, data) in paths { blobs[components] = GitObject(type: .blob, content: data) }
+            let blobs = try Self.libraryFiles(
+                GitSyncManifest(
+                    datasetID: datasetID, mode: mode, schemaVersion: GitSyncManifest.rotatedSchemaVersion),
+                keys: paths)
             var objects = Array(blobs.values)
             // Everything the old library owned goes: its records, its key files and, in a
             // plain-text library, its Markdown files (the new library writes them again).
@@ -398,6 +389,20 @@ actor GitSyncTransport: SyncTransport {
             }
             throw SyncTransportFailure.unreachable(detail: "git_ref_moved")
         } }
+    }
+
+    /// What a library with no records consists of: its manifest, the README of its
+    /// storage mode and its files under `keys/`.
+    private nonisolated static func libraryFiles(
+        _ manifest: GitSyncManifest, keys: [[String]: Data]
+    ) throws -> [[String]: GitObject] {
+        var blobs: [[String]: GitObject] = [
+            [GitSyncLayout.manifestName]: GitObject(type: .blob, content: try manifest.encoded()),
+            [GitSyncLayout.readmeName]: GitObject(
+                type: .blob, content: Data(GitSyncLayout.readme(for: manifest.mode).utf8)),
+        ]
+        for (components, data) in keys { blobs[components] = GitObject(type: .blob, content: data) }
+        return blobs
     }
 
     /// The commit a cursor of `datasetID` names: what the engine last fetched.

@@ -623,6 +623,46 @@ struct DiagnosticsTests {
         #expect(schedulerFields["reason"] as? String == "checkpoint_repair")
     }
 
+    @Test func gitKeyRotationRecordsOnlyClosedOutcomeReasonAndBoundedCounts() throws {
+        let record = DiagnosticRecord(
+            event: .gitKeyRotation(
+                outcome: .notReplaced, reason: .branchMoved, attempts: 99, durationMilliseconds: -5),
+            timestamp: "2026-11-11T10:00:00.000Z",
+            elapsedMilliseconds: 8,
+            sessionIdentifier: "test-session",
+            sequence: 1)
+        let object = try #require(JSONSerialization.jsonObject(with: record.jsonLine()) as? [String: Any])
+        let fields = try #require(object["fields"] as? [String: Any])
+        #expect(object["event"] as? String == "git_key_rotation")
+        #expect(object["category"] as? String == "sync")
+        #expect(object["level"] as? String == "warning")
+        #expect(Set(fields.keys) == ["outcome", "reason", "attempts", "duration_ms"])
+        #expect(fields["outcome"] as? String == "not_replaced")
+        #expect(fields["reason"] as? String == "branch_moved")
+        #expect(fields["attempts"] as? Int == 16)
+        #expect(fields["duration_ms"] as? Int == 0)
+
+        let replaced = DiagnosticEvent.gitKeyRotation(
+            outcome: .replaced, reason: nil, attempts: 1, durationMilliseconds: 1_200)
+        #expect(Set(replaced.fields.keys) == ["outcome", "attempts", "duration_ms"])
+        #expect(replaced.defaultLevel == .info)
+        #expect(!replaced.requiresSynchronousWrite)
+        // The repository and the device may disagree about the keys: keep the record.
+        for outcome in [DiagnosticGitKeyRotationOutcome.replacedNotSaved, .uncertain] {
+            let event = DiagnosticEvent.gitKeyRotation(
+                outcome: outcome, reason: nil, attempts: 1, durationMilliseconds: 1)
+            #expect(event.defaultLevel == .error)
+            #expect(event.requiresSynchronousWrite)
+        }
+        #expect(DiagnosticGitKeyRotationOutcome.allCases.map(\.rawValue) == [
+            "replaced", "not_replaced", "replaced_not_saved", "uncertain",
+        ])
+        #expect(DiagnosticGitKeyRotationReason.allCases.map(\.rawValue) == [
+            "not_syncing", "pending_secure_conflicts", "vault", "authentication", "key_storage",
+            "branch_moved", "library_changed", "rejected", "unreachable", "busy", "other",
+        ])
+    }
+
     @Test func globalFacadeIsNoOpUntilInstalledAndIsThreadSafeAfterInstall() {
         Diagnostics.install(nil)
         Diagnostics.record(.lifecycle(.started))

@@ -57,6 +57,11 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
     var confirmCreation: (String) -> GitLibraryMode? = MacGitSyncViewController.runCreationAlert
     var confirmReplacement: () -> Bool = MacGitSyncViewController.runReplacementAlert
     var confirmKeyRotation: () -> Bool = MacGitSyncViewController.runKeyRotationAlert
+    /// Where replacing the keys records its outcome.
+    var recordDiagnostic: (DiagnosticEvent) -> Void {
+        get { setup.recordDiagnostic }
+        set { setup.recordDiagnostic = newValue }
+    }
     /// Asked when a plain-text library's repository could not be checked for privacy.
     var confirmPrivateRepository: () -> Bool = MacGitSyncViewController.runConfirmPrivateAlert
     var confirmPlainTextJoin: () -> Bool = MacGitSyncViewController.runPlainTextJoinAlert
@@ -570,11 +575,8 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
         defer { setBusy(false, nil) }
         do {
             // A vault on this Mac is unlocked to wrap its key under the new code, which
-            // is the owner check; asking twice would be one prompt too many.
-            if !setup.newRecoveryCodeUnlocksVault {
-                try await authenticateOwner(GitSyncSetup.newCodeReason)
-            }
-            let code = try await setup.replaceRecoveryCode()
+            // is the owner check; the setup asks through this only when it is not.
+            let code = try await setup.replaceRecoveryCode(authenticateOwner: authenticateOwner)
             presentRecoveryCode(code, selection.gitKeys.syncsBetweenDevices)
         } catch where Self.isAuthenticationCancel(error) {
             statusLabel.stringValue = ""
@@ -595,11 +597,8 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
         defer { setBusy(false, nil) }
         do {
             // Re-sealing the secure snippets unlocks the vault, which is the owner check.
-            // A Mac without one is asked here instead.
-            if !setup.newRecoveryCodeUnlocksVault {
-                try await authenticateOwner(GitSyncSetup.rotateReason)
-            }
-            let code = try await setup.rotateKeys()
+            // A Mac with none to re-seal is asked through this instead.
+            let code = try await setup.rotateKeys(authenticateOwner: authenticateOwner)
             presentRecoveryCode(code, selection.gitKeys.syncsBetweenDevices)
             statusLabel.stringValue = "Keys replaced. Reconnect your other devices with the new recovery code."
             _ = await coordinator?.requestSync(trigger: .manual)

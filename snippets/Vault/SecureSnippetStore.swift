@@ -59,7 +59,8 @@ final class SecureSnippetStore: SecureSnippetProviding {
                     + "key with your recovery key under Secure Snippets."
             case .libraryVaultSetupRequired:
                 return "secure snippets are not set up for your Git library on this device yet. "
-                    + "Open Sync settings, then the Git repository, and choose Set Up Secure Snippets."
+                    + "Open Sync settings, then the Git repository, and choose Set Up Secure Snippets. "
+                    + "If it isn’t offered there, finish connecting the repository first."
             case .forgetRequiresSyncOff:
                 return "Turn off iCloud Sync first. Then Snippets can remove this device's "
                     + "vault without deleting the shared key or affecting your other devices."
@@ -898,7 +899,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
         } ?? true
         if unusedWithoutKey {
             return PreparedLibraryVault(
-                identity: try mintLibraryVault(wrappingUnder: recoveryKey), minted: true)
+                identity: try mintLibraryVault(wrappingUnder: recoveryKey).identity, minted: true)
         }
         return PreparedLibraryVault(
             identity: try await libraryVaultIdentity(wrappingUnder: recoveryKey, reason: reason),
@@ -920,10 +921,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
                     kid: document.kid, salt: salt)
                 return GitSyncVault.Identity(
                     kid: document.kid, vaultSalt: document.vaultSalt,
-                    kdf: .init(
-                        alg: document.kdf.alg, iterations: document.kdf.iterations,
-                        saltP: document.kdf.saltP),
-                    wrapRecovery: wrap)
+                    kdf: .init(document.kdf), wrapRecovery: wrap)
             }
         } catch VaultSession.Failure.noKey {
             throw LibraryVaultFailure.keyUnavailable
@@ -937,17 +935,18 @@ final class SecureSnippetStore: SecureSnippetProviding {
     /// Mints the key of a library's vault and stores it in the Keychain. No document is
     /// written: the key exists before the library does, exactly like the library key,
     /// so a crash after the creating push leaves a vault this device can still open.
-    private func mintLibraryVault(wrappingUnder recoveryKey: Data) throws -> GitSyncVault.Identity {
+    private func mintLibraryVault(
+        wrappingUnder recoveryKey: Data
+    ) throws -> (identity: GitSyncVault.Identity, key: SymmetricKey) {
         let keyring = SnippetCrypto.Keyring.generate()
         let kid = Self.newVaultKeyID()
         let wrap = try KeyWrap.wrap(
             keyring.libraryKey, under: recoveryKey, purpose: .recovery, kid: kid, salt: keyring.salt)
         try keychain.store(keyring.libraryKey.withUnsafeBytes { Data($0) }, keyID: kid)
-        let kdf = Self.newPassphraseKDFParameters()
-        return GitSyncVault.Identity(
+        let identity = GitSyncVault.Identity(
             kid: kid, vaultSalt: SnippetCrypto.base64URL(keyring.salt),
-            kdf: .init(alg: kdf.alg, iterations: kdf.iterations, saltP: kdf.saltP),
-            wrapRecovery: wrap)
+            kdf: .init(Self.newPassphraseKDFParameters()), wrapRecovery: wrap)
+        return (identity, keyring.libraryKey)
     }
 
     /// Removes a minted key whose library provably was never created.
@@ -1037,9 +1036,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 return VaultDocument(
                     kid: identity.kid,
                     vaultSalt: identity.vaultSalt,
-                    kdf: VaultKDFParameters(
-                        alg: identity.kdf.alg, iterations: identity.kdf.iterations,
-                        saltP: identity.kdf.saltP),
+                    kdf: identity.kdf.vaultParameters,
                     wrapRecovery: identity.wrapRecovery)
             }
         } catch let failure as LibraryVaultFailure {
@@ -1093,6 +1090,10 @@ final class SecureSnippetStore: SecureSnippetProviding {
             self.newKey = newKey
         }
 
+        /// True when preparing it unlocked this device's vault, which asked the device
+        /// owner. A rotation with nothing to re-seal asked nobody.
+        var authenticatedOwner: Bool { source != nil }
+
         fileprivate func finish() {
             oldKey = nil
             newKey = nil
@@ -1117,36 +1118,50 @@ final class SecureSnippetStore: SecureSnippetProviding {
             guard keychain.hasKey(keyID: existing.kid) else { throw LibraryVaultFailure.keyUnavailable }
             oldKey = try await authenticatedVaultKey(reason: reason)
             // Unlocking lets an open editor save first; validate what is on disk now.
-            guard let current = document, current.kid == existing.kid,
-                  let salt = current.vaultSaltBytes, let key = oldKey else {
+            guard let current = document, current.kid == existing.kid, let key = oldKey else {
                 throw LibraryVaultFailure.unreadable
             }
-            guard !hasUnresolvedSecureConflicts(current) else { throw LibraryVaultFailure.pendingConflicts }
-            let keyring = SnippetCrypto.Keyring(libraryKey: key, salt: salt)
-            for record in current.records {
-                do {
-                    var plaintext = try SnippetCrypto.open(
-                        record.sealed, for: context(for: record.id, in: current), keyring: keyring)
-                    SecureMemory.wipe(&plaintext)
-                } catch {
-                    throw LibraryVaultFailure.unreadable
-                }
-            }
+            try checkCanReseal(current, under: key)
             source = (current.kid, current.vaultSalt)
         }
-        let keyring = SnippetCrypto.Keyring.generate()
-        let kid = Self.newVaultKeyID()
-        let wrap = try KeyWrap.wrap(
-            keyring.libraryKey, under: recoveryKey, purpose: .recovery, kid: kid, salt: keyring.salt)
-        // The key before the library that names it, as in `mintLibraryVault`.
-        try keychain.store(keyring.libraryKey.withUnsafeBytes { Data($0) }, keyID: kid)
-        let kdf = Self.newPassphraseKDFParameters()
+        // The key before the library that names it.
+        let minted = try mintLibraryVault(wrappingUnder: recoveryKey)
         return PendingVaultRotation(
-            identity: GitSyncVault.Identity(
-                kid: kid, vaultSalt: SnippetCrypto.base64URL(keyring.salt),
-                kdf: .init(alg: kdf.alg, iterations: kdf.iterations, saltP: kdf.saltP),
-                wrapRecovery: wrap),
-            source: source, oldKey: oldKey, newKey: keyring.libraryKey)
+            identity: minted.identity, source: source, oldKey: oldKey, newKey: minted.key)
+    }
+
+    /// Checks the prepared rotation against the vault as it is now. Sync rounds ran
+    /// since `prepareVaultRotation`; call this with sync stopped, right before the
+    /// library is replaced, so that a record or a conflict that arrived in between
+    /// stops the rotation while the old library still exists.
+    func checkVaultRotation(_ pending: PendingVaultRotation) throws {
+        guard !isUnreadable else { throw LibraryVaultFailure.unreadable }
+        guard let source = pending.source else {
+            // Nothing was to be re-sealed; a vault in use that appeared since would be.
+            try checkCanJoinLibraryVault(pending.identity)
+            return
+        }
+        guard let current = document, current.kid == source.kid, current.vaultSalt == source.vaultSalt,
+              let key = pending.oldKey else {
+            throw LibraryVaultFailure.unreadable
+        }
+        try checkCanReseal(current, under: key)
+    }
+
+    /// Throws unless every record opens under `key` and no secure conflict is pending.
+    private func checkCanReseal(_ current: VaultDocument, under key: SymmetricKey) throws {
+        guard let salt = current.vaultSaltBytes else { throw LibraryVaultFailure.unreadable }
+        guard !hasUnresolvedSecureConflicts(current) else { throw LibraryVaultFailure.pendingConflicts }
+        let keyring = SnippetCrypto.Keyring(libraryKey: key, salt: salt)
+        for record in current.records {
+            do {
+                var plaintext = try SnippetCrypto.open(
+                    record.sealed, for: context(for: record.id, in: current), keyring: keyring)
+                SecureMemory.wipe(&plaintext)
+            } catch {
+                throw LibraryVaultFailure.unreadable
+            }
+        }
     }
 
     /// Moves this device's vault to the prepared key. Call once the library names it.
@@ -1314,8 +1329,7 @@ final class SecureSnippetStore: SecureSnippetProviding {
                 }
                 vault.kid = identity.kid
                 vault.vaultSalt = identity.vaultSalt
-                vault.kdf = VaultKDFParameters(
-                    alg: identity.kdf.alg, iterations: identity.kdf.iterations, saltP: identity.kdf.saltP)
+                vault.kdf = identity.kdf.vaultParameters
                 // Wraps of the old key open nothing in this vault any more.
                 vault.wrapPass = nil
                 vault.wrapCLI = nil

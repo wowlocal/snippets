@@ -322,7 +322,8 @@ final class GitSyncAppIntegrationTests: XCTestCase {
             assertLibrary(store, ["mac-git": Self.macEditedOnIOS])
             let before = try XCTUnwrap(selection.gitCoordinates)
             let oldVault = try XCTUnwrap(secureStore.document?.kid)
-            let newCode = try await setup.rotateKeys()
+            let newCode = try await setup.rotateKeys(
+                authenticateOwner: { _ in XCTFail("re-sealing the secure snippets is the owner check") })
             XCTAssertNotEqual(newCode, configuration.recoveryCode)
             let after = try XCTUnwrap(selection.gitCoordinates)
             XCTAssertNotEqual(after.datasetID, before.datasetID)

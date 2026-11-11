@@ -53,6 +53,21 @@ nonisolated enum GitSyncVault {
             let alg: String
             let iterations: Int
             let saltP: String
+
+            init(alg: String, iterations: Int, saltP: String) {
+                self.alg = alg
+                self.iterations = iterations
+                self.saltP = saltP
+            }
+
+            init(_ parameters: VaultKDFParameters) {
+                self.init(alg: parameters.alg, iterations: parameters.iterations, saltP: parameters.saltP)
+            }
+
+            /// The same parameters as `vault.json` stores them.
+            var vaultParameters: VaultKDFParameters {
+                VaultKDFParameters(alg: alg, iterations: iterations, saltP: saltP)
+            }
         }
 
         let kid: String

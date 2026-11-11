@@ -477,6 +477,9 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
             optional: ["http_status", "reason", "error_family", "error_code"]),
         "cloud_sign_in_presentation_anchor": ExportEventSchema(
             category: "sync", required: ["available"]),
+        "git_key_rotation": ExportEventSchema(
+            category: "sync", required: ["outcome", "attempts", "duration_ms"],
+            optional: ["reason"]),
         "sync_state": ExportEventSchema(
             category: "sync", required: ["state"], optional: ["halt_reason"]),
         "sync_round": ExportEventSchema(
@@ -724,6 +727,7 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
               fieldNames.isSubset(of: schemaForEvent.requiredFields.union(schemaForEvent.optionalFields)),
               fields.allSatisfy({ validateExportField(key: $0.key, value: $0.value) }),
               validateCloudSignInFields(event: event, fields: fields),
+              validateGitKeyRotationFields(event: event, fields: fields),
               validateAccessibilityReplacementFields(event: event, fields: fields),
               validatePasteDeliveryFields(event: event, fields: fields),
               validateSecurePasteFields(event: event, fields: fields)
@@ -734,6 +738,24 @@ nonisolated final class DiagnosticsService: NSObject, DiagnosticsSink, @unchecke
             session: session,
             sequence: sequence.uint64Value,
             data: data)
+    }
+
+    private static func validateGitKeyRotationFields(event: String, fields: [String: Any]) -> Bool {
+        guard event == "git_key_rotation" else { return true }
+        guard let outcome = fields["outcome"] as? String,
+              DiagnosticGitKeyRotationOutcome(rawValue: outcome) != nil,
+              let attempts = fields["attempts"] as? NSNumber,
+              (0...16).contains(attempts.doubleValue),
+              attempts.doubleValue.rounded(.towardZero) == attempts.doubleValue,
+              let duration = fields["duration_ms"] as? NSNumber,
+              (0...86_400_000).contains(duration.doubleValue),
+              duration.doubleValue.rounded(.towardZero) == duration.doubleValue
+        else { return false }
+        if let reason = fields["reason"] {
+            guard let value = reason as? String, DiagnosticGitKeyRotationReason(rawValue: value) != nil
+            else { return false }
+        }
+        return true
     }
 
     private static func validateAccessibilityReplacementFields(event: String, fields: [String: Any]) -> Bool {

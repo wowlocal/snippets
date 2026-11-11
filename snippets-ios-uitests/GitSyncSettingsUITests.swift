@@ -5,7 +5,9 @@ import XCTest
 /// repository served by `scripts/git-http-test-server.py`. Opt-in: ordinary UI smoke
 /// runs skip it. `scripts/test-git-sync-integration.sh` passes the coordinates through
 /// `TEST_RUNNER_SNIPPETS_GIT_UI_E2E_*`, then reads the copied recovery code from the
-/// simulator pasteboard and has a fresh macOS installation join the same library.
+/// simulator pasteboard and has a fresh macOS installation join the same library. The
+/// code it reads is the one Replace Keys showed last, so that join also proves the
+/// replaced library opens with its new code.
 ///
 /// `--ui-testing-reset` keeps the Git key and token in memory and permits loopback
 /// HTTP for this launch only.
@@ -14,7 +16,7 @@ final class GitSyncSettingsUITests: XCTestCase {
     static let snippetContent = "Hello from the Git settings UI 4c9e"
 
     @MainActor
-    func testConnectingAnEmptyRepositoryCreatesTheLibraryAndSwitchesSync() throws {
+    func testConnectingAnEmptyRepositoryCreatesTheLibrarySwitchesSyncAndReplacesItsKeys() throws {
         let environment = ProcessInfo.processInfo.environment
         guard let url = environment["SNIPPETS_GIT_UI_E2E_URL"],
               let username = environment["SNIPPETS_GIT_UI_E2E_USERNAME"],
@@ -24,7 +26,9 @@ final class GitSyncSettingsUITests: XCTestCase {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing-reset"]
+        // Replacing the keys unlocks the library's vault; the simulator has no passcode
+        // to do that with.
+        app.launchArguments = ["--ui-testing-reset", "--ui-testing-authentication-succeeds"]
         app.launch()
 
         // One snippet, so Switch and Sync has something to upload.
@@ -58,6 +62,7 @@ final class GitSyncSettingsUITests: XCTestCase {
         XCTAssertNotNil(
             codeText.label.range(of: #"^[0-9A-Z]{4}(-[0-9A-Z]{1,4}){6}$"#, options: .regularExpression),
             "the recovery code must be shown")
+        let firstCode = codeText.label
         // Copy hands the code to the driving script through the simulator pasteboard.
         app.buttons["git-recovery-copy"].tap()
         XCTAssertTrue(app.staticTexts["git-recovery-copied"].waitForExistence(timeout: 5), "copying is confirmed")
@@ -78,6 +83,35 @@ final class GitSyncSettingsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(
             NSPredicate(format: "label BEGINSWITH 'On. Last synced'")).firstMatch.waitForExistence(timeout: 60),
             "the first Git sync must complete")
+
+        // Replace Keys is offered once Git is syncing the library. It says what it
+        // costs, then shows a different code.
+        provider.tap()
+        // The provider in use is marked instead of ending in an ellipsis.
+        let git = app.buttons["Git Repository ✓"].firstMatch
+        XCTAssertTrue(git.waitForExistence(timeout: 5))
+        git.tap()
+        let replaceKeys = app.cells["git-replace-keys"]
+        XCTAssertTrue(replaceKeys.waitForExistence(timeout: 10), "an active library offers Replace Keys")
+        replaceKeys.tap()
+        let replaceAlert = app.alerts["Replace This Library’s Keys?"]
+        XCTAssertTrue(replaceAlert.waitForExistence(timeout: 5))
+        XCTAssertTrue(replaceAlert.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS 'history'")).firstMatch.exists,
+            "the confirmation says the old versions stay readable in the history")
+        replaceAlert.buttons["Replace Keys"].tap()
+
+        XCTAssertTrue(codeText.waitForExistence(timeout: 60), "the new recovery code must be shown")
+        let newCode = codeText.label
+        XCTAssertNotNil(newCode.range(of: #"^[0-9A-Z]{4}(-[0-9A-Z]{1,4}){6}$"#, options: .regularExpression))
+        XCTAssertNotEqual(newCode, firstCode, "replacing the keys makes a new code")
+        app.buttons["git-recovery-copy"].tap()
+        XCTAssertTrue(app.staticTexts["git-recovery-copied"].waitForExistence(timeout: 5), "copying is confirmed")
+        app.buttons["git-recovery-done"].tap()
+        XCTAssertTrue(app.staticTexts.containing(
+            NSPredicate(format: "label BEGINSWITH 'Keys replaced.'")).firstMatch.waitForExistence(timeout: 60),
+            "the screen says the keys were replaced")
+        XCTAssertFalse(app.alerts.firstMatch.exists, "replacing the keys reports no error")
     }
 
     /// One edit that turns an SSH address into a GitHub HTTPS one removes the key section

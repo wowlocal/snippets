@@ -2062,7 +2062,8 @@ private final class VaultSettingsViewController: NSViewController {
             switch session.state {
             case .noKey where !secure.hasVault && usesGitLibraryVault:
                 statusLabel.stringValue = "Not set up on this Mac. With Git sync, secure snippets belong "
-                    + "to your library: open Sync, then Git Repository, and choose Set Up Secure Snippets."
+                    + "to your library: open Sync, then Git Repository, and choose Set Up Secure Snippets. "
+                    + "If it isn’t offered there, finish connecting the repository first."
                 primaryButton.isHidden = true
                 lockButton.isHidden = true
             case .noKey where !secure.hasVault:
@@ -4036,7 +4037,7 @@ private final class DiagnosticsSettingsViewController: NSViewController {
             + "whichever comes first, and use at most 24 MB on this device.")
         let privacy = makeTertiaryLabel(
             "Exports are plaintext JSON Lines. They can include app and OS versions, "
-            + "operation counts, CloudKit callback and scheduler states, sign-in stages and HTTP status codes, error families and "
+            + "operation counts, CloudKit callback and scheduler states, sign-in stages and HTTP status codes, Git key-replacement outcomes and reasons, error families and "
             + "numeric codes, paste outcomes and methods, insertion stages, interruption reasons and source categories, selection verification and restoration outcomes, Accessibility replacement outcomes, write-attempt status and timings, delete-attempt counts, paste-dispatch status, clipboard restoration outcomes and timings, Secure Paste stages, destination categories, failure reasons, retry and focus-confirmation counts, authentication-handoff status and numeric AX codes, and secure-snippet keywords. When expansion verbose logging is "
             + "enabled, they can also include "
             + "content-free Accessibility stages, outcomes, state transitions, query lengths, "

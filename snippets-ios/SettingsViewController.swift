@@ -620,7 +620,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         case .exportDiagnostics:
             cell.textLabel?.text = "Export Diagnostic Logs"
             cell.detailTextLabel?.text = "Plaintext JSON Lines. Operation counts, CloudKit "
-                + "callback and scheduler states, sign-in stages and HTTP status codes, paste outcomes and methods, insertion stages, interruption reasons and source categories, selection verification and restoration outcomes, Accessibility replacement outcomes, write-attempt status and timings, delete-attempt counts, paste-dispatch status, clipboard restoration outcomes and timings, Secure Paste stages, destination categories, failure reasons, retry and focus-confirmation counts, authentication-handoff status and numeric AX codes, and secure-snippet keywords may be included; "
+                + "callback and scheduler states, sign-in stages and HTTP status codes, Git key-replacement outcomes and reasons, paste outcomes and methods, insertion stages, interruption reasons and source categories, selection verification and restoration outcomes, Accessibility replacement outcomes, write-attempt status and timings, delete-attempt counts, paste-dispatch status, clipboard restoration outcomes and timings, Secure Paste stages, destination categories, failure reasons, retry and focus-confirmation counts, authentication-handoff status and numeric AX codes, and secure-snippet keywords may be included; "
                 + "bodies, clipboard contents, names, tags, IDs, paths, account keys, account IDs, tokens, keys and ciphertext are excluded."
             cell.imageView?.image = UIImage(systemName: "square.and.arrow.up")
             cell.textLabel?.textColor = AppTheme.tint
