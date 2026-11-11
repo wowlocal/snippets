@@ -55,7 +55,12 @@ final class GitSyncScreenshotCaptureTests: XCTestCase {
         let create = app.alerts["Create a Snippets Library Here?"]
         if create.waitForExistence(timeout: 30) {
             shot(app, "06-create-choice")
-            create.buttons["Create Plain-Text Library"].tap()
+            create.buttons["Plain Text Instead…"].tap()
+            let plainText = app.alerts["Create a Plain-Text Library?"]
+            if plainText.waitForExistence(timeout: 5) {
+                shot(app, "06b-plain-text-choice")
+                plainText.buttons["Create Plain-Text Library"].tap()
+            }
         }
         if app.staticTexts["git-recovery-code-text"].waitForExistence(timeout: 30) {
             shot(app, "07-recovery-code")

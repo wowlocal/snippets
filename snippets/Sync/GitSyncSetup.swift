@@ -88,21 +88,83 @@ final class GitSyncSetup {
         return trimmed
     }
 
-    /// What kind of access token to create, for the host the address names.
+    /// What kind of access token to create, for the host the address names. Nothing
+    /// until an address is typed: advice for hosts the user did not name is noise.
     nonisolated static func tokenHelp(for text: String) -> (text: String, link: URL?) {
-        switch host(of: text) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return ("", nil) }
+        return switch host(of: text) {
         case .github:
-            ("Create a fine-grained token: Repository access “Only select repositories” → this repository; "
-                + "Permissions “Contents: Read and write”. When it expires, Snippets asks for a new one.",
+            ("Use a fine-grained token limited to this repository, with Contents: Read and write.",
              URL(string: "https://github.com/settings/personal-access-tokens/new"))
         case .gitlab:
-            ("Create a project access token with the read_repository and write_repository scopes "
-                + "(Developer role, or Maintainer if the branch is protected).",
+            ("Use a project access token with read_repository and write_repository (Developer role; "
+                + "Maintainer for a protected branch).",
              repositoryPath(of: text).flatMap { URL(string: "https://gitlab.com/\($0)/-/settings/access_tokens") })
         case .other:
-            ("Create a token that can read and write this repository. On Gitea and Forgejo, give it "
-                + "write:repository and use your account name as the user name.", nil)
+            ("Use a token that can read and write this repository. On Gitea and Forgejo: write:repository.", nil)
         }
+    }
+
+    /// GitHub or GitLab when the address names one, for link titles.
+    nonisolated static func hostDisplayName(of text: String) -> String? {
+        switch host(of: text) {
+        case .github: "GitHub"
+        case .gitlab: "GitLab"
+        case .other: nil
+        }
+    }
+
+    // MARK: - Texts both Settings screens show
+
+    /// A library is created encrypted unless the user asks for plain text, which is a
+    /// second, separate question: its warning is shown only to someone choosing it.
+    nonisolated static let createLibraryTitle = "Create a Snippets Library Here?"
+    nonisolated static func createLibraryMessage(_ place: String = "This branch") -> String {
+        "\(place) is empty. Snippets will create an encrypted library here and show you a recovery code to save."
+    }
+    nonisolated static let createLibraryAction = "Create Library"
+    nonisolated static let plainTextInsteadAction = "Plain Text Instead…"
+    nonisolated static let plainTextLibraryTitle = "Create a Plain-Text Library?"
+    nonisolated static let plainTextLibraryMessage =
+        "Ordinary snippets become Markdown files that the host and anyone with access to the repository "
+        + "can read. They stay in its history even after you delete them, and you can’t change this "
+        + "later. Secure snippets stay encrypted."
+    nonisolated static let plainTextLibraryAction = "Create Plain-Text Library"
+
+    nonisolated static let foreignBranchTitle = "This Branch Has Other Files"
+    nonisolated static let recoveryCodePrompt = "Enter this library’s newest recovery code."
+    nonisolated static func recoveryCodeExplanation(keychainSyncs: Bool) -> String {
+        "This code opens your library on a new device, secure snippets included. Snippets can’t show it "
+            + "again. Store it in your password manager."
+            + (keychainSyncs ? " Your other Apple devices with iCloud Keychain connect without it." : "")
+    }
+    nonisolated static let recoveryCodeCopied = "Copied. It clears from the clipboard in 2 minutes."
+
+    nonisolated static func plainTextJoinMessage(deviceName: String) -> String {
+        "This \(deviceName)’s ordinary snippets will be readable by anyone with access to the repository, "
+            + "and stay in its history. Secure snippets stay encrypted."
+    }
+    nonisolated static let replacementTitle = "Reconnect to This Repository?"
+    nonisolated static func replacementMessage(deviceName: String) -> String {
+        "This library’s keys were replaced on another device, or a new library was created in this "
+            + "repository. Reconnecting merges this \(deviceName)’s snippets into it. Nothing on this "
+            + "\(deviceName) is deleted."
+    }
+    nonisolated static let replacementAction = "Reconnect and Merge"
+    nonisolated static let removeMessage =
+        "Nothing in the repository is deleted. You can reconnect later without the recovery code."
+    /// What each key action is for, in a few words.
+    nonisolated static let newCodeHint = "For a lost code."
+    nonisolated static let replaceKeysHint = "For a leaked code or a lost device."
+    nonisolated static let fallbackMessage = "Something went wrong. Try again."
+
+    /// The confirmation before a new recovery code. Replace Keys is offered only while
+    /// Git is syncing the library.
+    var newCodeExplanation: String {
+        "The old code stops working in Snippets. If it may have leaked, "
+            + (selection.provider == .git
+                ? "use Replace Keys instead."
+                : "switch sync to this library and use Replace Keys instead.")
     }
 
     /// Where to add a deploy key, for GitHub and GitLab addresses.
@@ -355,7 +417,7 @@ final class GitSyncSetup {
             case .differentVault(let count):
                 GitSyncSetup.differentVaultMessage(count)
             case .vaultKeyUnavailable:
-                "Secure snippets on this device are locked without their key, so a recovery code made here could not open them. Unlock them first with Set Up Secure Snippets here or Restore with Recovery Key in Settings, or do this on a device that can open them."
+                "This device can’t open its secure snippets yet, so a code made here wouldn’t open them either. Use Set Up Secure Snippets first, or do this on a device that can open them."
             case .vaultAuthentication:
                 "Snippets couldn’t confirm it’s you, so your secure snippets were left as they are. Nothing was changed."
             case .vaultUnavailable:
@@ -399,14 +461,10 @@ final class GitSyncSetup {
 
     /// What replacing the keys does, for the confirmation on both platforms.
     nonisolated static let keyRotationExplanation =
-        "Snippets makes a new library key, a new key for secure snippets and a new recovery code, then "
-        + "uploads your library again under them. The old recovery code and keys open nothing written "
-        + "from now on.\n\n"
-        + "Your other devices stop syncing until you reconnect each one with the new code (Sync settings, "
-        + "Git Repository, Update). Sync them first if you can: changes they haven’t uploaded are merged "
-        + "in when they reconnect, and a snippet deleted since their last sync can come back.\n\n"
-        + "Earlier versions stay in the repository’s history and can still be read with the old code. If "
-        + "that code may have leaked, also change the passwords you keep in secure snippets."
+        "Your other devices stop syncing until you reconnect each one with the new recovery code. Sync "
+        + "them first if you can.\n\n"
+        + "The old code still opens earlier versions in the repository’s history. If it may have leaked, "
+        + "also change the passwords you keep in secure snippets."
     nonisolated private static let resealReason = "Move your secure snippets to the library’s new key"
     nonisolated private static let createLibraryReason = "Include your secure snippets in the new library’s recovery code"
 
@@ -415,8 +473,8 @@ final class GitSyncSetup {
     #else
     nonisolated private static let press = "tap"
     #endif
-    /// The connect button's title once a repository is saved, on both platforms.
-    nonisolated private static let reconnect = "Update"
+    /// The action that reconnects a library sync stopped on, on both platforms.
+    nonisolated private static let reconnect = "Reconnect"
 
     #if os(macOS)
     nonisolated private static let sshUnavailableMessage =
@@ -990,6 +1048,59 @@ final class GitSyncSetup {
         case .none: return .needsSetup
         case .keyMissing: return .needsRecoveryCode
         }
+    }
+
+    /// True when sync stopped on something only reconnecting fixes: this device has no
+    /// key for the library, or the branch no longer holds the library it was syncing.
+    var needsReconnect: Bool {
+        guard let coordinates = selection.gitCoordinates else { return false }
+        if !keys.hasMaterial(for: coordinates.keyScope) { return true }
+        guard selection.provider == .git, case .needsAttention(let detail)? = coordinator?.state else {
+            return false
+        }
+        return ["git_library_replaced", "git_repository_not_initialized", "git_library_mode_changed",
+                "git_key_required"].contains(detail)
+    }
+
+    /// The lines under the connected library's name: what it is, anything that needs
+    /// the user, and how sync stands. Facts that are simply true are left out.
+    func connectedSummary(deviceName: String) -> [String] {
+        guard let coordinates = selection.gitCoordinates else { return [] }
+        var lines = [
+            "\(coordinates.mode == .plainText ? "Plain text" : "Encrypted") · \(coordinates.usesSSH ? "SSH" : "HTTPS")",
+        ]
+        let press = Self.press.prefix(1).uppercased() + Self.press.dropFirst()
+        if !keys.hasMaterial(for: coordinates.keyScope) {
+            lines.append("This \(deviceName) can’t open the library. \(press) Reconnect and enter the recovery code.")
+        } else if !coordinates.usesSSH, !selection.hasGitCredential {
+            lines.append("Access token missing. Enter it below and \(Self.press) Update.")
+        }
+        switch secureSnippetsStatus {
+        case .needsSetup:
+            lines.append("Secure snippets: not set up on this \(deviceName).")
+        case .needsRecoveryCode:
+            lines.append("Secure snippets: locked. This \(deviceName) needs the recovery code.")
+        case .ready, .unavailable:
+            break
+        }
+        lines.append(selection.provider == .git
+            ? (coordinator?.statusDescription ?? "")
+            : "Not syncing with it yet: \(Self.press) Switch and Sync.")
+        return lines.filter { !$0.isEmpty }
+    }
+
+    /// False while a token is saved for the host the address names: advice on creating
+    /// one is for someone who has yet to.
+    func showsTokenHelp(for address: String) -> Bool {
+        guard selection.hasStoredGitToken, let saved = selection.gitCoordinates else { return true }
+        return Self.hostName(of: address) != Self.hostName(of: saved.repository.spec)
+    }
+
+    /// True when the connected screen must show the address and token form without
+    /// being asked: the token it holds is what is missing.
+    var connectionFormIsRequired: Bool {
+        guard let coordinates = selection.gitCoordinates else { return true }
+        return !coordinates.usesSSH && !selection.hasGitCredential
     }
 
     /// Makes secure snippets work on this device for the connected library.

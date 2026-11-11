@@ -55,7 +55,8 @@ final class GitSyncSettingsUITests: XCTestCase {
 
         let createAlert = app.alerts["Create a Snippets Library Here?"]
         XCTAssertTrue(createAlert.waitForExistence(timeout: 30), "an empty repository must offer to create a library")
-        createAlert.buttons["Create Encrypted Library"].tap()
+        XCTAssertTrue(createAlert.buttons["Plain Text Instead…"].exists, "plain text is a separate question")
+        createAlert.buttons["Create Library"].tap()
 
         let codeText = app.staticTexts["git-recovery-code-text"]
         XCTAssertTrue(codeText.waitForExistence(timeout: 30), "the recovery code sheet must appear")
@@ -108,7 +109,9 @@ final class GitSyncSettingsUITests: XCTestCase {
         app.buttons["git-recovery-copy"].tap()
         XCTAssertTrue(app.staticTexts["git-recovery-copied"].waitForExistence(timeout: 5), "copying is confirmed")
         app.buttons["git-recovery-done"].tap()
-        XCTAssertTrue(app.staticTexts.containing(
+        // The result is the section's footer, right under the actions; a footer is not
+        // always exposed as static text.
+        XCTAssertTrue(app.descendants(matching: .any).matching(
             NSPredicate(format: "label BEGINSWITH 'Keys replaced.'")).firstMatch.waitForExistence(timeout: 60),
             "the screen says the keys were replaced")
         XCTAssertFalse(app.alerts.firstMatch.exists, "replacing the keys reports no error")

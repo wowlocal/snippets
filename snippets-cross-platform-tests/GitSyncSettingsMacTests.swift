@@ -250,25 +250,65 @@ final class GitSyncSettingsMacTests: XCTestCase {
     }
 
     /// The guidance follows the host typed: which token to create, where to add a
-    /// deploy key, and whether the user name may be left empty.
+    /// deploy key, and whether a user name is asked for at all. Before an address is
+    /// typed there is none.
     func testGuidanceFollowsTheAddress() throws {
         let device = try makeDevice("guidance", seed: [])
         let sheet: MacGitSyncViewController = try XCTUnwrap(device.sheet)
+        XCTAssertEqual(sheet.hintText, "", "no advice for hosts the user has not named")
+        XCTAssertNil(sheet.guidanceLink)
+
         sheet.urlField.stringValue = "https://github.com/you/snippets-library"
         sheet.updateAccessMethod()
         XCTAssertTrue(sheet.hintText.contains("fine-grained token"))
         XCTAssertEqual(sheet.guidanceLink?.host, "github.com")
-        XCTAssertEqual(sheet.usernameField.placeholderString, "Optional for GitHub and GitLab")
+        XCTAssertFalse(sheet.showsUsernameField, "GitHub takes any user name with a token")
+        XCTAssertTrue(sheet.showsTokenFields)
 
         sheet.urlField.stringValue = "git@github.com:you/snippets-library.git"
         sheet.updateAccessMethod()
         XCTAssertEqual(sheet.guidanceLink?.absoluteString, "https://github.com/you/snippets-library/settings/keys/new")
+        XCTAssertFalse(sheet.showsUsernameField)
+        XCTAssertFalse(sheet.showsTokenFields)
 
         sheet.urlField.stringValue = "https://gitea.example.com/you/snippets-library"
         sheet.updateAccessMethod()
         XCTAssertNil(sheet.guidanceLink)
         XCTAssertTrue(sheet.hintText.contains("write:repository"))
-        XCTAssertEqual(sheet.usernameField.placeholderString, "Your account name on the host")
+        XCTAssertTrue(sheet.showsUsernameField, "other hosts need the account name")
+
+        // A name entered earlier stays visible, whatever the host.
+        sheet.usernameField.stringValue = "someone"
+        sheet.urlField.stringValue = "https://github.com/you/snippets-library"
+        sheet.updateAccessMethod()
+        XCTAssertTrue(sheet.showsUsernameField)
+    }
+
+    /// Once connected, the sheet shows what is connected and folds the address and
+    /// token away; the saved token needs no advice on creating one.
+    func testAConnectedLibraryFoldsItsFormAway() async throws {
+        let device = try makeDevice("folded", seed: [Self.snippet])
+        XCTAssertTrue(device.sheet.showsConnectionForm)
+        _ = try await createLibrary(device)
+        XCTAssertFalse(device.sheet.showsConnectionForm, "connected: the form is folded away")
+        XCTAssertFalse(device.sheet.offersReconnect)
+        XCTAssertEqual(device.sheet.hintText, "")
+        let summary = device.sheet.connectedText
+        XCTAssertTrue(summary.contains("Encrypted · HTTPS"), summary)
+        XCTAssertTrue(summary.contains("Not syncing with it yet"), summary)
+        XCTAssertFalse(summary.contains("recovery code"), "nothing is wrong, so nothing is explained")
+
+        // Unfolded, edited, and folded away again: the saved connection is back, so a
+        // later Reconnect cannot go to an address that was only typed.
+        let saved = device.sheet.urlField.stringValue
+        device.sheet.toggleConnectionForm()
+        XCTAssertTrue(device.sheet.showsConnectionForm)
+        device.sheet.urlField.stringValue = "https://example.invalid/other/library"
+        device.sheet.tokenField.stringValue = "typed-and-abandoned"
+        device.sheet.toggleConnectionForm()
+        XCTAssertFalse(device.sheet.showsConnectionForm)
+        XCTAssertEqual(device.sheet.urlField.stringValue, saved)
+        XCTAssertEqual(device.sheet.tokenField.stringValue, "")
     }
 
     func testWrongTokenAndForeignBranchAreExplainedAndSaveNothing() async throws {
@@ -1157,7 +1197,11 @@ final class GitSyncSettingsMacTests: XCTestCase {
         XCTAssertTrue(
             first.coordinator.statusDescription.contains("Reconnect it in Sync settings"),
             first.coordinator.statusDescription)
+        first.sheet.reloadState()
+        XCTAssertTrue(first.sheet.offersReconnect, "the sheet offers the way out it names")
         await reconnectToReplacedLibrary(first)
+        first.sheet.reloadState()
+        XCTAssertFalse(first.sheet.offersReconnect)
         XCTAssertEqual(first.selection.gitCoordinates?.datasetID, next.datasetID)
         XCTAssertFalse(first.selection.gitKeys.hasMaterial(for: old.keyScope))
         XCTAssertNotEqual(first.secureStore.document?.kid, oldVault.kid)

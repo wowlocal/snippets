@@ -743,11 +743,7 @@ final class SettingsPaneViewController: UITableViewController, UIDocumentPickerD
         let current = selection.provider
         let alert = UIAlertController(
             title: "Cloud Provider",
-            message: "Now syncing with \(current.displayName)."
-                + (selection.gitSyncEnabled
-                    ? " A Git repository syncs through GitHub, GitLab, Gitea or any git host, with no Snippets server."
-                    : "")
-                + " Switching keeps your library and the other provider’s copy.",
+            message: "Switching keeps your snippets and the other provider’s copy.",
             preferredStyle: .actionSheet)
         alert.addAction(UIAlertAction(title: current == .iCloud ? "iCloud ✓" : "iCloud", style: .default) { [weak self] _ in
             self?.confirmProviderSwitch(to: .iCloud)

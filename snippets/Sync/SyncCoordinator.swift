@@ -1930,7 +1930,8 @@ final class SyncCoordinator {
         case .needsAttention(let detail):
             var sentence = "Sync needs attention: \(Self.userFacingAttentionDetail(detail))"
             if !sentence.hasSuffix(".") { sentence += "." }
-            return sentence + " Fix the reported condition, then try again."
+            // Git details say what to do themselves.
+            return detail.hasPrefix("git_") ? sentence : sentence + " Fix the reported condition, then try again."
         case .waitingForVault(let detail):
             // With Git the key does not arrive by itself: it comes with the library's
             // recovery code, so say where to enter it instead of promising a wait.
@@ -2019,8 +2020,8 @@ final class SyncCoordinator {
         case "git_configuration_required":
             return "Connect the Git repository in Sync settings, or choose another provider"
         case "git_library_replaced":
-            return "The Git repository now holds a different Snippets library, or its keys were "
-                + "replaced on another device. Reconnect it in Sync settings with the newest recovery code"
+            return "This library’s keys were replaced on another device, or the repository holds a "
+                + "different library. Reconnect it in Sync settings with the newest recovery code"
         case "git_repository_not_initialized":
             return "The Git branch no longer holds a Snippets library. Reconnect it in Sync settings"
         case "git_branch_not_snippets_library":
