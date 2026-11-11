@@ -106,6 +106,7 @@ state for another library (see below).
 | `src/git_layout.rs` | Manifest (with `recordProfile` → `Mode`), both READMEs, record file and commit message bytes; strict decoders; fanout/record paths; `git-blob-sha1:<hex>` record and `git-md-blob-sha1:<hex>` Markdown versions; cursors; account/dataset/key-scope digests |
 | `src/git_plain.rs` | Plain-text Markdown files, byte for byte `GitPlainSnippetFile`: render (verified read-back), front-matter parser, edit detection and derived revisions, hand-deletion tombstones, path-derived ids, slugs, Foundation-compatible tag normalization |
 | `src/git_recovery.rs` | `keys/recovery.json`: HKDF-SHA256 (salt `snippets-git-recovery-salt-v1`, info = AAD) + AES-256-GCM (combined nonce‖ct‖tag) over the sync-v1 portable bundle; AAD `snippets-git-recovery-v1\0<dataset>`; Apple `RecoveryKey` code format |
+| `src/git_vault.rs` | `keys/vault.json`, byte for byte `GitSyncVault`: the secure-snippet vault's identity and its key under the recovery code, sealed with HKDF-SHA256 (IKM = library key, salt = library salt, info = AAD) + AES-256-GCM; AAD `snippets-git-vault-v1\0<dataset>`. Format only: Linux does not read or write the file during sync yet |
 | `src/git_repo.rs` | The system `git` in a hardened environment over a private bare cache; one-time git/ssh version checks; ls-remote, depth-1 fetch, `--force-with-lease` push, receive-pack dry-run write check, `ls-tree`/`cat-file`/`hash-object`/`mktree`/`commit-tree`; closed stderr classification |
 | `src/git_transport.rs` | `receiver::Remote` + `sender::Remote` for the existing bounded sync owner; setup operations (inspect, initialize, read/write `keys/`, verify write); the plain-text record locations, fetch, normalize commit and commit planning |
 | `src/git_setup.rs` | Configuration file, Secret Service slots, create/join/replace/disconnect, the agreed mode, token help by host, the public-repository probe, reviewed journal switch, sync cycles, deletion/snapshot reviews |
@@ -525,6 +526,18 @@ leave a device, so the `git-md-blob-sha1:` version has no cross-device bytes.
 - Secure snippets over Git sync are not done yet. A cycle that needs vault
   authentication reports `VaultLocked`. The authenticated one-cycle vault sync is
   wired only to the Cloud worker.
+- The Apple apps publish the library's vault in `keys/vault.json` so that the recovery
+  code also opens secure snippets. Linux mirrors the file format (`git_vault.rs`, with
+  the Apple known-answer file in `git_tests`) but does not adopt or publish a vault,
+  and a library created on Linux has none until an Apple device adds it. Because Linux
+  cannot rewrap the vault key, `replace_recovery_code` refuses a library that has the
+  file (`vault_recovery_code`): a code that opened the library without its secure
+  snippets would be worse than none.
+- Linux cannot replace a library's keys (`docs/git-sync.md`, "Replacing the keys").
+  When an Apple device does, Linux stops with `git_library_replaced` like every other
+  device and reconnects to the new library with the new recovery code through the
+  usual journal-first review. Such a library's manifest has `schemaVersion` 2, which
+  `decode_manifest` accepts (`ROTATED_SCHEMA_VERSION`); Linux itself only writes 1.
 - A malformed record file halts Linux sync (`git_record_malformed`). The Apple
   transport instead quarantines that one record, and the Linux engine has no
   per-record quarantine.

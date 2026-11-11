@@ -198,6 +198,26 @@ key handling and failure codes are in `docs/git-sync.md`.
 - The recovery code is shown once and never stored. Copy it only with the concealed
   markers (macOS) or as local-only, expiring (iOS). Never log it, the token, or the
   repository URL.
+- A Git library owns its secure-snippet vault (`docs/git-sync.md`, "Secure snippets:
+  the library's vault"). `keys/vault.json` (`GitSyncVault`) carries the vault's identity
+  and its key wrapped under the library's recovery code; `createLibrary` publishes it
+  and `connect` adopts it. Never wrap the vault key under the library key or anything
+  else a device stores, never publish a passphrase wrap, and never let anything mint a
+  vault while Git is the provider (`libraryVaultSetupRequired`): a second `kid` is a
+  second crypto scope. A new recovery code replaces `keys/recovery.json` and
+  `keys/vault.json` in one commit or neither. A device vault that is in use is never
+  re-pointed at another `kid`; its key changes only by re-sealing every record in one
+  write (`SecureSnippetStore.resealVault`).
+- Keys are rotated by replacing the library, never in place (`docs/git-sync.md`,
+  "Replacing the keys"): `GitSyncSetup.rotateKeys` puts a new dataset with a new
+  library key, vault key and recovery code on the branch in one fast-forward commit
+  (`GitSyncTransport.replaceLibrary`, manifest `schemaVersion` 2), pinned to the commit
+  the engine last fetched. Store both new keys before the push, and forget them only
+  when the repository proves it still holds the old library. Other devices stop with
+  `git_library_replaced` and re-seal on reconnect (`resealIntoLibraryVault`). Re-seal
+  only when a device follows the library Git was syncing to its replacement: any other
+  vault in use may be shared with another provider's devices. Never delete a retired
+  vault key from a synchronizable Keychain tier.
 - SSH reuses the same wire requests (`GitSSHClient`). macOS runs the system
   `/usr/bin/ssh` with `BatchMode=yes` and the user's agent, config and known_hosts;
   Snippets stores no SSH secret there and must never prompt, accept a host key, or
@@ -210,10 +230,10 @@ key handling and failure codes are in `docs/git-sync.md`.
 - SSH tests must pin ssh to a private config (`-F`), `known_hosts` and an agent on a
   short socket path set explicitly; never reach the user's real agent or keys. Use
   `GitSSHServer` / the fake `ssh` in `Tests/Core/GitTestServer.swift`.
-- `snippets-linux/src/git_layout.rs`, `git_location.rs` and `git_recovery.rs` mirror
-  `snippets/Core/Git/` byte for byte: manifest, README and record bytes,
-  `canonicalIdentity`, key scope, digests, the recovery envelope, and SSH value
-  rules. Change both sides together and keep `cargo test --lib git_tests` passing
+- `snippets-linux/src/git_layout.rs`, `git_location.rs`, `git_recovery.rs` and
+  `git_vault.rs` mirror `snippets/Core/Git/` byte for byte: manifest, README and record
+  bytes, `canonicalIdentity`, key scope, digests, the recovery envelope, the vault file,
+  and SSH value rules. Change both sides together and keep `cargo test --lib git_tests` passing
   on Linux.
 - Linux uses the system git with a cleared environment. Never pass a token in
   argv, a URL or a file, never follow redirects, and never auto-accept SSH host
