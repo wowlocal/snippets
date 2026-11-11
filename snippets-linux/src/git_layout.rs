@@ -27,6 +27,10 @@ pub const KEYS: &str = "keys";
 pub const RECOVERY_PATH: &str = "keys/recovery.json";
 pub const FORMAT: &str = "snippets-git-sync";
 pub const SCHEMA_VERSION: i64 = 1;
+/// A library whose keys were replaced on an Apple device (`replaceLibrary`). The
+/// layout is the same; the number keeps out builds that would upload secure
+/// snippets under the retired vault key. Linux never writes it.
+pub const ROTATED_SCHEMA_VERSION: i64 = 2;
 pub const RECORD_PROFILE: &str = "snippets-wire-v1";
 pub const PLAIN_RECORD_PROFILE: &str = "snippets-plain-v1";
 pub const MAX_REVISION_BYTES: usize = 256;
@@ -121,8 +125,9 @@ pub fn decode_manifest(bytes: &[u8]) -> Result<(Uuid, Mode), LayoutError> {
         .and_then(Mode::from_profile);
     match (id, dataset, mode) {
         (Some(id), Some(text), Some(mode))
-            if object["schemaVersion"].as_i64() == Some(SCHEMA_VERSION)
-                && object["schemaVersion"].is_i64()
+            if object["schemaVersion"].as_i64().is_some_and(|version| {
+                (SCHEMA_VERSION..=ROTATED_SCHEMA_VERSION).contains(&version)
+            }) && object["schemaVersion"].is_i64()
                 && id.hyphenated().to_string() == text =>
         {
             Ok((id, mode))

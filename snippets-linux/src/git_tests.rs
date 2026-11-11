@@ -6,7 +6,7 @@
 use crate::{
     bootstrap::Bundle,
     clock::Hlc,
-    cloud,
+    cloud, crypto,
     deletion_review::{Choice, Kind},
     git_layout::{self, Mode, Position},
     git_location::{Location, Remote, valid_branch},
@@ -14,7 +14,7 @@ use crate::{
     git_recovery::{self, Kit},
     git_repo,
     git_setup::{self, Environment, Failure, Form, State, SyncState},
-    git_transport,
+    git_transport, git_vault,
     model::{Library, Snippet},
     receiver,
     secret_store::{Store, tests::Memory},
@@ -525,6 +525,12 @@ fn manifest_bytes_and_strict_decoding() {
         git_layout::decode_manifest(compact),
         Ok((dataset, Mode::Encrypted))
     );
+    // A library whose keys were replaced has the same layout under schema 2.
+    let rotated = br#"{"datasetID":"8f0c2b4e-8f6e-4c1a-9d3b-1a2b3c4d5e6f","format":"snippets-git-sync","recordProfile":"snippets-plain-v1","schemaVersion":2}"#;
+    assert_eq!(
+        git_layout::decode_manifest(rotated),
+        Ok((dataset, Mode::PlainText))
+    );
     use git_layout::LayoutError::*;
     for (bytes, expected) in [
         (&b"not json"[..], NotALibrary),
@@ -532,7 +538,11 @@ fn manifest_bytes_and_strict_decoding() {
         (br#"[1]"#, NotALibrary),
         (br#"{"format":"snippets-git-sync"}"#, IncompatibleSchema),
         (
-            br#"{"datasetID":"8f0c2b4e-8f6e-4c1a-9d3b-1a2b3c4d5e6f","format":"snippets-git-sync","recordProfile":"snippets-wire-v1","schemaVersion":2}"#,
+            br#"{"datasetID":"8f0c2b4e-8f6e-4c1a-9d3b-1a2b3c4d5e6f","format":"snippets-git-sync","recordProfile":"snippets-wire-v1","schemaVersion":3}"#,
+            IncompatibleSchema,
+        ),
+        (
+            br#"{"datasetID":"8f0c2b4e-8f6e-4c1a-9d3b-1a2b3c4d5e6f","format":"snippets-git-sync","recordProfile":"snippets-wire-v1","schemaVersion":0}"#,
             IncompatibleSchema,
         ),
         (
@@ -707,6 +717,180 @@ fn recovery_envelopes_open_only_with_their_code_and_library() {
         Err(git_recovery::Failure::InvalidEnvelope)
     ));
 }
+
+// MARK: - Vault files
+
+fn vault_identity() -> git_vault::Identity {
+    git_vault::Identity {
+        kid: "k-0f1e2d3c-4b5".into(),
+        vault_salt: crypto::b64(&core::array::from_fn::<u8, 32, _>(|i| 0x40 + i as u8)),
+        kdf: git_vault::Kdf {
+            alg: "pbkdf2-hmac-sha512".into(),
+            iterations: 600_000,
+            salt_p: "AAECAwQFBgcICQoLDA0ODw".into(),
+        },
+        wrap_recovery: KNOWN_VAULT_WRAP.into(),
+    }
+}
+
+#[test]
+fn vault_files_open_only_with_their_library_key_and_library() {
+    let dataset = Uuid::new_v4();
+    let bundle = Bundle::generate().unwrap();
+    let identity = vault_identity();
+    let file = git_vault::seal(&identity, &bundle, dataset).unwrap();
+    let text = std::str::from_utf8(&file).unwrap();
+    assert!(text.starts_with("{\n  \"algorithm\" : \"snippets-git-vault-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \""));
+    assert!(text.ends_with(&format!(
+        "\",\n  \"datasetID\" : \"{}\",\n  \"schemaVersion\" : 1\n}}\n",
+        dataset.hyphenated()
+    )));
+    // Nothing about the vault is readable without the library key.
+    assert!(!text.contains(&identity.kid) && !text.contains(&identity.vault_salt));
+    assert_eq!(
+        git_vault::open(&file, &bundle, dataset),
+        Ok(identity.clone())
+    );
+    assert_eq!(
+        git_vault::open(&file, &Bundle::generate().unwrap(), dataset),
+        Err(git_vault::Failure::IncorrectKey)
+    );
+    // Another library's file is refused even under the same key.
+    assert_eq!(
+        git_vault::open(&file, &bundle, Uuid::new_v4()),
+        Err(git_vault::Failure::InvalidEnvelope)
+    );
+    // A newer format reads as "update", never as damage to overwrite.
+    let newer = text.replacen("\"schemaVersion\" : 1", "\"schemaVersion\" : 2", 1);
+    assert_eq!(
+        git_vault::open(newer.as_bytes(), &bundle, dataset),
+        Err(git_vault::Failure::UnsupportedVersion)
+    );
+    assert_eq!(
+        git_vault::open(
+            br#"{"algorithm":"x","schemaVersion":2,"wraps":[]}"#,
+            &bundle,
+            dataset
+        ),
+        Err(git_vault::Failure::UnsupportedVersion)
+    );
+    for damaged in ["", "[]", "{}", &text[..text.len() - 20]] {
+        assert_eq!(
+            git_vault::open(damaged.as_bytes(), &bundle, dataset),
+            Err(git_vault::Failure::InvalidEnvelope),
+            "{damaged}"
+        );
+    }
+    // Only well-formed identities are written.
+    for bad in [
+        git_vault::Identity {
+            kid: String::new(),
+            ..identity.clone()
+        },
+        git_vault::Identity {
+            kid: "k \"quoted\"".into(),
+            ..identity.clone()
+        },
+        git_vault::Identity {
+            kid: "k".repeat(129),
+            ..identity.clone()
+        },
+        git_vault::Identity {
+            vault_salt: "AAAA".into(),
+            ..identity.clone()
+        },
+        git_vault::Identity {
+            wrap_recovery: "line\nbreak".into(),
+            ..identity.clone()
+        },
+        git_vault::Identity {
+            wrap_recovery: "A".repeat(1_025),
+            ..identity.clone()
+        },
+        git_vault::Identity {
+            kdf: git_vault::Kdf {
+                iterations: 0,
+                ..identity.kdf.clone()
+            },
+            ..identity.clone()
+        },
+    ] {
+        assert_eq!(
+            git_vault::seal(&bad, &bundle, dataset),
+            Err(git_vault::Failure::InvalidEnvelope)
+        );
+    }
+}
+
+/// Fixed bytes shared with the Apple apps (`GitSyncVaultTests`): both sides
+/// must open this file and unwrap this key. Change them together.
+#[test]
+fn vault_file_known_answer_matches_the_apple_apps() {
+    let material: Vec<u8> = (0u8..64).collect();
+    let bundle = Bundle::from_material(&material).unwrap();
+    let dataset = Uuid::parse_str("617a0001-0000-4000-8000-0000000000aa").unwrap();
+    let file = format!(
+        "{{\n  \"algorithm\" : \"snippets-git-vault-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"{KNOWN_VAULT_CIPHERTEXT}\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}}\n"
+    );
+    let identity = git_vault::open(file.as_bytes(), &bundle, dataset).unwrap();
+    assert_eq!(identity, vault_identity());
+    let nonce: [u8; 12] = core::array::from_fn(|i| 0x20 + i as u8);
+    assert_eq!(
+        git_vault::seal_with_nonce(&identity, &bundle, dataset, nonce).unwrap(),
+        file.as_bytes()
+    );
+    // The recovery code reaches the vault key, exactly as on Apple.
+    let secret = crypto::decode_recovery(KNOWN_VAULT_CODE).unwrap();
+    assert_eq!(
+        *secret,
+        core::array::from_fn::<u8, 16, _>(|i| 0xa0 + i as u8)
+    );
+    let key = crypto::unwrap_recovery(
+        &crypto::Sealed::parse(identity.wrap_recovery.clone()).unwrap(),
+        &secret,
+        &identity.vault_salt_bytes().unwrap(),
+        &identity.kid,
+    )
+    .unwrap();
+    let expected: [u8; 32] = core::array::from_fn(|i| 0x80 + i as u8);
+    assert!(key.same_key(&crypto::RootKey::from_bytes(&expected).unwrap()));
+    // The library key alone does not.
+    let other = crypto::decode_recovery(&Kit::generate(dataset).unwrap().code()).unwrap();
+    assert!(
+        crypto::unwrap_recovery(
+            &crypto::Sealed::parse(identity.wrap_recovery.clone()).unwrap(),
+            &other,
+            &identity.vault_salt_bytes().unwrap(),
+            &identity.kid,
+        )
+        .is_err()
+    );
+}
+
+/// The Apple apps keep the vault key under the same code. Linux cannot rewrap
+/// it yet, so it must not issue a code that opens only half the library.
+#[test]
+fn a_library_with_a_vault_file_refuses_a_linux_recovery_code() {
+    let fixture = Fixture::new();
+    let mut a = fixture.device();
+    let code = a.create();
+    fixture.commit_by_hand(|work| {
+        std::fs::write(work.join("keys/vault.json"), b"{}\n").unwrap();
+    });
+    assert_eq!(
+        git_setup::replace_recovery_code(&a.environment, &mut a.store).err(),
+        Some(Failure::VaultRecoveryCode)
+    );
+    assert_eq!(Failure::VaultRecoveryCode.code(), "vault_recovery_code");
+    // Nothing was written: the code shown at creation still opens the library.
+    let mut b = fixture.device();
+    b.join(Some(&code)).unwrap();
+    assert!(fixture.files().contains(&"keys/vault.json".to_string()));
+}
+
+const KNOWN_VAULT_CODE: &str = "M2GT-58X4-MPKA-FA59-NANT-SBDE-NWJ";
+const KNOWN_VAULT_WRAP: &str = "v1.EBESExQVFhcYGRob.qUF4uXZngBvzSRgme_SKaRQDkG-x67b2_sbB8MU6aK6jjnoZqp7TQGXxuoj-7Mf_Vz_Yw697Ajxzygx1rVrF-Qy0RkQqGDiLVfEUNhedNvQr4o0l6Q_9hWxHiaxMkenw9HpreSqCE93FTxFr8siez0bnIPGvOCsVY8L7R_C2o7fEWIPVMRV1cDmXepTFGsf4lp_Wi8yAe4z0o7SwO_sLbuVXooNbn_3VVHyYWsgr6wtdsJC5ZJu5o3BJlNInXj08zidXd8pPj6sJoF8XHX9Y9BDxZ_XgUIkmK2DB_jyi7cIXTNJsEo0ApPvCQOrZTLYLgfRs7tia7CFlrLJrUHHluOjnQOHfRlRfZYN8y6MBqUU";
+const KNOWN_VAULT_CIPHERTEXT: &str = "ICEiIyQlJicoKSorul4Dv23bwTOhvOYKTu1b+0rWFeE2UdslKKtfLiTwkw4Q/aNUqUeyELUg84tqzJwhiQQlOtY9MBswBrDtosF2sCT2cE0McqvKBXTN9ppi/ZtjnlfXiG3yNd2DBGJHKMBCzoAf3Pipt/jhmrui2oUL6JFhWQR/tbcoC1kgdISIQO7tlMHMvClol2oPGArvEFk+GhHYVhdoIuGG/kO9Vt29GSbUq6wFi7YBXf4uZPMOeQP6OZh5mNLcY8nKqqnGPibPYxjKHXQ14Pl++Yhwzq3T612lwlt6hPHQSWnUChK9/8/W3SsYa+ulItytSDrG0rGWT01u8AdipQ9qG3OIlz3D/KlUJKrOhfgKpIGooirpC7+IhGqTisPc2koF9Lo3EC3WFlHNXGj/cUHXHkYIrM3OvtwfY4fxpMqaWzDyy4nd8xGOQhRK9KCCvkbian9NMKi/doF8+Yq3sokaNyOz5ixd80mYT47c4v2Kg9d/hURNrpDBgub2NbenZQsoyMvTmoelRgxST4VtNF8WAlkA9GRYDST6oXRrNkzqSo3tVMgkHIt8uxT5uZyYGksiiroicR3GbZ1qBd48/waDrljrtld4LODOWlrrAs90TOTcKAqiyPWPEWLrsO1ASsFdpeuNVZpuwd3GH8q5ySIKqJe9rP5ISGb3LR/osq3EshxTrRwwBPGfAJ9eEaGT85wpsiJfvd60bTh5VCAVnLNNCL47xkI/Drtv9PhBA4YDeCYS5BNUfGTGPYEs10IQhlnN9snawHg13t1hvxpO2ONSHVw1s+7afsptDD9Jrb6XixZsJx0=";
 
 #[test]
 fn stderr_classification_is_closed() {

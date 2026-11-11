@@ -95,6 +95,10 @@ pub enum Failure {
     /// Plain text was chosen where Snippets could not check the repository's
     /// visibility, without the user's word that it is private.
     VisibilityUnknown,
+    /// The library publishes its secure-snippet key under the recovery code
+    /// (`keys/vault.json`). Linux cannot rewrap it yet, and a code that opened
+    /// the library without its secure snippets would be worse than none.
+    VaultRecoveryCode,
 }
 pub type Result<T> = std::result::Result<T, Failure>;
 impl From<secret_store::Failure> for Failure {
@@ -151,6 +155,7 @@ impl Failure {
             Self::LibraryBusy => "library_busy",
             Self::PublicRepository => "public_repository",
             Self::VisibilityUnknown => "visibility_unknown",
+            Self::VaultRecoveryCode => "vault_recovery_code",
         }
     }
     pub fn message(self) -> &'static str {
@@ -177,7 +182,7 @@ impl Failure {
                 "Another device created a Snippets library in this repository a moment ago. Connect to it instead."
             }
             Self::LibraryChanged | Self::Transport(T::LibraryReplaced) => {
-                "The repository now holds a different Snippets library. Check it again and reconnect."
+                "The repository now holds a different Snippets library, or its keys were replaced on another device. Check it again and reconnect with the newest recovery code."
             }
             Self::RecoveryCodeRequired => {
                 "Enter this library’s recovery code. It was shown when the library was created."
@@ -263,6 +268,9 @@ impl Failure {
                 "This repository is public. Anyone on the internet could read plain-text snippets. Make it private, or create an encrypted library."
             }
             Self::VisibilityUnknown => VISIBILITY_UNKNOWN_MESSAGE,
+            Self::VaultRecoveryCode => {
+                "This library’s recovery code also opens its secure snippets, which Snippets for Linux cannot do yet. Create the new recovery code in Snippets on a Mac, iPhone or iPad."
+            }
             Self::PlainTextConsentRequired => {
                 "This library stores ordinary snippets as readable Markdown files. Confirm joining it: this device’s ordinary snippets will be readable by anyone with access to the repository, and stay in its history."
             }
@@ -1213,6 +1221,12 @@ pub fn replace_recovery_code<B: Backend>(
         let kit = Kit::generate(connected.settings.dataset).map_err(|_| Failure::Storage)?;
         let envelope = kit.seal(&connected.bundle).map_err(|_| Failure::Storage)?;
         let mut transport = connected.transport(environment)?;
+        // The Apple apps wrap the vault key under the same code in the same
+        // commit. Replacing only the library envelope here would leave a code
+        // that opens the library without its secure snippets.
+        if transport.read_file(crate::git_vault::PATH)?.is_some() {
+            return Err(Failure::VaultRecoveryCode);
+        }
         if let Err(failure) = transport.write_files(
             &[(git_layout::RECOVERY_PATH, &envelope)],
             git_layout::RECOVERY_MESSAGE,

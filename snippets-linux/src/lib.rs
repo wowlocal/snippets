@@ -37,6 +37,7 @@ mod git_tests;
 pub mod git_transport;
 #[cfg(feature = "desktop")]
 mod git_ui;
+pub mod git_vault;
 pub mod global_shortcuts;
 #[cfg(feature = "desktop")]
 mod gnome_clipboard;
