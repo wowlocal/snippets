@@ -1,6 +1,6 @@
 import CloudKit
 import Foundation
-import os
+import Synchronization
 
 // App target only. This adapter lets CKSyncEngine own CloudKit scheduling while the
 // durable SyncJournal remains the sole source of outbound user intent.
@@ -116,6 +116,9 @@ nonisolated extension CloudKitSyncDriving {
 /// Bridges the project transport contract to CKSyncEngine without creating a second
 /// outbox. A submit is an immutable in-memory lease over the exact `WireRecord`s already
 /// frozen in SyncJournal; `hasPendingUntrackedChanges` is only CKSyncEngine's wake hint.
+// iCloud sync needs macOS 15 (Synchronization's Atomic); on macOS 14 the app offers
+// Git instead (`SyncBackendSelectionStore.iCloudSyncAvailable`).
+@available(macOS 15.0, *)
 nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked Sendable {
     static let antiEntropyInterval: TimeInterval = 24 * 60 * 60
 
@@ -779,25 +782,24 @@ nonisolated final class CloudKitSyncTransportAdapter: SyncTransport, @unchecked 
 /// Atomic lifecycle fence around the only driver operation that can construct a new
 /// CKSyncEngine. Once stop wins the lock, every delayed recovery task becomes a no-op;
 /// if restart wins, stop follows it and retires the engine before shutdown returns.
+@available(macOS 15.0, *)
 nonisolated final class CloudKitAdapterLifecycleGate: @unchecked Sendable {
     private let lock = NSLock()
-    // Its own lock, never held across anything else: Synchronization's Atomic would
-    // need macOS 15.
-    private let active = OSAllocatedUnfairLock(initialState: true)
+    private let active = Atomic(true)
 
     // Driver construction may synchronously trigger an automatic CKSyncEngine
     // callback. That callback must be able to observe the published lifecycle state
     // without waiting on the restart critical section that is constructing its engine.
-    var acceptsEvents: Bool { active.withLock { $0 } }
+    var acceptsEvents: Bool { active.load(ordering: .acquiring) }
 
     func stop() {
-        lock.withLock { active.withLock { $0 = false } }
+        lock.withLock { active.store(false, ordering: .releasing) }
     }
 
     @discardableResult
     func restartIfActive(_ restart: () throws -> Void) rethrows -> Bool {
         try lock.withLock {
-            guard active.withLock({ $0 }) else { return false }
+            guard active.load(ordering: .relaxed) else { return false }
             try restart()
             return true
         }
@@ -922,6 +924,7 @@ nonisolated final class CloudKitAdapterMaintenanceQueue: @unchecked Sendable {
     }
 }
 
+@available(macOS 15.0, *)
 private nonisolated final class CloudKitSyncAdapterEventReceiver: @unchecked Sendable {
     private let lock = NSLock()
     private weak var adapter: CloudKitSyncTransportAdapter?

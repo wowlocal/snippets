@@ -9,6 +9,9 @@ import Foundation
 /// Core's `SyncEngine` remains the domain reducer and `SyncJournal` remains the only
 /// durable outbound source. CKSyncEngine receives exact immutable journal offers via
 /// `hasPendingUntrackedChanges`; its own pending-record list is never a second outbox.
+// iCloud sync needs macOS 15 (Synchronization's Atomic); on macOS 14 the app offers
+// Git instead (`SyncBackendSelectionStore.iCloudSyncAvailable`).
+@available(macOS 15.0, *)
 nonisolated final class CloudKitTransport: SyncTransport, @unchecked Sendable {
     let identifier: String
     let supportsPush = true
@@ -585,6 +588,7 @@ private nonisolated final class CloudKitLazyContainer: @unchecked Sendable {
 /// Serializes adapter retirement without holding a blocking lock across `await`.
 /// Registration happens under CloudKitTransport's creation lock; the task itself owns
 /// the adapter strongly until its CKSyncEngine has cancelled and all callbacks returned.
+@available(macOS 15.0, *)
 private nonisolated final class CloudKitAdapterRetirementGate: @unchecked Sendable {
     private let condition = NSCondition()
     private var tail: Task<Void, Never>?

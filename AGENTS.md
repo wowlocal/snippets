@@ -8,8 +8,11 @@ These instructions apply to the whole repository.
   (Sonoma); `snippets-cli`, the macOS tests and `CorePackage` use the same minimum.
   APIs newer than 14.0 need `#available` with a working fallback (Writing Tools and
   math completion in `SnippetContentTextView`, the sync status subtitle in the More
-  menu). Do not use `Synchronization` (`Atomic`, `Mutex`) or `String(validating:as:)`
-  in Mac code: both need macOS 15.
+  menu). iCloud sync is macOS 15 and later only: the CloudKit transport types are
+  `@available(macOS 15.0, *)`, and on macOS 14 `SyncBackendSelectionStore.iCloudSyncAvailable`
+  is false, so iCloud is not offered, Settings and the More menu lead to Git, and an
+  iCloud selection left as the default fails with `iCloudUnavailable` instead of
+  starting. Do not use `String(validating:as:)` in shared code: it needs macOS 15.
   Debug uses `com.khm.snippets.debug`; Release uses `com.khm.snippets`.
 - `Snippets iOS` is the native UIKit universal app in `snippets-ios/`. Its deployment
   target is iOS/iPadOS 26.0 and `TARGETED_DEVICE_FAMILY` is `1,2`. It is not Catalyst

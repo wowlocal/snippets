@@ -27,6 +27,7 @@ nonisolated enum CloudKitEngineCancellationDrain {
 /// Thin CKSyncEngine delegate/driver. It translates Apple callback values into neutral
 /// DTOs; durable ordering, inbox replay, journal ownership, and account policy live in
 /// `CloudKitSyncTransportAdapter` and Core's existing `SyncEngine`.
+@available(macOS 15.0, *)
 nonisolated final class CloudKitSyncEngineDriver: NSObject,
     CloudKitSyncDriving, CKSyncEngineDelegate, @unchecked Sendable
 {

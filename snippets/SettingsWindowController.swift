@@ -2314,12 +2314,16 @@ private final class SyncSettingsViewController: NSViewController {
         title.font = .systemFont(ofSize: 13, weight: .semibold)
 
         let providers = backendSelection.availableProviders
-        let choosesProvider = providers.count > 1
+        // On macOS 14 iCloud is not offered, so even a single provider is a choice to make.
+        let choosesProvider = providers.count > 1 || !Self.iCloudOffered
         let alternatives = providers.filter { $0 != .iCloud }.map { provider in
             provider == .git ? "a Git repository you own" : provider.displayName
         }
-        let choice = "Choose iCloud or \(alternatives.joined(separator: " or ")) without migrating away "
-            + "from any of them. Only the selected provider is writable. "
+        let choice = Self.iCloudOffered
+            ? "Choose iCloud or \(alternatives.joined(separator: " or ")) without migrating away "
+                + "from any of them. Only the selected provider is writable. "
+            : "iCloud sync needs macOS 15 or later. On this Mac, sync through "
+                + "\(alternatives.joined(separator: " or ")). "
         introText = choosesProvider
             ? (choice + "Every snippet is encrypted on this Mac before it leaves; each provider stores "
                 + "the same opaque records.",
@@ -2410,10 +2414,19 @@ private final class SyncSettingsViewController: NSViewController {
         (NSApp.delegate as? AppDelegate)?.syncCoordinator
     }
 
+    private static var iCloudOffered: Bool { SyncBackendSelectionStore.iCloudSyncAvailable }
+
+    /// macOS 14 with nothing chosen yet: iCloud is the stored default but cannot run, so
+    /// there is nothing to turn on until a Git repository is connected.
+    private var awaitsAnotherProvider: Bool {
+        !Self.iCloudOffered && backendSelection.provider == .iCloud
+    }
+
     func reloadFromStorage() {
         guard isViewLoaded, let coordinator = Self.coordinator else { return }
 
         enableCheckbox.state = SyncCoordinator.isEnabled ? .on : .off
+        enableCheckbox.isHidden = awaitsAnotherProvider && !SyncCoordinator.isEnabled
         let selection = backendSelection
         if !introText.plainText.isEmpty {
             introLabel?.stringValue = selection.syncsPlainText ? introText.plainText : introText.encrypted
@@ -2423,9 +2436,9 @@ private final class SyncSettingsViewController: NSViewController {
         }) {
             providerPopup.select(item)
         }
-        configureCloudButton.isHidden = !(selection.provider == .git
+        configureCloudButton.isHidden = !(selection.provider == .git || awaitsAnotherProvider
             || (selection.snippetsCloudEnabled && selection.provider == .snippetsCloud))
-        configureCloudButton.title = if selection.provider == .git {
+        configureCloudButton.title = if selection.provider == .git || awaitsAnotherProvider {
             "Repository…"
         } else if selection.cloudCredentialResetRequired {
             "Reset Cloud Sign-In…"
@@ -2434,7 +2447,9 @@ private final class SyncSettingsViewController: NSViewController {
         } else {
             "Configure…"
         }
-        statusLabel.stringValue = coordinator.statusDescription
+        statusLabel.stringValue = awaitsAnotherProvider && !SyncCoordinator.isEnabled
+            ? "Connect a Git repository to start syncing."
+            : coordinator.statusDescription
 
         // Shown whenever sync is on, not only when an engine exists: a start that failed
         // on the keychain leaves no engine and no poll timer, and this button is what
@@ -2524,7 +2539,7 @@ private final class SyncSettingsViewController: NSViewController {
     }
 
     @objc private func configureSelectedProvider() {
-        if backendSelection.provider == .git {
+        if backendSelection.provider == .git || awaitsAnotherProvider {
             showGitRepository()
         } else {
             showSnippetsCloudAccount()

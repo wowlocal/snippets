@@ -602,7 +602,7 @@ currently a shipped feature. Start with the [Android overview](docs/android/READ
 
 | Target | Minimum OS | Native interface |
 |---|---|---|
-| Mac | macOS 14.0 (Sonoma) | AppKit |
+| Mac | macOS 14.0 (Sonoma); iCloud sync needs macOS 15, Git sync works on 14 | AppKit |
 | iPhone and iPad | iOS / iPadOS 26.0 | UIKit, one universal app |
 | Android source preview | Android 9 / API 28 | Kotlin and Compose |
 

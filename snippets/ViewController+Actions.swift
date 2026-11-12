@@ -289,12 +289,16 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         let coordinator = (NSApp.delegate as? AppDelegate)?.syncCoordinator
         let recoveryAction = coordinator?.recoveryAction
         let needsSettings = coordinator?.requiresSyncSettingsAttention == true
+        // On macOS 14 iCloud sync is not offered: turning sync on starts in Settings, at Git.
+        let iCloudOffered = SyncBackendSelectionStore.iCloudSyncAvailable
         let syncTitle = if let recoveryAction {
             recoveryAction.buttonTitle + "…"
         } else if needsSettings {
             "Open Sync Settings…"
+        } else if syncEnabled {
+            "Sync Now"
         } else {
-            syncEnabled ? "Sync Now" : "Connect iCloud"
+            iCloudOffered ? "Connect iCloud" : "Set Up Sync…"
         }
         let syncSymbol = recoveryAction != nil ? "exclamationmark.shield"
             : needsSettings ? "exclamationmark.triangle"
@@ -371,6 +375,8 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         }
         if SyncCoordinator.isEnabled {
             app.syncCoordinator.syncNow()
+        } else if !SyncBackendSelectionStore.iCloudSyncAvailable {
+            app.openSyncSettings()
         } else {
             app.syncCoordinator.setEnabled(true)
         }

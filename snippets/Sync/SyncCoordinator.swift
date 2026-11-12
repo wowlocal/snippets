@@ -379,9 +379,12 @@ final class SyncCoordinator {
         case cloudCredentialsUnreadable
         case providerSwitchUnreadable
         case retryablePrerequisite
+        case iCloudUnavailable
 
         var description: String {
             switch self {
+            case .iCloudUnavailable:
+                "iCloud sync needs macOS 15 or later. Open Sync settings to sync this Mac through a Git repository instead."
             case .schemaTooNew:
                 "A newer Snippets version wrote the local sync state. Update Snippets."
             case .checkpointUnreadable:
@@ -435,6 +438,8 @@ final class SyncCoordinator {
                 .needsAttention("provider_switch_unreadable")
             case .retryablePrerequisite:
                 .needsAttention("startup_prerequisite_unavailable")
+            case .iCloudUnavailable:
+                .needsAttention("icloud_unavailable")
             }
         }
 
@@ -445,7 +450,7 @@ final class SyncCoordinator {
             case .retryablePrerequisite: .retrySync
             case .schemaTooNew, .authenticationRequired, .cloudKeyRequired,
                  .gitKeyRequired, .gitCredentialRequired, .gitConfigurationRequired,
-                 .cloudCredentialsUnreadable, .providerSwitchUnreadable: nil
+                 .cloudCredentialsUnreadable, .providerSwitchUnreadable, .iCloudUnavailable: nil
             }
         }
 
@@ -455,7 +460,7 @@ final class SyncCoordinator {
             case .schemaTooNew, .checkpointUnreadable, .authenticationRequired,
                  .cloudKeyRequired, .gitKeyRequired, .gitCredentialRequired,
                  .gitConfigurationRequired, .syncKeyUnreadable,
-                 .cloudCredentialsUnreadable, .providerSwitchUnreadable: false
+                 .cloudCredentialsUnreadable, .providerSwitchUnreadable, .iCloudUnavailable: false
             }
         }
     }
@@ -683,7 +688,7 @@ final class SyncCoordinator {
             case .schemaTooNew, .checkpointUnreadable, .providerSwitchUnreadable: .syncState
             case .authenticationRequired, .cloudKeyRequired, .gitKeyRequired,
                  .gitCredentialRequired, .gitConfigurationRequired, .syncKeyUnreadable,
-                 .cloudCredentialsUnreadable, .retryablePrerequisite: .syncKey
+                 .cloudCredentialsUnreadable, .retryablePrerequisite, .iCloudUnavailable: .syncKey
             }
             Diagnostics.record(.storageFailure(
                 area: diagnosticArea,
@@ -1314,6 +1319,7 @@ final class SyncCoordinator {
             case .credentialResetRequired: .cloudCredentialsUnreadable
             case .gitCredentialRequired: .gitCredentialRequired
             case .gitConfigurationRequired: .gitConfigurationRequired
+            case .iCloudUnavailable: .iCloudUnavailable
             case .invalidProviderSelection, .switchStateUnreadable:
                 .providerSwitchUnreadable
             case .featureDisabled, .missingConfiguration,
@@ -2018,8 +2024,9 @@ final class SyncCoordinator {
         case .needsAttention(let detail):
             var sentence = "Sync needs attention: \(Self.userFacingAttentionDetail(detail))"
             if !sentence.hasSuffix(".") { sentence += "." }
-            // Git details say what to do themselves.
-            return detail.hasPrefix("git_") ? sentence : sentence + " Fix the reported condition, then try again."
+            // Git details, and iCloud's macOS requirement, say what to do themselves.
+            return detail.hasPrefix("git_") || detail == "icloud_unavailable"
+                ? sentence : sentence + " Fix the reported condition, then try again."
         case .waitingForVault(let detail):
             // With Git the key does not arrive by itself: it comes with the library's
             // recovery code, so say where to enter it instead of promising a wait.
@@ -2107,6 +2114,8 @@ final class SyncCoordinator {
             return "Enter the Git library’s recovery code in Sync settings"
         case "git_configuration_required":
             return "Connect the Git repository in Sync settings, or choose another provider"
+        case "icloud_unavailable":
+            return "iCloud sync needs macOS 15 or later. Open Sync settings to sync this Mac through a Git repository instead"
         case "git_library_replaced":
             return "This library’s keys were replaced on another device, or the repository holds a "
                 + "different library. Reconnect it in Sync settings with the newest recovery code"

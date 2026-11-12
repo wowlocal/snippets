@@ -249,6 +249,29 @@ final class GitSyncSettingsMacTests: XCTestCase {
         await retire(second)
     }
 
+    /// On macOS 14 iCloud sync is not offered: the provider list is Git alone, iCloud
+    /// left as the default never starts a transport and says why, and Git works.
+    func testMacOS14OffersGitInsteadOfICloud() async throws {
+        SyncBackendSelectionStore.iCloudSyncAvailableOverride = false
+        defer { SyncBackendSelectionStore.iCloudSyncAvailableOverride = nil }
+        let device = try makeDevice("sonoma", seed: [Self.snippet])
+        XCTAssertEqual(device.selection.provider, .iCloud, "the stored default")
+        XCTAssertEqual(device.selection.availableProviders, [.git])
+        XCTAssertThrowsError(try device.selection.makeTransport()) { error in
+            XCTAssertEqual(error as? SyncBackendSelectionStore.Failure, .iCloudUnavailable)
+        }
+        _ = await device.coordinator.requestSync(trigger: .manual)
+        XCTAssertTrue(
+            device.coordinator.statusDescription.contains("iCloud sync needs macOS 15 or later"),
+            device.coordinator.statusDescription)
+
+        _ = try await createLibrary(device)
+        try await switchToGit(device)
+        try await sync(device)
+        XCTAssertEqual(try recordFiles().count, 1)
+        await retire(device)
+    }
+
     /// The guidance follows the host typed: which token to create, where to add a
     /// deploy key, and whether a user name is asked for at all. Before an address is
     /// typed there is none.

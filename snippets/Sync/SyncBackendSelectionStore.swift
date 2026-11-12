@@ -422,9 +422,12 @@ final class SyncBackendSelectionStore {
         case gitCredentialRequired
         case gitConfigurationInUse
         case gitConfigurationRequired
+        /// iCloud sync needs macOS 15; this Mac runs an earlier version.
+        case iCloudUnavailable
 
         var description: String {
             switch self {
+            case .iCloudUnavailable: "iCloud sync needs macOS 15 or later"
             case .gitCredentialRequired: "the Git access token is missing on this device"
             case .gitConfigurationInUse: "a provider switch involving Git is still finishing"
             case .gitConfigurationRequired: "no Git repository is connected on this device"
@@ -673,8 +676,25 @@ final class SyncBackendSelectionStore {
     }
 
     var availableProviders: [Provider] {
-        [.iCloud] + (snippetsCloudEnabled ? [.snippetsCloud] : []) + (gitSyncEnabled ? [.git] : [])
+        (Self.iCloudSyncAvailable ? [.iCloud] : []) + (snippetsCloudEnabled ? [.snippetsCloud] : [])
+            + (gitSyncEnabled ? [.git] : [])
     }
+
+    /// CloudKit sync runs on macOS 15 and later (and on every supported iOS). On macOS 14
+    /// it is not offered at all: Sync settings lead to Git, and an iCloud selection left
+    /// as the default never starts a transport (`iCloudUnavailable`).
+    nonisolated static var iCloudSyncAvailable: Bool {
+        #if DEBUG
+        if let iCloudSyncAvailableOverride { return iCloudSyncAvailableOverride }
+        #endif
+        if #available(macOS 15.0, *) { return true }
+        return false
+    }
+
+    #if DEBUG
+    /// Tests stand in for a macOS 14 Mac with `false`.
+    nonisolated(unsafe) static var iCloudSyncAvailableOverride: Bool?
+    #endif
 
     // MARK: - Git
 
@@ -1420,6 +1440,9 @@ final class SyncBackendSelectionStore {
             // crash recovery during construction; neither a remaining marker nor a
             // temporarily unavailable credential Keychain may hold up the independent
             // iCloud/CloudKit data plane.
+            guard Self.iCloudSyncAvailable, #available(macOS 15.0, *) else {
+                throw Failure.iCloudUnavailable
+            }
             return CloudKitTransport()
         case .snippetsCloud:
             guard snippetsCloudEnabled else { throw Failure.featureDisabled }

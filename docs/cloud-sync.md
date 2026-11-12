@@ -950,8 +950,9 @@ Verified locally, by inspecting shipping apps rather than reading documentation:
   is a symlink into `OrbStack.app`, Developer ID signed with hardened runtime, carrying its own
   `application-identifier` and a shared `keychain-access-groups` — the same packaging
   `snippets-cli` already uses.
-- `CKSyncEngine` is macOS 14+/iOS 17+ and `CKRecord.encryptedValues` is macOS 12+, both within
-  the 14.0 deployment target.
+- `CKSyncEngine` is macOS 14+/iOS 17+ and `CKRecord.encryptedValues` is macOS 12+. The app's
+  CloudKit transport itself needs macOS 15 (it uses Synchronization), so on macOS 14 iCloud
+  sync is not offered and Git is (`SyncBackendSelectionStore.iCloudSyncAvailable`).
 
 Still unverified, each with a fallback:
 
