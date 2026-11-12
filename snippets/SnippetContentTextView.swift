@@ -77,8 +77,10 @@ final class SnippetContentTextView: NSTextView {
         let automaticTextReplacement: Bool
         let automaticTextCompletion: Bool
         let inlinePredictionType: NSTextInputTraitType
-        let mathExpressionCompletionType: NSTextInputTraitType
-        let writingToolsBehavior: NSWritingToolsBehavior
+        /// Nil before macOS 15, which has neither setting.
+        let mathExpressionCompletionType: NSTextInputTraitType?
+        /// `NSWritingToolsBehavior`'s raw value; that type needs macOS 15.
+        let writingToolsBehavior: Int?
         let usesFindPanel: Bool
         let usesFindBar: Bool
         let incrementalSearching: Bool
@@ -919,6 +921,12 @@ final class SnippetContentTextView: NSTextView {
     private func applyContentExposureMode() {
         if isSecureContentMode {
             if ordinaryTextServiceSettings == nil {
+                var mathCompletion: NSTextInputTraitType?
+                var writingTools: Int?
+                if #available(macOS 15.0, *) {
+                    mathCompletion = mathExpressionCompletionType
+                    writingTools = writingToolsBehavior.rawValue
+                }
                 ordinaryTextServiceSettings = AmbientTextServiceSettings(
                     continuousSpellChecking: isContinuousSpellCheckingEnabled,
                     grammarChecking: isGrammarCheckingEnabled,
@@ -932,8 +940,8 @@ final class SnippetContentTextView: NSTextView {
                     automaticTextReplacement: isAutomaticTextReplacementEnabled,
                     automaticTextCompletion: isAutomaticTextCompletionEnabled,
                     inlinePredictionType: inlinePredictionType,
-                    mathExpressionCompletionType: mathExpressionCompletionType,
-                    writingToolsBehavior: writingToolsBehavior,
+                    mathExpressionCompletionType: mathCompletion,
+                    writingToolsBehavior: writingTools,
                     usesFindPanel: usesFindPanel,
                     usesFindBar: usesFindBar,
                     incrementalSearching: isIncrementalSearchingEnabled,
@@ -956,8 +964,10 @@ final class SnippetContentTextView: NSTextView {
             isAutomaticTextReplacementEnabled = false
             isAutomaticTextCompletionEnabled = false
             inlinePredictionType = .no
-            mathExpressionCompletionType = .no
-            writingToolsBehavior = .none
+            if #available(macOS 15.0, *) {
+                mathExpressionCompletionType = .no
+                writingToolsBehavior = .none
+            }
             usesFindPanel = false
             usesFindBar = false
             isIncrementalSearchingEnabled = false
@@ -975,8 +985,12 @@ final class SnippetContentTextView: NSTextView {
             isAutomaticTextReplacementEnabled = settings.automaticTextReplacement
             isAutomaticTextCompletionEnabled = settings.automaticTextCompletion
             inlinePredictionType = settings.inlinePredictionType
-            mathExpressionCompletionType = settings.mathExpressionCompletionType
-            writingToolsBehavior = settings.writingToolsBehavior
+            if #available(macOS 15.0, *) {
+                if let value = settings.mathExpressionCompletionType { mathExpressionCompletionType = value }
+                if let raw = settings.writingToolsBehavior, let behavior = NSWritingToolsBehavior(rawValue: raw) {
+                    writingToolsBehavior = behavior
+                }
+            }
             usesFindPanel = settings.usesFindPanel
             usesFindBar = settings.usesFindBar
             isIncrementalSearchingEnabled = settings.incrementalSearching

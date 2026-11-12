@@ -27,7 +27,7 @@ import PackageDescription
 // than merely matching one of the two targets.
 let package = Package(
     name: "SnippetsCore",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v14)],
     products: [
         // Explicitly static: were this ever linked into the bare Mach-O CLI, a dynamic
         // library would leave an unresolvable @rpath in a binary that has no bundle to

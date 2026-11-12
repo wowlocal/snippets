@@ -27,7 +27,7 @@ are implemented. [Current verification and remaining desktop work](docs/linux/IM
 Python is not required to build, install or run the Linux application.
 
 <p align="center">
-  <a href="#get-started"><img src="https://img.shields.io/badge/macOS-15.5%2B-6D5EF5?style=flat-square&amp;logo=apple&amp;logoColor=white" alt="macOS 15.5 or later"></a>
+  <a href="#get-started"><img src="https://img.shields.io/badge/macOS-14.0%2B-6D5EF5?style=flat-square&amp;logo=apple&amp;logoColor=white" alt="macOS 14.0 or later"></a>
   <a href="#ipad-workspace-and-iphone-companion"><img src="https://img.shields.io/badge/iPad_%26_iPhone-26.0%2B-4C77E8?style=flat-square&amp;logo=apple&amp;logoColor=white" alt="iOS and iPadOS 26.0 or later"></a>
   <a href="#android-and-snippets-cloud"><img src="https://img.shields.io/badge/Android-source_preview-34A87C?style=flat-square&amp;logo=android&amp;logoColor=white" alt="Android source preview"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-A78BFA?style=flat-square" alt="MIT License"></a>
@@ -602,7 +602,7 @@ currently a shipped feature. Start with the [Android overview](docs/android/READ
 
 | Target | Minimum OS | Native interface |
 |---|---|---|
-| Mac | macOS 15.5 | AppKit |
+| Mac | macOS 14.0 (Sonoma) | AppKit |
 | iPhone and iPad | iOS / iPadOS 26.0 | UIKit, one universal app |
 | Android source preview | Android 9 / API 28 | Kotlin and Compose |
 

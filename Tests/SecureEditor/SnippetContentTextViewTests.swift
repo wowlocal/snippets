@@ -304,8 +304,15 @@ struct SnippetContentTextViewTests {
         view.isAutomaticTextReplacementEnabled = true
         view.isAutomaticTextCompletionEnabled = true
         view.inlinePredictionType = .yes
-        view.mathExpressionCompletionType = .yes
-        view.writingToolsBehavior = .limited
+        // Math completion and Writing Tools exist from macOS 15 on.
+        let hasMacOS15Services: Bool
+        if #available(macOS 15.0, *) {
+            hasMacOS15Services = true
+            view.mathExpressionCompletionType = .yes
+            view.writingToolsBehavior = .limited
+        } else {
+            hasMacOS15Services = false
+        }
         view.usesFindPanel = true
         view.usesFindBar = true
         view.isIncrementalSearchingEnabled = true
@@ -320,8 +327,12 @@ struct SnippetContentTextViewTests {
         let ordinaryReplacement = view.isAutomaticTextReplacementEnabled
         let ordinaryCompletion = view.isAutomaticTextCompletionEnabled
         let ordinaryInlinePrediction = view.inlinePredictionType
-        let ordinaryMathCompletion = view.mathExpressionCompletionType
-        let ordinaryWritingTools = view.writingToolsBehavior
+        var ordinaryMathCompletion: NSTextInputTraitType?
+        var ordinaryWritingTools: Int?
+        if #available(macOS 15.0, *) {
+            ordinaryMathCompletion = view.mathExpressionCompletionType
+            ordinaryWritingTools = view.writingToolsBehavior.rawValue
+        }
         let ordinaryFindPanel = view.usesFindPanel
         let ordinaryFindBar = view.usesFindBar
         let ordinaryIncrementalSearch = view.isIncrementalSearchingEnabled
@@ -339,8 +350,10 @@ struct SnippetContentTextViewTests {
         #expect(!view.isAutomaticTextReplacementEnabled)
         #expect(!view.isAutomaticTextCompletionEnabled)
         #expect(view.inlinePredictionType == .no)
-        #expect(view.mathExpressionCompletionType == .no)
-        #expect(view.writingToolsBehavior == .none)
+        if #available(macOS 15.0, *) {
+            #expect(view.mathExpressionCompletionType == .no)
+            #expect(view.writingToolsBehavior == .none)
+        }
         #expect(!view.usesFindPanel)
         #expect(!view.usesFindBar)
         #expect(!view.isIncrementalSearchingEnabled)
@@ -367,8 +380,11 @@ struct SnippetContentTextViewTests {
         #expect(view.isAutomaticTextReplacementEnabled == ordinaryReplacement)
         #expect(view.isAutomaticTextCompletionEnabled == ordinaryCompletion)
         #expect(view.inlinePredictionType == ordinaryInlinePrediction)
-        #expect(view.mathExpressionCompletionType == ordinaryMathCompletion)
-        #expect(view.writingToolsBehavior == ordinaryWritingTools)
+        if #available(macOS 15.0, *) {
+            #expect(hasMacOS15Services)
+            #expect(view.mathExpressionCompletionType == ordinaryMathCompletion)
+            #expect(view.writingToolsBehavior.rawValue == ordinaryWritingTools)
+        }
         #expect(view.usesFindPanel == ordinaryFindPanel)
         #expect(view.usesFindBar == ordinaryFindBar)
         #expect(view.isIncrementalSearchingEnabled == ordinaryIncrementalSearch)

@@ -950,8 +950,8 @@ Verified locally, by inspecting shipping apps rather than reading documentation:
   is a symlink into `OrbStack.app`, Developer ID signed with hardened runtime, carrying its own
   `application-identifier` and a shared `keychain-access-groups` — the same packaging
   `snippets-cli` already uses.
-- `CKSyncEngine` is macOS 14+/iOS 17+ and `CKRecord.encryptedValues` is macOS 12+, both under the
-  15.5 deployment target.
+- `CKSyncEngine` is macOS 14+/iOS 17+ and `CKRecord.encryptedValues` is macOS 12+, both within
+  the 14.0 deployment target.
 
 Still unverified, each with a fallback:
 

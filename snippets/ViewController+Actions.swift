@@ -307,8 +307,12 @@ extension ViewController: NSMenuDelegate, NSMenuItemValidation {
         )
         if let app = NSApp.delegate as? AppDelegate {
             // NSMenuItem renders this below the title using the system's smaller,
-            // secondary menu typography on the deployment target.
-            syncItem.subtitle = app.syncCoordinator.statusDescription
+            // secondary menu typography (macOS 14.4 and later; earlier, a tooltip).
+            if #available(macOS 14.4, *) {
+                syncItem.subtitle = app.syncCoordinator.statusDescription
+            } else {
+                syncItem.toolTip = app.syncCoordinator.statusDescription
+            }
         } else {
             syncItem.isEnabled = false
         }

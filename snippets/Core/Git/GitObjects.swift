@@ -157,7 +157,13 @@ nonisolated struct GitTreeEntry: Sendable, Equatable {
     /// Git writes `40000`; a zero-padded `040000` from another writer is still a tree.
     var isTree: Bool { Array(mode.drop { $0 == UInt8(ascii: "0") }) == Self.treeMode }
     var isRegularFile: Bool { mode == Self.blobMode || mode == Array("100755".utf8) }
-    var nameString: String? { String(validating: name, as: UTF8.self) }
+    /// The name as text, or nil when it is not valid UTF-8. (`String(validating:as:)`
+    /// needs macOS 15; decoding substitutes U+FFFD for invalid bytes, so a name whose
+    /// decoding does not give back the same bytes was not valid UTF-8.)
+    var nameString: String? {
+        let decoded = String(decoding: name, as: UTF8.self)
+        return decoded.utf8.elementsEqual(name) ? decoded : nil
+    }
 }
 
 nonisolated enum GitTree {
