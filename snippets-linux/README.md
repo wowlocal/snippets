@@ -124,6 +124,20 @@ runtime passes its minimal reproductions, installed-GUI Cancel/focus/private-sta
 check and existing host-portal smoke with verified mapped libraries.
 The CLI and storage model also build without GTK or libsecret using `--no-default-features`.
 
+There are two desktop build configurations (Cargo features):
+
+| Feature | Desktop | Inline expansion | Native toolchain |
+| --- | --- | --- | --- |
+| `hyprland` (default) | Omarchy / Hyprland | Fcitx5 addon (`libsnippets-fcitx.so`) | C and C++20: Fcitx5's addon API is C++ only and its headers need C++20 |
+| `gnome` | GNOME | IBus engine (`snippets-ibus`, `src/inline_ibus.c`) | C only, no C++ compiler |
+
+`scripts/install-linux.sh --desktop gnome|hyprland` picks the matching one. Build
+the GNOME configuration directly with `--no-default-features --features gnome`.
+Both expansion backends read the app's candidate rows: Fcitx with
+`src/inline_rows.h` (C++), IBus with `src/inline_rows_c.h` (C). They must accept
+exactly the same replies; change them together. `tests/ibus-engine-live.sh` checks
+the IBus engine (see `docs/linux/GNOME.md`, "The C IBus engine").
+
 From the repository root:
 
 ```sh
