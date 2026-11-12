@@ -321,6 +321,36 @@ Three details keep this cheap:
 GitHub acknowledges every common `have` (reference git acknowledges only the first);
 the client skips extra `ACK`/`NAK` lines before the pack.
 
+### When a round runs
+
+Every Git round that carries a change is a commit, so automatic rounds are paced more
+slowly than on the other providers. The transport declares this as `roundPacing`
+(`GitSyncTransport.localChangeDebounce` and its neighbours); iCloud and Snippets Cloud
+declare none and keep the one-second debounce and every automatic trigger.
+
+| Trigger | Git | iCloud, Snippets Cloud |
+|---|---|---|
+| Local edit, CLI write, vault change | 30 s after the last change, at most 120 s after the first of a burst | 1 s after the last change |
+| Poll (Git: every 60 s) | skipped while an edit waits | runs |
+| App activation | skipped while an edit waits, or within 30 s of a successful round | runs |
+| iOS app enters the background, macOS app quits | a waiting edit is pushed at once (iOS under a background task; Quit waits at most 5 s) | unchanged |
+| Sync Now, setup, recovery, provider switch | immediate | immediate |
+
+A waiting edit owns the next round, which fetches as well, so skipping a poll or an
+activation delays incoming changes by at most the maximum wait. Before this, each pause
+of more than a second in typing became its own commit, and every poll or return to the
+app pushed the half-finished edit. A pushed edit's round also fetches its own commit
+back; applying that echo is local work but refreshes the snippet list once.
+
+A round's local work (projecting the library, reconciling the journal, writing the
+base) runs off the main actor between the steps that must touch the stores
+(`SyncLibraryAccess.currentSnapshotForRound`, `SyncEngine.offMainActor`). With 300
+snippets in a Debug build it used to occupy the main thread for about 1.4 s per edit
+round, in stalls of up to 0.7 s, and 0.6 s per idle poll. It is now about 0.1 s per
+edit round (longest stall about 0.07 s, mostly applying the echo) and under 0.01 s per
+idle poll
+(`GitSyncSettingsMacTests.testAGitRoundAgainstASlowHostLeavesTheMainThreadResponsive`).
+
 History grows by roughly the changed snippet's ciphertext per edit: 26 commits cost 39
 KB on top of a 385 KB tip in the measurement above (about 1.9 KB per edit). New
 devices download only the tip, so history affects storage, not sync speed.

@@ -1589,6 +1589,188 @@ final class GitSyncSettingsMacTests: XCTestCase {
         await retire(first)
     }
 
+    // MARK: - Responsiveness and pacing
+
+    /// The local half of a round (projecting the library, reconciling the journal,
+    /// encoding the base) used to run on the main actor. With 300 snippets the main
+    /// thread stalled for about 0.7 s at a time, twice in every round, however slow the
+    /// host was. Against a slow host, a 5 ms main-run-loop timer must keep firing
+    /// through each round, and saves made meanwhile must return at once.
+    func testAGitRoundAgainstASlowHostLeavesTheMainThreadResponsive() async throws {
+        let device = try makeDevice("busy", seed: Self.library(count: 300))
+        _ = try await createLibrary(device)
+        try await switchToGit(device)
+        GitBackendURLProtocol.setLatency(0.2, host: host)
+
+        let monitor = MainThreadMonitor()
+        for round in 1...2 {
+            var edited = device.store.snippets[round]
+            edited.content += " edited \(round)"
+            XCTAssertTrue(device.store.update(edited))
+            monitor.start(savingEvery: 0.25) { [store = device.store] tick in
+                var typed = store.snippets[100 + tick]
+                typed.content += " typed \(tick)"
+                store.update(typed)
+            }
+            let result = await device.coordinator.requestSync(trigger: .manual)
+            monitor.stop()
+            guard case .completed(.idle) = result else {
+                return XCTFail("round \(round) did not sync: \(result)")
+            }
+            XCTAssertGreaterThan(monitor.saves.count, 0, "round \(round) saved nothing meanwhile")
+            XCTAssertLessThan(
+                monitor.longestGap, 0.25,
+                "round \(round) blocked the main thread for \(Int(monitor.longestGap * 1_000)) ms")
+            XCTAssertLessThan(
+                monitor.saves.max() ?? 0, 0.05, "a save during round \(round) did not return at once")
+        }
+    }
+
+    /// Every Git round that carries a change is a commit. A burst of edits waits for a
+    /// pause and goes out as one commit; a poll or an activation meanwhile starts
+    /// nothing; typing without a pause still syncs within the maximum wait; Sync Now
+    /// and an app about to be suspended or quit never wait. (Intervals are shortened.)
+    func testGitWaitsForAPauseInEditingAndCommitsTheBurstOnce() async throws {
+        let device = try makeDevice("typist", seed: [Self.snippet])
+        _ = try await createLibrary(device)
+        try await switchToGit(device)
+        device.coordinator.roundPacingOverride = SyncRoundPacing(
+            localChangeDelay: 1.5, localChangeMaximumWait: 4, activationRefreshInterval: 30)
+        func type(_ text: String) {
+            var snippet = device.store.snippets[0]
+            snippet.content += text
+            XCTAssertTrue(device.store.update(snippet))
+        }
+        func settled() -> Bool {
+            !device.coordinator.hasPendingLibraryChangeSync && device.coordinator.isQuiescent
+        }
+        let start = try commitCount()
+
+        // An activation right after a successful round starts nothing.
+        let requests = GitBackendURLProtocol.requestCount(host: host)
+        device.coordinator.syncAfterActivation()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(GitBackendURLProtocol.requestCount(host: host), requests)
+
+        // Keystrokes 0.1 s apart push nothing while they last, nor does a poll or an
+        // activation meanwhile.
+        for keystroke in 1...6 {
+            type("\(keystroke)")
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        device.coordinator.pollIntervalElapsed()
+        device.coordinator.syncAfterActivation()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(try commitCount(), start, "a half-finished edit was pushed")
+        XCTAssertTrue(device.coordinator.hasPendingPacedLibraryChangeSync)
+
+        // After the pause, one round pushes the whole burst as one commit.
+        let pushed = await waitUntil { settled() }
+        XCTAssertTrue(pushed)
+        XCTAssertEqual(try commitCount(), start + 1)
+
+        // Typing without a pause still reaches the repository within the maximum wait.
+        let continuous = try commitCount()
+        let began = ProcessInfo.processInfo.systemUptime
+        while ProcessInfo.processInfo.systemUptime - began < 6 {
+            type(".")
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        let duringTyping = try commitCount() - continuous
+        XCTAssertGreaterThanOrEqual(duringTyping, 1, "continuous typing never synced")
+        XCTAssertLessThan(duringTyping, 10, "\(duringTyping) commits for 30 keystrokes")
+        _ = await waitUntil { settled() }
+
+        // Sync Now does not wait for a pause.
+        type("!")
+        XCTAssertTrue(device.coordinator.hasPendingPacedLibraryChangeSync)
+        var before = try commitCount()
+        try await sync(device)
+        XCTAssertFalse(device.coordinator.hasPendingLibraryChangeSync)
+        XCTAssertEqual(try commitCount(), before + 1)
+
+        // Neither does an app about to be suspended or to quit.
+        type("?")
+        before = try commitCount()
+        let flushed = await withCheckedContinuation { continuation in
+            XCTAssertTrue(device.coordinator.flushPendingLibraryChangeSync {
+                continuation.resume(returning: $0)
+            })
+        }
+        guard case .completed(.idle) = flushed else { return XCTFail("flush: \(flushed)") }
+        XCTAssertEqual(try commitCount(), before + 1)
+        XCTAssertFalse(device.coordinator.flushPendingLibraryChangeSync(), "nothing left to push")
+    }
+
+    private static func library(count: Int) -> [Snippet] {
+        (0..<count).map { index in
+            Snippet(
+                id: UUID(), name: "Snippet \(index)", keyword: "snippet\(index)",
+                content: String(repeating: "lorem ipsum dolor sit amet ", count: 20) + "\(index)",
+                tags: ["tag\(index % 7)"], isEnabled: true, isPinned: false,
+                createdAt: Date(timeIntervalSince1970: 1_786_579_200),
+                updatedAt: Date(timeIntervalSince1970: 1_786_579_200))
+        }
+    }
+
+    private func commitCount() throws -> Int {
+        Int(try git(["--git-dir", bare.path, "rev-list", "--count", "main"])) ?? -1
+    }
+
+    private func waitUntil(timeout: TimeInterval = 15, _ condition: () -> Bool) async -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return condition()
+    }
+
+    /// Measures how long the main run loop goes without servicing a 5 ms timer, and
+    /// makes saves on a second timer, timing each.
+    private final class MainThreadMonitor {
+        private(set) var longestGap: TimeInterval = 0
+        /// How long each save took to return.
+        private(set) var saves: [TimeInterval] = []
+        private var timers: [Timer] = []
+        private var last: TimeInterval = 0
+        private var tick = 0
+        private var save: (Int) -> Void = { _ in }
+
+        func start(savingEvery interval: TimeInterval, save: @escaping (Int) -> Void) {
+            stop()
+            longestGap = 0
+            saves = []
+            tick = 0
+            self.save = save
+            last = ProcessInfo.processInfo.systemUptime
+            let heartbeat = Timer(timeInterval: 0.005, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let now = ProcessInfo.processInfo.systemUptime
+                    self.longestGap = max(self.longestGap, now - self.last)
+                    self.last = now
+                }
+            }
+            let saver = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.tick += 1
+                    let began = ProcessInfo.processInfo.systemUptime
+                    self.save(self.tick)
+                    self.saves.append(ProcessInfo.processInfo.systemUptime - began)
+                }
+            }
+            timers = [heartbeat, saver]
+            for timer in timers { RunLoop.main.add(timer, forMode: .common) }
+        }
+
+        func stop() {
+            for timer in timers { timer.invalidate() }
+            timers = []
+        }
+    }
+
     // MARK: - Secure fixture
 
     /// Creates a library from `device`'s sheet and returns its recovery code.
@@ -1869,6 +2051,19 @@ final class GitBackendURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var offlineAtNextPush: Set<String> = []
     /// Hosts that answer nothing, as with the network down.
     nonisolated(unsafe) private static var offline: Set<String> = []
+    /// Seconds each request to a host waits before it is answered, as over a slow link.
+    nonisolated(unsafe) private static var latency: [String: TimeInterval] = [:]
+    nonisolated(unsafe) private static var requests: [String: Int] = [:]
+
+    /// How many requests reached `host` so far.
+    static func requestCount(host: String) -> Int {
+        lock.withLock { requests[host, default: 0] }
+    }
+
+    /// Delays every later answer from `host` (off the main thread), as a slow host would.
+    static func setLatency(_ seconds: TimeInterval, host: String) {
+        lock.withLock { latency[host] = seconds > 0 ? seconds : nil }
+    }
 
     static func dropResponseOfNextPush(host: String) {
         lock.withLock { _ = dropNextPushResponse.insert(host) }
@@ -1899,6 +2094,8 @@ final class GitBackendURLProtocol: URLProtocol, @unchecked Sendable {
             pushActions[host] = nil
             offlineAtNextPush.remove(host)
             offline.remove(host)
+            latency[host] = nil
+            requests[host] = nil
         }
     }
 
@@ -1925,10 +2122,14 @@ final class GitBackendURLProtocol: URLProtocol, @unchecked Sendable {
                 let host = request.url?.host ?? ""
                 let isPush = request.httpMethod == "POST" && request.url?.lastPathComponent == "git-receive-pack"
                 let unreachable = Self.lock.withLock { () -> Bool in
+                    Self.requests[host, default: 0] += 1
                     if isPush, Self.offlineAtNextPush.remove(host) != nil { Self.offline.insert(host) }
                     return Self.offline.contains(host)
                 }
                 if unreachable { throw URLError(.notConnectedToInternet) }
+                if let delay = Self.lock.withLock({ Self.latency[host] }) {
+                    Thread.sleep(forTimeInterval: delay)
+                }
                 let (status, headers, body) = try respond()
                 if isPush, let action = Self.lock.withLock({ Self.pushActions.removeValue(forKey: host) }) {
                     action()

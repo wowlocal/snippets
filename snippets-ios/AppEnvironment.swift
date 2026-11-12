@@ -235,7 +235,7 @@ final class AppEnvironment {
         } else if SyncCoordinator.isEnabled {
             // No structural callback was emitted, so the lifecycle request is the one
             // round this activation needs.
-            _ = syncCoordinator.syncNow(trigger: .becameActive)
+            syncCoordinator.syncAfterActivation()
         }
     }
 
@@ -243,7 +243,45 @@ final class AppEnvironment {
         Diagnostics.record(.lifecycle(.enteredBackground))
         vaultSession.lock()
         store.flushPendingWrites()
+        pushPendingSyncBeforeSuspension()
         Diagnostics.flush()
+    }
+
+    /// Git holds an edit back for up to two minutes before it pushes it, and iOS
+    /// suspends the app, timers included, soon after it leaves the screen. Push a
+    /// waiting change now, under a background task so the round can finish. A round
+    /// cut short by suspension is safe: its offer is journaled before anything is sent.
+    private func pushPendingSyncBeforeSuspension() {
+        guard syncCoordinator.hasPendingPacedLibraryChangeSync else { return }
+        runInBackground("Sync pending snippet changes") { [syncCoordinator] finished in
+            if !syncCoordinator.flushPendingLibraryChangeSync(completion: { _ in finished() }) {
+                finished()
+            }
+        }
+    }
+
+    /// Runs `work` under a background task that ends when `work` calls its argument, or
+    /// when iOS expires it first. Replaced in tests.
+    var runInBackground: @MainActor (String, (@escaping () -> Void) -> Void) -> Void =
+        AppEnvironment.runInBackgroundTask
+
+    private static func runInBackgroundTask(
+        named name: String, _ work: (@escaping () -> Void) -> Void
+    ) {
+        let application = UIApplication.shared
+        let task = BackgroundTask()
+        task.identifier = application.beginBackgroundTask(withName: name) { task.end(application) }
+        work { task.end(application) }
+    }
+
+    private final class BackgroundTask {
+        var identifier = UIBackgroundTaskIdentifier.invalid
+
+        func end(_ application: UIApplication) {
+            guard identifier != .invalid else { return }
+            application.endBackgroundTask(identifier)
+            identifier = .invalid
+        }
     }
 
     func receivedMemoryWarning() {

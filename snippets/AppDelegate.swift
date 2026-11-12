@@ -423,7 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func applicationDidBecomeActive(_ notification: Notification) {
         Diagnostics.record(.lifecycle(.becameActive))
         guard postLaunchServicesStarted else { return }
-        _ = syncCoordinator.syncNow(trigger: .becameActive)
+        syncCoordinator.syncAfterActivation()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -604,18 +604,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 sender.reply(toApplicationShouldTerminate: false)
                 return
             }
-            self.terminationReplyPending = false
-            if !canTerminate {
+            guard canTerminate else {
+                self.terminationReplyPending = false
                 self.expansionEngine.cancelTerminationPreparation()
+                sender.reply(toApplicationShouldTerminate: false)
+                return
             }
-            sender.reply(toApplicationShouldTerminate: canTerminate)
+            if !self.replyAfterPushingPendingSync(sender) {
+                self.terminationReplyPending = false
+                sender.reply(toApplicationShouldTerminate: true)
+            }
         }
         guard !ready else {
+            if replyAfterPushingPendingSync(sender) { return .terminateLater }
             terminationReplyPending = false
             return .terminateNow
         }
 
         return .terminateLater
+    }
+
+    /// The longest Quit waits for a Git edit that was still in the debounce to reach
+    /// the repository. A slower host gets it from the next launch's first round.
+    private static let pendingSyncQuitTimeout: TimeInterval = 5
+
+    /// Git holds an edit back for up to two minutes before it pushes it. Quitting in
+    /// that window pushes it now and replies (always later, never inside this call)
+    /// once the round ends or `pendingSyncQuitTimeout` passes. Returns false, doing
+    /// nothing, when no such change is waiting: then the caller replies itself.
+    private func replyAfterPushingPendingSync(_ sender: NSApplication) -> Bool {
+        guard postLaunchServicesStarted,
+              syncCoordinator.hasPendingPacedLibraryChangeSync else { return false }
+        let reply = RunOnce { [weak self] in
+            self?.terminationReplyPending = false
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        syncCoordinator.flushPendingLibraryChangeSync { _ in
+            DispatchQueue.main.async { reply.run() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pendingSyncQuitTimeout) {
+            reply.run()
+        }
+        return true
+    }
+
+    private final class RunOnce {
+        private var action: (() -> Void)?
+
+        init(_ action: @escaping () -> Void) { self.action = action }
+
+        func run() {
+            let action = self.action
+            self.action = nil
+            action?()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

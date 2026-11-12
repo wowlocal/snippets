@@ -30,7 +30,12 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     private let metadataURL: URL
     private let temporaryDirectory: URL
     private let flushPendingEditorEdits: () throws -> Void
-    private var metadataCache: SyncBase?
+    private var metadataCache: SyncBase? {
+        didSet { metadataCacheGeneration &+= 1 }
+    }
+    /// Changes whenever the cache does, so a projection computed off the main actor
+    /// can tell that the cache moved underneath it.
+    private var metadataCacheGeneration: UInt64 = 0
 
     private struct ApplyResult {
         var changedIDs: [UUID]
@@ -76,6 +81,29 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         try projectedSnapshot(agreedBase: agreedBase, allowingReviewedQuarantine: false)
     }
 
+    func currentEnvelopesForRound(agreedBase: SyncBase) async throws -> [UUID: SyncEnvelope] {
+        try await currentSnapshotForRound(agreedBase: agreedBase).envelopes
+    }
+
+    /// `currentSnapshot` as a sync round takes it: the same read, with the projection's
+    /// CPU-bound part (decoding the sidecar, hashing every envelope for validation,
+    /// encoding the new sidecar) off the main actor. That part used to freeze the UI
+    /// for most of every round on a library of a few hundred snippets.
+    ///
+    /// The library and sidecar are read before the first suspension, so the result is
+    /// the one `currentSnapshot` returns at the moment of the call. Promote and demote
+    /// write the sidecar from the main actor at any time; if one did while this ran,
+    /// writing this projection's sidecar would overwrite that handoff, so the read is
+    /// taken again synchronously instead, exactly as before.
+    func currentSnapshotForRound(agreedBase: SyncBase) async throws -> SyncLibrarySnapshot {
+        let read = try readProjection(agreedBase: agreedBase, allowingReviewedQuarantine: false)
+        let projection = try await SyncEngine.offMainActor { Self.project(read) }
+        if let snapshot = try commitProjection(projection, of: read, checkingSidecar: true) {
+            return snapshot
+        }
+        return try projectedSnapshot(agreedBase: agreedBase, allowingReviewedQuarantine: false)
+    }
+
     /// The recovery action needs one narrow read path while ordinary mutation and sync
     /// remain quarantined. `adoptRecoveredLibraryIfPresent` has already decoded the
     /// exact primary bytes; this flag authorizes projection only, never writes or apply.
@@ -83,6 +111,45 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         agreedBase: SyncBase,
         allowingReviewedQuarantine: Bool
     ) throws -> SyncLibrarySnapshot {
+        let read = try readProjection(
+            agreedBase: agreedBase, allowingReviewedQuarantine: allowingReviewedQuarantine)
+        // Nothing runs between the read and the commit here, so the sidecar is the one
+        // that was read and the commit always completes.
+        guard let snapshot = try commitProjection(
+            Self.project(read), of: read, checkingSidecar: false) else {
+            preconditionFailure("an unchecked projection commit always completes")
+        }
+        return snapshot
+    }
+
+    /// Everything a projection reads, taken at one instant on the main actor.
+    private nonisolated struct ProjectionRead: Sendable {
+        let agreedBase: SyncBase
+        let sidecar: SyncBaseFile.Bytes
+        let cachedMetadata: SyncBase?
+        let cacheGeneration: UInt64
+        let primary: Result<(snippets: [Snippet], vault: VaultDocument?), SyncEngineFailure>
+        let vaultIsUnreadable: Bool
+        let vaultDocumentIsAbsent: Bool
+        let deviceID: String
+    }
+
+    /// What `project` decided, applied by `commitProjection` on the main actor.
+    private nonisolated struct Projection: Sendable {
+        /// The value `loadMetadata` would have left in the cache: set even when a later
+        /// step fails, as the synchronous projection always did.
+        var cacheAfterLoad: SyncBase?
+        var result: Result<SyncLibrarySnapshot, SyncEngineFailure>
+        /// The sidecar to write, and its bytes or why they could not be encoded.
+        var sidecarWrite: (next: SyncBase, bytes: Result<Data, any Error>)?
+        /// Thrown only after the sidecar is written, as before.
+        var receiptsFailure: SyncEngineFailure?
+    }
+
+    private func readProjection(
+        agreedBase: SyncBase,
+        allowingReviewedQuarantine: Bool
+    ) throws -> ProjectionRead {
         guard allowingReviewedQuarantine || !store.isLibraryQuarantined else {
             throw SyncEngineFailure(
                 reason: .localLibraryQuarantined,
@@ -106,35 +173,83 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                     + "sync stopped before offering them to iCloud")
         }
 
-        let metadata = try loadMetadata(fallingBackTo: agreedBase)
+        // The sidecar is read first, then the primary files, as before; decoding the
+        // sidecar is left to `project`. Other app boundaries (notably promote/demote)
+        // make safety-critical sidecar writes without owning this bridge instance, so
+        // it is re-read on every projection rather than trusted from the cache.
+        let sidecar = SyncBaseFile.read(from: metadataURL)
         // Decode both files under their shared read lock. Besides closing the external
         // writer tear, this canonicalizes Date precision exactly as a later transaction
         // sees it; in-memory VaultFile.update results can retain sub-millisecond values
         // that the durable JSON representation intentionally rounds.
-        let primary: LibraryTransaction.Outcome<(snippets: [Snippet], vault: VaultDocument?)>
+        let primary: Result<(snippets: [Snippet], vault: VaultDocument?), SyncEngineFailure>
         do {
-            primary = try LibraryTransaction.perform(lockTimeout: lockTimeout) { contents in
+            let outcome = try LibraryTransaction.perform(lockTimeout: lockTimeout) { contents in
                 (contents.snippets, contents.vault)
             }
+            primary = .success(outcome.value)
         } catch {
-            throw SyncEngineFailure(
+            primary = .failure(SyncEngineFailure(
                 reason: .vaultUnreadable,
                 detail: "the primary snippet library could not be read consistently; "
-                    + "sync stopped before offering or applying changes")
+                    + "sync stopped before offering or applying changes"))
         }
-        let snippets = primary.value.snippets
-        let vault = primary.value.vault
-        try refuseToSpeakForAnUnreadableVault(
+        return ProjectionRead(
+            agreedBase: agreedBase,
+            sidecar: sidecar,
+            cachedMetadata: metadataCache,
+            cacheGeneration: metadataCacheGeneration,
+            primary: primary,
+            vaultIsUnreadable: secureStore.isUnreadable,
+            vaultDocumentIsAbsent: secureStore.document == nil,
+            deviceID: store.deviceID)
+    }
+
+    /// The projection itself: pure, so a round runs it off the main actor. It decides
+    /// everything `commitProjection` applies, in the order the steps always ran.
+    private nonisolated static func project(_ read: ProjectionRead) -> Projection {
+        let metadata: SyncBase
+        switch SyncBaseFile.decode(read.sidecar) {
+        case .loaded(let loaded):
+            metadata = loaded
+        case .missing:
+            metadata = read.cachedMetadata ?? read.agreedBase
+        case .tooNew(let version):
+            return Projection(cacheAfterLoad: nil, result: .failure(SyncEngineFailure(
+                reason: .schemaTooNew,
+                detail: "Sync/library-metadata.json is version \(version); this build "
+                    + "will not replace newer projection metadata")))
+        case .unreadable:
+            return Projection(cacheAfterLoad: nil, result: .failure(SyncEngineFailure(
+                reason: .localLibraryQuarantined,
+                detail: "sync projection metadata could not be read; sync stopped "
+                    + "instead of replacing unknown causal fields")))
+        }
+
+        let snippets: [Snippet]
+        let vault: VaultDocument?
+        switch read.primary {
+        case .success(let primary):
+            snippets = primary.snippets
+            vault = primary.vault
+        case .failure(let failure):
+            return Projection(cacheAfterLoad: metadata, result: .failure(failure))
+        }
+        if let refusal = refusalToSpeakForAnUnreadableVault(
+            vaultIsUnreadable: read.vaultIsUnreadable,
+            vaultDocumentIsAbsent: read.vaultDocumentIsAbsent,
             actualVault: vault,
-            against: agreedBase,
-            metadata: metadata)
+            against: read.agreedBase,
+            metadata: metadata) {
+            return Projection(cacheAfterLoad: metadata, result: .failure(refusal))
+        }
         let records = vault?.records ?? []
         let envelopes = SyncLibraryProjection.currentEnvelopes(
             snippets: snippets,
             records: records,
-            deviceID: store.deviceID,
+            deviceID: read.deviceID,
             metadata: metadata,
-            agreedBase: agreedBase,
+            agreedBase: read.agreedBase,
             vaultKID: vault?.kid)
         do {
             for envelope in envelopes.values {
@@ -148,12 +263,15 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                 }
             }
         } catch {
-            throw SyncEngineFailure(
+            return Projection(cacheAfterLoad: metadata, result: .failure(SyncEngineFailure(
                 reason: .localLibraryQuarantined,
                 detail: "local secure conflict state is malformed or belongs to another vault; "
-                    + "sync stopped before offering it")
+                    + "sync stopped before offering it")))
         }
-        persistMetadata(envelopes, replacing: metadata)
+        // Written only when it differs from what was loaded, as `persistMetadata` does.
+        let next = SyncLibraryProjection.projectionSidecar(for: envelopes, replacing: metadata)
+        let sidecarWrite = next == metadata
+            ? nil : (next: next, bytes: Result<Data, any Error> { try SyncBaseFile.encode(next) })
         var primaryStates: [UUID: SyncPrimaryState] = [:]
         for snippet in snippets {
             primaryStates[snippet.id] = .plain(snippet)
@@ -174,11 +292,50 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
                 }
             }
         }
-        return SyncLibrarySnapshot(
-            envelopes: envelopes,
-            primaryStates: primaryStates,
-            installedConflictPrerequisiteHashes: try validatedConflictInstallReceipts(
-                in: vault))
+        let receipts = validatedConflictInstallReceipts(in: vault)
+        var receiptsFailure: SyncEngineFailure?
+        if case .failure(let failure) = receipts { receiptsFailure = failure }
+        return Projection(
+            cacheAfterLoad: metadata,
+            result: .success(SyncLibrarySnapshot(
+                envelopes: envelopes,
+                primaryStates: primaryStates,
+                installedConflictPrerequisiteHashes: (try? receipts.get()) ?? [:])),
+            sidecarWrite: sidecarWrite,
+            receiptsFailure: receiptsFailure)
+    }
+
+    /// Applies a projection on the main actor: the metadata cache, the best-effort
+    /// sidecar write, then the outcome. With `checkingSidecar`, returns nil, changing
+    /// nothing, when the sidecar file or the cache changed since `read` was taken.
+    private func commitProjection(
+        _ projection: Projection,
+        of read: ProjectionRead,
+        checkingSidecar: Bool
+    ) throws -> SyncLibrarySnapshot? {
+        if checkingSidecar {
+            guard metadataCacheGeneration == read.cacheGeneration,
+                  SyncBaseFile.read(from: metadataURL) == read.sidecar else { return nil }
+        }
+        if let cacheAfterLoad = projection.cacheAfterLoad { metadataCache = cacheAfterLoad }
+        let snapshot = try projection.result.get()
+        if let write = projection.sidecarWrite {
+            do {
+                try AtomicFileWriter.write(
+                    try write.bytes.get(), to: metadataURL, temporaryDirectory: temporaryDirectory)
+                metadataCache = write.next
+            } catch {
+                // Derived state only. The agreed base is the fallback, so losing this can
+                // cause one conservative re-push after restart but cannot lose a snippet.
+                Diagnostics.record(.storageFailure(
+                    area: .syncMetadata,
+                    operation: .write,
+                    failure: DiagnosticFailure(error),
+                    attempt: nil))
+            }
+        }
+        if let receiptsFailure = projection.receiptsFailure { throw receiptsFailure }
+        return snapshot
     }
 
     func reviewRecoveredLibrary(agreedBase: SyncBase) throws -> [UUID: SyncEnvelope] {
@@ -202,17 +359,17 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         }
     }
 
-    private func validatedConflictInstallReceipts(
+    private nonisolated static func validatedConflictInstallReceipts(
         in vault: VaultDocument?
-    ) throws -> [UUID: String] {
-        guard let vault else { return [:] }
+    ) -> Result<[UUID: String], SyncEngineFailure> {
+        guard let vault else { return .success([:]) }
         guard let receipts = vault.localConflictInstallReceipts else {
-            throw SyncEngineFailure(
+            return .failure(SyncEngineFailure(
                 reason: .localLibraryQuarantined,
                 detail: "local conflict-install receipts are malformed; sync stopped "
-                    + "instead of guessing whether an absent copy was deleted")
+                    + "instead of guessing whether an absent copy was deleted"))
         }
-        return receipts
+        return .success(receipts)
     }
 
     func retainConflictPrerequisiteInstallReceipts(for ids: Set<UUID>) throws {
@@ -258,12 +415,17 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
     ///
     /// Both halts are sticky and re-checked on every round, so "Check Again" on a vault
     /// that is still unreadable stops again instead of pushing.
-    private func refuseToSpeakForAnUnreadableVault(
-        actualVault: VaultDocument? = nil,
+    ///
+    /// Returns the halt, if any. `vaultIsUnreadable` and `vaultDocumentIsAbsent` are the
+    /// secure store's state when the library was read.
+    private nonisolated static func refusalToSpeakForAnUnreadableVault(
+        vaultIsUnreadable: Bool,
+        vaultDocumentIsAbsent: Bool,
+        actualVault: VaultDocument?,
         against base: SyncBase, metadata: SyncBase
-    ) throws {
-        if secureStore.isUnreadable {
-            throw SyncEngineFailure(
+    ) -> SyncEngineFailure? {
+        if vaultIsUnreadable {
+            return SyncEngineFailure(
                 reason: .vaultUnreadable,
                 detail: "the secure vault on this device could not be read, so its snippets "
                     + "cannot be synced without appearing to have been deleted")
@@ -272,9 +434,9 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
         // No vault at all is ordinary: a Mac that never made one, or one whose vault the
         // user deliberately forgot — `forgetEverything` clears these entries itself, so
         // reaching here means the file went away underneath us instead.
-        if actualVault != nil { return }
-        guard secureStore.document == nil else {
-            throw SyncEngineFailure(
+        if actualVault != nil { return nil }
+        guard vaultDocumentIsAbsent else {
+            return SyncEngineFailure(
                 reason: .vaultUnreadable,
                 detail: "the in-memory vault exists but its primary file is missing; "
                     + "sync stopped instead of projecting secure deletions")
@@ -285,11 +447,12 @@ final class SnippetLibraryBridge: SyncLibraryAccess {
             .filter { $0.secure && !$0.deleted }.map(\.id)
         let orphaned = Set(baseIDs).union(metadataIDs).count
         guard orphaned == 0 else {
-            throw SyncEngineFailure(
+            return SyncEngineFailure(
                 reason: .vaultUnreadable,
                 detail: "\(orphaned) secure snippet(s) have been synced from this device but "
                     + "its vault file is missing, so syncing now would delete them everywhere")
         }
+        return nil
     }
 
     func liveIDs() -> Set<UUID> {

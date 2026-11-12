@@ -558,6 +558,11 @@ nonisolated protocol SyncTransport: Sendable {
     /// "never".
     var pollInterval: TimeInterval { get }
 
+    /// How automatic rounds are paced on a backend for which every round that carries
+    /// a change is expensive (Git: a commit and a push). `nil`, the default, keeps the
+    /// coordinator's ordinary short debounce and lets every automatic trigger run.
+    var roundPacing: SyncRoundPacing? { get }
+
     /// Out-of-band hints. One long-lived stream per transport, with one consumer —
     /// `AsyncStream` has a single continuation, so a second iteration would steal
     /// events rather than duplicate them.
@@ -637,7 +642,20 @@ nonisolated protocol SyncTransport: Sendable {
     func shutdown() async
 }
 
+/// Pacing for automatic rounds, declared by a transport whose rounds are costly.
+/// Explicit requests (Sync Now, setup, recovery) are never paced.
+nonisolated struct SyncRoundPacing: Equatable, Sendable {
+    /// Quiet period after the last local change before the round that pushes it.
+    var localChangeDelay: TimeInterval
+    /// Longest a local change waits while further changes keep restarting the delay.
+    var localChangeMaximumWait: TimeInterval
+    /// An app activation this soon after a successful round fetches nothing new
+    /// often enough to be worth a round of its own; the poll covers it.
+    var activationRefreshInterval: TimeInterval
+}
+
 nonisolated extension SyncTransport {
+    var roundPacing: SyncRoundPacing? { nil }
     func resolveAccountIdentity() async throws -> SyncAccountIdentity? { nil }
     func preflightScope() async throws -> SyncScopePreflight {
         SyncScopePreflight(identity: try await resolveAccountIdentity())

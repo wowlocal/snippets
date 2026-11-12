@@ -112,6 +112,22 @@ actor GitSyncTransport: SyncTransport {
     nonisolated let identifier = "git"
     nonisolated let supportsPush = true
     nonisolated let pollInterval: TimeInterval = 60
+
+    /// Quiet period after the last local edit before Git syncs it. Every Git round
+    /// that carries a change is a commit and three or four requests, and an editor
+    /// publishes on every keystroke: the ordinary one-second debounce turned each pause
+    /// in typing into its own commit. Thirty seconds covers the pauses within editing
+    /// one snippet, and other devices poll only once a minute anyway.
+    nonisolated static let localChangeDebounce: TimeInterval = 30
+    /// Continuous editing still reaches the repository at least this often.
+    nonisolated static let localChangeMaximumWait: TimeInterval = 120
+    /// Coming back to the app within this long of a successful round does not start
+    /// another one (iOS also "activates" after Face ID or Control Center).
+    nonisolated static let activationRefreshInterval: TimeInterval = 30
+    nonisolated let roundPacing: SyncRoundPacing? = SyncRoundPacing(
+        localChangeDelay: localChangeDebounce,
+        localChangeMaximumWait: localChangeMaximumWait,
+        activationRefreshInterval: activationRefreshInterval)
     nonisolated let events: AsyncStream<SyncTransportEvent>
 
     private let configuration: Configuration

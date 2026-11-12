@@ -256,6 +256,17 @@ key handling and failure codes are in `docs/git-sync.md`.
   asks for `deepen 1`), and macOS ssh shares connections. `GitIncrementalFetchTests`
   guards the first two; measure real hosts with `GitSyncHostBenchmarkTests` and
   `scripts/test-git-sync-hosted.sh owner/scratch-repo` (opt-in, writes to that repo).
+- Automatic Git rounds are paced by the transport's `roundPacing` (`docs/git-sync.md`,
+  "When a round runs"): a 30 s debounce after local changes capped at 120 s, polls and
+  activations deferring to a waiting change, and a waiting change pushed when iOS
+  backgrounds or macOS quits. Explicit actions (Sync Now, setup, recovery) are never
+  paced, and the other providers declare no pacing; keep both true.
+- A round's CPU-bound local work (projection, journal reconcile, base encoding) runs off
+  the main actor (`currentSnapshotForRound`, `SyncEngine.offMainActor`); keep it there.
+  An implementation must read the library before it first suspends, and a reconcile
+  consumes only the UI deletion intents captured before that read.
+  `GitSyncSettingsMacTests.testAGitRoundAgainstASlowHostLeavesTheMainThreadResponsive`
+  guards the main thread.
 - Each device pins the library mode (encrypted or plain text) the user agreed to.
   A manifest naming another mode stops sync with `git_library_mode_changed`; never
   follow a changed mode silently, and never give an encrypted library's transport the

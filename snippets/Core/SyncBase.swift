@@ -588,14 +588,34 @@ nonisolated enum SyncBaseFile {
         case unreadable
     }
 
-    static func load(from url: URL = SnippetStorageLocations.syncBaseFileURL) -> Outcome {
-        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
+    /// The raw file, before decoding. Reading and decoding are separate so a caller
+    /// can take the bytes at one instant and decode them elsewhere (a sync round does
+    /// the decoding off the main actor); `load` is exactly `decode(read(url))`.
+    enum Bytes: Equatable, Sendable {
+        case present(Data)
+        case missing
+        case unreadable
+    }
 
-        let data: Data
+    static func load(from url: URL = SnippetStorageLocations.syncBaseFileURL) -> Outcome {
+        decode(read(from: url))
+    }
+
+    static func read(from url: URL = SnippetStorageLocations.syncBaseFileURL) -> Bytes {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
         do {
-            data = try Data(contentsOf: url)
+            return .present(try Data(contentsOf: url))
         } catch {
             return .unreadable
+        }
+    }
+
+    static func decode(_ bytes: Bytes) -> Outcome {
+        let data: Data
+        switch bytes {
+        case .present(let present): data = present
+        case .missing: return .missing
+        case .unreadable: return .unreadable
         }
 
         if let probe = try? JSONDecoder().decode(SchemaVersionProbe.self, from: data),
@@ -616,9 +636,14 @@ nonisolated enum SyncBaseFile {
         to url: URL = SnippetStorageLocations.syncBaseFileURL,
         temporaryDirectory: URL = SnippetStorageLocations.tmpFolderURL
     ) throws {
+        try AtomicFileWriter.write(try encode(base), to: url, temporaryDirectory: temporaryDirectory)
+    }
+
+    /// The exact bytes `write` stores.
+    static func encode(_ base: SyncBase) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        try AtomicFileWriter.write(try encoder.encode(base), to: url, temporaryDirectory: temporaryDirectory)
+        return try encoder.encode(base)
     }
 }

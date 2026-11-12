@@ -51,7 +51,7 @@ import Foundation
 ///
 /// Collapsing them means either giving this type a hand-rolled encoder it does not need,
 /// or giving the wire a `Codable` one it cannot use.
-nonisolated enum JSONValue: Codable, Equatable, Hashable {
+nonisolated enum JSONValue: Codable, Equatable, Hashable, Sendable {
     case null
     case bool(Bool)
     case integer(Int64)

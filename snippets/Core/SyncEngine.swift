@@ -135,6 +135,13 @@ protocol SyncLibraryAccess: AnyObject {
     func finalizeRecoveredLibraryReview() throws
     /// Captures projection and exact primary comparison tokens as one logical read.
     func currentSnapshot(agreedBase: SyncBase) throws -> SyncLibrarySnapshot
+    /// `currentEnvelopes` and `currentSnapshot` as a running round reads them. The
+    /// result must be the one the synchronous read returns at the moment of the call;
+    /// an implementation may do its CPU-bound part off the main actor meanwhile. It
+    /// must take its read of the library before it first suspends, so nothing the
+    /// main actor does after the call can leak into the result.
+    func currentEnvelopesForRound(agreedBase: SyncBase) async throws -> [UUID: SyncEnvelope]
+    func currentSnapshotForRound(agreedBase: SyncBase) async throws -> SyncLibrarySnapshot
     /// Partitions records before the deletion guard. A deletion the library cannot file
     /// must not count toward a mass-deletion halt, and must not be passed to `applyRemote`.
     func classifyRemote(_ envelopes: [SyncEnvelope]) -> RemoteClassification
@@ -200,6 +207,14 @@ protocol SyncLibraryAccess: AnyObject {
     }
 
     func finalizeRecoveredLibraryReview() throws {}
+
+    func currentEnvelopesForRound(agreedBase: SyncBase) async throws -> [UUID: SyncEnvelope] {
+        try currentEnvelopes(agreedBase: agreedBase)
+    }
+
+    func currentSnapshotForRound(agreedBase: SyncBase) async throws -> SyncLibrarySnapshot {
+        try currentSnapshot(agreedBase: agreedBase)
+    }
 
     func currentSnapshot(agreedBase: SyncBase) throws -> SyncLibrarySnapshot {
         let envelopes = try currentEnvelopes(agreedBase: agreedBase)
@@ -1462,7 +1477,13 @@ final class SyncEngine {
         // own changes have left it — and if the process dies between the two, those
         // changes are gone with nothing to recover them from. Pushing first means the
         // worst case is a duplicate round, not a lost edit.
-        let current = try library.currentEnvelopes(
+        //
+        // The UI deletion intents this reconcile may consume are the ones noted before
+        // the library was read. One noted while the projection or reconcile runs off
+        // the main actor belongs to a deletion this read may not contain yet; consuming
+        // it against a still-live record would drop it, so it waits for the next round.
+        let deletionIntents = userInitiatedDeletionIDs
+        let current = try await library.currentEnvelopesForRound(
             agreedBase: journal.projectionKnowledge(over: base))
         var reconciled = journal
         do {
@@ -1483,14 +1504,13 @@ final class SyncEngine {
                 detail: "a deterministic conflict-copy identifier is occupied by "
                     + "unrelated or malformed data; sync stopped without overwriting it")
         }
-        reconciled.reconcile(
+        reconciled = try await reconciledOffMainActor(
+            reconciled,
             current: current,
             confirmed: base,
-            deviceID: device,
-            now: now(),
-            userInitiatedDeletionIDs: userInitiatedDeletionIDs)
+            userInitiatedDeletionIDs: deletionIntents)
         try persistJournal(reconciled)
-        consumeUserDeletionIntents(afterReconciling: current)
+        consumeUserDeletionIntents(afterReconciling: current, among: deletionIntents)
 
         let resolutions = journal.carrierResolutions(current: current, confirmed: base)
         if !resolutions.isEmpty {
@@ -1668,7 +1688,7 @@ final class SyncEngine {
                 // dependency-owned source is stronger: only this submit response is
                 // an acceptance receipt. A byte-identical value learned by fetch (even
                 // with a newer generation) must never close its copy-before-source edge.
-                try persistBase(nextBase)
+                try await persistBaseOffMainActor(nextBase)
                 var acknowledged = journal
                 acknowledged.acknowledge(Array(acceptedIDs), confirmed: base)
                 try persistJournal(acknowledged)
@@ -1678,7 +1698,7 @@ final class SyncEngine {
                 // receipt belongs to the old epoch and reconcile keeps/reopens it. If
                 // this step crashes, no receipt is persisted: restart retries the exact
                 // source CAS conservatively, which is safe and eventually idempotent.
-                let afterAcceptance = try library.currentEnvelopes(
+                let afterAcceptance = try await library.currentEnvelopesForRound(
                     agreedBase: journal.projectionKnowledge(over: base))
                 var finalized = journal
                 do {
@@ -1693,11 +1713,10 @@ final class SyncEngine {
                         detail: "accepted conflict dependency state no longer matches "
                             + "its primary records; sync stopped without releasing it")
                 }
-                finalized.reconcile(
+                finalized = try await reconciledOffMainActor(
+                    finalized,
                     current: afterAcceptance,
-                    confirmed: base,
-                    deviceID: device,
-                    now: now())
+                    confirmed: base)
                 try persistJournal(finalized)
             }
 
@@ -1835,7 +1854,7 @@ final class SyncEngine {
         // Capture edits — especially an absence that means delete — which happened
         // while submit/fetch was suspended. This write precedes remote apply so a crash
         // cannot let the apply erase the only remaining evidence of local intent.
-        let localSnapshot = try library.currentSnapshot(
+        let localSnapshot = try await library.currentSnapshotForRound(
             agreedBase: journal.projectionKnowledge(over: base))
         let projectedLocal = localSnapshot.envelopes
         var beforeApply = journal
@@ -1850,8 +1869,8 @@ final class SyncEngine {
                 detail: "a dependency-owned conflict copy changed identity while sync "
                     + "was waiting for iCloud; no remote value was applied")
         }
-        beforeApply.reconcile(
-            current: projectedLocal, confirmed: base, deviceID: device, now: now())
+        beforeApply = try await reconciledOffMainActor(
+            beforeApply, current: projectedLocal, confirmed: base)
         try persistJournal(beforeApply)
 
         guard !incoming.isEmpty || isFullResync else {
@@ -1876,7 +1895,7 @@ final class SyncEngine {
             if opaqueFetchedIDs.isEmpty, unresolvedConflictIDs.isEmpty {
                 var nextBase = base
                 nextBase.adoptCursor(cursor, kind: cursorKind)
-                try persistBase(nextBase)
+                try await persistBaseOffMainActor(nextBase)
                 try await transport.acknowledgeFetched(through: cursor)
             }
             round.fullResync = isFullResync
@@ -2229,7 +2248,7 @@ final class SyncEngine {
                 detail: "a later conflict-copy generation did not match its durable lineage")
         }
         try persistJournal(postApplyJournal)
-        try persistBase(nextBase)
+        try await persistBaseOffMainActor(nextBase)
 
         // A fetched server value resolves ambiguity for that record. A matching offer
         // is acknowledged; a different value explicitly rejects the old offer while
@@ -2262,7 +2281,7 @@ final class SyncEngine {
         // `applyRemote` may have written a field-level merge rather than the server
         // envelope recorded in base. Reproject it now so that difference becomes the
         // next durable desired state before this round is considered complete.
-        let afterApply = try library.currentEnvelopes(
+        let afterApply = try await library.currentEnvelopesForRound(
             agreedBase: resolvedJournal.projectionKnowledge(over: base))
         do {
             try resolvedJournal.reconcileDependencies(
@@ -2275,8 +2294,8 @@ final class SyncEngine {
                 detail: "applied conflict dependency state no longer matches its primary "
                     + "records; sync stopped without overwriting them")
         }
-        resolvedJournal.reconcile(
-            current: afterApply, confirmed: base, deviceID: device, now: now())
+        resolvedJournal = try await reconciledOffMainActor(
+            resolvedJournal, current: afterApply, confirmed: base)
         try persistJournal(resolvedJournal)
 
         // Only after the journal no longer exposes a stale offer may the CAS ancestor
@@ -2287,7 +2306,7 @@ final class SyncEngine {
            unresolvedConflictIDs.isEmpty {
             var advancedBase = base
             advancedBase.adoptCursor(cursor, kind: cursorKind)
-            try persistBase(advancedBase)
+            try await persistBaseOffMainActor(advancedBase)
             try await transport.acknowledgeFetched(through: cursor)
         }
 
@@ -2978,16 +2997,73 @@ final class SyncEngine {
                 candidate, to: baseURL, temporaryDirectory: temporaryDirectory)
             base = candidate
         } catch {
-            Diagnostics.record(.storageFailure(
-                area: .syncBase,
-                operation: .write,
-                failure: DiagnosticFailure(error),
-                attempt: nil))
-            throw SyncEngineFailure(
-                reason: .localLibraryQuarantined,
-                detail: "the confirmed sync base could not be saved; sync stopped "
-                    + "before acknowledging any pending local change")
+            throw Self.baseWriteFailure(error)
         }
+    }
+
+    /// `persistBase` for a running round: the same write, published the same way, but
+    /// encoded and written off the main actor. Encoding the base hashes every envelope
+    /// in the library, which is most of what a round used to cost the main thread.
+    ///
+    /// Only the round writes `base.json` while it runs (vault removal waits for
+    /// quiescence), and the round awaits each write before its next step, so the order
+    /// of durable writes is unchanged.
+    private func persistBaseOffMainActor(_ candidate: SyncBase) async throws {
+        let url = baseURL
+        let temporaryDirectory = temporaryDirectory
+        do {
+            try await Self.offMainActor {
+                try SyncBaseFile.write(candidate, to: url, temporaryDirectory: temporaryDirectory)
+            }
+            base = candidate
+        } catch {
+            throw Self.baseWriteFailure(error)
+        }
+    }
+
+    private static func baseWriteFailure(_ error: Error) -> SyncEngineFailure {
+        Diagnostics.record(.storageFailure(
+            area: .syncBase,
+            operation: .write,
+            failure: DiagnosticFailure(error),
+            attempt: nil))
+        return SyncEngineFailure(
+            reason: .localLibraryQuarantined,
+            detail: "the confirmed sync base could not be saved; sync stopped "
+                + "before acknowledging any pending local change")
+    }
+
+    /// `SyncJournal.reconcile` for a running round, off the main actor. Reconciling
+    /// compares canonical hashes of every envelope in the library; it reads only its
+    /// arguments, so the result is the one the main actor would have computed.
+    private func reconciledOffMainActor(
+        _ journal: SyncJournal,
+        current: [UUID: SyncEnvelope],
+        confirmed: SyncBase,
+        userInitiatedDeletionIDs: Set<UUID> = []
+    ) async throws -> SyncJournal {
+        let device = device
+        let now = now()
+        return try await Self.offMainActor {
+            var reconciled = journal
+            reconciled.reconcile(
+                current: current,
+                confirmed: confirmed,
+                deviceID: device,
+                now: now,
+                userInitiatedDeletionIDs: userInitiatedDeletionIDs)
+            return reconciled
+        }
+    }
+
+    /// Runs pure, CPU-bound protocol work (canonical hashing, journal reconciliation,
+    /// JSON encoding) on the global executor, so a sync round leaves the main thread
+    /// free between the steps it has to take there. The work never touches the
+    /// library or this engine's state.
+    nonisolated static func offMainActor<T: Sendable>(
+        _ work: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await Task.detached(priority: Task.currentPriority) { try work() }.value
     }
 
     /// Same publish-after-durability rule for desired/offered state.
@@ -3034,11 +3110,18 @@ final class SyncEngine {
     /// marker (or proves there is no deletion left to publish). A conflict-protected
     /// live desired value keeps the intent for the later round that can finally make
     /// its tombstone.
+    ///
+    /// - Parameter reconciled: the intents the reconcile actually saw, when the round
+    ///   suspended between reading the library and reconciling. Intents noted since
+    ///   stay for the next round.
     private func consumeUserDeletionIntents(
-        afterReconciling current: [UUID: SyncEnvelope]
+        afterReconciling current: [UUID: SyncEnvelope],
+        among reconciled: Set<UUID>? = nil
     ) {
-        guard !userInitiatedDeletionIDs.isEmpty else { return }
-        let consumed = Set(userInitiatedDeletionIDs.filter { id in
+        let candidates = reconciled.map { $0.intersection(userInitiatedDeletionIDs) }
+            ?? userInitiatedDeletionIDs
+        guard !candidates.isEmpty else { return }
+        let consumed = Set(candidates.filter { id in
             if current[id] != nil { return true }
             guard let desired = journal.entry(id)?.desired else { return true }
             return desired.carriesUserInitiatedDeletion

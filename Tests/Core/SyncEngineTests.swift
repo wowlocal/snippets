@@ -31,6 +31,21 @@ struct SyncEngineTests {
             return envelopes
         }
 
+        /// Runs once inside the next round's read, after the library was taken: a
+        /// main-actor event arriving while the production bridge projects off the main
+        /// actor.
+        var duringNextRoundRead: (() -> Void)?
+
+        func currentEnvelopesForRound(agreedBase: SyncBase) async throws -> [UUID: SyncEnvelope] {
+            let read = try currentEnvelopes(agreedBase: agreedBase)
+            await Task.yield()
+            if let event = duringNextRoundRead {
+                duringNextRoundRead = nil
+                event()
+            }
+            return read
+        }
+
         /// Ids this fake temporarily refuses to file, standing in for a secure record whose
         /// vault has not arrived yet. A different vault uses `incompatibleIDs` below and
         /// produces a sticky halt after compatible records apply.
@@ -613,6 +628,35 @@ struct SyncEngineTests {
         for id in deletedIDs {
             #expect(confirmed.envelope(id)?.carriesUserInitiatedDeletion == true)
         }
+    }
+
+    /// A round reads the library, then reconciles off the main actor. A UI delete noted
+    /// in between belongs to a deletion that read still holds live; consuming its intent
+    /// then would let the tombstone leave later without the user's marker.
+    @Test func aDeleteNotedWhileTheRoundReadsTheLibraryKeepsItsIntent() async throws {
+        let h = try harness()
+        defer { try? FileManager.default.removeItem(at: h.dir) }
+
+        let ids = (0..<12).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            h.library.envelopes[id] = envelope(id, name: "n\(index)")
+        }
+        _ = await h.engine.sync()
+
+        let deleted = ids[0]
+        var consumed: Set<UUID> = []
+        h.engine.onUserDeletionIntentsConsumed = { consumed.formUnion($0) }
+        h.library.duringNextRoundRead = { [library = h.library, engine = h.engine] in
+            library.envelopes[deleted] = nil
+            engine.noteUserInitiatedDeletions([deleted])
+        }
+        _ = await h.engine.sync()
+        #expect(!consumed.contains(deleted), "the intent was consumed against the earlier read")
+
+        let state = await h.engine.sync()
+        #expect(!state.isHalted)
+        #expect(consumed.contains(deleted))
+        #expect(h.engine.agreedBase.envelope(deleted)?.carriesUserInitiatedDeletion == true)
     }
 
     @Test func unexplainedDeletionsStillTripTheGuardBesideApprovedOnes() async throws {

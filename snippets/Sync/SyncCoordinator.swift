@@ -33,11 +33,17 @@ nonisolated struct SyncRoundRequestCoalescer {
 /// gives the whole burst a single round while keeping the ordinary interactive delay
 /// short. The timer runs in common modes so an open menu or editor tracking loop cannot
 /// strand a completed change until the next CKSyncEngine wake or health-check poll.
+///
+/// A request may carry a maximum wait, measured from the first request of the burst:
+/// a long delay that every keystroke restarts would otherwise never fire while
+/// someone keeps typing.
 @MainActor
 final class SyncTriggerDebouncer {
     private let delay: TimeInterval
     private let action: () -> Void
     private var timer: Timer?
+    /// When the oldest request still waiting was made (system uptime).
+    private var burstStart: TimeInterval?
 
     init(delay: TimeInterval, action: @escaping () -> Void) {
         precondition(delay >= 0)
@@ -48,11 +54,23 @@ final class SyncTriggerDebouncer {
     var isPending: Bool { timer != nil }
 
     func request() {
-        cancel()
-        let next = Timer(timeInterval: delay, repeats: false) { [weak self] fired in
+        request(delay: delay, maximumWait: nil)
+    }
+
+    /// Restarts the delay, but never past `maximumWait` after the burst's first request.
+    func request(delay: TimeInterval, maximumWait: TimeInterval?) {
+        precondition(delay >= 0)
+        let now = ProcessInfo.processInfo.systemUptime
+        let start = burstStart ?? now
+        var wait = delay
+        if let maximumWait { wait = max(0, min(wait, start + maximumWait - now)) }
+        timer?.invalidate()
+        burstStart = start
+        let next = Timer(timeInterval: wait, repeats: false) { [weak self] fired in
             MainActor.assumeIsolated {
                 guard let self, self.timer === fired else { return }
                 self.timer = nil
+                self.burstStart = nil
                 self.action()
             }
         }
@@ -63,6 +81,7 @@ final class SyncTriggerDebouncer {
     func cancel() {
         timer?.invalidate()
         timer = nil
+        burstStart = nil
     }
 }
 
@@ -211,7 +230,14 @@ final class SyncCoordinator {
 
     /// Long enough to collapse a CLI loop or a run of editor keystrokes, while still
     /// making a completed local change visible to another device almost immediately.
+    /// A transport that declares `roundPacing` (Git) uses its own, much longer delay.
     static let libraryChangeDebounceInterval: TimeInterval = 1
+
+    #if DEBUG
+    /// Test-only: replaces a paced transport's intervals. A transport that declares no
+    /// pacing stays unpaced.
+    var roundPacingOverride: SyncRoundPacing?
+    #endif
 
     #if DEBUG
     /// Process-only preference used by explicit debug launch modes. Keeping this out of
@@ -520,6 +546,24 @@ final class SyncCoordinator {
     /// Observable for lifecycle checks and focused tests; the timer itself remains an
     /// implementation detail.
     var hasPendingLibraryChangeSync: Bool { libraryChangeDebouncer.isPending }
+
+    /// The running transport's pacing for automatic rounds, or nil (every provider but
+    /// Git): the one-second debounce, and every automatic trigger runs.
+    private var roundPacing: SyncRoundPacing? {
+        guard let declared = transport?.roundPacing else { return nil }
+        #if DEBUG
+        if let roundPacingOverride { return roundPacingOverride }
+        #endif
+        return declared
+    }
+
+    /// A local change is waiting in a paced transport's debounce. That change owns the
+    /// next round, which fetches as well, within the maximum wait: a poll or an app
+    /// activation in the meantime would only push the half-finished edit early, as one
+    /// more commit.
+    var hasPendingPacedLibraryChangeSync: Bool {
+        roundPacing != nil && libraryChangeDebouncer.isPending
+    }
 
     /// Destructive local maintenance may proceed only after an old round has returned,
     /// not merely after the checkbox was switched off.
@@ -926,7 +970,44 @@ final class SyncCoordinator {
         // its redundant debounce is safe and prevents a timer from attempting to reopen
         // the transport while credentials are being revoked or erased.
         guard Self.isEnabled, !cloudMutationInProgress else { return }
-        libraryChangeDebouncer.request()
+        if let pacing = roundPacing {
+            libraryChangeDebouncer.request(
+                delay: pacing.localChangeDelay, maximumWait: pacing.localChangeMaximumWait)
+        } else {
+            libraryChangeDebouncer.request()
+        }
+    }
+
+    /// The round an app activation asks for.
+    ///
+    /// With a paced transport (Git) it starts nothing while a local change is waiting
+    /// (that change's round fetches too), nor right after a successful round: iOS also
+    /// "activates" the app after Face ID, Control Center or a notification, and the
+    /// poll covers the rest. Other providers sync on every activation, as before.
+    func syncAfterActivation() {
+        if let pacing = roundPacing {
+            if hasPendingPacedLibraryChangeSync { return }
+            if case .idle(let lastSync?) = state,
+               Date().timeIntervalSince(lastSync) < pacing.activationRefreshInterval {
+                return
+            }
+        }
+        _ = syncNow(trigger: .becameActive)
+    }
+
+    /// Starts now the round a paced transport's debounce is holding back, for an app
+    /// about to be suspended (iOS stops its timers soon after it leaves the screen) or
+    /// to quit. `completion` runs when that round ends. Returns false, starting
+    /// nothing, when no paced change is waiting; the short debounce of other providers
+    /// is left as it is.
+    @discardableResult
+    func flushPendingLibraryChangeSync(
+        completion: ((RequestResult) -> Void)? = nil
+    ) -> Bool {
+        guard hasPendingPacedLibraryChangeSync else { return false }
+        libraryChangeDebouncer.cancel()
+        _ = enqueueSyncRequest(trigger: .localLibraryChange, completion: completion)
+        return true
     }
 
     // MARK: - Running a round
@@ -1792,11 +1873,18 @@ final class SyncCoordinator {
         // health check covers a missed push without restoring the old two-minute load.
         // `tolerance` lets the system coalesce it with other background work.
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { _ = self?.syncNow(trigger: .poll) }
+            MainActor.assumeIsolated { self?.pollIntervalElapsed() }
         }
         timer.tolerance = interval / 4
         RunLoop.main.add(timer, forMode: .common)
         pollTimer = timer
+    }
+
+    /// The poll timer's tick: a round, unless a paced transport's pending local change
+    /// already owns the next one.
+    func pollIntervalElapsed() {
+        guard !hasPendingPacedLibraryChangeSync else { return }
+        _ = syncNow(trigger: .poll)
     }
 
     private func startEventPump(for transport: any SyncTransport) {

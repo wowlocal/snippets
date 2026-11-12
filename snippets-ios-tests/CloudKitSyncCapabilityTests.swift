@@ -108,10 +108,21 @@ final class CloudKitSyncCapabilityTests: XCTestCase {
             range: callbackStart.upperBound..<source.endIndex))
         let body = source[callbackStart.lowerBound..<callbackEnd.lowerBound]
 
-        XCTAssertTrue(body.contains("syncCoordinator.syncNow(trigger: .becameActive)"),
+        XCTAssertTrue(body.contains("syncCoordinator.syncAfterActivation()"),
                       "foreground activation must use the coordinator's coalescing request path")
         XCTAssertFalse(body.contains("syncEngine?.sync()"),
                        "AppDelegate must not bypass coordinator request coalescing")
+
+        // The activation entry point paces Git, then requests through the same path.
+        let coordinator = try self.source(at: "snippets/Sync/SyncCoordinator.swift")
+        let activationStart = try XCTUnwrap(coordinator.range(of: "func syncAfterActivation()"))
+        let activationEnd = try XCTUnwrap(coordinator.range(
+            of: "func flushPendingLibraryChangeSync(",
+            range: activationStart.upperBound..<coordinator.endIndex))
+        XCTAssertTrue(
+            coordinator[activationStart.lowerBound..<activationEnd.lowerBound]
+                .contains("syncNow(trigger: .becameActive)"),
+            "activation must request through the coordinator's coalescing path")
     }
 
     func testSettingsExposeReasonSpecificRecoveryActions() throws {

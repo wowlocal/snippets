@@ -472,6 +472,147 @@ final class SyncLifecycleTests: XCTestCase {
         XCTAssertFalse(debouncer.isPending)
     }
 
+    func testLibraryChangeDebouncerMaximumWaitFiresDuringAContinuousBurst() async throws {
+        var fireCount = 0
+        let debouncer = SyncTriggerDebouncer(delay: 1) { fireCount += 1 }
+        let started = ProcessInfo.processInfo.systemUptime
+
+        // Requests every 50 ms keep restarting a 0.3 s delay; the 0.6 s maximum wait,
+        // counted from the first request, still fires.
+        while fireCount == 0, ProcessInfo.processInfo.systemUptime - started < 2 {
+            debouncer.request(delay: 0.3, maximumWait: 0.6)
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(fireCount, 1)
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 1.2)
+        XCTAssertFalse(debouncer.isPending)
+
+        // A burst that ended starts afresh: its maximum wait counts from its own start.
+        debouncer.request(delay: 60, maximumWait: 120)
+        XCTAssertTrue(debouncer.isPending)
+        debouncer.cancel()
+        XCTAssertFalse(debouncer.isPending)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(fireCount, 1)
+    }
+
+    /// iCloud and Snippets Cloud declare no pacing: their one-second debounce, and every
+    /// poll and activation running a round, are exactly as before.
+    func testProvidersWithoutPacingKeepTheShortDebounceAndEveryAutomaticTrigger() async throws {
+        SnippetStorageLocations.createAllDirectories()
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let transport = PacingTestTransport(pacing: nil)
+        let coordinator = makeCoordinatorForPacingTests(transport: transport)
+        defer { coordinator.setEnabled(false) }
+        guard case .completed(.idle) = await coordinator.requestSync(trigger: .manual) else {
+            return XCTFail("the first round should complete")
+        }
+        let rounds = transport.fetchAttempts
+
+        coordinator.libraryDidChange(.local)
+        XCTAssertTrue(coordinator.hasPendingLibraryChangeSync)
+        XCTAssertFalse(coordinator.hasPendingPacedLibraryChangeSync)
+        XCTAssertFalse(coordinator.flushPendingLibraryChangeSync(), "only a paced change is flushed")
+        XCTAssertTrue(coordinator.hasPendingLibraryChangeSync)
+
+        coordinator.pollIntervalElapsed()
+        XCTAssertFalse(coordinator.hasPendingLibraryChangeSync, "a poll takes over the debounce")
+        let polled = await waitUntil { transport.fetchAttempts == rounds + 1 && coordinator.isQuiescent }
+        XCTAssertTrue(polled)
+
+        coordinator.syncAfterActivation()
+        let activated = await waitUntil {
+            transport.fetchAttempts == rounds + 2 && coordinator.isQuiescent
+        }
+        XCTAssertTrue(activated, "an activation right after a round still syncs")
+    }
+
+    /// Git declares pacing: a waiting local change owns the next round, so a poll or an
+    /// activation meanwhile starts nothing; an activation right after a successful round
+    /// starts nothing; an explicit request, or an app about to be suspended, never waits.
+    func testAPacedTransportLetsAPendingLocalChangeOwnTheNextRound() async throws {
+        SnippetStorageLocations.createAllDirectories()
+        UserDefaults.standard.set(true, forKey: SyncCoordinator.enabledDefaultsKey)
+        let transport = PacingTestTransport(pacing: SyncRoundPacing(
+            localChangeDelay: 60, localChangeMaximumWait: 120, activationRefreshInterval: 60))
+        let coordinator = makeCoordinatorForPacingTests(transport: transport)
+        defer { coordinator.setEnabled(false) }
+        guard case .completed(.idle) = await coordinator.requestSync(trigger: .manual) else {
+            return XCTFail("the first round should complete")
+        }
+        let rounds = transport.fetchAttempts
+
+        coordinator.syncAfterActivation()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(transport.fetchAttempts, rounds, "an activation right after a round")
+
+        coordinator.libraryDidChange(.local)
+        XCTAssertTrue(coordinator.hasPendingPacedLibraryChangeSync)
+        coordinator.pollIntervalElapsed()
+        coordinator.syncAfterActivation()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(transport.fetchAttempts, rounds, "a poll or an activation pushed early")
+        XCTAssertTrue(coordinator.hasPendingPacedLibraryChangeSync)
+
+        let flushed = await withCheckedContinuation { continuation in
+            XCTAssertTrue(coordinator.flushPendingLibraryChangeSync { continuation.resume(returning: $0) })
+        }
+        guard case .completed(.idle) = flushed else { return XCTFail("flush: \(flushed)") }
+        XCTAssertEqual(transport.fetchAttempts, rounds + 1)
+        XCTAssertFalse(coordinator.hasPendingLibraryChangeSync)
+        XCTAssertFalse(coordinator.flushPendingLibraryChangeSync(), "nothing is waiting any more")
+
+        coordinator.libraryDidChange(.local)
+        guard case .completed(.idle) = await coordinator.requestSync(trigger: .manual) else {
+            return XCTFail("Sync Now should complete")
+        }
+        XCTAssertEqual(transport.fetchAttempts, rounds + 2, "Sync Now does not wait")
+        XCTAssertFalse(coordinator.hasPendingLibraryChangeSync)
+    }
+
+    func testEnteringTheBackgroundPushesOnlyAPacedPendingChange() async throws {
+        SyncCoordinator.runtimeEnabledOverride = true
+        for pacing in [nil, SyncRoundPacing(
+            localChangeDelay: 60, localChangeMaximumWait: 120, activationRefreshInterval: 60)] {
+            let transport = PacingTestTransport(pacing: pacing)
+            let environment = AppEnvironment(
+                keychain: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+                cloudCredentialStore: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+                cloudBootstrapSecrets: KeychainSecretStore(tier: .deviceOnly, inMemory: true),
+                syncTransportFactory: { transport })
+            var backgroundTasks = 0
+            var finished = 0
+            environment.runInBackground = { _, work in
+                backgroundTasks += 1
+                work { finished += 1 }
+            }
+            guard case .completed(.idle) = await environment.syncCoordinator.requestSync(
+                trigger: .manual) else { return XCTFail("the first round should complete") }
+            let rounds = transport.fetchAttempts
+            _ = try environment.store.addSnippet(name: "Edited before leaving", content: "body")
+            XCTAssertTrue(environment.syncCoordinator.hasPendingLibraryChangeSync)
+
+            environment.enteredBackground()
+
+            if pacing == nil {
+                XCTAssertEqual(backgroundTasks, 0, "iCloud's short debounce is left alone")
+                XCTAssertTrue(environment.syncCoordinator.hasPendingLibraryChangeSync)
+            } else {
+                XCTAssertEqual(backgroundTasks, 1)
+                let pushed = await waitUntil { finished == 1 }
+                XCTAssertTrue(pushed, "the background task ends when the round does")
+                XCTAssertEqual(transport.fetchAttempts, rounds + 1)
+                XCTAssertGreaterThan(transport.submittedRecords, 0)
+                XCTAssertFalse(environment.syncCoordinator.hasPendingLibraryChangeSync)
+            }
+            // A stopped coordinator restarts itself while sync is enabled.
+            SyncCoordinator.runtimeEnabledOverride = false
+            environment.syncCoordinator.stop()
+            _ = await waitUntil { environment.syncCoordinator.isQuiescent }
+            SyncCoordinator.runtimeEnabledOverride = true
+        }
+    }
+
     func testStoreChangesUseDebounceButRemoteSyncWritesDoNot() {
         SyncCoordinator.runtimeEnabledOverride = true
         let environment = AppEnvironment()
@@ -1850,6 +1991,29 @@ final class SyncLifecycleTests: XCTestCase {
             transportFactory: { transport })
     }
 
+    private func makeCoordinatorForPacingTests(transport: PacingTestTransport) -> SyncCoordinator {
+        SyncCoordinator(
+            library: SnapshotSyncLibrary([]),
+            keys: SyncKeyStore(keychain: KeychainSecretStore(
+                tier: .deviceOnly,
+                service: "com.khm.snippets.sync-pacing-tests.\(UUID().uuidString.lowercased())",
+                inMemory: true)),
+            device: "aaaaaaa1",
+            transportFactory: { transport })
+    }
+
+    /// Rounds now leave the main actor for their local work, so wait in time, not yields.
+    private func waitUntil(
+        timeout: TimeInterval = 10, _ condition: () -> Bool
+    ) async -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return condition()
+    }
+
     private func eventually(_ condition: () -> Bool) async -> Bool {
         for _ in 0..<1_000 {
             if condition() { return true }
@@ -2384,6 +2548,42 @@ nonisolated final class SyncLifecycleTransport: SyncTransport, @unchecked Sendab
     func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission {
         lock.withLock { submitAttemptCount += 1 }
         throw SyncTransportFailure.unreachable(detail: "lifecycle test transport is inert")
+    }
+}
+
+/// Completes every round: nothing to fetch, every record accepted. Declares `pacing`,
+/// as the Git transport does, when given one.
+nonisolated final class PacingTestTransport: SyncTransport, @unchecked Sendable {
+    let identifier = "pacing-test"
+    let supportsPush = true
+    let pollInterval: TimeInterval = 3_600
+    let events = AsyncStream<SyncTransportEvent> { _ in }
+    let roundPacing: SyncRoundPacing?
+
+    private let lock = NSLock()
+    private var fetchAttemptCount = 0
+    private var submittedRecordCount = 0
+
+    init(pacing: SyncRoundPacing?) {
+        roundPacing = pacing
+    }
+
+    var fetchAttempts: Int { lock.withLock { fetchAttemptCount } }
+    var submittedRecords: Int { lock.withLock { submittedRecordCount } }
+
+    func fetchChanges(since cursor: SyncCursor?) async throws -> SyncFetch {
+        lock.withLock { fetchAttemptCount += 1 }
+        return SyncFetch(records: [], cursor: SyncCursor("pacing-test"))
+    }
+
+    func submit(_ records: [WireRecord], at cursor: SyncCursor?) async throws -> SyncSubmission {
+        lock.withLock { submittedRecordCount += records.count }
+        return SyncSubmission(
+            results: records.map {
+                SyncSubmitResult(id: $0.id, outcome: .accepted(
+                    rev: $0.rev, recordVersion: SyncRecordVersion(Data($0.rev.utf8))))
+            },
+            cursor: cursor)
     }
 }
 
