@@ -12,8 +12,9 @@ Ubuntu account; GDM authentication and a physical-seat login remain unqualified.
 
 Implemented:
 
-- A `desktop` build independent of the optional `fcitx` feature. Default Cargo
-  builds retain `desktop,fcitx` for Hyprland.
+- Two build configurations: `gnome` (`desktop,ibus`) and `hyprland`
+  (`desktop,fcitx`, the default for Omarchy). The GNOME one is plain C and
+  Rust: it needs no C++ compiler.
 - Desktop detection for colon-separated `XDG_CURRENT_DESKTOP` values, including
   `ubuntu:GNOME`. Ambiguous GNOME/Hyprland environments remain unavailable.
 - Read-only session-lock observation through GNOME Shell's
@@ -23,10 +24,14 @@ Implemented:
   work even when both signals arrive between UI ticks.
 - A GNOME install mode which neither requires nor installs the Fcitx addon.
 - An explicit `unsupportedDesktop` expansion status in the desktop-only build.
-- An experimental `ibus` feature with a separate native engine built against
-  public libibus and xkbcommon APIs. It shares matching and bounded candidate
-  metadata with Fcitx, but commits through an IBus input context. The Fcitx path
-  still requires its original Hyprland window/process witness.
+- An experimental `ibus` feature with a separate native engine in C
+  (`src/inline_ibus.c`, C11 with GNU extensions) built against public libibus and
+  xkbcommon APIs. It reads the same bounded candidate metadata as Fcitx with its
+  own C parser (`src/inline_rows_c.h`, kept byte-for-byte equivalent to the C++
+  `src/inline_rows.h`), but commits through an IBus input context. The Fcitx path
+  still requires its original Hyprland window/process witness. The engine was a
+  C++20 program until the GNOME configuration was made C-only; the C port is
+  checked against it by `tests/ibus-engine-live.sh` (below).
 
 IBus expansion and caret suggestions have real GTK4 and native Wayland Chromium
 coverage below; other application input paths remain unqualified.
@@ -37,7 +42,7 @@ An experimental Shell companion supplies cross-application ordinary insertion
 for native Wayland text-input clients. Opted-in clipboard history now uses a
 separate generation-based companion reader. Existing Hyprland window-target and
 Wayland peer checks remain required for the Hyprland mechanisms.
-The GNOME installer builds `desktop,ibus` and installs the engine and companion.
+The GNOME installer builds the `gnome` configuration and installs the engine and companion.
 It does not enable them or replace existing input sources. The integration
 remains experimental until the remaining acceptance cases are complete.
 
@@ -73,7 +78,7 @@ Older distributions may need newer development packages; they are not qualified.
 sudo apt install build-essential cargo pkg-config libgtk-4-dev libadwaita-1-dev \
   libicu-dev libsecret-1-dev libpam0g-dev libaudit-dev libcap-ng-dev \
   libqrencode-dev libwayland-dev wayland-protocols libxkbcommon-dev libjson-c-dev \
-  libibus-1.0-dev python3
+  libibus-1.0-dev python3 git
 ./scripts/install-linux.sh --desktop gnome
 ```
 
@@ -173,9 +178,39 @@ Run the feature matrix on Linux:
 
 ```sh
 cargo test --locked --manifest-path snippets-linux/Cargo.toml
-cargo test --locked --manifest-path snippets-linux/Cargo.toml --no-default-features --features desktop,ibus
+cargo test --locked --manifest-path snippets-linux/Cargo.toml --no-default-features --features gnome
 cargo check --locked --manifest-path snippets-linux/Cargo.toml --no-default-features
 ```
+
+The `gnome` configuration needs no C++ compiler: it also builds with `CXX`
+pointing at a program that does not exist.
+
+### The C IBus engine
+
+`tests/ibus-engine-live.sh /path/to/snippets-ibus [transcript]` runs the engine
+the way an installed GNOME session does, without touching it: a private
+`dbus-daemon`, a private `ibus-daemon` that launches the engine from a component
+XML with `--ibus` once it is selected as the global engine, a fictional Shell
+(`org.gnome.ScreenSaver`) and a fictional Snippets app on
+`$XDG_RUNTIME_DIR/snippets-ibus.sock` (`tests/ibus/`). The app runs from a copy
+of the Python interpreter named `snippets` beside the engine, because the engine
+accepts only that peer. A Python GI input context (`tests/ibus/driver.py`) types
+20 scenarios: expansion with Return and Tab, Escape, password and hidden-text
+fields, arrow and Control-N/P navigation, keys typed while a request is pending,
+Backspace, malformed replies, focus and content-type changes, a locked screen and
+locking during a composition, Control chords and a Compose sequence that contains
+a backslash. It checks what is committed and what the app was asked, and writes a
+transcript of every preedit, lookup table, commit and app request.
+
+The C port (2026-11-12, Omarchy, IBus 1.5.34 unpacked into a scratch prefix, not
+installed) passed every scenario, and its transcript (448 observations) is
+identical to the C++20 engine it replaced; so is the transcript of the C engine
+built with AddressSanitizer and UBSan. A differential fuzzer ran the C row parser
+(`src/inline_rows_c.h`) and the C++ one (`src/inline_rows.h`, still used by Fcitx)
+on 4,000,000 generated and mutated replies: both accepted the same 1,611,757 and
+read the same rows from each. The engine compiles without warnings under GCC
+(`-std=gnu11 -Wall -Wextra -Werror`) and Clang. Strict ISO C with `-Wpedantic`
+is not used: libibus's own headers rely on GNU variadic macros.
 
 The GNOME module tests use a real private `dbus-daemon` and a fictional Shell.
 They cover locked/unlocked states, rapid cycles, foreign signals, loss of Shell,

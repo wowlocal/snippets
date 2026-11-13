@@ -13,15 +13,16 @@ fn main() {
         );
         let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
         let executable = output.join("snippets-ibus");
-        let mut compiler = cc::Build::new().cpp(true).get_compiler().to_command();
+        // Plain C: the GNOME build needs no C++ compiler (`docs/linux/GNOME.md`).
+        let mut compiler = cc::Build::new().get_compiler().to_command();
         compiler
             .args([
-                "-std=c++20",
+                "-std=gnu11",
                 "-O2",
                 "-Wall",
                 "-Wextra",
                 "-Werror",
-                "src/inline_ibus.cpp",
+                "src/inline_ibus.c",
                 "-o",
             ])
             .arg(&executable);
@@ -48,7 +49,7 @@ fn main() {
             compiler.arg(format!("-l{library}"));
         }
         assert!(
-            compiler.status().expect("C++ compiler required").success(),
+            compiler.status().expect("C compiler required").success(),
             "IBus engine build failed"
         );
         std::fs::copy(
@@ -60,7 +61,8 @@ fn main() {
             "cargo:rustc-env=SNIPPETS_IBUS_ENGINE={}",
             executable.display()
         );
-        println!("cargo:rerun-if-changed=src/inline_ibus.cpp");
+        println!("cargo:rerun-if-changed=src/inline_ibus.c");
+        println!("cargo:rerun-if-changed=src/inline_rows_c.h");
     }
     if std::env::var_os("CARGO_FEATURE_FCITX").is_some() {
         let fcitx = pkg_config::Config::new()

@@ -111,11 +111,12 @@ exit codes, consent behavior and the remaining full terminal-control scope.
 On Omarchy, install missing build and native runtime packages:
 
 ```sh
-omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols libxkbcommon pkgconf base-devel
+omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols libxkbcommon pkgconf base-devel git
 ```
 
 Requirements: Rust 1.92+, GTK 4.12+, libadwaita 1.5+, ICU, libsecret 0.21+, Linux-PAM,
-libqrencode 4.1+, Fcitx5 5.1+, Wayland, libxkbcommon, Cairo/Pango, json-c and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
+libqrencode 4.1+, Fcitx5 5.1+, Wayland, libxkbcommon, Cairo/Pango, json-c and wayland-protocols with the ext-data-control-v1 XML,
+and `git` (Git sync runs the system git; its tests need it too). Cargo dependencies
 are locked in `Cargo.lock`. Source builds normally use the installed native GTK.
 The latest user-test candidate includes GTK 4.22.4 and libadwaita 1.9.3 with the
 verified fallback-cancellation and alert-heading measurement repairs as app-local
@@ -123,6 +124,20 @@ shared libraries. Other native dependencies are provided by Omarchy. The combine
 runtime passes its minimal reproductions, installed-GUI Cancel/focus/private-state
 check and existing host-portal smoke with verified mapped libraries.
 The CLI and storage model also build without GTK or libsecret using `--no-default-features`.
+
+There are two desktop build configurations (Cargo features):
+
+| Feature | Desktop | Inline expansion | Native toolchain |
+| --- | --- | --- | --- |
+| `hyprland` (default) | Omarchy / Hyprland | Fcitx5 addon (`libsnippets-fcitx.so`) | C and C++20: Fcitx5's addon API is C++ only and its headers need C++20 |
+| `gnome` | GNOME | IBus engine (`snippets-ibus`, `src/inline_ibus.c`) | C only, no C++ compiler |
+
+`scripts/install-linux.sh --desktop gnome|hyprland` picks the matching one. Build
+the GNOME configuration directly with `--no-default-features --features gnome`.
+Both expansion backends read the app's candidate rows: Fcitx with
+`src/inline_rows.h` (C++), IBus with `src/inline_rows_c.h` (C). They must accept
+exactly the same replies; change them together. `tests/ibus-engine-live.sh` checks
+the IBus engine (see `docs/linux/GNOME.md`, "The C IBus engine").
 
 From the repository root:
 

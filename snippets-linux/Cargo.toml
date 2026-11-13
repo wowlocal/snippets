@@ -8,7 +8,14 @@ description = "Native GTK desktop client for Snippets on Omarchy"
 default-run = "snippets"
 
 [features]
-default = ["desktop", "fcitx"]
+# Two build configurations, one per supported desktop:
+# - `hyprland` (the default; Omarchy): inline expansion through a Fcitx5 addon.
+#   Fcitx5's addon API is C++ only and its headers need C++20.
+# - `gnome`: inline expansion through an IBus engine written in C. Building it
+#   needs a C compiler and no C++ compiler.
+default = ["hyprland"]
+hyprland = ["desktop", "fcitx"]
+gnome = ["desktop", "ibus"]
 desktop = ["dep:gtk", "dep:adw", "dep:pangocairo", "dep:cairo", "secret-service", "local-auth"]
 fcitx = ["desktop"]
 ibus = ["desktop"]

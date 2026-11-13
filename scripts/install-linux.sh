@@ -30,18 +30,19 @@ command -v python3 >/dev/null || { echo 'Python 3 is required to generate instal
 if ! pkg-config --atleast-version=4.12 gtk4 || ! pkg-config --atleast-version=1.5 libadwaita-1 || ! pkg-config --exists icu-i18n || ! pkg-config --atleast-version=0.21 libsecret-1 || ! pkg-config --exists pam || ! pkg-config --atleast-version=4.1 libqrencode || ! pkg-config --exists wayland-client wayland-protocols xkbcommon json-c pangocairo || ! command -v wayland-scanner >/dev/null; then
   echo 'Requires GTK >= 4.12, libadwaita >= 1.5, ICU, libsecret >= 0.21, Linux-PAM, libqrencode >= 4.1, Wayland, xkbcommon, Cairo/Pango, json-c, and wayland-protocols.' >&2
   if [[ $TASK_DESKTOP == gnome ]]; then
-    echo 'On Ubuntu: sudo apt install build-essential cargo pkg-config python3 libgtk-4-dev libadwaita-1-dev libicu-dev libsecret-1-dev libpam0g-dev libaudit-dev libcap-ng-dev libqrencode-dev libwayland-dev wayland-protocols libxkbcommon-dev libjson-c-dev libibus-1.0-dev' >&2
+    echo 'On Ubuntu (a C compiler is enough; the GNOME build needs no C++): sudo apt install build-essential cargo pkg-config python3 git libgtk-4-dev libadwaita-1-dev libicu-dev libsecret-1-dev libpam0g-dev libaudit-dev libcap-ng-dev libqrencode-dev libwayland-dev wayland-protocols libxkbcommon-dev libjson-c-dev libibus-1.0-dev' >&2
   else
-    echo 'On Omarchy: omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols json-c pkgconf base-devel' >&2
+    echo 'On Omarchy: omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols json-c pkgconf base-devel git' >&2
   fi
   exit 1
 fi
-TASK_FEATURES=(--no-default-features --features desktop,ibus)
+# The two build configurations in snippets-linux/Cargo.toml.
+TASK_FEATURES=(--no-default-features --features gnome)
 TASK_BINARIES=(snippets snippets-cli snippets-owner-auth snippets-ibus)
 TASK_DEFAULT_TARGET=$TASK_REPO_ROOT/snippets-linux/target/gnome
 if [[ $TASK_DESKTOP == hyprland ]]; then
   pkg-config --atleast-version=5.1 Fcitx5Core && pkg-config --exists Fcitx5Module || { echo 'The Hyprland build requires Fcitx5 >= 5.1 development files.' >&2; exit 1; }
-  TASK_FEATURES=(--no-default-features --features desktop,fcitx)
+  TASK_FEATURES=(--no-default-features --features hyprland)
   TASK_BINARIES=(snippets snippets-cli snippets-owner-auth)
   TASK_DEFAULT_TARGET=$TASK_REPO_ROOT/snippets-linux/target
 else

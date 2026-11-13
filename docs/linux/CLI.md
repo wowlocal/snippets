@@ -34,8 +34,11 @@ executables. Update GUI and CLI together; older apps report an unsupported comma
 Replies contain `appAvailable`, `enabled`, `suggestions` and `state`. `enabled`
 is the configured state; `waitingForField` means the handler is ready, while
 `waitingForFcitx`, `unavailable` and `waitingForUnlock` identify an unmet runtime
-condition. `starting` is transient. A stopped app can still report stored settings
-with `appAvailable: false` and `state: null`; that read creates no library files.
+condition. On GNOME, `waitingForIBus` means the Snippets IBus engine has not connected
+yet: it connects at the first `\` typed with the Snippets input source selected, and the
+state is `waitingForField` from then on. `starting` is transient. A stopped app can
+still report stored settings with `appAvailable: false` and `state: null`; that read
+creates no library files.
 Mutations require the background app. Exit code 3 means it is not running.
 
 ## Git sync
