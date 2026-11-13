@@ -262,6 +262,19 @@ static GString *composition(State *s) {
   return text;
 }
 
+// Marks a field's match ranges, as character offsets from `base` in the
+// candidate. The Snippets Shell companion draws them in bold; a panel that
+// renders candidate attributes itself shows them underlined.
+static void emphasize(IBusText *candidate, const char *field, const GArray *matches, guint base) {
+  for (guint i = 0; i < matches->len; ++i) {
+    const RowMatch *match = &g_array_index(matches, RowMatch, i);
+    guint start = base + (guint)g_utf8_pointer_to_offset(field, field + match->start);
+    guint end = base + (guint)g_utf8_pointer_to_offset(field, field + match->end);
+    ibus_text_append_attribute(candidate, IBUS_ATTR_TYPE_UNDERLINE, IBUS_ATTR_UNDERLINE_SINGLE,
+                               start, end);
+  }
+}
+
 static void render(IBusEngine *e) {
   State *s = state(e);
   GString *preedit = s->active ? composition(s) : g_string_new("");
@@ -274,7 +287,11 @@ static void render(IBusEngine *e) {
   for (guint i = 0; i < s->rows->len; ++i) {
     SnippetRow *row = row_at(s, i);
     char *label = g_strconcat(row->name, "\n", row->keyword, NULL);
-    ibus_lookup_table_append_candidate(table, ibus_text_new_from_string(label));
+    IBusText *candidate = ibus_text_new_from_string(label);
+    emphasize(candidate, row->name, row->name_matches, 0);
+    emphasize(candidate, row->keyword, row->keyword_matches,
+              (guint)g_utf8_strlen(row->name, -1) + 1);
+    ibus_lookup_table_append_candidate(table, candidate);
     g_free(label);
   }
   ibus_engine_update_lookup_table(e, table, s->active && s->rows->len > 0);

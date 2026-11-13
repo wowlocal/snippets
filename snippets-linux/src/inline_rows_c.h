@@ -8,18 +8,27 @@
 // byte ranges on UTF-8 boundaries, increasing and not overlapping), a shown tag
 // count (at most 2), the total tag count (at most 999, not less than shown) and
 // the shown tags (u8 length, at most 64 bytes). Integers are little-endian. The
-// IBus panel shows only the identity, name and keyword; the rest is validated.
+// IBus panel shows the identity, name and keyword and emphasizes the match
+// ranges; the rest is validated.
+
+// [start, end) byte ranges, increasing and not overlapping.
+typedef struct {
+  uint16_t start, end;
+} RowMatch;
 
 typedef struct {
   unsigned char identity[16];
   char *name;
   char *keyword;
+  GArray *name_matches, *keyword_matches;  // RowMatch
 } SnippetRow;
 
 static void snippet_row_free(gpointer data) {
   SnippetRow *row = data;
   g_free(row->name);
   g_free(row->keyword);
+  if (row->name_matches) g_array_unref(row->name_matches);
+  if (row->keyword_matches) g_array_unref(row->keyword_matches);
   g_free(row);
 }
 
@@ -57,19 +66,22 @@ static bool row_boundary(const char *text, size_t size, uint16_t index) {
 }
 
 // A name or keyword and its match ranges.
-static bool row_field(RowReader *r, size_t bound, char **text) {
+static bool row_field(RowReader *r, size_t bound, char **text, GArray **matches) {
   uint16_t size = 0;
   unsigned count = 0;
   if (!row_short(r, &size) || !row_string(r, size, bound, text) || !row_byte(r, &count) ||
       count > 128)
     return false;
+  *matches = g_array_sized_new(FALSE, FALSE, sizeof(RowMatch), count);
   uint16_t previous = 0;
   for (unsigned j = 0; j < count; ++j) {
-    uint16_t start = 0, end = 0;
-    if (!row_short(r, &start) || !row_short(r, &end) || start < previous || start >= end ||
-        end > size || !row_boundary(*text, size, start) || !row_boundary(*text, size, end))
+    RowMatch match = {0, 0};
+    if (!row_short(r, &match.start) || !row_short(r, &match.end) || match.start < previous ||
+        match.start >= match.end || match.end > size || !row_boundary(*text, size, match.start) ||
+        !row_boundary(*text, size, match.end))
       return false;
-    previous = end;
+    g_array_append_val(*matches, match);
+    previous = match.end;
   }
   return true;
 }
@@ -89,7 +101,8 @@ static bool row_metadata(const unsigned char *reply, size_t size, GPtrArray *row
     g_ptr_array_add(parsed, row);
     for (guint j = 0; j + 1 < parsed->len; ++j)
       if (!memcmp(((SnippetRow *)parsed->pdata[j])->identity, row->identity, 16)) ok = false;
-    ok = ok && row_field(&r, 512, &row->name) && row_field(&r, 256, &row->keyword);
+    ok = ok && row_field(&r, 512, &row->name, &row->name_matches) &&
+         row_field(&r, 256, &row->keyword, &row->keyword_matches);
     unsigned shown = 0;
     uint16_t total = 0;
     ok = ok && row_byte(&r, &shown) && shown <= 2 && row_short(&r, &total) && total >= shown &&

@@ -60,10 +60,29 @@ ic.connect(
 )
 ic.connect("show-preedit-text", lambda _: events.append(["preedit-shown"]))
 ic.connect("hide-preedit-text", lambda _: events.append(["preedit-hidden"]))
-ic.connect(
-    "update-lookup-table",
-    lambda _, table, visible: events.append(["table", candidates(table), table.get_cursor_pos(), visible]),
-)
+def emphasis(table):
+    """Per candidate, the [type, start, end] of each attribute (character offsets)."""
+    marks = []
+    for i in range(table.get_number_of_candidates()):
+        attributes = table.get_candidate(i).get_attributes()
+        ranges = []
+        j = 0
+        while attributes is not None and (attribute := attributes.get(j)) is not None:
+            ranges.append([attribute.get_attr_type(), attribute.get_start_index(), attribute.get_end_index()])
+            j += 1
+        marks.append(ranges)
+    return marks
+
+
+def lookup_table(_, table, visible):
+    event = ["table", candidates(table), table.get_cursor_pos(), visible]
+    marks = emphasis(table)
+    if any(marks):
+        event.append(marks)
+    events.append(event)
+
+
+ic.connect("update-lookup-table", lookup_table)
 ic.connect("show-lookup-table", lambda _: events.append(["table-shown"]))
 ic.connect("hide-lookup-table", lambda _: events.append(["table-hidden"]))
 ic.set_capabilities(
@@ -104,7 +123,7 @@ def app_log():
     return lines
 
 
-NAMES = {"\\": "backslash", " ": "space"}
+NAMES = {"\\": "backslash", " ": "space", "é": "eacute"}
 
 
 def keyval(key):
@@ -305,6 +324,45 @@ def _():
     settle()
     set_locked(False)
     settle()
+
+
+UNDERLINE = int(IBus.AttrType.UNDERLINE)
+
+
+def check_emphasis(name, expected):
+    """Compares the latest lookup table's marked [start, end] ranges, per
+    candidate; None when it marks nothing."""
+    table = next(event for event in reversed(events) if event[0] == "table")
+    actual = None if len(table) < 5 else [
+        [[start, end] for kind, start, end in ranges if kind == UNDERLINE] for ranges in table[4]
+    ]
+    if actual != expected:
+        failures.append(f"{name}: marked {actual!r}, expected {expected!r}")
+
+
+# Name and keyword share one candidate, "name\nkeyword"; the keyword's marks
+# start after the name and the newline.
+@scenario("matched-characters-are-marked")
+@expect("\\")
+def _():
+    typing("\\hel")
+    check_emphasis("matched-characters-are-marked", [[[0, 3], [6, 9]], [[0, 3], [5, 8]]])
+    for _ in range(3):
+        press("BackSpace")
+    # The empty query matches nothing, so nothing is marked.
+    check_emphasis("matched-characters-are-marked", None)
+    press("Escape")
+
+
+# "Café" is 4 characters and 5 bytes: marks count characters, as IBus does.
+@scenario("marks-count-characters-not-bytes")
+@expect("\\café")
+def _():
+    typing("\\caf")
+    check_emphasis("marks-count-characters-not-bytes", [[[0, 3], [5, 8]]])
+    press("é")
+    check_emphasis("marks-count-characters-not-bytes", [[[0, 4]]])
+    press("Escape")
 
 
 REFUSE = os.path.join(os.environ["XDG_RUNTIME_DIR"], "refuse-engine")

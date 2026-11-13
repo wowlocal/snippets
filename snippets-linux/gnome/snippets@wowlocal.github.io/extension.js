@@ -1,6 +1,7 @@
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import IBus from 'gi://IBus';
 import Shell from 'gi://Shell';
 import Meta from 'gi://Meta';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -47,6 +48,137 @@ function historyLabels(window) {
             !/[\x00-\x1f\x7f]/.test(value)) ? labels : null;
     } catch {
         return null;
+    }
+}
+
+// The Snippets IBus engine marks the matched part of each candidate's name and
+// keyword with underline attributes. GNOME Shell's candidate popup shows only
+// candidate text, so this draws those ranges in bold, for the Snippets input
+// source alone, after the Shell has filled the popup. Candidate text is read
+// from the lookup table the Shell is already showing and is never retained.
+// A row without valid marks, another input source and disable all get the
+// Shell's plain text back.
+function emphasizedMarkup(candidate) {
+    const text = candidate?.get_text();
+    const attributes = candidate?.get_attributes();
+    if (typeof text !== 'string' || !attributes)
+        return null;
+    // IBus counts characters (code points), as Array.from does.
+    const characters = Array.from(text);
+    const bold = new Array(characters.length).fill(false);
+    let any = false;
+    let attribute;
+    for (let i = 0; (attribute = attributes.get(i)); ++i) {
+        if (attribute.get_attr_type() !== IBus.AttrType.UNDERLINE)
+            continue;
+        const start = attribute.get_start_index(), end = attribute.get_end_index();
+        if (!Number.isInteger(start) || !Number.isInteger(end) || start >= end ||
+            end > characters.length)
+            return null;
+        bold.fill(true, start, end);
+        any = true;
+    }
+    if (!any)
+        return null;
+    let markup = '', run = '', open = false;
+    const flush = () => {
+        markup += GLib.markup_escape_text(run, -1);
+        run = '';
+    };
+    characters.forEach((character, index) => {
+        if (bold[index] !== open) {
+            flush();
+            markup += open ? '</b>' : '<b>';
+            open = !open;
+        }
+        run += character;
+    });
+    flush();
+    return open ? `${markup}</b>` : markup;
+}
+
+class CandidateEmphasis {
+    enable() {
+        const popup = IBusManager.getIBusManager()?._candidatePopup;
+        if (!popup || typeof popup.setPanelService !== 'function' ||
+            !Array.isArray(popup._candidateArea?._candidateBoxes))
+            return;
+        this._popup = popup;
+        // The Shell connects its own lookup-table handler in setPanelService,
+        // first, whenever IBus (re)connects; this one runs after it. A wrapper
+        // left in place after disable (another extension wrapped it later) does
+        // nothing.
+        const setPanelService = popup.setPanelService;
+        const emphasis = this;
+        this._setPanelService = function (panelService) {
+            setPanelService.call(this, panelService);
+            if (emphasis._popup)
+                emphasis._watch(panelService);
+        };
+        popup.setPanelService = this._setPanelService;
+        this._watch(popup._panelService);
+    }
+
+    disable() {
+        this._watch(null);
+        for (const box of this._popup?._candidateArea?._candidateBoxes ?? []) {
+            const label = box?._candidateLabel?.clutter_text;
+            if (label?.get_use_markup())
+                label.set_text(label.get_text());
+        }
+        if (this._popup?.setPanelService === this._setPanelService)
+            delete this._popup.setPanelService;
+        this._popup = this._setPanelService = null;
+    }
+
+    _watch(panelService) {
+        if (this._panelService) {
+            this._panelService.disconnect(this._signal);
+            this._panelService.disconnect(this._destroySignal);
+        }
+        this._panelService = panelService ?? null;
+        this._signal = this._destroySignal = 0;
+        if (!this._panelService)
+            return;
+        this._signal = this._panelService.connect('update-lookup-table',
+            (_service, table) => this._emphasize(table));
+        // The Shell destroys a service before it replaces it. Forget it then,
+        // while its handlers still exist, rather than disconnect later.
+        this._destroySignal = this._panelService.connect('destroy', () => {
+            this._panelService = null;
+            this._signal = this._destroySignal = 0;
+        });
+    }
+
+    _emphasize(table) {
+        try {
+            const boxes = this._popup?._candidateArea?._candidateBoxes;
+            if (!Array.isArray(boxes))
+                return;
+            const source = Keyboard.getInputSourceManager().currentSource;
+            const snippets = source?.type === 'ibus' && source?.id === 'snippets';
+            // The page the Shell just showed, computed as it does.
+            const count = table.get_number_of_candidates();
+            const cursor = table.get_cursor_pos();
+            const size = table.get_page_size();
+            const first = cursor === 0 ? 0 : Math.floor(cursor / size) * size;
+            const last = Math.min(first + size, count);
+            for (let i = first; i < last && i - first < boxes.length; ++i) {
+                const label = boxes[i - first]?._candidateLabel?.clutter_text;
+                const candidate = table.get_candidate(i);
+                if (!label || !candidate || label.get_text() !== candidate.get_text())
+                    continue;
+                const markup = snippets ? emphasizedMarkup(candidate) : null;
+                // St.Label keeps an unchanged text as it is, markup included, so
+                // a row that should be plain is reset explicitly.
+                if (markup !== null)
+                    label.set_markup(markup);
+                else if (label.get_use_markup())
+                    label.set_text(candidate.get_text());
+            }
+        } catch (error) {
+            console.warn(`Snippets: candidate emphasis failed: ${error}`);
+        }
     }
 }
 
@@ -115,9 +247,13 @@ export default class SnippetsExtension extends Extension {
             }
             return GLib.SOURCE_CONTINUE;
         });
+        this._emphasis = new CandidateEmphasis();
+        this._emphasis.enable();
     }
 
     disable() {
+        this._emphasis?.disable();
+        this._emphasis = null;
         this._cancelOperations();
         this._generation++;
         this._owner = null;

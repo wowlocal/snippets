@@ -30,6 +30,8 @@ CATALOG = [
     ("Sloth", "sloth", "Hang in there"),
     ("Xenon", "xenon", "Xe"),
     ("Xylophone", "xylo", "Ξυλόφωνο"),
+    # A name whose bytes and characters differ, for match ranges.
+    ("Café", "cafe", "Coffee"),
 ]
 PALETTE = bytes([1]) + bytes([43, 43, 43, 245, 245, 245, 0, 122, 255])
 
@@ -118,7 +120,7 @@ def serve(conn, log, refuse):
                 shown = [
                     (index, entry)
                     for index, entry in enumerate(CATALOG)
-                    if entry[1].startswith(query)
+                    if entry[1].startswith(query) or entry[0].lower().startswith(query.lower())
                 ][:8]
                 conn.sendall(frame(1, rows([(i, e) for i, e in shown], query)))
                 if query.startswith("q"):

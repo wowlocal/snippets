@@ -195,13 +195,15 @@ XML with `--ibus` once it is selected as the global engine, a fictional Shell
 `$XDG_RUNTIME_DIR/snippets-ibus.sock` (`tests/ibus/`). The app runs from a copy
 of the Python interpreter named `snippets` beside the engine, because the engine
 accepts only that peer. A Python GI input context (`tests/ibus/driver.py`) types
-26 scenarios: expansion with Return and Tab, Escape, password and hidden-text
+28 scenarios: expansion with Return and Tab, Escape, password and hidden-text
 fields, arrow and Control-N/P navigation, keys typed while a request is pending,
 Backspace, malformed replies, focus and content-type changes, a locked screen and
 locking during a composition, the app hanging up between requests, right after a
-reply or during one, and refusing the engine (unlocked and locked), Control
-chords and a Compose sequence that contains a backslash. It checks what is committed and what the app
-was asked, and writes a transcript of every preedit, lookup table, commit and app
+reply or during one, and refusing the engine (unlocked and locked), Control chords,
+a Compose sequence that contains a backslash, and the marked match ranges, counted
+in characters for a name whose bytes and characters differ. It checks what is
+committed, what each lookup table marks and what the app was asked, and writes a
+transcript of every preedit, lookup table (with its marks), commit and app
 request.
 
 When the app hangs up during a composition, the engine commits what was typed,
@@ -299,7 +301,22 @@ The IBus backend owns composition generations across reset, focus and content
 type changes; drops pending work on connection loss or consent revocation; and
 checks GNOME Shell's unlocked state through its unique bus owner before delivering
 a reply. Candidate rows contain ordinary-snippet metadata, never vault bodies.
-Its popup currently uses GNOME's native IBus candidate presentation.
+Its popup uses GNOME's native IBus candidate presentation.
+
+Matched characters are bold (the Hyprland popup also colours them). The engine
+attaches the app's match ranges to each candidate (`name\nkeyword`) as underline
+attributes, in characters, the unit IBus counts. GNOME Shell's candidate popup
+draws only candidate text, so the Snippets companion re-renders the visible rows
+with those ranges in bold, after the Shell has filled them, and only while the
+Snippets input source is selected; it wraps the popup's `setPanelService` to
+follow IBus reconnects. The companion reads candidate text from the lookup table
+the Shell is showing and keeps none of it. A row without valid marks, another
+input source and disabling the companion get the Shell's plain text back. Without
+the companion the rows are plain; a panel that draws candidate attributes itself
+shows the ranges underlined. Bold rather than the accent colour, because the
+selected row is filled with the accent colour. Checked on GNOME Shell 50.1
+(2026-11-13): bold matches in names and keywords on selected and unselected rows,
+across cursor moves, and a name with markup characters shown literally.
 
 The owned GTK4/Wayland receiver passed exact expansion, password pass-through,
 cross-field cancellation and screen-shield activation/deactivation. The last case
