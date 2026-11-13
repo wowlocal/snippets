@@ -223,7 +223,9 @@ export default class SnippetsExtension extends Extension {
             }
         });
         this._focusSignal = global.display.connect('notify::focus-window', () => this._focusChanged());
-        this._lockSignal = Main.screenShield.connect('active-changed', () => this._cancelOperations());
+        // Shell creates no screen shield where the session cannot lock (for
+        // example some remote sessions); session-mode updates still apply.
+        this._lockSignal = Main.screenShield?.connect('active-changed', () => this._cancelOperations()) ?? 0;
         this._modeSignal = Main.sessionMode.connect('updated', () => this._cancelOperations());
         this._overviewSignal = Main.overview.connect('showing', () => this._cancelOperations());
         this._sleepSignal = Gio.DBus.system.signal_subscribe('org.freedesktop.login1',
@@ -267,7 +269,7 @@ export default class SnippetsExtension extends Extension {
         if (this._focusSignal)
             global.display.disconnect(this._focusSignal);
         if (this._lockSignal)
-            Main.screenShield.disconnect(this._lockSignal);
+            Main.screenShield?.disconnect(this._lockSignal);
         if (this._modeSignal)
             Main.sessionMode.disconnect(this._modeSignal);
         if (this._inputSignal)
@@ -291,7 +293,7 @@ export default class SnippetsExtension extends Extension {
     }
 
     _ready() {
-        return this._exported && this._owner && !Main.screenShield.active &&
+        return this._exported && this._owner && !Main.screenShield?.active &&
             !Main.sessionMode.isLocked && !Main.sessionMode.isGreeter && Main.sessionMode.hasWindows &&
             Main.actionMode === Shell.ActionMode.NORMAL;
     }

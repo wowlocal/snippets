@@ -30,12 +30,16 @@ pub(crate) struct Image {
 }
 fn identity(metadata: &fs::Metadata) -> Result<[u64; 7]> {
     if !metadata.is_file()
-        || metadata.nlink() != 1
         || metadata.mode() & 0o6022 != 0
         || metadata.mode() & 0o111 == 0
         || ![0, unsafe { libc::geteuid() }].contains(&metadata.uid())
     {
         return Err(REFUSED);
+    }
+    // A second name could keep or replace this image. Say why: the usual case
+    // is a binary run straight from cargo's target/ directory.
+    if metadata.nlink() != 1 {
+        return Err(HARD_LINKED);
     }
     Ok([
         metadata.dev(),
@@ -312,6 +316,11 @@ mod tests {
         let hard = temp.path().join("hard");
         fs::hard_link(&path, &hard).unwrap();
         assert!(image.check().is_err());
+        // A hard-linked image, as cargo leaves in target/, gets its own advice.
+        assert_eq!(
+            Image::at(hard.clone()).err().map(|error| error.0),
+            Some(HARD_LINKED.0)
+        );
         fs::remove_file(hard).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o722)).unwrap();
         assert!(Image::at(path.clone()).is_err());

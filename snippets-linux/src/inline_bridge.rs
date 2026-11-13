@@ -55,6 +55,47 @@ impl Backend {
             Self::IBus => Status::WaitingForIBus,
         }
     }
+    /// The status while no request is being served, or None when it cannot be
+    /// told (keep what is shown). Without an IBus daemon no field ever reaches
+    /// the engine, before or after it first connected; say so rather than wait.
+    fn idle(self, engine_connected: bool) -> Option<Status> {
+        #[cfg(feature = "ibus")]
+        if matches!(self, Self::IBus) {
+            match ibus_running() {
+                Some(false) => return Some(Status::IBusNotRunning),
+                None => return None,
+                Some(true) => (),
+            }
+        }
+        Some(if engine_connected {
+            Status::WaitingForField
+        } else {
+            self.waiting()
+        })
+    }
+}
+
+/// Whether an IBus daemon owns `org.freedesktop.IBus` on the session bus, or
+/// None when the bus cannot be asked. GNOME starts it at sign-in.
+#[cfg(feature = "ibus")]
+fn ibus_running() -> Option<bool> {
+    use gtk::{gio, prelude::*};
+    gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>)
+        .ok()?
+        .call_sync(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameHasOwner",
+            Some(&("org.freedesktop.IBus",).to_variant()),
+            None,
+            gio::DBusCallFlags::NO_AUTO_START,
+            150,
+            None::<&gio::Cancellable>,
+        )
+        .ok()?
+        .get::<(bool,)>()
+        .map(|(owned,)| owned)
 }
 
 struct Socket {
@@ -449,6 +490,7 @@ pub(super) fn run(
     // tell whether its input method is selected; once it has, it stays ready across
     // rebinds (unlock, consent changes) for this worker.
     let mut engine_connected = false;
+    let mut recheck = Instant::now();
     while !stop.load(Ordering::Acquire) && Preference::read(&root).is_ok_and(|p| p.enabled) {
         let (state, epoch) = witness.snapshot();
         if state != SessionState::Unlocked {
@@ -474,11 +516,15 @@ pub(super) fn run(
             report(Status::Unavailable);
             return;
         };
-        report(if engine_connected {
-            Status::WaitingForField
-        } else {
-            backend.waiting()
-        });
+        report(
+            backend
+                .idle(engine_connected)
+                .unwrap_or(if engine_connected {
+                    Status::WaitingForField
+                } else {
+                    backend.waiting()
+                }),
+        );
         while guard().is_ok() {
             match socket.listener.accept() {
                 Ok((mut stream, _)) => {
@@ -510,6 +556,13 @@ pub(super) fn run(
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // Follow whether the input method is there at all.
+                    if recheck.elapsed() >= Duration::from_secs(2) {
+                        recheck = Instant::now();
+                        if let Some(status) = backend.idle(engine_connected) {
+                            report(status);
+                        }
+                    }
                     thread::park_timeout(Duration::from_millis(20))
                 }
                 Err(_) => {

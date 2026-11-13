@@ -90,6 +90,61 @@ artifacts. `CARGO_TARGET_DIR` can override either directory. Library storage is
 preserved. Switching an existing prefix does not remove old Fcitx addon files or
 change a running input-method service; use a separate prefix for this preview.
 
+GTK and libadwaita must come with their own matching headers: building against
+one version's headers and running with another (for example a hand-assembled
+sysroot) prints `Gtk-CRITICAL`/`Adwaita-CRITICAL` assertions at every start.
+
+### Building by hand
+
+`cargo build --features gnome` is not the GNOME configuration: features add to
+the defaults, which build the Fcitx (Hyprland) backend with C++ and Wayland
+dependencies. Build only the IBus backend with:
+
+```sh
+cargo build --no-default-features --features gnome
+```
+
+When a dependency only the Fcitx backend needs is missing, `build.rs` says which
+feature brought it in. Run what you build only after installing it. The app and
+`snippets-cli` accept each other only as files with a single link, and cargo
+hard-links its `target/` outputs, so a binary run from there reports that it must
+be installed. Inline expansion does nothing either: the engine accepts only the
+`snippets` installed beside it. `scripts/install-linux.sh` installs single copies.
+
+### Without root, or where programs may run only from some directories
+
+Nothing needs root. The installer writes only under its prefix (default
+`~/.local`), and **Prepare Integration** writes only user configuration: the IBus
+drop-in under `~/.config/systemd/user/` and the Shell companion, which GNOME Shell
+reads but never executes, under `~/.local/share/gnome-shell/extensions/`. The
+system component directory (`/usr/share/ibus/component`) is only kept on IBus's
+search path, never written.
+
+Where a policy such as fapolicyd lets programs run only from some directories,
+build and install inside one of them, then prepare integration from there. Cargo
+runs its build scripts from the target directory (by default
+`snippets-linux/target/gnome` in the clone), so keep the clone there too, or set
+`CARGO_TARGET_DIR` to such a directory:
+
+```sh
+./scripts/install-linux.sh --desktop gnome --prefix /home/work/$USER/snippets
+/home/work/$USER/snippets/bin/snippets
+```
+
+The engine test (`tests/ibus-engine-live.sh`, below) runs programs from its work
+directory: set `TMPDIR` to such a directory when `/tmp` is not allowed.
+
+### IBus must be running
+
+GNOME starts IBus at sign-in (`org.freedesktop.IBus.session.GNOME.service`), and
+inline expansion reaches text fields only through it. If no IBus daemon owns
+`org.freedesktop.IBus` on the session bus, the Inline Expansion window and
+`snippets-cli expansion status` say so (`ibusNotRunning`) instead of waiting; sign
+out and back in, or run `ibus start`. `ibus start` uses GNOME's IBus unit when
+the session has one, so the search path Prepare Integration added applies. A
+plain `ibus-daemon` started without that unit does not get it and will not find
+an engine installed under a custom `--prefix`.
+
 Installed GNOME files include `share/snippets-linux/snippets-ibus`,
 `share/ibus/component/snippets.xml`, and
 `share/gnome-shell/extensions/snippets@wowlocal.github.io/`. Component XML and all
@@ -414,8 +469,12 @@ for other portal backends. See the [GNOME implementation](https://gitlab.gnome.o
 
 ## Ordinary picker insertion companion
 
-`snippets-linux/gnome/snippets@wowlocal.github.io` is currently qualified against
-GNOME Shell 50. The app pins its companion calls to the issuing Shell's unique
+`snippets-linux/gnome/snippets@wowlocal.github.io` declares GNOME Shell 48, 49 and
+50. Everything it hooks into (the IBus candidate popup and manager, the input
+source manager, the session mode and screen shield) was checked line by line
+against the GNOME Shell 48.4 and 50 sources; it runs live only on 50.1 so far.
+Where the session cannot lock, Shell has no screen shield; the companion then
+relies on session-mode updates alone. The app pins its companion calls to the issuing Shell's unique
 D-Bus owner. The companion admits only the connection owning the primary
 `com.khm.snippets.linux` application name; it has no arbitrary window selector,
 or generic key-injection method. A separate, bounded text reader supports

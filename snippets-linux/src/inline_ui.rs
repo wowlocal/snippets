@@ -168,6 +168,8 @@ impl Service {
                 Status::WaitingForFcitx => ExpansionState::WaitingForFcitx,
                 #[cfg(feature = "ibus")]
                 Status::WaitingForIBus => ExpansionState::WaitingForIBus,
+                #[cfg(feature = "ibus")]
+                Status::IBusNotRunning => ExpansionState::IBusNotRunning,
                 #[cfg(not(feature = "ibus"))]
                 Status::UnsupportedDesktop => ExpansionState::UnsupportedDesktop,
             }

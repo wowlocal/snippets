@@ -1,3 +1,21 @@
+// The Fcitx (Hyprland) backend is in the default features. A GNOME host
+// without its own dependencies (Fcitx5, json-c, a C++20 compiler) wants the
+// IBus-only configuration, so those failures say so.
+const FCITX: &str = "the Fcitx (Hyprland) input backend (feature `fcitx`, part of \
+    the default `hyprland` configuration). For GNOME, build only the IBus backend: \
+    cargo build --no-default-features --features gnome";
+
+fn include_flags(paths: &[std::path::PathBuf]) -> Vec<std::ffi::OsString> {
+    paths
+        .iter()
+        .map(|path| {
+            let mut flag = std::ffi::OsString::from("-I");
+            flag.push(path);
+            flag
+        })
+        .collect()
+}
+
 fn main() {
     println!("cargo:rerun-if-env-changed=SNIPPETS_GTK_RUNTIME_DIR");
     println!("cargo:rerun-if-changed=src/inline_rows.h");
@@ -69,14 +87,14 @@ fn main() {
             .cargo_metadata(false)
             .atleast_version("5.1")
             .probe("Fcitx5Core")
-            .expect("Fcitx5 development files are required for inline expansion");
+            .unwrap_or_else(|_| panic!("Fcitx5 5.1 development files are required by {FCITX}"));
         let addon_output =
             std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output directory"));
         let addon_library = addon_output.join("libsnippets-fcitx.so");
         let module = pkg_config::Config::new()
             .cargo_metadata(false)
             .probe("Fcitx5Module")
-            .expect("Fcitx5 module development files are required");
+            .unwrap_or_else(|_| panic!("Fcitx5 module development files are required by {FCITX}"));
         let wayland_panel = pkg_config::Config::new()
             .cargo_metadata(false)
             .probe("wayland-client")
@@ -89,7 +107,7 @@ fn main() {
             .cargo_metadata(false)
             .atleast_version("0.14")
             .probe("json-c")
-            .expect("json-c development files are required");
+            .unwrap_or_else(|_| panic!("json-c development files are required by {FCITX}"));
         for (mode, name) in [
             (
                 "client-header",
@@ -120,6 +138,7 @@ fn main() {
                     "-Wextra",
                     "-Werror"
                 ])
+                .args(include_flags(&wayland_panel.include_paths))
                 .arg(addon_output.join("snippets-fcitx-popup-protocol.c"))
                 .arg("-o")
                 .arg(&panel_protocol)
@@ -142,7 +161,7 @@ fn main() {
                         .arg(format!("data/{xml}"))
                         .arg(addon_output.join(format!("{stem}-{suffix}")))
                         .status()
-                        .expect("wayland-scanner required")
+                        .expect("wayland-scanner is required")
                         .success()
                 );
             }
@@ -159,6 +178,7 @@ fn main() {
                         "-Wextra",
                         "-Werror"
                     ])
+                    .args(include_flags(&wayland_panel.include_paths))
                     .arg(addon_output.join(format!("{stem}-protocol.c")))
                     .arg("-o")
                     .arg(&object)
@@ -222,8 +242,11 @@ fn main() {
         }
         addon.arg("-ldl");
         assert!(
-            addon.status().expect("C++ compiler required").success(),
-            "Fcitx addon build failed"
+            addon
+                .status()
+                .unwrap_or_else(|_| panic!("A C++20 compiler is required by {FCITX}"))
+                .success(),
+            "The Fcitx addon did not build; it belongs to {FCITX}"
         );
         // Installable transport sits next to the GUI it authenticates by inode.
         std::fs::copy(
@@ -297,8 +320,11 @@ fn main() {
         }
         fixture.arg("-ldl");
         assert!(
-            fixture.status().expect("C++ compiler required").success(),
-            "Native Fcitx state fixture build failed"
+            fixture
+                .status()
+                .unwrap_or_else(|_| panic!("A C++20 compiler is required by {FCITX}"))
+                .success(),
+            "The native Fcitx state fixture did not build; it belongs to {FCITX}"
         );
         println!(
             "cargo:rustc-env=SNIPPETS_FCITX_STATE_FIXTURE={}",

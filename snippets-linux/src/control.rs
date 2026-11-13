@@ -29,6 +29,11 @@ pub(crate) const INVALID: Error =
 pub(crate) const REFUSED: Error = Error(
     "The control peer could not be verified. Restart Snippets with the matching installed CLI.",
 );
+/// Cargo hard-links its build outputs, so a binary run straight from `target/`
+/// is refused like any file with a second name that could keep or replace it.
+pub(crate) const HARD_LINKED: Error = Error(
+    "Snippets and snippets-cli accept each other only as installed files with a single link; cargo's target/ outputs are hard links. Install with scripts/install-linux.sh (--prefix chooses where) and run the installed copy.",
+);
 pub(crate) const CLOSED: Error =
     Error("Snippets is unavailable or closed the request. Open the app and try again.");
 

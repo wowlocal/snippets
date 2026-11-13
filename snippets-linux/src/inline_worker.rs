@@ -154,6 +154,8 @@ pub(crate) enum Status {
     WaitingForFcitx,
     #[cfg(feature = "ibus")]
     WaitingForIBus,
+    #[cfg(feature = "ibus")]
+    IBusNotRunning,
     #[cfg(not(feature = "ibus"))]
     UnsupportedDesktop,
 }
@@ -182,6 +184,10 @@ impl Status {
             #[cfg(feature = "ibus")]
             Self::WaitingForIBus => {
                 "Enabled; type \\ and a keyword in a text field. If nothing appears, select Snippets in GNOME Input Sources."
+            }
+            #[cfg(feature = "ibus")]
+            Self::IBusNotRunning => {
+                "Enabled, but IBus is not running in this session, so no text field reaches Snippets. Sign out and back in, or start it with: ibus start"
             }
             #[cfg(not(feature = "ibus"))]
             Self::UnsupportedDesktop => {

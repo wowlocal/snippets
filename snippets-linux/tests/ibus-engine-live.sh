@@ -6,10 +6,11 @@
 #   tests/ibus-engine-live.sh /path/to/snippets-ibus [transcript]
 #
 # Needs dbus-run-session, ibus-daemon (or SNIPPETS_IBUS_DAEMON) and Python GI
-# with the IBus typelib. The daemon launches the engine from a component XML, as
-# an installed GNOME session does; engine output goes to the daemon's log. The
-# transcript, one JSON line per observation, lets two engine builds be compared
-# with diff.
+# with the IBus typelib. The daemon launches the engine from a component XML,
+# as an installed GNOME session does; engine output goes to the daemon's log.
+# The transcript, one JSON line per observation, lets two engine builds be
+# compared with diff. It works in $TMPDIR (default /tmp), which must allow
+# running programs: set TMPDIR where a host forbids executing from /tmp.
 set -euo pipefail
 umask 077
 if [[ $# -lt 1 || $# -gt 2 || ! -x $1 ]]; then
@@ -25,15 +26,26 @@ command -v dbus-run-session >/dev/null || { printf '%s\n' 'dbus-run-session not 
 python3 -c 'import gi; gi.require_version("IBus", "1.0"); from gi.repository import IBus' \
   || { printf '%s\n' 'Python GI with the IBus typelib is required' >&2; exit 2; }
 
-root=$(mktemp -d /tmp/sie.XXXXXX)
+root=$(realpath -- "$(mktemp -d "${TMPDIR:-/tmp}/sie.XXXXXX")")
 cleanup() {
   set +e
   for pid in $(cat "$root/pids" 2>/dev/null); do kill "$pid" 2>/dev/null; done
-  [[ $root == /tmp/sie.* ]] && rm -rf -- "$root"
+  [[ -d $root && $(basename -- "$root") == sie.* ]] && rm -rf -- "$root"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# The path goes into the component XML's <exec>, which IBus splits like a
+# command line, and into Unix socket paths of at most 107 bytes.
+if [[ $root =~ [^A-Za-z0-9@._/-] ]]; then
+  printf 'The work directory path has characters the IBus component cannot hold: %s\nSet TMPDIR to a plain path.\n' "$root" >&2
+  exit 2
+fi
+socket=$root/run/snippets-ibus.sock
+if (( $(printf %s "$socket" | wc -c) > 107 )); then
+  printf 'The work directory path is too long for Unix sockets: %s\nSet TMPDIR to a shorter directory.\n' "$root" >&2
+  exit 2
+fi
 mkdir -p "$root/bin" "$root/home" "$root/config" "$root/cache" "$root/run" "$root/components"
 chmod 700 "$root/run"
 # The engine accepts only the `snippets` executable installed beside it, so the

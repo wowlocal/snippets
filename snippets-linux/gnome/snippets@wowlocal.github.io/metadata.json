@@ -3,6 +3,8 @@
   "name": "Snippets",
   "description": "Input source setup, ordinary snippet insertion and clipboard capture/history for Snippets.",
   "shell-version": [
+    "48",
+    "49",
     "50"
   ],
   "url": "https://github.com/wowlocal/snippets",

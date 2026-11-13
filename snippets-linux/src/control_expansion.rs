@@ -45,6 +45,9 @@ pub enum ExpansionState {
     Unavailable,
     WaitingForFcitx,
     WaitingForIBus,
+    // Not camelCase's "iBusNotRunning".
+    #[serde(rename = "ibusNotRunning")]
+    IBusNotRunning,
     UnsupportedDesktop,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
