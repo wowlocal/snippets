@@ -194,3 +194,21 @@ else
   echo 'Experimental GNOME components installed. Desktop preferences and input sources were preserved.'
   echo 'Open Settings → GNOME Integration to prepare setup, sign out and back in, then enable integration. See docs/linux/GNOME.md.'
 fi
+# The app and its input method (the IBus engine, or the Fcitx addon) accept each
+# other only by the installed files. A process still running from a file this
+# installation replaced no longer matches, and expansion pauses until it restarts.
+TASK_STALE_APP=0
+TASK_STALE_ENGINE=0
+TASK_DESTINATION_REAL=$(realpath -- "$TASK_DESTINATION")
+for TASK_PID in $(pgrep -u "$(id -u)" -x 'snippets|snippets-ibus' || true); do
+  case $(readlink "/proc/$TASK_PID/exe" 2>/dev/null) in
+    "$TASK_DESTINATION_REAL/snippets (deleted)") TASK_STALE_APP=1 ;;
+    "$TASK_DESTINATION_REAL/snippets-ibus (deleted)") TASK_STALE_ENGINE=1 ;;
+  esac
+done
+if [[ $TASK_STALE_APP == 1 ]]; then
+  echo 'Snippets from the previous installation is still running: quit it (Quit in its menu) and open it again.'
+fi
+if [[ $TASK_STALE_ENGINE == 1 ]]; then
+  echo 'The Snippets input engine from the previous installation is still running: run `ibus restart`, or sign out and back in, to resume expansion.'
+fi

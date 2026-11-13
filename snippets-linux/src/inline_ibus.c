@@ -192,6 +192,8 @@ typedef struct {
   struct xkb_compose_state *compose;
   Connection *connection;
   bool active, pending, append_only, selected_by_user;
+  // The app hung up while a request was in flight; complete() settles the rest.
+  bool hung_up;
   bool accept;
   char accept_literal;
   int navigation;
@@ -286,7 +288,7 @@ static void clear(IBusEngine *e) {
   if (s->connection) connection_cancel(s->connection);
   connection_unref(s->connection);
   s->connection = NULL;
-  s->active = s->pending = s->accept = s->selected_by_user = false;
+  s->active = s->pending = s->accept = s->selected_by_user = s->hung_up = false;
   s->accept_literal = 0;
   s->navigation = 0;
   s->selected = 0;
@@ -306,6 +308,7 @@ static void literal(IBusEngine *e) {
 }
 
 static void request(IBusEngine *e, unsigned char kind, const char *payload, size_t size);
+static void settle_after_hang_up(IBusEngine *e);
 
 static void select_row(IBusEngine *e) {
   State *s = state(e);
@@ -344,7 +347,9 @@ static void io(GTask *task, gpointer source G_GNUC_UNUSED, gpointer data,
       ok = transfer(r->connection->fd, r->reply->str, length, false, deadline);
     }
   }
-  if (ok && r->kind != 3 && !unlocked(r->session)) {
+  // complete() settles a failed transfer as typed text, so it needs the same lock
+  // check as a reply: a locked screen discards the composition either way.
+  if (r->kind != 3 && !unlocked(r->session)) {
     r->revoked = true;
     ok = false;
   }
@@ -371,6 +376,7 @@ static void complete(GObject *object, GAsyncResult *result, gpointer data G_GNUC
     return;
   }
   if (!ok) {
+    if (s->accept) insert_accept_literal(s);
     literal(e);
     return;
   }
@@ -453,6 +459,8 @@ static void complete(GObject *object, GAsyncResult *result, gpointer data G_GNUC
   } else if (s->tail->len > 0) {
     literal(e);
   }
+  // The app sent this reply and hung up: nothing more can be asked of it.
+  if (s->hung_up && s->active && !s->pending) settle_after_hang_up(e);
 }
 
 static void request(IBusEngine *e, unsigned char kind, const char *payload, size_t size) {
@@ -487,12 +495,73 @@ static void drop_last_character(GString *text) {
   g_string_truncate(text, keep);
 }
 
+typedef struct {
+  guint64 generation;
+  GDBusConnection *session;
+} HangUp;
+
+static void hang_up_free(gpointer data) {
+  HangUp *h = data;
+  if (h->session) g_object_unref(h->session);
+  g_free(h);
+}
+
+static void check_lock(GTask *task, gpointer source G_GNUC_UNUSED, gpointer data,
+                       GCancellable *cancellable G_GNUC_UNUSED) {
+  g_task_return_boolean(task, unlocked(((HangUp *)data)->session));
+}
+
+static void settle_hang_up(GObject *object, GAsyncResult *result, gpointer data G_GNUC_UNUSED) {
+  IBusEngine *e = IBUS_ENGINE(object);
+  State *s = state(e);
+  HangUp *h = g_task_get_task_data(G_TASK(result));
+  bool keep = g_task_propagate_boolean(G_TASK(result), NULL);
+  if (s->generation != h->generation) return;
+  s->pending = false;
+  if (!keep) {
+    clear(e);
+    return;
+  }
+  if (s->accept) insert_accept_literal(s);
+  literal(e);
+}
+
+// The app hung up: it quit, expansion was turned off, the query sat idle, or it
+// refused this engine (an earlier installation still running after an update).
+// What was typed is the user's own text, so it is kept, as Escape keeps it, unless
+// the screen is locked, which discards it as `shell_changed` does.
 static gboolean app_disconnected(gint fd G_GNUC_UNUSED, GIOCondition condition G_GNUC_UNUSED,
                                  gpointer data) {
   IBusEngine *engine = IBUS_ENGINE(data);
-  state(engine)->disconnect_watch = 0;
-  clear(engine);
+  State *s = state(engine);
+  s->disconnect_watch = 0;
+  // Only an expansion's usage ACK was left, or the field takes no text.
+  if (!s->active || !public_field(engine)) {
+    clear(engine);
+    return G_SOURCE_REMOVE;
+  }
+  // complete() settles a request in flight: a failed one after io() has checked
+  // the lock, and a composition its reply leaves open through `hung_up`.
+  if (s->pending) {
+    s->hung_up = true;
+    return G_SOURCE_REMOVE;
+  }
+  settle_after_hang_up(engine);
   return G_SOURCE_REMOVE;
+}
+
+// Checks the lock on a worker, then keeps or discards what was typed. Keys keep
+// composing meanwhile; none is sent on the closed stream.
+static void settle_after_hang_up(IBusEngine *e) {
+  State *s = state(e);
+  s->pending = true;
+  HangUp *h = g_new0(HangUp, 1);
+  h->generation = s->generation;
+  if (session_bus) h->session = g_object_ref(session_bus);
+  GTask *task = g_task_new(e, NULL, settle_hang_up, NULL);
+  g_task_set_task_data(task, h, hang_up_free);
+  g_task_run_in_thread(task, check_lock);
+  g_object_unref(task);
 }
 
 static gboolean key(IBusEngine *e, guint keyval, guint keycode, guint modifiers) {

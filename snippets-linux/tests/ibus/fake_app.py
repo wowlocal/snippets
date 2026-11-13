@@ -6,7 +6,13 @@ executable is that file. Serves SNI3 frames on RUNTIME_DIR/snippets-ibus.sock
 from a fictional catalog and logs every request, so a run can be compared.
 
 Queries starting with `b` get a malformed row reply; queries starting with `s`
-are answered after 200 ms, so keys can arrive while a request is pending.
+are answered after 200 ms, so keys can arrive while a request is pending. The
+app hangs up, as when it quits or expansion is turned off: one second after
+answering a query starting with `q` (no request is pending then), right after
+answering one starting with `j`, and 300 ms after a query starting with `k`,
+unanswered (keys typed meanwhile wait for it). While RUNTIME_DIR/refuse-engine
+exists, it closes every new connection unread, as it refuses an engine left
+running from an earlier installation.
 """
 
 import os
@@ -82,10 +88,13 @@ class Log:
             out.write(line + "\n")
 
 
-def serve(conn, log):
+def serve(conn, log, refuse):
     number = log.connection()
     shown = []
     try:
+        if os.path.exists(refuse):
+            log.write(f"app {number} refused")
+            return
         while True:
             header = read_exact(conn, 9)
             if header[:4] != b"SNI3":
@@ -97,6 +106,10 @@ def serve(conn, log):
             if kind == 1:
                 query = payload.decode()
                 log.write(f"app {number} query {query!r}")
+                if query.startswith("k"):
+                    time.sleep(0.3)
+                    log.write(f"app {number} hang-up")
+                    return
                 if query.startswith("s"):
                     time.sleep(0.2)
                 if query.startswith("b"):
@@ -108,6 +121,11 @@ def serve(conn, log):
                     if entry[1].startswith(query)
                 ][:8]
                 conn.sendall(frame(1, rows([(i, e) for i, e in shown], query)))
+                if query.startswith("q"):
+                    time.sleep(1.0)
+                if query.startswith(("q", "j")):
+                    log.write(f"app {number} hang-up")
+                    return
             elif kind == 2:
                 index = payload[0] if payload else 255
                 log.write(f"app {number} select {index}")
@@ -136,10 +154,11 @@ def main():
     os.chmod(path, 0o600)
     server.listen(8)
     log = Log(log_path)
+    refuse = os.path.join(runtime, "refuse-engine")
     print("READY", flush=True)
     while True:
         conn, _ = server.accept()
-        threading.Thread(target=serve, args=(conn, log), daemon=True).start()
+        threading.Thread(target=serve, args=(conn, log, refuse), daemon=True).start()
 
 
 if __name__ == "__main__":

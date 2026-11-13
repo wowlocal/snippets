@@ -86,9 +86,10 @@ settle()
 shell = Gio.bus_get_sync(Gio.BusType.SESSION, None)
 
 
-def set_locked(value):
+def set_locked(value, quietly=False):
     shell.call_sync(
-        "org.gnome.Shell", "/org/gnome/ScreenSaver", "org.gnome.ScreenSaver", "SetActive",
+        "org.gnome.Shell", "/org/gnome/ScreenSaver", "org.gnome.ScreenSaver",
+        "SetActiveQuietly" if quietly else "SetActive",
         GLib.Variant("(b)", (value,)), None, Gio.DBusCallFlags.NONE, 1000, None,
     )
 
@@ -304,6 +305,77 @@ def _():
     settle()
     set_locked(False)
     settle()
+
+
+REFUSE = os.path.join(os.environ["XDG_RUNTIME_DIR"], "refuse-engine")
+
+
+class refused_engine:
+    """The app refuses this engine, as after an update replaced its file."""
+
+    def __enter__(self):
+        open(REFUSE, "w").close()
+
+    def __exit__(self, *_):
+        os.remove(REFUSE)
+
+
+# The app hangs up a second after answering `q`, with no request pending.
+@scenario("app-hang-up-keeps-what-was-typed")
+@expect("\\q")
+def _():
+    typing("\\q")
+    settle(quiet=1.5, limit=4.0)
+    press("a")
+
+
+@scenario("app-hang-up-while-locked-discards")
+@expect()
+def _():
+    typing("\\q")
+    set_locked(True, quietly=True)
+    try:
+        settle(quiet=1.5, limit=4.0)
+    finally:
+        set_locked(False, quietly=True)
+
+
+# The app answers `j` and hangs up at once, often before the engine has read it.
+@scenario("app-hang-up-right-after-a-reply-keeps-what-was-typed")
+@expect("\\j")
+def _():
+    typing("\\j")
+    settle(quiet=1.0, limit=4.0)
+
+
+# The app hangs up on `k` with the request still pending, after Return was queued.
+@scenario("hang-up-mid-request-keeps-the-queued-return")
+@expect("\\k\n")
+def _():
+    press("\\")
+    press("k", wait=False)
+    press("Return", wait=False)
+    settle(limit=3.0)
+
+
+@scenario("refused-engine-keeps-the-backslash")
+@expect("\\")
+def _():
+    with refused_engine():
+        press("\\")
+        press("a")
+
+
+@scenario("refused-engine-while-locked-discards")
+@expect()
+def _():
+    with refused_engine():
+        set_locked(True)
+        try:
+            press("\\")
+        finally:
+            set_locked(False)
+            settle()
 
 
 @scenario("control-chord-ends-literally")

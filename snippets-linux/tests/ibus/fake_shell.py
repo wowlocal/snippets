@@ -1,6 +1,8 @@
 """A fictional GNOME Shell on a private session bus: owns org.gnome.Shell and
 serves the org.gnome.ScreenSaver lock state the IBus engine checks.
-SetActive(b) changes it and emits ActiveChanged, as the real Shell does."""
+SetActive(b) changes it and emits ActiveChanged, as the real Shell does;
+SetActiveQuietly(b) changes it without the signal, so a test can reach the
+engine's own lock checks before the signal would clear its compositions."""
 
 import sys
 
@@ -14,6 +16,7 @@ XML = """
   <interface name="org.gnome.ScreenSaver">
     <method name="GetActive"><arg type="b" direction="out"/></method>
     <method name="SetActive"><arg type="b" direction="in"/></method>
+    <method name="SetActiveQuietly"><arg type="b" direction="in"/></method>
     <signal name="ActiveChanged"><arg type="b"/></signal>
   </interface>
 </node>
@@ -31,6 +34,9 @@ def call(connection, sender, path, interface, method, parameters, invocation):
         connection.emit_signal(
             None, path, interface, "ActiveChanged", GLib.Variant("(b)", (active,))
         )
+        invocation.return_value(None)
+    elif method == "SetActiveQuietly":
+        active = parameters.unpack()[0]
         invocation.return_value(None)
 
 

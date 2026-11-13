@@ -195,17 +195,31 @@ XML with `--ibus` once it is selected as the global engine, a fictional Shell
 `$XDG_RUNTIME_DIR/snippets-ibus.sock` (`tests/ibus/`). The app runs from a copy
 of the Python interpreter named `snippets` beside the engine, because the engine
 accepts only that peer. A Python GI input context (`tests/ibus/driver.py`) types
-20 scenarios: expansion with Return and Tab, Escape, password and hidden-text
+26 scenarios: expansion with Return and Tab, Escape, password and hidden-text
 fields, arrow and Control-N/P navigation, keys typed while a request is pending,
 Backspace, malformed replies, focus and content-type changes, a locked screen and
-locking during a composition, Control chords and a Compose sequence that contains
-a backslash. It checks what is committed and what the app was asked, and writes a
-transcript of every preedit, lookup table, commit and app request.
+locking during a composition, the app hanging up between requests, right after a
+reply or during one, and refusing the engine (unlocked and locked), Control
+chords and a Compose sequence that contains a backslash. It checks what is committed and what the app
+was asked, and writes a transcript of every preedit, lookup table, commit and app
+request.
+
+When the app hangs up during a composition, the engine commits what was typed,
+as Escape does (with a Return or Tab pressed while a request was pending),
+unless the screen is locked; it checks the lock on its I/O worker, never on the
+key-event thread. The app hangs up when it quits, when expansion is turned off,
+after a query has been idle for 120 seconds, and when it refuses the engine's
+process: after an update replaces `snippets-ibus`, the engine still running is
+the earlier file and no longer matches. Expansion then resumes after
+`ibus restart` or the next sign-in, and, if Snippets itself was running, once it
+is reopened; the installer names each process left from the earlier files. Until
+2026-11-13 the engine (and the C++ one before it) discarded the typed text,
+including the backslash, in these cases.
 
 The C port (2026-11-12, Omarchy, IBus 1.5.34 unpacked into a scratch prefix, not
-installed) passed every scenario, and its transcript (448 observations) is
-identical to the C++20 engine it replaced; so is the transcript of the C engine
-built with AddressSanitizer and UBSan. A differential fuzzer ran the C row parser
+installed) passed the 20 scenarios of that time, and its transcript (448
+observations) is identical to the C++20 engine it replaced; so is the transcript
+of the C engine built with AddressSanitizer and UBSan. A differential fuzzer ran the C row parser
 (`src/inline_rows_c.h`) and the C++ one (`src/inline_rows.h`, still used by Fcitx)
 on 4,000,000 generated and mutated replies: both accepted the same 1,611,757 and
 read the same rows from each. The engine compiles without warnings under GCC
