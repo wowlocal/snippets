@@ -78,7 +78,7 @@ Older distributions may need newer development packages; they are not qualified.
 sudo apt install build-essential cargo pkg-config libgtk-4-dev libadwaita-1-dev \
   libicu-dev libsecret-1-dev libpam0g-dev libaudit-dev libcap-ng-dev \
   libqrencode-dev libwayland-dev wayland-protocols libxkbcommon-dev libjson-c-dev \
-  libibus-1.0-dev python3
+  libibus-1.0-dev python3 git
 ./scripts/install-linux.sh --desktop gnome
 ```
 

@@ -445,6 +445,10 @@ pub(super) fn run(
             last = Some(status);
         }
     };
+    // The engine connects only when someone types `\`. Until it has, this process cannot
+    // tell whether its input method is selected; once it has, it stays ready across
+    // rebinds (unlock, consent changes) for this worker.
+    let mut engine_connected = false;
     while !stop.load(Ordering::Acquire) && Preference::read(&root).is_ok_and(|p| p.enabled) {
         let (state, epoch) = witness.snapshot();
         if state != SessionState::Unlocked {
@@ -470,13 +474,19 @@ pub(super) fn run(
             report(Status::Unavailable);
             return;
         };
-        report(backend.waiting());
+        report(if engine_connected {
+            Status::WaitingForField
+        } else {
+            backend.waiting()
+        });
         while guard().is_ok() {
             match socket.listener.accept() {
                 Ok((mut stream, _)) => {
                     if !trusted_peer(&stream, backend) {
                         continue;
                     }
+                    engine_connected = true;
+                    report(Status::WaitingForField);
                     if stream
                         .set_read_timeout(Some(Duration::from_millis(50)))
                         .is_err()

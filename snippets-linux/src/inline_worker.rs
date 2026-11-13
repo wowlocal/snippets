@@ -180,7 +180,9 @@ impl Status {
                 "Enabled; waiting for the Snippets Fcitx addon. Restart Fcitx after installing Snippets."
             }
             #[cfg(feature = "ibus")]
-            Self::WaitingForIBus => "Enabled; select Snippets in GNOME Input Sources.",
+            Self::WaitingForIBus => {
+                "Enabled; type \\ and a keyword in a text field. If nothing appears, select Snippets in GNOME Input Sources."
+            }
             #[cfg(not(feature = "ibus"))]
             Self::UnsupportedDesktop => {
                 "Inline expansion is not available on this desktop yet. Your saved snippets remain available in the app."

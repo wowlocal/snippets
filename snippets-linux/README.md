@@ -111,11 +111,12 @@ exit codes, consent behavior and the remaining full terminal-control scope.
 On Omarchy, install missing build and native runtime packages:
 
 ```sh
-omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols libxkbcommon pkgconf base-devel
+omarchy pkg add rust gtk4 libadwaita icu libsecret pam qrencode fcitx5 wayland wayland-protocols libxkbcommon pkgconf base-devel git
 ```
 
 Requirements: Rust 1.92+, GTK 4.12+, libadwaita 1.5+, ICU, libsecret 0.21+, Linux-PAM,
-libqrencode 4.1+, Fcitx5 5.1+, Wayland, libxkbcommon, Cairo/Pango, json-c and wayland-protocols with the ext-data-control-v1 XML. Cargo dependencies
+libqrencode 4.1+, Fcitx5 5.1+, Wayland, libxkbcommon, Cairo/Pango, json-c and wayland-protocols with the ext-data-control-v1 XML,
+and `git` (Git sync runs the system git; its tests need it too). Cargo dependencies
 are locked in `Cargo.lock`. Source builds normally use the installed native GTK.
 The latest user-test candidate includes GTK 4.22.4 and libadwaita 1.9.3 with the
 verified fallback-cancellation and alert-heading measurement repairs as app-local

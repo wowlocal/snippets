@@ -127,6 +127,11 @@ impl Settings {
             .build();
         window.set_application(Some(application));
         window.set_hide_on_close(true);
+        // AdwPreferencesWindow is modal by default, and a modal window takes the input of
+        // every other window of the application. Settings opens separate windows (Inline
+        // Expansion, Shortcuts, Suggestion Learning, Clipboard History), which would then
+        // ignore every click until Settings closed.
+        window.set_modal(false);
         let general = adw::PreferencesPage::builder()
             .title("General")
             .icon_name("preferences-system-symbolic")
@@ -477,6 +482,10 @@ mod tests {
             None,
         );
         assert!(settings.window.is_search_enabled());
+        assert!(
+            !settings.window.is_modal(),
+            "windows opened from Settings take input"
+        );
         assert!(!settings.startup.is_active());
         assert_eq!(settings.close.selected(), 0);
         assert!(!config.exists());
