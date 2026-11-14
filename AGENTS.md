@@ -327,6 +327,39 @@ Library/Application Support/SnippetsClone/Sync/state.json
 Library/Application Support/SnippetsClone/Vault/vault.json
 ```
 
+## Agent skill (`snippets-cli skill`)
+
+- `agent-skill/` holds the one source for both CLIs: `guide.md` (with `<!-- mac -->` /
+  `<!-- linux -->` blocks), the default `rules.md` and the `stub.md` that `install`
+  writes. After editing it, run `python3 scripts/agent-skill.py`; it regenerates
+  `snippets/Core/AgentSkillText.swift` and `snippets-linux/src/agent_skill/*.md`.
+  `--check` fails on stale copies. Never edit the generated files by hand.
+- `snippets/Core/AgentSkill.swift` and `snippets-linux/src/agent_skill.rs` must keep the
+  same places, folder rules, states, outcomes and `skill status` JSON. The CLIs
+  (`snippets-cli/main.swift`, `snippets-linux/src/bin/cli_skill/`) and Settings
+  (`snippets/CommandLineSettingsSection.swift` in Integrations,
+  `snippets-linux/src/agent_skill_ui.rs` in General) only call them.
+- Install and uninstall never touch a `SKILL.md` without the `snippets-cli-stub:` marker,
+  and never delete the user's guide or rules. Only custom folders are remembered (in
+  `agent-skill/.state.json`); owned stubs record the built-in places. A remembered folder
+  that has gone is shown as missing and never recreated, and only its final `skills`
+  component may ever be created.
+- The user edits `guide.md` and `rules.md` in `~/.config/snippets/agent-skill/`, outside
+  the support directory whose root `SnippetStore` watches. The Mac ignores
+  `XDG_CONFIG_HOME` there because the app never sees it; Linux follows it. `.state.json`
+  records the SHA-256 of the defaults each copy came from: an unedited copy follows new
+  defaults, an edited one is never overwritten and is reported `outdated` instead, and
+  the printed guide then tells the agent to check `snippets-cli help`. Reset moves an
+  edited copy to `.bak` first.
+- Read-only (`0444`) originals of the defaults are written to the support folder's
+  `AgentSkill/` (created by `createAllDirectories` before the watcher starts; keep it in
+  `ClockAndStateTests`' folder list) and to `~/.local/share/snippets/agent-skill/` on
+  Linux.
+- The rules are advisory. Never make a secure path depend on them.
+- Every Linux guide example must parse (`the_agent_guide_examples_parse`); only use
+  flags both CLIs accept in shared examples. Tests must use a temporary home and never
+  pass `~` through a shell that would expand it to the real one.
+
 ## Persistent diagnostics and logging
 
 The macOS and iOS app targets use CocoaLumberjack 3.9.1 for persistent diagnostics.

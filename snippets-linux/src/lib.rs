@@ -1,5 +1,6 @@
 pub mod account_key;
 pub mod account_review;
+pub mod agent_skill;
 #[cfg(feature = "desktop")]
 mod account_ui;
 #[cfg(feature = "desktop")]

@@ -18,6 +18,8 @@ use std::{
     rc::{Rc, Weak},
     time::Duration,
 };
+#[path = "agent_skill_ui.rs"]
+mod agent_skill_ui;
 #[path = "diagnostics_ui.rs"]
 mod diagnostic_controls;
 #[path = "editor_assistance_ui.rs"]

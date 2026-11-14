@@ -945,6 +945,7 @@ struct ClockAndStateTests {
             ("Diagnostics/Logs", SnippetStorageLocations.diagnosticsLogsFolderURL),
             ("Backups", SnippetStorageLocations.backupsFolderURL),
             ("Tmp", SnippetStorageLocations.tmpFolderURL),
+            ("AgentSkill", SnippetStorageLocations.agentSkillOriginalsFolderURL),
         ]
 
         /// Path components of `url` below the support folder, or `nil` if it is not

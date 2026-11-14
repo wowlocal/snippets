@@ -19,6 +19,7 @@ pub(super) struct Settings {
     loading: Cell<bool>,
     quitting: Cell<bool>,
     diagnostics: Rc<diagnostic_controls::Controls>,
+    _agent_skill: Rc<agent_skill_ui::AgentSkillControls>,
     #[cfg(feature = "ibus")]
     gnome: Option<(adw::ActionRow, gtk::Button, gtk::Button)>,
 }
@@ -173,6 +174,7 @@ impl Settings {
         status.set_subtitle("Settings are local to this device.");
         group.add(&status);
         general.add(&group);
+        let agent_skill = agent_skill_ui::AgentSkillControls::new(&window, &general);
         window.add(&general);
         for (title, icon, entries) in PAGES {
             let page = adw::PreferencesPage::builder()
@@ -241,6 +243,7 @@ impl Settings {
             loading: Cell::new(false),
             quitting: Cell::new(false),
             diagnostics,
+            _agent_skill: agent_skill,
             #[cfg(feature = "ibus")]
             gnome,
         });

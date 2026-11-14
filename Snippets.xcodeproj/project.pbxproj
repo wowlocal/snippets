@@ -21,6 +21,8 @@
 		27C120052F54000000000005 /* SyncStateFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C121052F54000000000105 /* SyncStateFile.swift */; };
 		27C120062F54000000000006 /* HybridLogicalClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C121062F54000000000106 /* HybridLogicalClock.swift */; };
 		27C130202F55000000000020 /* SnippetsIPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C131202F55000000000220 /* SnippetsIPC.swift */; };
+		27C140112F56000000000311 /* AgentSkill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C140012F56000000000301 /* AgentSkill.swift */; };
+		27C140122F56000000000312 /* AgentSkillText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C140022F56000000000302 /* AgentSkillText.swift */; };
 		27C130212F55000000000021 /* VaultDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C131212F55000000000221 /* VaultDocument.swift */; };
 		27C130222F55000000000022 /* SnippetCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C131222F55000000000222 /* SnippetCrypto.swift */; };
 		27C130232F55000000000023 /* PassphraseKDF.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C131232F55000000000223 /* PassphraseKDF.swift */; };
@@ -165,6 +167,8 @@
 		27C121052F54000000000105 /* SyncStateFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncStateFile.swift; path = ../snippets/Core/SyncStateFile.swift; sourceTree = "<group>"; };
 		27C121062F54000000000106 /* HybridLogicalClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HybridLogicalClock.swift; path = ../snippets/Core/HybridLogicalClock.swift; sourceTree = "<group>"; };
 		27C131202F55000000000220 /* SnippetsIPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetsIPC.swift; path = ../snippets/Core/SnippetsIPC.swift; sourceTree = "<group>"; };
+		27C140012F56000000000301 /* AgentSkill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgentSkill.swift; path = ../snippets/Core/AgentSkill.swift; sourceTree = "<group>"; };
+		27C140022F56000000000302 /* AgentSkillText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgentSkillText.swift; path = ../snippets/Core/AgentSkillText.swift; sourceTree = "<group>"; };
 		27C131212F55000000000221 /* VaultDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VaultDocument.swift; path = ../snippets/Core/VaultDocument.swift; sourceTree = "<group>"; };
 		27C131222F55000000000222 /* SnippetCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SnippetCrypto.swift; path = ../snippets/Core/SnippetCrypto.swift; sourceTree = "<group>"; };
 		27C131232F55000000000223 /* PassphraseKDF.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PassphraseKDF.swift; path = ../snippets/Core/PassphraseKDF.swift; sourceTree = "<group>"; };
@@ -376,6 +380,8 @@
 				27C110032F53000000000003 /* Snippet.swift */,
 				27C110042F53000000000004 /* FuzzyMatch.swift */,
 				27C131202F55000000000220 /* SnippetsIPC.swift */,
+				27C140012F56000000000301 /* AgentSkill.swift */,
+				27C140022F56000000000302 /* AgentSkillText.swift */,
 				27C131212F55000000000221 /* VaultDocument.swift */,
 				27C131222F55000000000222 /* SnippetCrypto.swift */,
 				27C131232F55000000000223 /* PassphraseKDF.swift */,
@@ -732,6 +738,8 @@
 				27C110062F53000000000006 /* Snippet.swift in Sources */,
 				27C110072F53000000000007 /* FuzzyMatch.swift in Sources */,
 				27C130202F55000000000020 /* SnippetsIPC.swift in Sources */,
+				27C140112F56000000000311 /* AgentSkill.swift in Sources */,
+				27C140122F56000000000312 /* AgentSkillText.swift in Sources */,
 				27C130212F55000000000021 /* VaultDocument.swift in Sources */,
 				27C130222F55000000000022 /* SnippetCrypto.swift in Sources */,
 				27C130232F55000000000023 /* PassphraseKDF.swift in Sources */,
