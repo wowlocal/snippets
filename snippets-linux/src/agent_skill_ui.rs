@@ -15,7 +15,7 @@ pub(super) struct AgentSkillControls {
     reset: gtk::Button,
 }
 
-const INTRO: &str = "Teaches Claude Code, Codex and other coding agents to use snippets-cli. Rules are advice to agents; secure snippets still need your approval.";
+const INTRO: &str = "Teaches coding agents such as Claude Code and Codex to use snippets-cli. Secure snippets still need your approval.";
 /// A standing state on a row; "Not changed: …" is only the result of an action.
 const FOREIGN: &str = "Another skill named snippets-cli is already here.";
 
@@ -123,7 +123,12 @@ impl AgentSkillControls {
         self.files
             .set_subtitle(&files_text(&environment, &status.files));
         self.reset.set_sensitive(!status.files.are_defaults());
-        for place in status.places {
+        // Codex also reads ~/.agents/skills, so its own folder is shown only when
+        // something is in it.
+        for place in status.places.into_iter().filter(|p| {
+            !(p.place == Place::Target(agent_skill::Target::Codex)
+                && p.state == PlaceState::NotInstalled)
+        }) {
             let row = self.make_row(&environment, place);
             self.skills.add(&row);
             self.rows.borrow_mut().push(row);
@@ -133,6 +138,15 @@ impl AgentSkillControls {
     fn make_row(self: &Rc<Self>, environment: &Environment, status: PlaceStatus) -> gtk::Widget {
         let folder = environment.display(&status.skills_folder);
         match status.place.clone() {
+            Place::Target(target) if status.state == PlaceState::Foreign => {
+                let row = adw::ActionRow::builder()
+                    .use_markup(false)
+                    .title(target.display_name())
+                    .subtitle(format!("{folder} · {FOREIGN}"))
+                    .build();
+                row.add_suffix(&self.replace_button(status.place.clone()));
+                row.upcast()
+            }
             Place::Target(target) => {
                 let row = adw::SwitchRow::builder()
                     .use_markup(false)
@@ -173,6 +187,9 @@ impl AgentSkillControls {
                     "folder-symbolic"
                 });
                 row.add_prefix(&icon);
+                if status.state == PlaceState::Foreign {
+                    row.add_suffix(&self.replace_button(status.place.clone()));
+                }
                 let remove = gtk::Button::builder()
                     .icon_name("user-trash-symbolic")
                     .tooltip_text("Remove skill from this folder")
@@ -190,6 +207,48 @@ impl AgentSkillControls {
                 row.upcast()
             }
         }
+    }
+
+    fn replace_button(self: &Rc<Self>, place: Place) -> gtk::Button {
+        let button = gtk::Button::builder()
+            .label("Replace…")
+            .valign(gtk::Align::Center)
+            .build();
+        let weak = Rc::downgrade(self);
+        button.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                let place = place.clone();
+                glib::spawn_future_local(async move { this.replace(place).await });
+            }
+        });
+        button
+    }
+
+    async fn replace(self: Rc<Self>, place: Place) {
+        let Some(environment) = Environment::current() else {
+            return;
+        };
+        let folder = environment.display(&environment.skills_folder(&place));
+        let dialog = adw::AlertDialog::builder()
+            .heading(format!("Replace the other snippets-cli skill in {folder}?"))
+            .body("Snippets didn't write it. Its SKILL.md is kept beside it as SKILL.md.bak, so agents stop loading it, and Snippets installs its own skill there.")
+            .build();
+        dialog.add_responses(&[("cancel", "Cancel"), ("replace", "Replace")]);
+        dialog.set_response_appearance("replace", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        if dialog.choose_future(Some(&self.window)).await != "replace" {
+            return;
+        }
+        match agent_skill::replace(&environment, &place) {
+            Ok(Some(backup)) => self.toast(&format!(
+                "Replaced. The other skill is kept as {}.",
+                environment.display(&backup)
+            )),
+            Ok(None) => self.toast("Installed."),
+            Err(error) => self.toast(&format!("Could not replace the skill: {error}")),
+        }
+        self.reload();
     }
 
     fn apply(self: &Rc<Self>, place: &Place, install: bool) {

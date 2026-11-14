@@ -922,6 +922,28 @@ pub fn install(environment: &Environment, places: &[Place]) -> io::Result<Vec<Ch
         .collect()
 }
 
+/// Takes over a place that holds someone else's `snippets-cli` skill, after the user
+/// confirmed it: their `SKILL.md` is renamed to `SKILL.md.bak` (or `.bak2`, …) in the same
+/// folder, so agents stop loading it and nothing is deleted, then ours is installed.
+/// Returns the backup, or None when there was nothing to move.
+pub fn replace(environment: &Environment, place: &Place) -> io::Result<Option<PathBuf>> {
+    let path = environment.stub_path(place);
+    let mut backup = None;
+    let ours = fs::read_to_string(&path).is_ok_and(|text| is_stub(&text));
+    if path.exists() && !ours {
+        let mut candidate = path.with_extension("md.bak");
+        let mut counter = 2;
+        while candidate.exists() {
+            candidate = path.with_extension(format!("md.bak{counter}"));
+            counter += 1;
+        }
+        fs::rename(&path, &candidate)?;
+        backup = Some(candidate);
+    }
+    install(environment, std::slice::from_ref(place))?;
+    Ok(backup)
+}
+
 /// Removes stubs `install` wrote, and their folder when nothing else is in it. A custom
 /// folder is forgotten whatever was there. Never touches the rules file.
 pub fn uninstall(environment: &Environment, places: &[Place]) -> io::Result<Vec<Change>> {
@@ -1062,6 +1084,33 @@ mod tests {
             place_status(&environment, AGENTS).state,
             PlaceState::Foreign
         );
+    }
+
+    #[test]
+    fn replace_keeps_the_other_skill_as_a_backup_and_installs_ours() {
+        let (_dir, environment) = temporary_home(&[]);
+        let foreign = "---\nname: snippets-cli\ndescription: mine\n---\nHand-written.\n";
+        write(&environment, ".codex/skills/snippets-cli/SKILL.md", foreign);
+        write(&environment, ".codex/skills/snippets-cli/notes.md", "notes");
+        let codex = Place::Target(Target::Codex);
+        let backup = replace(&environment, &codex).unwrap().unwrap();
+        assert_eq!(backup.file_name().unwrap(), "SKILL.md.bak");
+        assert_eq!(
+            read(&environment, ".codex/skills/snippets-cli/SKILL.md.bak"),
+            foreign
+        );
+        assert_eq!(
+            read(&environment, ".codex/skills/snippets-cli/notes.md"),
+            "notes"
+        );
+        assert_eq!(
+            place_status(&environment, codex.clone()).state,
+            PlaceState::Installed
+        );
+        assert_eq!(replace(&environment, &codex).unwrap(), None);
+        write(&environment, ".codex/skills/snippets-cli/SKILL.md", foreign);
+        let second = replace(&environment, &codex).unwrap().unwrap();
+        assert_eq!(second.file_name().unwrap(), "SKILL.md.bak2");
     }
 
     #[test]

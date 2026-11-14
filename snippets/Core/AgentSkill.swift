@@ -678,6 +678,30 @@ nonisolated enum AgentSkill {
         }
     }
 
+    /// Takes over a place that holds someone else's `snippets-cli` skill, after the user
+    /// confirmed it: their `SKILL.md` is renamed to `SKILL.md.bak` (or `.bak2`, …) in the
+    /// same folder, so agents stop loading it and nothing is deleted, then ours is
+    /// installed. Returns the backup, or nil when there was nothing to move.
+    @discardableResult
+    static func replace(_ place: Place, in environment: Environment) throws -> URL? {
+        let url = stubURL(for: place, in: environment)
+        let fileManager = FileManager.default
+        var backup: URL?
+        if fileManager.fileExists(atPath: url.path),
+           (try? String(contentsOf: url, encoding: .utf8)).map(isStub) != true {
+            var candidate = url.appendingPathExtension("bak")
+            var counter = 2
+            while fileManager.fileExists(atPath: candidate.path) {
+                candidate = url.appendingPathExtension("bak\(counter)")
+                counter += 1
+            }
+            try fileManager.moveItem(at: url, to: candidate)
+            backup = candidate
+        }
+        _ = try install([place], in: environment)
+        return backup
+    }
+
     /// Removes stubs `install` wrote, and their folder when nothing else is in it. A custom
     /// folder is forgotten whatever was there. Never touches the rules file.
     static func uninstall(_ places: [Place], in environment: Environment) throws -> [Change] {

@@ -6,8 +6,9 @@ import UniformTypeIdentifiers
 import Vision
 
 private enum SettingsLayout {
-    static let defaultContentWidth: CGFloat = 660
-    static let minimumContentWidth: CGFloat = 620
+    // Wide enough for nine toolbar items and the search field without an overflow menu.
+    static let defaultContentWidth: CGFloat = 720
+    static let minimumContentWidth: CGFloat = 700
 }
 
 private enum SettingsPane: String, CaseIterable {
@@ -18,6 +19,7 @@ private enum SettingsPane: String, CaseIterable {
     case secure
     case backup
     case integrations
+    case agents
     case diagnostics
 
     var title: String {
@@ -29,6 +31,7 @@ private enum SettingsPane: String, CaseIterable {
         case .secure: "Secure"
         case .backup: "Backup"
         case .integrations: "Integrations"
+        case .agents: "Agents"
         case .diagnostics: "Diagnostics"
         }
     }
@@ -42,6 +45,7 @@ private enum SettingsPane: String, CaseIterable {
         case .secure: "lock"
         case .backup: "externaldrive"
         case .integrations: "puzzlepiece.extension"
+        case .agents: "terminal"
         case .diagnostics: "waveform.path.ecg"
         }
     }
@@ -55,6 +59,7 @@ private enum SettingsPane: String, CaseIterable {
         case .secure: 480
         case .backup: 300
         case .integrations: 500
+        case .agents: 360
         case .diagnostics: 480
         }
     }
@@ -125,6 +130,7 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
     private let syncViewController = SyncSettingsViewController()
     private let backupViewController = BackupSettingsViewController()
     private let browsersViewController = BrowserSettingsViewController()
+    private let agentsViewController = AgentsSettingsViewController()
     private let diagnosticsViewController = DiagnosticsSettingsViewController()
     private let searchResultsViewController = SettingsSearchResultsViewController()
     private var searchResultsPanel: SettingsSearchResultsPanel?
@@ -142,6 +148,7 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
         addTab(.secure, viewController: vaultViewController)
         addTab(.backup, viewController: backupViewController)
         addTab(.integrations, viewController: browsersViewController)
+        addTab(.agents, viewController: agentsViewController)
         addTab(.diagnostics, viewController: diagnosticsViewController)
 
         searchResultsViewController.onSelection = { [weak self] entry in
@@ -181,6 +188,7 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
         vaultViewController.reloadFromStorage()
         syncViewController.reloadFromStorage()
         browsersViewController.reloadFromStorage()
+        agentsViewController.reloadFromStorage()
         diagnosticsViewController.reloadFromStorage()
     }
 
@@ -511,10 +519,10 @@ private struct MacSettingsSearchEntry {
         .init(title: "Cmd+Q Behavior", pane: .general,
               terms: ["quit", "close", "hide", "menu bar", "ask every time"],
               needles: ["Pressing Cmd+Q"]),
-        .init(title: "Install Command Line Tool", pane: .integrations,
+        .init(title: "Install Command Line Tool", pane: .agents,
               terms: ["cli", "terminal", "snippets-cli", "/usr/local/bin"],
               needles: ["Command Line Tool"]),
-        .init(title: "Agent Skill", pane: .integrations,
+        .init(title: "Agent Skill", pane: .agents,
               terms: ["agent", "skill", "claude", "codex", "ai", "rules"],
               needles: ["Agent Skill"]),
         .init(title: "Global Shortcuts", pane: .expansion,
@@ -813,12 +821,7 @@ private final class GeneralSettingsViewController: NSViewController {
         let closingTitle = makeSettingsSectionTitle("Closing Snippets")
         let introLabel = makeSecondaryLabel("Choose what happens when you press Cmd+Q. This matches the remembered choice from the quit confirmation dialog.")
 
-        let behaviorLabel = NSTextField(labelWithString: "Pressing Cmd+Q:")
-        behaviorLabel.textColor = .secondaryLabelColor
-        behaviorLabel.font = .systemFont(ofSize: 13)
-        behaviorLabel.alignment = .right
-        behaviorLabel.setContentHuggingPriority(.required, for: .horizontal)
-        behaviorLabel.widthAnchor.constraint(equalToConstant: 130).isActive = true
+        let behaviorLabel = makeInlineControlLabel("Pressing Cmd+Q:", for: quitBehaviorPopup)
 
         quitBehaviorPopup.target = self
         quitBehaviorPopup.action = #selector(handleQuitBehaviorChanged(_:))
@@ -827,7 +830,7 @@ private final class GeneralSettingsViewController: NSViewController {
         let behaviorRow = NSStackView(views: [behaviorLabel, quitBehaviorPopup, NSView()])
         behaviorRow.orientation = .horizontal
         behaviorRow.alignment = .centerY
-        behaviorRow.spacing = 12
+        behaviorRow.spacing = 8
 
         selectionSummaryLabel.font = .systemFont(ofSize: 13)
         selectionSummaryLabel.textColor = .labelColor
@@ -979,16 +982,13 @@ private final class ExpansionSettingsViewController: NSViewController {
         let matchIntro = makeSecondaryLabel(
             "Choose how the suggestion panel marks letters matched by your query. Changes apply to the next panel you open."
         )
-        let matchLabel = NSTextField(labelWithString: "Appearance:")
-        matchLabel.textColor = .secondaryLabelColor
-        matchLabel.alignment = .right
-        matchLabel.widthAnchor.constraint(equalToConstant: 100).isActive = true
+        let matchLabel = makeInlineControlLabel("Appearance:", for: matchHighlightPopup)
         matchHighlightPopup.target = self
         matchHighlightPopup.action = #selector(handleMatchHighlightChanged(_:))
         let matchRow = NSStackView(views: [matchLabel, matchHighlightPopup, NSView()])
         matchRow.orientation = .horizontal
         matchRow.alignment = .centerY
-        matchRow.spacing = 10
+        matchRow.spacing = 8
         matchHighlightSummaryLabel.font = .systemFont(ofSize: 12)
         matchHighlightSummaryLabel.textColor = .secondaryLabelColor
 
@@ -1521,7 +1521,6 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
     private let tableView = NSTableView()
     private let removeButton = NSButton(title: "Remove Selected", target: nil, action: nil)
     private let clearButton = NSButton(title: "Clear All", target: nil, action: nil)
-    private let commandLineSection = CommandLineSettingsSection()
 
     private var customBundleIDs: [String] = []
     private var rows: [BundleIDRow] = []
@@ -1620,8 +1619,6 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        commandLineSection.add(to: stack)
-
         reloadFromStorage()
     }
 
@@ -1629,7 +1626,6 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         customBundleIDs = ChromiumBundleIDSettings.additionalBundleIDs()
         statusLabel.stringValue = ""
         rebuildRows()
-        commandLineSection.reload()
     }
 
     @objc private func addApp() {
@@ -3926,6 +3922,29 @@ func requireMacOwnerAuthentication(reason: String) async throws {
 
 @MainActor
 private final class DiagnosticsSettingsViewController: NSViewController {
+    /// The full list behind "What's Included…". Keep it in step with
+    /// `DiagnosticsService.exportEventSchemas` and docs/diagnostics.md.
+    static let exportContentsDescription =
+        "Exports are plaintext JSON Lines. They can include app and OS versions, "
+        + "operation counts, CloudKit callback and scheduler states, sign-in stages and HTTP status codes, Git key-replacement outcomes and reasons, error families and "
+        + "numeric codes, paste outcomes and methods, insertion stages, interruption reasons and source categories, selection verification and restoration outcomes, Accessibility replacement outcomes, write-attempt status and timings, delete-attempt counts, paste-dispatch status, clipboard restoration outcomes and timings, Secure Paste stages, destination categories, failure reasons, retry and focus-confirmation counts, authentication-handoff status and numeric AX codes, and secure-snippet keywords. When expansion verbose logging is "
+        + "enabled, they can also include "
+        + "content-free Accessibility stages, outcomes, state transitions, query lengths, "
+        + "and numeric AX error codes. Snippet bodies, clipboard contents, names, tags, paths, record IDs, keys and "
+        + "ciphertext, account keys, account IDs and tokens are never accepted by the logging API."
+
+    @objc private func showExportContents() {
+        let alert = NSAlert()
+        alert.messageText = "What a diagnostics export contains"
+        alert.informativeText = Self.exportContentsDescription
+        alert.addButton(withTitle: "OK")
+        if let window = view.window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let privacyLabel = NSTextField(wrappingLabelWithString: "")
     private let expansionVerbosePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -3947,13 +3966,14 @@ private final class DiagnosticsSettingsViewController: NSViewController {
             + "\(DiagnosticsService.retentionDays) days. Logs rotate daily or at 1 MB, "
             + "whichever comes first, and use at most 24 MB on this device.")
         let privacy = makeTertiaryLabel(
-            "Exports are plaintext JSON Lines. They can include app and OS versions, "
-            + "operation counts, CloudKit callback and scheduler states, sign-in stages and HTTP status codes, Git key-replacement outcomes and reasons, error families and "
-            + "numeric codes, paste outcomes and methods, insertion stages, interruption reasons and source categories, selection verification and restoration outcomes, Accessibility replacement outcomes, write-attempt status and timings, delete-attempt counts, paste-dispatch status, clipboard restoration outcomes and timings, Secure Paste stages, destination categories, failure reasons, retry and focus-confirmation counts, authentication-handoff status and numeric AX codes, and secure-snippet keywords. When expansion verbose logging is "
-            + "enabled, they can also include "
-            + "content-free Accessibility stages, outcomes, state transitions, query lengths, "
-            + "and numeric AX error codes. Snippet bodies, clipboard contents, names, tags, paths, record IDs, keys and "
-            + "ciphertext, account keys, account IDs and tokens are never accepted by the logging API.")
+            "Exports are plain-text files: counts, timings, states and error codes, which "
+            + "can include secure-snippet keywords. Snippet text, clipboard contents, names, "
+            + "tags, paths, keys and tokens are never recorded.")
+        let privacyDetailsButton = NSButton(
+            title: "What's Included…", target: self, action: #selector(showExportContents))
+        privacyDetailsButton.bezelStyle = .inline
+        privacyDetailsButton.controlSize = .small
+
 
         let expansionVerboseTitle = NSTextField(labelWithString: "Expansion Accessibility logging")
         expansionVerboseTitle.font = .systemFont(ofSize: 13, weight: .medium)
@@ -3973,8 +3993,8 @@ private final class DiagnosticsSettingsViewController: NSViewController {
         expansionVerboseRow.alignment = .centerY
         expansionVerboseRow.spacing = 10
         let expansionVerboseHelp = makeTertiaryLabel(
-            "Off records no per-keystroke AX diagnostics. This Session resets when Snippets quits; "
-            + "Always remains enabled across launches. Typed text is never recorded.")
+            "Extra detail for expansion problems. This Session lasts until Snippets quits; "
+            + "Always stays on. Typed text is never recorded.")
 
         statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
         privacyLabel.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -4001,6 +4021,7 @@ private final class DiagnosticsSettingsViewController: NSViewController {
         stack.addArrangedSubview(buttons)
         stack.addArrangedSubview(NSBox.horizontalSeparator())
         stack.addArrangedSubview(privacy)
+        stack.addArrangedSubview(privacyDetailsButton)
 
         expansionVerboseRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
@@ -4104,7 +4125,7 @@ private final class DiagnosticsSettingsViewController: NSViewController {
     }
 }
 
-private func makeSettingsPane() -> (NSView, NSStackView) {
+func makeSettingsPane() -> (NSView, NSStackView) {
     let rootView = NSView()
     // NSTabViewController sizes pane roots by frame. Pane switches and the window-height
     // animation happen in the same run-loop turn, so the newly selected root must grow
@@ -4152,6 +4173,17 @@ func makeSecondaryLabel(_ text: String) -> NSTextField {
     let label = NSTextField(wrappingLabelWithString: text)
     label.font = .systemFont(ofSize: 13)
     label.textColor = .secondaryLabelColor
+    return label
+}
+
+/// The label in front of a pop-up on the same row. It starts at the section's edge
+/// (no fixed column, which indented short labels) and takes the control's own font, so
+/// it matches the control's text when Settings uses compact control sizes.
+func makeInlineControlLabel(_ text: String, for control: NSControl) -> NSTextField {
+    let label = NSTextField(labelWithString: text)
+    label.textColor = .secondaryLabelColor
+    label.font = control.font ?? .systemFont(ofSize: NSFont.systemFontSize(for: control.controlSize))
+    label.setContentHuggingPriority(.required, for: .horizontal)
     return label
 }
 

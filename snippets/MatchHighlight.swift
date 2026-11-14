@@ -47,13 +47,13 @@ enum MatchHighlightStyle: String, CaseIterable {
     var summary: String {
         switch self {
         case .accent:
-            return "The original look: matches take the system accent colour. Measures 2.3:1 against a selected row in dark mode — below the 4.5:1 body text needs."
+            return "Matches use your accent colour, as they always did. On a selected row in dark mode they can be hard to read."
         case .emphasis:
-            return "Matches stay at full label colour and go semibold while the rest of the line steps back. 10.5:1 dark / 13.7:1 light in every row state, on any accent colour."
+            return "Matches stay in the normal text colour but turn bold, and the rest of the line fades slightly. Easy to read on every row."
         case .tint:
-            return "Matches keep the accent hue, re-rendered per appearance until it clears 4.5:1 against the busiest row the panel draws."
+            return "Matches use your accent colour, adjusted in light and dark mode so they stay easy to read on every row."
         case .wash:
-            return "Matches sit on a tinted pill, like a find-in-page highlight, with the glyphs flipped to whichever of black or white the pill carries."
+            return "Matches get a coloured highlight behind them, like search results on a web page."
         }
     }
 }

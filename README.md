@@ -112,7 +112,7 @@ remaining work are [documented separately](docs/android/IMPLEMENTATION.md).
 4. For a password or API token, enable **Secure** in the editor. On Mac, use `⌘\`
    to choose and authenticate a secure insertion. On iPhone or iPad, authenticate to copy.
 5. Optionally enable iCloud sync on each Apple device. Install the Mac CLI from
-   **Settings → Integrations → Command Line Tool** to make the library available to agents.
+   **Settings → Agents → Command Line Tool** to make the library available to agents.
 
 Accessibility permission is needed for cross-app insertion on Mac; library management
 works without it. Some macOS configurations also require Input Monitoring. The Mac app
@@ -236,7 +236,7 @@ plaintext. See the [input compatibility guide](docs/text-input-detection.md),
 
 **Your agent can use the same library you use.** The bundled Mac `snippets-cli` lets
 scripts and agents find saved links, retrieve reference information, maintain ordinary
-entries, and ask for a specific secret. Install it from **Settings → Integrations →
+entries, and ask for a specific secret. Install it from **Settings → Agents →
 Command Line Tool**.
 
 ```sh
@@ -285,7 +285,8 @@ always matches the commands your version has. Run again with no options, `instal
 updates every place it is installed. `--for claude|agents|codex` picks a built-in agent
 folder; `--dir` takes your own skills folder (given `.claude`, it uses `.claude/skills`)
 and remembers it, and `uninstall --dir` removes the skill there and forgets the folder.
-Neither command ever touches a `SKILL.md` it did not write. The first time an agent
+Neither command ever touches a `SKILL.md` it did not write; in Settings, **Replace…**
+swaps one for ours after you confirm, keeping it beside ours as `SKILL.md.bak`. The first time an agent
 uses the skill, Claude Code asks you to allow it; after that, the read-only commands
 (`search`, `get`, `list`, `tags`, `secure-status`) run without prompts, while `add`,
 `update`, `delete` and `reveal` still ask.
@@ -299,7 +300,7 @@ overwrite your edits; if the defaults change after you edited the guide, Setting
 originals of the defaults are kept to compare against (Mac:
 `~/Library/Application Support/SnippetsClone/AgentSkill/`; Linux:
 `~/.local/share/snippets/agent-skill/`), and **Reset** puts them back, keeping your
-versions as `.bak`. The same controls are in **Settings → Integrations → Agent Skill**
+versions as `.bak`. The same controls are in **Settings → Agents**
 on the Mac (Show in Finder, Reset to Defaults) and **Settings → General** on Linux
 (Open Folder, Reset). The rules are advice to the agent: Snippets' approval is what
 protects secure entries.
