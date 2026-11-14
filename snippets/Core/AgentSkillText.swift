@@ -73,10 +73,11 @@ them. They are guidance: Snippets' own approval is what protects secure entries.
 ---
 description: Look up, save and update the user's personal Snippets library (saved links, reference text, addresses, secure tokens) with snippets-cli. Not for code snippets in the current project.
 ---
-<!-- Your rules for agents that use snippets-cli. App updates never change this
-     file; delete it to go back to the defaults. The description above is what
-     agents see before they load the skill: after changing it, run
-     `snippets-cli skill install`. -->
+<!-- Your rules for agents that use snippets-cli. Updates never overwrite your
+     changes; Reset to Defaults (Settings or `snippets-cli skill reset`) puts the
+     defaults back and keeps your version as rules.md.bak. The description above
+     is what agents see before they load the skill; Settings and `skill install`
+     copy it into the installed skills. -->
 
 - Search the library before asking the user for a link, address or value they
   may have saved.

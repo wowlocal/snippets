@@ -4,16 +4,20 @@
 //!
 //! The guide is built into the binary, generated with the stub and the default rules from
 //! `agent-skill/` by `scripts/agent-skill.py`. `install` writes a stub that tells the agent
-//! to run `snippets-cli skill`. The user's do/don't rules and the skill description live in
-//! `$XDG_CONFIG_HOME/snippets/agent-rules.md`, which updates never touch. Custom skills
-//! folders are remembered in `agent-skill.json` beside it; owned stubs on disk are the
-//! record of the built-in places. The rules are advice to an agent; secure reveals stay
-//! gated by the app's own approval.
+//! to run `snippets-cli skill`. The user edits `guide.md` and `rules.md` (do/don't rules and
+//! the skill description) in `$XDG_CONFIG_HOME/snippets/agent-skill/`; until they exist the
+//! defaults apply. Read-only originals sit in the data folder's `agent-skill/`, Reset puts
+//! them back (keeping `.bak`), an unedited copy follows updates and an edited one is
+//! reported `outdated` once the defaults change under it. Custom skills folders and the
+//! defaults each copy came from are in the hidden `.state.json`; owned stubs on disk are
+//! the record of the built-in places. The rules are advice to an agent; secure reveals
+//! stay gated by the app's own approval.
 //!
 //! Unlike the Mac, Linux follows `XDG_CONFIG_HOME`: the desktop session gives the app and
 //! the terminal the same environment.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs,
@@ -136,10 +140,72 @@ pub struct PlaceStatus {
     pub state: PlaceState,
 }
 
+/// One of the two editable files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SkillFile {
+    Guide,
+    Rules,
+}
+
+impl SkillFile {
+    pub const ALL: [SkillFile; 2] = [SkillFile::Guide, SkillFile::Rules];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            SkillFile::Guide => "guide",
+            SkillFile::Rules => "rules",
+        }
+    }
+
+    pub fn file_name(self) -> String {
+        format!("{}.md", self.name())
+    }
+
+    pub fn default_text(self) -> &'static str {
+        match self {
+            SkillFile::Guide => GUIDE,
+            SkillFile::Rules => DEFAULT_RULES,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileState {
+    /// No copy yet, or the copy matches the current defaults.
+    Default,
+    /// The user changed it; the defaults it came from are still current.
+    Edited,
+    /// The user changed it, and an update changed the defaults since.
+    Outdated,
+}
+
+impl FileState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FileState::Default => "default",
+            FileState::Edited => "edited",
+            FileState::Outdated => "outdated",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Files {
+    pub folder: PathBuf,
+    pub originals_folder: PathBuf,
+    pub guide: FileState,
+    pub rules: FileState,
+}
+
+impl Files {
+    pub fn are_defaults(&self) -> bool {
+        self.guide == FileState::Default && self.rules == FileState::Default
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
-    pub rules_path: PathBuf,
-    pub rules_are_custom: bool,
+    pub files: Files,
     /// Every built-in target, then every remembered folder.
     pub places: Vec<PlaceStatus>,
 }
@@ -177,13 +243,23 @@ impl std::error::Error for FolderError {}
 pub struct Environment {
     pub home: PathBuf,
     pub variables: HashMap<String, String>,
+    /// Where the read-only originals go. None means `~/.local/share/snippets/agent-skill`
+    /// inside `home`, as tests want.
+    pub originals_folder: Option<PathBuf>,
 }
 
 impl Environment {
     pub fn current() -> Option<Self> {
         let variables: HashMap<_, _> = std::env::vars().collect();
         let home = variables.get("HOME").filter(|v| !v.is_empty())?.into();
-        Some(Environment { home, variables })
+        let originals_folder = crate::model::default_root()
+            .ok()
+            .map(|root| root.join("agent-skill"));
+        Some(Environment {
+            home,
+            variables,
+            originals_folder,
+        })
     }
 
     fn directory(&self, variable: &str, relative: &str) -> PathBuf {
@@ -213,12 +289,28 @@ impl Environment {
             .join("snippets")
     }
 
-    pub fn rules_path(&self) -> PathBuf {
-        self.config_folder().join("agent-rules.md")
+    /// The folder the user edits: `guide.md` and `rules.md`.
+    pub fn files_folder(&self) -> PathBuf {
+        self.config_folder().join("agent-skill")
     }
 
-    fn folders_path(&self) -> PathBuf {
-        self.config_folder().join("agent-skill.json")
+    pub fn file_path(&self, file: SkillFile) -> PathBuf {
+        self.files_folder().join(file.file_name())
+    }
+
+    pub fn rules_path(&self) -> PathBuf {
+        self.file_path(SkillFile::Rules)
+    }
+
+    pub fn originals_folder(&self) -> PathBuf {
+        self.originals_folder
+            .clone()
+            .unwrap_or_else(|| self.home.join(".local/share/snippets/agent-skill"))
+    }
+
+    /// Hidden: remembered folders and which defaults each editable file came from.
+    fn state_path(&self) -> PathBuf {
+        self.files_folder().join(".state.json")
     }
 
     /// The root folder of a built-in target's agent.
@@ -367,40 +459,56 @@ pub fn resolve_folder(
     Ok(Place::Folder(path))
 }
 
-#[derive(Serialize, Deserialize)]
-struct FoldersFile {
+#[derive(Serialize, Deserialize, Default, PartialEq)]
+struct StateFile {
+    #[serde(default = "state_version")]
     version: u32,
+    #[serde(default)]
     folders: Vec<String>,
+    /// Per editable file, the SHA-256 of the defaults it was copied from.
+    #[serde(default)]
+    defaults: std::collections::BTreeMap<String, String>,
 }
 
-pub fn remembered_folders(environment: &Environment) -> Vec<PathBuf> {
-    fs::read(environment.folders_path())
+fn state_version() -> u32 {
+    1
+}
+
+fn read_state(environment: &Environment) -> StateFile {
+    fs::read(environment.state_path())
         .ok()
-        .and_then(|data| serde_json::from_slice::<FoldersFile>(&data).ok())
-        .map(|file| {
-            file.folders
-                .into_iter()
-                .filter(|f| f.starts_with('/'))
-                .map(|f| normalized(Path::new(&f)))
-                .collect()
+        .and_then(|data| serde_json::from_slice::<StateFile>(&data).ok())
+        .unwrap_or(StateFile {
+            version: 1,
+            ..StateFile::default()
         })
-        .unwrap_or_default()
 }
 
-fn save_folders(environment: &Environment, folders: &[PathBuf]) -> io::Result<()> {
-    let path = environment.folders_path();
-    if folders.is_empty() {
+fn write_state(environment: &Environment, state: &StateFile) -> io::Result<()> {
+    let path = environment.state_path();
+    if state.folders.is_empty() && state.defaults.is_empty() {
         return match fs::remove_file(&path) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
             _ => Ok(()),
         };
     }
-    let file = FoldersFile {
-        version: 1,
-        folders: folders.iter().map(|f| f.display().to_string()).collect(),
-    };
-    let text = serde_json::to_string_pretty(&file).map_err(io::Error::other)? + "\n";
+    let text = serde_json::to_string_pretty(state).map_err(io::Error::other)? + "\n";
     write_atomically(&path, text.as_bytes())
+}
+
+pub fn remembered_folders(environment: &Environment) -> Vec<PathBuf> {
+    read_state(environment)
+        .folders
+        .into_iter()
+        .filter(|f| f.starts_with('/'))
+        .map(|f| normalized(Path::new(&f)))
+        .collect()
+}
+
+fn save_folders(environment: &Environment, folders: &[PathBuf]) -> io::Result<()> {
+    let mut state = read_state(environment);
+    state.folders = folders.iter().map(|f| f.display().to_string()).collect();
+    write_state(environment, &state)
 }
 
 fn remember(environment: &Environment, folder: &Path) -> io::Result<()> {
@@ -434,8 +542,7 @@ pub fn status(environment: &Environment) -> io::Result<Status> {
             .map(Place::Folder),
     );
     Ok(Status {
-        rules_path: environment.rules_path(),
-        rules_are_custom: current_rules(environment)?.is_custom,
+        files: sync_files(environment)?,
         places: places.map(|p| place_status(environment, p)).collect(),
     })
 }
@@ -509,10 +616,9 @@ pub fn default_rules() -> Rules {
 }
 
 pub fn current_rules(environment: &Environment) -> io::Result<Rules> {
-    let text = match fs::read_to_string(environment.rules_path()) {
-        Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(default_rules()),
-        Err(error) => return Err(error),
+    let text = match editable_text(environment, SkillFile::Rules)? {
+        Some(text) if text != DEFAULT_RULES => text,
+        _ => return Ok(default_rules()),
     };
     let (description, body) = parse_rules(&text);
     let description = description
@@ -574,39 +680,171 @@ fn unquoted(raw: &str) -> String {
     value.to_string()
 }
 
-/// Writes the default rules unless a rules file exists. Returns whether it wrote.
-pub fn create_rules_file(environment: &Environment) -> io::Result<bool> {
-    let path = environment.rules_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
-        Ok(mut file) => file.write_all(DEFAULT_RULES.as_bytes()).map(|_| true),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+// MARK: Editable files
+
+pub fn sha256(text: &str) -> String {
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The user's copy, or None when there is none.
+fn editable_text(environment: &Environment, file: SkillFile) -> io::Result<Option<String>> {
+    match fs::read_to_string(environment.file_path(file)) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
     }
 }
 
+/// The text in effect: the user's copy, or the defaults.
+pub fn current_text(environment: &Environment, file: SkillFile) -> io::Result<String> {
+    Ok(editable_text(environment, file)?.unwrap_or_else(|| file.default_text().to_string()))
+}
+
+/// Brings the files up to date and says what state each is in: writes the read-only
+/// originals when they differ, replaces a copy the user never changed when the defaults
+/// changed since, and leaves an edited copy alone, reporting it `Outdated` once the
+/// defaults moved on.
+pub fn sync_files(environment: &Environment) -> io::Result<Files> {
+    write_originals(environment)?;
+    let before = read_state(environment);
+    let mut state = read_state(environment);
+    let mut states = HashMap::new();
+    for file in SkillFile::ALL {
+        let current = sha256(file.default_text());
+        let Some(text) = editable_text(environment, file)? else {
+            states.insert(file, FileState::Default);
+            continue;
+        };
+        let base = state.defaults.get(file.name()).cloned();
+        let file_state = if text == file.default_text() {
+            state.defaults.insert(file.name().to_string(), current);
+            FileState::Default
+        } else if base.as_deref() != Some(current.as_str())
+            && base.as_deref() == Some(sha256(&text).as_str())
+        {
+            // Never edited, and an update changed the defaults: follow them.
+            write_atomically(&environment.file_path(file), file.default_text().as_bytes())?;
+            state.defaults.insert(file.name().to_string(), current);
+            FileState::Default
+        } else if base.as_deref() == Some(current.as_str()) {
+            FileState::Edited
+        } else {
+            FileState::Outdated
+        };
+        states.insert(file, file_state);
+    }
+    if state != before {
+        write_state(environment, &state)?;
+    }
+    Ok(Files {
+        folder: environment.files_folder(),
+        originals_folder: environment.originals_folder(),
+        guide: states[&SkillFile::Guide],
+        rules: states[&SkillFile::Rules],
+    })
+}
+
+/// Read-only copies of this version's defaults, to compare an edited file against.
+fn write_originals(environment: &Environment) -> io::Result<()> {
+    let folder = environment.originals_folder();
+    fs::create_dir_all(&folder)?;
+    for file in SkillFile::ALL {
+        let path = folder.join(file.file_name());
+        if fs::read_to_string(&path).is_ok_and(|t| t == file.default_text()) {
+            continue;
+        }
+        if path.exists() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
+            fs::remove_file(&path)?;
+        }
+        fs::write(&path, file.default_text())?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444))?;
+    }
+    Ok(())
+}
+
+/// Writes the defaults for each file the user has no copy of yet, so the folder holds
+/// both files to edit. Returns the files it created.
+pub fn create_editable_files(environment: &Environment) -> io::Result<Vec<SkillFile>> {
+    sync_files(environment)?;
+    fs::create_dir_all(environment.files_folder())?;
+    let mut state = read_state(environment);
+    let mut created = Vec::new();
+    for file in SkillFile::ALL {
+        if editable_text(environment, file)?.is_some() {
+            continue;
+        }
+        let mut handle = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(environment.file_path(file))?;
+        handle.write_all(file.default_text().as_bytes())?;
+        state
+            .defaults
+            .insert(file.name().to_string(), sha256(file.default_text()));
+        created.push(file);
+    }
+    if !created.is_empty() {
+        write_state(environment, &state)?;
+    }
+    Ok(created)
+}
+
+/// Puts the defaults back. A copy the user changed is kept beside it as `.bak` (replacing
+/// an older one). Returns those backups.
+pub fn reset_files(environment: &Environment) -> io::Result<Vec<PathBuf>> {
+    sync_files(environment)?;
+    let mut state = read_state(environment);
+    let mut backups = Vec::new();
+    for file in SkillFile::ALL {
+        let path = environment.file_path(file);
+        if let Some(text) = editable_text(environment, file)?
+            && text != file.default_text()
+        {
+            let backup = environment
+                .files_folder()
+                .join(format!("{}.bak", file.file_name()));
+            fs::rename(&path, &backup)?;
+            backups.push(backup);
+        }
+        if editable_text(environment, file)?.is_none() && environment.files_folder().is_dir() {
+            write_atomically(&path, file.default_text().as_bytes())?;
+        }
+        state
+            .defaults
+            .insert(file.name().to_string(), sha256(file.default_text()));
+    }
+    write_state(environment, &state)?;
+    Ok(backups)
+}
+
 /// What `snippets-cli skill` prints: the guide, the user's rules, and where they live.
 pub fn guide(environment: &Environment) -> io::Result<String> {
+    let files = sync_files(environment)?;
     let rules = current_rules(environment)?;
-    let path = environment.rules_path();
-    let source = if rules.is_custom {
+    let mut text = current_text(environment, SkillFile::Guide)?;
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    let folder = files.folder.display();
+    let source = if files.are_defaults() {
         format!(
-            "Rules file: {}\nEdit it when the user asks to change these rules.",
-            path.display()
+            "These are the defaults. To change the guide or the rules, `snippets-cli skill edit` creates editable copies in {folder}; edit those when the user asks."
         )
     } else {
         format!(
-            "These are the defaults. To change them, `snippets-cli skill edit` creates {}; edit that file when the user asks.",
-            path.display()
+            "The guide and rules are the user's files in {folder} (guide.md, rules.md). Edit them when the user asks to change them."
         )
     };
-    Ok(format!("{GUIDE}\n{}\n\n{source}\n", rules.body))
+    let note = if files.guide == FileState::Outdated {
+        "\nThe user edited this guide before Snippets was updated, so it may name commands or flags this version does not have. `snippets-cli help` lists the exact ones.\n"
+    } else {
+        ""
+    };
+    Ok(format!("{text}\n{}\n\n{source}\n{note}", rules.body))
 }
 
 // MARK: Stubs
@@ -723,6 +961,7 @@ mod tests {
     fn temporary_home(variables: &[(&str, &str)]) -> (tempfile::TempDir, Environment) {
         let directory = tempfile::tempdir().unwrap();
         let environment = Environment {
+            originals_folder: None,
             home: fs::canonicalize(directory.path()).unwrap(),
             variables: variables
                 .iter()
@@ -784,7 +1023,7 @@ mod tests {
         );
         assert_eq!(
             environment.rules_path(),
-            PathBuf::from("/tmp/xdg/snippets/agent-rules.md")
+            PathBuf::from("/tmp/xdg/snippets/agent-skill/rules.md")
         );
     }
 
@@ -829,7 +1068,7 @@ mod tests {
     fn uninstall_removes_only_our_stub_and_leaves_the_rules() {
         let (_dir, environment) = temporary_home(&[]);
         install(&environment, &[AGENTS]).unwrap();
-        create_rules_file(&environment).unwrap();
+        create_editable_files(&environment).unwrap();
         let changes = uninstall(&environment, &[Place::Target(Target::Claude), AGENTS]).unwrap();
         assert_eq!(outcomes(&changes), vec![Outcome::Absent, Outcome::Removed]);
         assert!(
@@ -916,7 +1155,7 @@ mod tests {
         assert!(
             !environment
                 .home
-                .join(".config/snippets/agent-skill.json")
+                .join(".config/snippets/agent-skill/.state.json")
                 .exists()
         );
     }
@@ -975,7 +1214,7 @@ mod tests {
         let (_dir, environment) = temporary_home(&[]);
         write(
             &environment,
-            ".config/snippets/agent-rules.md",
+            ".config/snippets/agent-skill/rules.md",
             "---\ndescription: My \"saved\" stuff:\n---\n- Be brief.\n",
         );
         let rules = current_rules(&environment).unwrap();
@@ -997,20 +1236,133 @@ mod tests {
         assert_eq!(text.matches("\nname: ").count(), 1);
     }
 
+    fn files(environment: &Environment) -> Files {
+        sync_files(environment).unwrap()
+    }
+
+    /// What `.state.json` says when a copy was taken from older defaults.
+    fn pretend_copied_from(environment: &Environment, old: &str, file: SkillFile) {
+        let json = format!(
+            r#"{{"version":1,"folders":[],"defaults":{{"{}":"{}"}}}}"#,
+            file.name(),
+            sha256(old)
+        );
+        write(
+            environment,
+            ".config/snippets/agent-skill/.state.json",
+            &json,
+        );
+    }
+
     #[test]
-    fn create_rules_file_never_overwrites() {
+    fn copies_are_made_from_the_defaults_and_originals_are_read_only() {
         let (_dir, environment) = temporary_home(&[]);
-        assert!(create_rules_file(&environment).unwrap());
+        assert!(files(&environment).are_defaults());
         assert_eq!(
-            read(&environment, ".config/snippets/agent-rules.md"),
+            create_editable_files(&environment).unwrap(),
+            vec![SkillFile::Guide, SkillFile::Rules]
+        );
+        assert_eq!(
+            read(&environment, ".config/snippets/agent-skill/guide.md"),
+            GUIDE
+        );
+        assert_eq!(
+            read(&environment, ".config/snippets/agent-skill/rules.md"),
             DEFAULT_RULES
         );
-        write(&environment, ".config/snippets/agent-rules.md", "- mine\n");
-        assert!(!create_rules_file(&environment).unwrap());
-        assert_eq!(
-            read(&environment, ".config/snippets/agent-rules.md"),
-            "- mine\n"
+        assert!(create_editable_files(&environment).unwrap().is_empty());
+        assert!(files(&environment).are_defaults());
+        let original = environment
+            .home
+            .join(".local/share/snippets/agent-skill/guide.md");
+        assert_eq!(fs::read_to_string(&original).unwrap(), GUIDE);
+        let mode = fs::metadata(&original).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o444);
+    }
+
+    #[test]
+    fn an_edited_guide_is_what_agents_read() {
+        let (_dir, environment) = temporary_home(&[]);
+        create_editable_files(&environment).unwrap();
+        write(
+            &environment,
+            ".config/snippets/agent-skill/guide.md",
+            "# My guide\nUse snippets-cli search.\n",
         );
+        assert_eq!(files(&environment).guide, FileState::Edited);
+        assert_eq!(files(&environment).rules, FileState::Default);
+        let printed = guide(&environment).unwrap();
+        assert!(printed.starts_with("# My guide"));
+        assert!(printed.contains("Search the library before asking"));
+        assert!(!printed.contains("may name commands"));
+    }
+
+    #[test]
+    fn an_unedited_copy_follows_new_defaults() {
+        let (_dir, environment) = temporary_home(&[]);
+        let old = "# The guide of an older version\n";
+        write(&environment, ".config/snippets/agent-skill/guide.md", old);
+        pretend_copied_from(&environment, old, SkillFile::Guide);
+        assert_eq!(files(&environment).guide, FileState::Default);
+        assert_eq!(
+            read(&environment, ".config/snippets/agent-skill/guide.md"),
+            GUIDE
+        );
+    }
+
+    #[test]
+    fn an_edited_copy_is_kept_but_flagged_when_the_defaults_change() {
+        let (_dir, environment) = temporary_home(&[]);
+        write(
+            &environment,
+            ".config/snippets/agent-skill/guide.md",
+            "# Edited long ago\n",
+        );
+        pretend_copied_from(
+            &environment,
+            "# The guide of an older version\n",
+            SkillFile::Guide,
+        );
+        assert_eq!(files(&environment).guide, FileState::Outdated);
+        assert_eq!(
+            read(&environment, ".config/snippets/agent-skill/guide.md"),
+            "# Edited long ago\n"
+        );
+        assert!(
+            guide(&environment)
+                .unwrap()
+                .contains("may name commands or flags")
+        );
+    }
+
+    #[test]
+    fn reset_puts_the_defaults_back_and_keeps_edits() {
+        let (_dir, environment) = temporary_home(&[]);
+        create_editable_files(&environment).unwrap();
+        write(
+            &environment,
+            ".config/snippets/agent-skill/rules.md",
+            "---\ndescription: Mine\n---\n- Mine.\n",
+        );
+        assert_eq!(current_rules(&environment).unwrap().description, "Mine");
+        let backups = reset_files(&environment).unwrap();
+        assert_eq!(
+            backups,
+            vec![
+                environment
+                    .home
+                    .join(".config/snippets/agent-skill/rules.md.bak")
+            ]
+        );
+        assert!(
+            read(&environment, ".config/snippets/agent-skill/rules.md.bak").contains("- Mine.")
+        );
+        assert_eq!(
+            read(&environment, ".config/snippets/agent-skill/rules.md"),
+            DEFAULT_RULES
+        );
+        assert!(files(&environment).are_defaults());
+        assert!(reset_files(&environment).unwrap().is_empty());
     }
 
     #[test]
@@ -1023,12 +1375,12 @@ mod tests {
         assert!(!defaults.contains("description:"));
         write(
             &environment,
-            ".config/snippets/agent-rules.md",
+            ".config/snippets/agent-skill/rules.md",
             "- Custom rule.\n",
         );
         let custom = guide(&environment).unwrap();
         assert!(custom.contains("- Custom rule."));
-        assert!(custom.contains("Rules file: "));
+        assert!(custom.contains("the user's files in"));
     }
 
     #[test]

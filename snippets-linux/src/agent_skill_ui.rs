@@ -1,17 +1,18 @@
-//! Settings › General › "Agent Skill" and "Agent Rules": the same model as the Mac's
+//! Settings › General › "Agent Skill" and "Guide and Rules": the same model as the Mac's
 //! Settings › Integrations and `snippets-cli skill status`, from `crate::agent_skill`.
 //!
 //! Changes apply at once, as elsewhere in GNOME settings. A foreign `SKILL.md` is shown and
 //! never replaced; a remembered folder that has gone is shown and only removable.
 
 use super::*;
-use crate::agent_skill::{self, Environment, Place, PlaceState, PlaceStatus};
+use crate::agent_skill::{self, Environment, FileState, Files, Place, PlaceState, PlaceStatus};
 
 pub(super) struct AgentSkillControls {
     window: adw::PreferencesWindow,
     skills: adw::PreferencesGroup,
     rows: RefCell<Vec<gtk::Widget>>,
-    rules: adw::ActionRow,
+    files: adw::ActionRow,
+    reset: gtk::Button,
 }
 
 const INTRO: &str = "Teaches Claude Code, Codex and other coding agents to use snippets-cli. Rules are advice to agents; secure snippets still need your approval.";
@@ -31,33 +32,35 @@ impl AgentSkillControls {
             .build();
         skills.set_header_suffix(Some(&add_folder));
 
-        let rules_group = adw::PreferencesGroup::builder()
-            .title("Agent Rules")
+        let files_group = adw::PreferencesGroup::builder()
+            .title("Guide and Rules")
+            .description("What agents read. Edit guide.md and rules.md in any editor; the read-only originals stay beside the app's data.")
             .build();
-        let rules = adw::ActionRow::builder()
+        let files = adw::ActionRow::builder()
             .use_markup(false)
-            .title("Rules for agents")
-            .build();
-        let edit = gtk::Button::builder()
-            .label("Edit")
-            .valign(gtk::Align::Center)
+            .title("guide.md and rules.md")
             .build();
         let open_folder = gtk::Button::builder()
             .label("Open Folder")
             .valign(gtk::Align::Center)
             .build();
-        rules.add_suffix(&edit);
-        rules.add_suffix(&open_folder);
-        rules_group.add(&rules);
+        let reset = gtk::Button::builder()
+            .label("Reset…")
+            .valign(gtk::Align::Center)
+            .build();
+        files.add_suffix(&open_folder);
+        files.add_suffix(&reset);
+        files_group.add(&files);
 
         page.add(&skills);
-        page.add(&rules_group);
+        page.add(&files_group);
 
         let this = Rc::new(Self {
             window: window.clone(),
             skills,
             rows: RefCell::new(Vec::new()),
-            rules,
+            files,
+            reset: reset.clone(),
         });
 
         let weak = Rc::downgrade(&this);
@@ -67,15 +70,15 @@ impl AgentSkillControls {
             }
         });
         let weak = Rc::downgrade(&this);
-        edit.connect_clicked(move |_| {
+        open_folder.connect_clicked(move |_| {
             if let Some(this) = weak.upgrade() {
-                this.open_rules(false);
+                this.open_folder();
             }
         });
         let weak = Rc::downgrade(&this);
-        open_folder.connect_clicked(move |_| {
+        reset.connect_clicked(move |_| {
             if let Some(this) = weak.upgrade() {
-                this.open_rules(true);
+                glib::spawn_future_local(async move { this.reset().await });
             }
         });
         // The rules may have changed in an editor; bring the installed descriptions up to
@@ -117,12 +120,9 @@ impl AgentSkillControls {
                 return;
             }
         };
-        let rules = environment.display(&status.rules_path);
-        self.rules.set_subtitle(&if status.rules_are_custom {
-            rules
-        } else {
-            format!("{rules} (not created yet: the defaults apply)")
-        });
+        self.files
+            .set_subtitle(&files_text(&environment, &status.files));
+        self.reset.set_sensitive(!status.files.are_defaults());
         for place in status.places {
             let row = self.make_row(&environment, place);
             self.skills.add(&row);
@@ -252,30 +252,93 @@ impl AgentSkillControls {
         }
     }
 
-    /// Creates the rules file from the defaults if needed, then opens it (or its folder)
-    /// with the desktop's default application.
-    fn open_rules(&self, folder: bool) {
+    /// Makes editable copies of the guide and rules if there are none yet, then shows them
+    /// in the file manager, where the user opens them in any editor.
+    fn open_folder(self: &Rc<Self>) {
         let Some(environment) = Environment::current() else {
             return;
         };
-        if let Err(error) = agent_skill::create_rules_file(&environment) {
-            self.toast(&format!("Could not create the rules file: {error}"));
+        if let Err(error) = agent_skill::create_editable_files(&environment) {
+            self.toast(&format!("Could not create the guide and rules: {error}"));
             return;
         }
-        let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(environment.rules_path())));
+        let guide = environment.file_path(agent_skill::SkillFile::Guide);
+        let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(guide)));
         let window = self.window.clone();
-        let report = move |result: Result<(), glib::Error>| {
-            if let Err(error) = result {
-                window.add_toast(adw::Toast::new(&format!(
-                    "Could not open the rules file: {}",
-                    error.message()
-                )));
-            }
-        };
-        if folder {
-            launcher.open_containing_folder(Some(&self.window), gio::Cancellable::NONE, report);
-        } else {
-            launcher.launch(Some(&self.window), gio::Cancellable::NONE, report);
-        }
+        launcher.open_containing_folder(
+            Some(&self.window),
+            gio::Cancellable::NONE,
+            move |result| {
+                if let Err(error) = result {
+                    window.add_toast(adw::Toast::new(&format!(
+                        "Could not open the folder: {}",
+                        error.message()
+                    )));
+                }
+            },
+        );
+        self.reload();
     }
+
+    async fn reset(self: Rc<Self>) {
+        let dialog = adw::AlertDialog::builder()
+            .heading("Reset the agent guide and rules?")
+            .body("Snippets puts the default guide.md and rules.md back. Your versions are kept beside them as guide.md.bak and rules.md.bak.")
+            .build();
+        dialog.add_responses(&[("cancel", "Cancel"), ("reset", "Reset")]);
+        dialog.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        if dialog.choose_future(Some(&self.window)).await != "reset" {
+            return;
+        }
+        let Some(environment) = Environment::current() else {
+            return;
+        };
+        match agent_skill::reset_files(&environment) {
+            Ok(backups) if backups.is_empty() => {
+                self.toast("The guide and rules are the defaults.")
+            }
+            Ok(backups) => {
+                let names: Vec<_> = backups
+                    .iter()
+                    .filter_map(|b| b.file_name().map(|n| n.to_string_lossy().into_owned()))
+                    .collect();
+                self.toast(&format!(
+                    "Put the defaults back. Your versions are kept as {}.",
+                    names.join(" and ")
+                ));
+            }
+            Err(error) => self.toast(&format!("Could not reset the guide and rules: {error}")),
+        }
+        self.reload();
+    }
+}
+
+/// "~/.config/snippets/agent-skill · Defaults", or which one was edited, or that the
+/// defaults changed under an edited file.
+fn files_text(environment: &Environment, files: &Files) -> String {
+    let folder = environment.display(&files.folder);
+    let changed: Vec<_> = [("guide", files.guide), ("rules", files.rules)]
+        .into_iter()
+        .filter(|(_, state)| *state != FileState::Default)
+        .collect();
+    if changed.is_empty() {
+        return format!("{folder} · Defaults");
+    }
+    let names = changed
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join(" and ");
+    if changed
+        .iter()
+        .any(|(_, state)| *state == FileState::Outdated)
+    {
+        return format!(
+            "{folder} · You edited the {names}; an update changed the defaults since. The originals are in {}.",
+            environment.display(&files.originals_folder)
+        );
+    }
+    format!("{folder} · You edited the {names}")
 }

@@ -649,6 +649,8 @@ mod tests {
                 "codex",
             ],
             vec!["snippets-cli", "skill", "edit"],
+            vec!["snippets-cli", "skill", "edit", "guide"],
+            vec!["snippets-cli", "skill", "reset"],
         ] {
             assert!(Options::try_parse_from(&args).is_ok(), "{args:?}");
         }

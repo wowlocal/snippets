@@ -275,7 +275,8 @@ snippets-cli reveal atlas-token
 snippets-cli skill install                    # Claude Code (if set up) and ~/.agents/skills
 snippets-cli skill install --dir ~/src/app/.claude/skills   # also a project or another agent
 snippets-cli skill status                     # JSON: where it is installed, and your rules
-snippets-cli skill edit                       # your do/don't rules and the skill description
+snippets-cli skill edit [rules|guide]         # your copy of the rules (and description) or guide
+snippets-cli skill reset                      # put the default guide and rules back
 ```
 
 `install` writes a small `SKILL.md` that tells the agent to run `snippets-cli skill`,
@@ -289,11 +290,19 @@ uses the skill, Claude Code asks you to allow it; after that, the read-only comm
 (`search`, `get`, `list`, `tags`, `secure-status`) run without prompts, while `add`,
 `update`, `delete` and `reveal` still ask.
 
-Your rules live in `~/.config/snippets/agent-rules.md` (on Linux, under
-`$XDG_CONFIG_HOME`). Updates never change that file, and deleting it restores the
-defaults. The same controls are in **Settings → Integrations → Agent Skill** on the Mac
-and **Settings → General → Agent Skill** on Linux. The rules are advice to the agent:
-Snippets' approval is what protects secure entries.
+The guide and your do/don't rules are plain files you can edit in any editor:
+`guide.md` and `rules.md` (whose `description:` line is the skill's description) in
+`~/.config/snippets/agent-skill/` (on Linux, under `$XDG_CONFIG_HOME`). Until you edit
+them the defaults apply, and a copy you never changed follows updates. Updates never
+overwrite your edits; if the defaults change after you edited the guide, Settings and
+`skill status` say so, and agents are told to check `snippets-cli help`. Read-only
+originals of the defaults are kept to compare against (Mac:
+`~/Library/Application Support/SnippetsClone/AgentSkill/`; Linux:
+`~/.local/share/snippets/agent-skill/`), and **Reset** puts them back, keeping your
+versions as `.bak`. The same controls are in **Settings → Integrations → Agent Skill**
+on the Mac (Show in Finder, Reset to Defaults) and **Settings → General** on Linux
+(Open Folder, Reset). The rules are advice to the agent: Snippets' approval is what
+protects secure entries.
 
 ### The agent asks; you authorize the secret
 

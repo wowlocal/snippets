@@ -346,6 +346,13 @@ nonisolated enum SnippetStorageLocations {
     /// so these `mkdir`s happen while no monitor exists to observe them. Creating
     /// them lazily on first use would fire the folder monitor at an arbitrary later
     /// moment — the exact bug the `Usage/` comment above was written to prevent.
+    /// Read-only originals of the agent skill's guide and rules (`AgentSkill`), for the
+    /// user to compare their edited copies in `~/.config/snippets/agent-skill/` against.
+    /// Created with the other subdirectories, before `SnippetStore` starts watching.
+    static var agentSkillOriginalsFolderURL: URL {
+        supportFolderURL.appendingPathComponent("AgentSkill", isDirectory: true)
+    }
+
     static func createAllDirectories(fileManager: FileManager = .default) {
         // Resolve the sandbox/application-support root once. Each computed path above
         // intentionally stays dynamic for tests that redirect storage between cases,
@@ -365,9 +372,20 @@ nonisolated enum SnippetStorageLocations {
             diagnostics.appendingPathComponent("Logs", isDirectory: true),
             root.appendingPathComponent("Backups", isDirectory: true),
             root.appendingPathComponent("Tmp", isDirectory: true),
-        ] {
+        ] + agentSkillFolders(root) {
             try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         }
+    }
+}
+
+extension SnippetStorageLocations {
+    /// The agent skill exists only where `snippets-cli` does.
+    nonisolated fileprivate static func agentSkillFolders(_ root: URL) -> [URL] {
+        #if os(macOS)
+        [root.appendingPathComponent("AgentSkill", isDirectory: true)]
+        #else
+        []
+        #endif
     }
 }
 

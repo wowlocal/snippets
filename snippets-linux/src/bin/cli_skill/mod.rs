@@ -3,7 +3,7 @@
 
 use clap::{Args, Subcommand};
 use serde_json::json;
-use snippets_linux::agent_skill::{self, Change, Environment, Outcome, Place, Target};
+use snippets_linux::agent_skill::{self, Change, Environment, Outcome, Place, SkillFile, Target};
 use std::{
     io::{self, IsTerminal},
     process::Command,
@@ -11,15 +11,27 @@ use std::{
 
 #[derive(Subcommand)]
 pub enum SkillOperation {
-    /// Where the skill is installed, and the rules file, as JSON.
+    /// Where the skill is installed, and the state of your guide and rules, as JSON.
     Status,
     /// Install the skill. With no options: update where it is installed, else Claude Code
     /// (if set up) and ~/.agents/skills.
     Install(Places),
     /// Remove the skill (everywhere by default). --dir also forgets that folder.
     Uninstall(Places),
-    /// Edit your agent rules and the skill description.
-    Edit,
+    /// Edit your copy of the rules (with the skill's description) or of the guide, made
+    /// from the defaults in ~/.config/snippets/agent-skill.
+    Edit {
+        #[arg(value_enum, default_value = "rules")]
+        file: EditFile,
+    },
+    /// Put the default guide and rules back; your versions are kept as .bak.
+    Reset,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum EditFile {
+    Rules,
+    Guide,
 }
 
 #[derive(Args)]
@@ -95,7 +107,7 @@ pub fn run(command: Option<SkillOperation>) -> u8 {
 
 fn execute(environment: &Environment, command: Option<SkillOperation>) -> Result<u8, String> {
     let io = |e: io::Error| e.to_string();
-    let rules_path = environment.display(&environment.rules_path());
+    let folder_path = environment.display(&environment.files_folder());
     match command {
         None => print!("{}", agent_skill::guide(environment).map_err(io)?),
         Some(SkillOperation::Status) => {
@@ -117,7 +129,12 @@ fn execute(environment: &Environment, command: Option<SkillOperation>) -> Result
                 })
                 .collect();
             let output = json!({
-                "rules": {"path": status.rules_path, "custom": status.rules_are_custom},
+                "files": {
+                    "folder": status.files.folder,
+                    "originals": status.files.originals_folder,
+                    "guide": status.files.guide.as_str(),
+                    "rules": status.files.rules.as_str(),
+                },
                 "places": places,
             });
             println!(
@@ -152,15 +169,15 @@ fn execute(environment: &Environment, command: Option<SkillOperation>) -> Result
                     "Pre-approved in Claude Code: skill, search, get, list, tags and secure-status (read-only)."
                 );
             }
-            if agent_skill::current_rules(environment)
+            if agent_skill::sync_files(environment)
                 .map_err(io)?
-                .is_custom
+                .are_defaults()
             {
-                println!("Your rules: {rules_path}");
-            } else {
                 println!(
-                    "Rules: the defaults. `snippets-cli skill edit` creates {rules_path} to change them."
+                    "Guide and rules: the defaults. `snippets-cli skill edit` puts copies to edit in {folder_path}."
                 );
+            } else {
+                println!("Your guide and rules: {folder_path}");
             }
             println!(
                 "Rules guide agents; Snippets still asks you before revealing a secure snippet."
@@ -191,29 +208,64 @@ fn execute(environment: &Environment, command: Option<SkillOperation>) -> Result
                 println!("Uninstalled the snippets-cli skill:");
                 print_changes(environment, &changes);
             }
-            if agent_skill::current_rules(environment)
+            if !agent_skill::sync_files(environment)
                 .map_err(io)?
-                .is_custom
+                .are_defaults()
             {
-                println!("Your rules stay in {rules_path}.");
+                println!("Your guide and rules stay in {folder_path}.");
             }
         }
-        Some(SkillOperation::Edit) => return edit(environment).map_err(io),
+        Some(SkillOperation::Edit { file }) => {
+            let file = match file {
+                EditFile::Rules => SkillFile::Rules,
+                EditFile::Guide => SkillFile::Guide,
+            };
+            return edit(environment, file).map_err(io);
+        }
+        Some(SkillOperation::Reset) => {
+            let backups = agent_skill::reset_files(environment).map_err(io)?;
+            if backups.is_empty() {
+                println!("The guide and rules are already the defaults.");
+            } else {
+                println!("Put the default guide and rules back. Your versions are kept as:");
+                for backup in &backups {
+                    println!("  {}", environment.display(backup));
+                }
+            }
+            refresh_descriptions(environment).map_err(io)?;
+        }
     }
     Ok(0)
 }
 
-/// Opens the rules file in the user's editor, or prints its path for an agent.
-fn edit(environment: &Environment) -> io::Result<u8> {
-    let path = environment.rules_path();
-    let created = agent_skill::create_rules_file(environment)?;
+/// Rewrites installed stubs whose description no longer matches the rules.
+fn refresh_descriptions(environment: &Environment) -> io::Result<()> {
+    let places = agent_skill::installed_places(environment)?;
+    let updated: Vec<_> = agent_skill::install(environment, &places)?
+        .into_iter()
+        .filter(|c| c.outcome == Outcome::Wrote)
+        .collect();
+    if !updated.is_empty() {
+        println!("Updated the skill description:");
+        print_changes(environment, &updated);
+    }
+    Ok(())
+}
+
+/// Opens one of the editable files in the user's editor, creating the copies from the
+/// defaults first, or prints their paths for an agent.
+fn edit(environment: &Environment, file: SkillFile) -> io::Result<u8> {
+    let created = agent_skill::create_editable_files(environment)?;
+    let path = environment.file_path(file);
     if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
-        // No terminal: an agent or a script. Hand it the file instead of an editor.
-        println!("{}", path.display());
-        if created {
+        // No terminal: an agent or a script. Hand it the files instead of an editor.
+        for each in SkillFile::ALL {
+            println!("{}", environment.file_path(each).display());
+        }
+        if !created.is_empty() {
             eprintln!("Created from the defaults.");
         }
-        eprintln!("After changing its description, run `snippets-cli skill install`.");
+        eprintln!("After changing the description in rules.md, run `snippets-cli skill install`.");
         return Ok(0);
     }
     let editor = ["VISUAL", "EDITOR"]
@@ -234,14 +286,6 @@ fn edit(environment: &Environment) -> io::Result<u8> {
         return Ok(1);
     }
     // The description lives in the installed stubs too; bring them up to date.
-    let places = agent_skill::installed_places(environment)?;
-    let updated: Vec<_> = agent_skill::install(environment, &places)?
-        .into_iter()
-        .filter(|c| c.outcome == Outcome::Wrote)
-        .collect();
-    if !updated.is_empty() {
-        println!("Updated the skill description:");
-        print_changes(environment, &updated);
-    }
+    refresh_descriptions(environment)?;
     Ok(0)
 }

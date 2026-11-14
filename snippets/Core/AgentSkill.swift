@@ -1,6 +1,7 @@
+import CryptoKit
 import Foundation
 
-// Compiled into the app, snippets-cli and CorePackage. Foundation only.
+// Compiled into the app, snippets-cli and CorePackage. Foundation and CryptoKit only.
 
 /// The `snippets-cli` skill for AI coding agents (Claude Code, Codex and others that
 /// read `SKILL.md`). Mirrored on Linux by `snippets-linux/src/agent_skill.rs`.
@@ -13,20 +14,27 @@ import Foundation
 /// - **The stub** is what `install` writes into a skills folder. It only tells the agent
 ///   to run `snippets-cli skill`, plus the one rule that must hold even if it never
 ///   does. Install rewrites it freely: nobody edits it by hand.
-/// - **The rules** are the user's: do/don't lines and the skill's description, in one
-///   file that app updates never touch. Missing means the built-in defaults.
+/// - **The guide and the rules** are the user's to edit: `guide.md` and `rules.md` (the
+///   do/don't lines and the skill's description) in `~/.config/snippets/agent-skill/`.
+///   Until they exist, the built-in defaults apply. Read-only originals of the defaults
+///   are kept in the support folder's `AgentSkill/` to compare against, and Reset puts
+///   them back (keeping the previous copy as `.bak`). An unedited copy follows updates;
+///   an edited one is never overwritten, only reported as `outdated` once the defaults
+///   change under it, because a stale guide can name commands this CLI no longer has.
 ///
 /// A stub goes to the built-in places (`Target`) or to folders the user named. The
 /// owned stubs on disk are the record of which built-in places the user chose; only
-/// custom folders are remembered, in `agent-skill.json` beside the rules, so status,
-/// refresh and uninstall can find them again.
+/// custom folders are remembered, in the hidden `.state.json` beside the guide, so
+/// status, refresh and uninstall can find them again.
 ///
 /// The rules are advice to an agent, not a security boundary. Secure reveals stay
 /// gated by the app's own approval and authentication.
 ///
-/// Both files live in `~/.config/snippets/` rather than the support directory, whose
-/// root `SnippetStore` watches. On the Mac that path ignores `XDG_CONFIG_HOME`: the app
-/// never sees the shell's variables, and the CLI and Settings must edit the same file.
+/// The editable files live in `~/.config/snippets/` rather than the support directory,
+/// whose root `SnippetStore` watches (the read-only originals sit in a subfolder that
+/// `createAllDirectories` makes before the watcher starts). On the Mac that path ignores
+/// `XDG_CONFIG_HOME`: the app never sees the shell's variables, and the CLI and Settings
+/// must edit the same files.
 nonisolated enum AgentSkill {
 
     static let skillName = "snippets-cli"
@@ -66,6 +74,8 @@ nonisolated enum AgentSkill {
     struct Environment: Sendable {
         var home: URL
         var variables: [String: String]
+        /// Where the read-only originals go. Nil means inside `home`, as tests want.
+        var originalsFolder: URL?
 
         /// `$HOME` when set, as for any command-line tool; the account's home otherwise.
         static var current: Environment {
@@ -73,7 +83,9 @@ nonisolated enum AgentSkill {
             let home = variables["HOME"].flatMap { $0.isEmpty ? nil : $0 }
                 .map { URL(fileURLWithPath: $0, isDirectory: true) }
                 ?? FileManager.default.homeDirectoryForCurrentUser
-            return Environment(home: home, variables: variables)
+            return Environment(
+                home: home, variables: variables,
+                originalsFolder: SnippetStorageLocations.agentSkillOriginalsFolderURL)
         }
 
         func directory(_ variable: String, default relativePath: String) -> URL {
@@ -118,9 +130,40 @@ nonisolated enum AgentSkill {
         var state: PlaceState
     }
 
+    /// One of the two editable files.
+    enum SkillFile: String, CaseIterable, Sendable {
+        case guide, rules
+
+        var fileName: String { "\(rawValue).md" }
+
+        var defaultText: String {
+            switch self {
+            case .guide: AgentSkillText.guide
+            case .rules: AgentSkillText.defaultRules
+            }
+        }
+    }
+
+    enum FileState: String, Sendable {
+        /// No copy yet, or the copy matches the current defaults.
+        case `default`
+        /// The user changed it; the defaults it came from are still current.
+        case edited
+        /// The user changed it, and an update changed the defaults since.
+        case outdated
+    }
+
+    struct Files: Equatable, Sendable {
+        var folder: URL
+        var originalsFolder: URL
+        var guide: FileState
+        var rules: FileState
+
+        var areDefaults: Bool { guide == .default && rules == .default }
+    }
+
     struct Status: Equatable, Sendable {
-        var rulesURL: URL
-        var rulesAreCustom: Bool
+        var files: Files
         /// Every built-in target, then every remembered folder.
         var places: [PlaceStatus]
     }
@@ -128,7 +171,7 @@ nonisolated enum AgentSkill {
     struct Rules: Equatable, Sendable {
         var description: String
         var body: String
-        /// False when no rules file exists and these are the defaults.
+        /// False when the defaults apply.
         var isCustom: Bool
     }
 
@@ -217,12 +260,26 @@ nonisolated enum AgentSkill {
         environment.home.appendingPathComponent(".config/snippets", isDirectory: true)
     }
 
-    static func rulesURL(in environment: Environment) -> URL {
-        configFolder(in: environment).appendingPathComponent("agent-rules.md", isDirectory: false)
+    /// The folder the user edits: `guide.md` and `rules.md`.
+    static func filesFolder(in environment: Environment) -> URL {
+        configFolder(in: environment).appendingPathComponent("agent-skill", isDirectory: true)
     }
 
-    static func foldersURL(in environment: Environment) -> URL {
-        configFolder(in: environment).appendingPathComponent("agent-skill.json", isDirectory: false)
+    static func fileURL(_ file: SkillFile, in environment: Environment) -> URL {
+        filesFolder(in: environment).appendingPathComponent(file.fileName, isDirectory: false)
+    }
+
+    static func rulesURL(in environment: Environment) -> URL { fileURL(.rules, in: environment) }
+
+    static func originalsFolder(in environment: Environment) -> URL {
+        environment.originalsFolder
+            ?? environment.home.appendingPathComponent(
+                "Library/Application Support/SnippetsClone/AgentSkill", isDirectory: true)
+    }
+
+    /// Hidden: remembered folders and which defaults each editable file came from.
+    static func stateURL(in environment: Environment) -> URL {
+        filesFolder(in: environment).appendingPathComponent(".state.json", isDirectory: false)
     }
 
     /// The root folder of a built-in target's agent: whether it exists says whether
@@ -284,24 +341,24 @@ nonisolated enum AgentSkill {
         return folder(url.path)
     }
 
-    private struct FoldersFile: Codable {
+    private struct StateFile: Codable {
         var version = 1
-        var folders: [String]
+        var folders: [String] = []
+        /// Per editable file, the SHA-256 of the defaults it was copied from.
+        var defaults: [String: String] = [:]
     }
 
-    static func rememberedFolders(in environment: Environment) -> [URL] {
-        guard let data = try? Data(contentsOf: foldersURL(in: environment)),
-              let file = try? JSONDecoder().decode(FoldersFile.self, from: data)
-        else { return [] }
-        return file.folders.filter { $0.hasPrefix("/") }.compactMap {
-            if case .folder(let url) = folder($0) { url } else { nil }
-        }
+    private static func readState(in environment: Environment) -> StateFile {
+        guard let data = try? Data(contentsOf: stateURL(in: environment)),
+              let state = try? JSONDecoder().decode(StateFile.self, from: data)
+        else { return StateFile() }
+        return state
     }
 
-    private static func saveFolders(_ folders: [URL], in environment: Environment) throws {
-        let url = foldersURL(in: environment)
+    private static func writeState(_ state: StateFile, in environment: Environment) throws {
+        let url = stateURL(in: environment)
         let fileManager = FileManager.default
-        if folders.isEmpty {
+        if state.folders.isEmpty && state.defaults.isEmpty {
             if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
             return
         }
@@ -309,7 +366,19 @@ nonisolated enum AgentSkill {
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try encoder.encode(FoldersFile(folders: folders.map(\.path))).write(to: url, options: .atomic)
+        try encoder.encode(state).write(to: url, options: .atomic)
+    }
+
+    static func rememberedFolders(in environment: Environment) -> [URL] {
+        readState(in: environment).folders.filter { $0.hasPrefix("/") }.compactMap {
+            if case .folder(let url) = folder($0) { url } else { nil }
+        }
+    }
+
+    private static func saveFolders(_ folders: [URL], in environment: Environment) throws {
+        var state = readState(in: environment)
+        state.folders = folders.map(\.path)
+        try writeState(state, in: environment)
     }
 
     /// Same folder by path, or once symlinks in the existing part are resolved.
@@ -336,8 +405,7 @@ nonisolated enum AgentSkill {
         let places = Target.allCases.map(Place.target)
             + rememberedFolders(in: environment).map(Place.folder)
         return Status(
-            rulesURL: rulesURL(in: environment),
-            rulesAreCustom: try currentRules(in: environment).isCustom,
+            files: try syncFiles(in: environment),
             places: places.map { placeStatus($0, in: environment) })
     }
 
@@ -386,13 +454,9 @@ nonisolated enum AgentSkill {
     }
 
     static func currentRules(in environment: Environment) throws -> Rules {
-        let url = rulesURL(in: environment)
-        let text: String
-        do {
-            text = try String(contentsOf: url, encoding: .utf8)
-        } catch CocoaError.fileReadNoSuchFile {
-            return defaultRules
-        }
+        guard let text = try editableText(.rules, in: environment),
+              text != SkillFile.rules.defaultText
+        else { return defaultRules }
         let parsed = parseRules(text)
         let description = parsed.description.map(sanitizedDescription) ?? ""
         return Rules(
@@ -428,27 +492,142 @@ nonisolated enum AgentSkill {
         return String(words.joined(separator: " ").prefix(maximumDescriptionLength))
     }
 
-    /// Writes the default rules unless a rules file exists. Returns whether it wrote.
+    // MARK: - Editable files
+
+    static func sha256(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The user's copy, or nil when there is none.
+    private static func editableText(_ file: SkillFile, in environment: Environment) throws -> String? {
+        do {
+            return try String(contentsOf: fileURL(file, in: environment), encoding: .utf8)
+        } catch CocoaError.fileReadNoSuchFile {
+            return nil
+        }
+    }
+
+    /// The text in effect: the user's copy, or the defaults.
+    static func currentText(_ file: SkillFile, in environment: Environment) throws -> String {
+        try editableText(file, in: environment) ?? file.defaultText
+    }
+
+    /// Brings the files up to date and says what state each is in:
+    ///
+    /// - writes the read-only originals when they differ from this version's defaults;
+    /// - replaces a copy the user never changed when the defaults changed since;
+    /// - leaves an edited copy alone, reporting it `outdated` once the defaults moved on.
     @discardableResult
-    static func createRulesFile(in environment: Environment) throws -> Bool {
-        let url = rulesURL(in: environment)
-        guard !FileManager.default.fileExists(atPath: url.path) else { return false }
+    static func syncFiles(in environment: Environment) throws -> Files {
+        try writeOriginals(in: environment)
+        var state = readState(in: environment)
+        var states: [SkillFile: FileState] = [:]
+        for file in SkillFile.allCases {
+            let current = sha256(file.defaultText)
+            guard let text = try editableText(file, in: environment) else {
+                states[file] = .default
+                continue
+            }
+            let base = state.defaults[file.rawValue]
+            if text == file.defaultText {
+                states[file] = .default
+                state.defaults[file.rawValue] = current
+            } else if base != current, base == sha256(text) {
+                // Never edited, and an update changed the defaults: follow them.
+                try Data(file.defaultText.utf8).write(to: fileURL(file, in: environment), options: .atomic)
+                state.defaults[file.rawValue] = current
+                states[file] = .default
+            } else {
+                states[file] = base == current ? .edited : .outdated
+            }
+        }
+        if state.defaults != readState(in: environment).defaults {
+            try writeState(state, in: environment)
+        }
+        return Files(
+            folder: filesFolder(in: environment), originalsFolder: originalsFolder(in: environment),
+            guide: states[.guide] ?? .default, rules: states[.rules] ?? .default)
+    }
+
+    /// Read-only copies of this version's defaults, to compare an edited file against.
+    private static func writeOriginals(in environment: Environment) throws {
+        let folder = originalsFolder(in: environment)
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        for file in SkillFile.allCases {
+            let url = folder.appendingPathComponent(file.fileName, isDirectory: false)
+            if (try? String(contentsOf: url, encoding: .utf8)) == file.defaultText { continue }
+            if fileManager.fileExists(atPath: url.path) {
+                try fileManager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+                try fileManager.removeItem(at: url)
+            }
+            try Data(file.defaultText.utf8).write(to: url)
+            try fileManager.setAttributes([.posixPermissions: 0o444], ofItemAtPath: url.path)
+        }
+    }
+
+    /// Writes the defaults for each file the user has no copy of yet, so the folder holds
+    /// both files to edit. Returns the files it created.
+    @discardableResult
+    static func createEditableFiles(in environment: Environment) throws -> [SkillFile] {
+        try syncFiles(in: environment)
         try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(AgentSkillText.defaultRules.utf8).write(to: url, options: .withoutOverwriting)
-        return true
+            at: filesFolder(in: environment), withIntermediateDirectories: true)
+        var state = readState(in: environment)
+        var created: [SkillFile] = []
+        for file in SkillFile.allCases where try editableText(file, in: environment) == nil {
+            try Data(file.defaultText.utf8).write(
+                to: fileURL(file, in: environment), options: .withoutOverwriting)
+            state.defaults[file.rawValue] = sha256(file.defaultText)
+            created.append(file)
+        }
+        if !created.isEmpty { try writeState(state, in: environment) }
+        return created
+    }
+
+    /// Puts the defaults back. A copy the user changed is kept beside it as `.bak`
+    /// (replacing an older one). Returns those backups.
+    @discardableResult
+    static func resetFiles(in environment: Environment) throws -> [URL] {
+        try syncFiles(in: environment)
+        let fileManager = FileManager.default
+        var state = readState(in: environment)
+        var backups: [URL] = []
+        for file in SkillFile.allCases {
+            let url = fileURL(file, in: environment)
+            if let text = try editableText(file, in: environment), text != file.defaultText {
+                let backup = url.appendingPathExtension("bak")
+                if fileManager.fileExists(atPath: backup.path) { try fileManager.removeItem(at: backup) }
+                try fileManager.moveItem(at: url, to: backup)
+                backups.append(backup)
+            }
+            if try editableText(file, in: environment) == nil, fileManager.fileExists(
+                atPath: filesFolder(in: environment).path) {
+                try Data(file.defaultText.utf8).write(to: url, options: .atomic)
+            }
+            state.defaults[file.rawValue] = sha256(file.defaultText)
+        }
+        try writeState(state, in: environment)
+        return backups
     }
 
     // MARK: - The printed guide
 
     /// What `snippets-cli skill` prints: the guide, the user's rules, and where they live.
     static func guide(in environment: Environment) throws -> String {
+        let files = try syncFiles(in: environment)
         let rules = try currentRules(in: environment)
-        let path = rulesURL(in: environment).path
-        let source = rules.isCustom
-            ? "Rules file: \(path)\nEdit it when the user asks to change these rules."
-            : "These are the defaults. To change them, `snippets-cli skill edit` creates \(path); edit that file when the user asks."
-        return AgentSkillText.guide + "\n" + rules.body + "\n\n" + source + "\n"
+        var text = try currentText(.guide, in: environment)
+        if !text.hasSuffix("\n") { text += "\n" }
+        let folder = files.folder.path
+        let source = files.areDefaults
+            ? "These are the defaults. To change the guide or the rules, `snippets-cli skill edit` creates editable copies in \(folder); edit those when the user asks."
+            : "The guide and rules are the user's files in \(folder) (guide.md, rules.md). Edit them when the user asks to change them."
+        var notes = ""
+        if files.guide == .outdated {
+            notes = "\nThe user edited this guide before Snippets was updated, so it may name commands or flags this version does not have. `snippets-cli help` lists the exact ones.\n"
+        }
+        return text + "\n" + rules.body + "\n\n" + source + "\n" + notes
     }
 
     // MARK: - Stubs

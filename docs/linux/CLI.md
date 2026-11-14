@@ -57,10 +57,12 @@ no window. See [GIT_SYNC.md](GIT_SYNC.md).
 
 `snippets-cli skill` prints the guide for AI agents with the user's rules.
 `skill status` (JSON), `skill install [--for claude|agents|codex]... [--dir PATH]...`,
-`skill uninstall [--for …] [--dir …]` and `skill edit` manage the installed `SKILL.md`
-stubs, the remembered custom folders in `$XDG_CONFIG_HOME/snippets/agent-skill.json` and
-the rules in `$XDG_CONFIG_HOME/snippets/agent-rules.md`. **Settings → General → Agent
-Skill** shows the same places (`src/agent_skill_ui.rs`); the logic is
+`skill uninstall [--for …] [--dir …]`, `skill edit [rules|guide]` and `skill reset`
+manage the installed `SKILL.md` stubs and the user's editable `guide.md` and `rules.md`
+in `$XDG_CONFIG_HOME/snippets/agent-skill/` (remembered custom folders and the defaults
+each copy came from are in its hidden `.state.json`; read-only originals are in
+`~/.local/share/snippets/agent-skill/`). **Settings → General** shows the same places and
+files, with Open Folder and Reset (`src/agent_skill_ui.rs`); the logic is
 `src/agent_skill.rs`, shared by the CLI and the app. Both platforms share the text in
 `agent-skill/`; regenerate the copies with `scripts/agent-skill.py`. `update` also accepts
 the Mac spellings `--unpinned` and `--disabled`.

@@ -1,5 +1,4 @@
 import AppKit
-import UniformTypeIdentifiers
 
 extension Notification.Name {
     /// A Settings pane changed how much it shows; the window re-measures the current pane.
@@ -26,8 +25,9 @@ final class CommandLineSettingsSection: NSObject {
         "Teaches Claude Code, Codex and other coding agents to use snippets-cli. Rules are advice to agents; secure snippets still need your approval.")
     private let placesStack = NSStackView()
     private let addFolderButton = NSButton(title: "Add Folder…", target: nil, action: nil)
-    private let editRulesButton = NSButton(title: "Edit Rules…", target: nil, action: nil)
-    private let rulesLabel = makeTertiaryLabel("")
+    private let showFilesButton = NSButton(title: "Show in Finder", target: nil, action: nil)
+    private let resetFilesButton = NSButton(title: "Reset to Defaults…", target: nil, action: nil)
+    private let filesLabel = makeTertiaryLabel("")
     private let skillStatusLabel = NSTextField(wrappingLabelWithString: "")
 
     private var environment: AgentSkill.Environment { .current }
@@ -48,15 +48,18 @@ final class CommandLineSettingsSection: NSObject {
         addFolderButton.target = self
         addFolderButton.action = #selector(addFolder)
         LiquidGlassDesign.configureActionButton(addFolderButton, symbolName: "folder.badge.plus")
-        editRulesButton.target = self
-        editRulesButton.action = #selector(editRules)
-        LiquidGlassDesign.configureActionButton(editRulesButton, symbolName: "list.bullet.rectangle")
-        rulesLabel.lineBreakMode = .byTruncatingMiddle
-        rulesLabel.maximumNumberOfLines = 1
+        showFilesButton.target = self
+        showFilesButton.action = #selector(showFiles)
+        LiquidGlassDesign.configureActionButton(showFilesButton, symbolName: "folder")
+        resetFilesButton.target = self
+        resetFilesButton.action = #selector(resetFiles)
+        LiquidGlassDesign.configureActionButton(resetFilesButton, symbolName: "arrow.counterclockwise")
+        filesLabel.lineBreakMode = .byTruncatingMiddle
+        filesLabel.maximumNumberOfLines = 2
         configureStatusLabel(skillStatusLabel)
 
         let cliRow = row([cliInstallButton, NSView()])
-        let skillButtonRow = row([addFolderButton, editRulesButton, NSView()])
+        let skillButtonRow = row([addFolderButton, showFilesButton, NSView(), resetFilesButton])
 
         let views: [NSView] = [
             NSBox.horizontalSeparator(),
@@ -69,7 +72,7 @@ final class CommandLineSettingsSection: NSObject {
             skillIntroLabel,
             placesStack,
             skillButtonRow,
-            rulesLabel,
+            filesLabel,
             skillStatusLabel,
         ]
         for view in views {
@@ -222,16 +225,14 @@ final class CommandLineSettingsSection: NSObject {
 
         let enabled = cliIsInstalled
         addFolderButton.isEnabled = enabled
-        editRulesButton.isEnabled = true
+        showFilesButton.isEnabled = true
 
         guard let status = try? AgentSkill.status(in: environment) else {
             skillStatusLabel.stringValue = "Could not read the agent skill status."
             return
         }
-        let rules = displayPath(status.rulesURL)
-        rulesLabel.stringValue = status.rulesAreCustom
-            ? "Rules: \(rules)"
-            : "Rules: \(rules) (defaults until you edit it)"
+        filesLabel.stringValue = filesText(status.files)
+        resetFilesButton.isEnabled = !status.files.areDefaults
         if !enabled {
             skillStatusLabel.stringValue = "Install the command line tool first. The skill runs snippets-cli."
         } else if skillStatusLabel.stringValue.hasPrefix("Install the command line tool") {
@@ -364,21 +365,52 @@ final class CommandLineSettingsSection: NSObject {
 
     /// Creates the rules file from the defaults if needed, then opens it in the default
     /// plain-text editor: opening a `.md` directly can land in Xcode or in nothing.
-    @objc private func editRules() {
+    /// "Guide and rules: … · Defaults", or which one was edited, or that the defaults
+    /// changed under an edited file.
+    private func filesText(_ files: AgentSkill.Files) -> String {
+        let folder = displayPath(files.folder)
+        let changed = [("guide", files.guide), ("rules", files.rules)].filter { $0.1 != .default }
+        if changed.isEmpty { return "Guide and rules: \(folder) · Defaults" }
+        let names = changed.map(\.0).joined(separator: " and ")
+        if changed.contains(where: { $0.1 == .outdated }) {
+            return "Guide and rules: \(folder) · You edited the \(names); an update changed the defaults since. The originals are in \(displayPath(files.originalsFolder))."
+        }
+        return "Guide and rules: \(folder) · You edited the \(names)"
+    }
+
+    /// Makes editable copies of the guide and rules if there are none yet, then shows
+    /// them in Finder, where the user edits them in any editor.
+    @objc private func showFiles() {
         let environment = environment
         do {
-            try AgentSkill.createRulesFile(in: environment)
+            try AgentSkill.createEditableFiles(in: environment)
         } catch {
-            skillStatusLabel.stringValue = "Could not create the rules file: \(error.localizedDescription)"
+            skillStatusLabel.stringValue = "Could not create the guide and rules: \(error.localizedDescription)"
             return
         }
-        let url = AgentSkill.rulesURL(in: environment)
-        let workspace = NSWorkspace.shared
-        if let editor = workspace.urlForApplication(toOpen: .plainText) {
-            workspace.open([url], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
-        } else {
-            workspace.open(url)
+        NSWorkspace.shared.activateFileViewerSelecting(
+            AgentSkill.SkillFile.allCases.map { AgentSkill.fileURL($0, in: environment) })
+        skillStatusLabel.stringValue = "Edit guide.md and rules.md in any editor. Changes apply the next time an agent reads the skill; a new description reaches installed skills when you come back to Snippets."
+        rebuildPlaces()
+    }
+
+    @objc private func resetFiles() {
+        let alert = NSAlert()
+        alert.messageText = "Reset the agent guide and rules?"
+        alert.informativeText = "Snippets puts the default guide.md and rules.md back. Your versions are kept beside them as guide.md.bak and rules.md.bak."
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let environment = environment
+        do {
+            let backups = try AgentSkill.resetFiles(in: environment)
+            refreshInstalledDescriptions()
+            skillStatusLabel.stringValue = backups.isEmpty
+                ? "The guide and rules are the defaults."
+                : "Put the defaults back. Your versions are kept as \(backups.map(\.lastPathComponent).joined(separator: " and "))."
+        } catch {
+            skillStatusLabel.stringValue = "Could not reset the guide and rules: \(error.localizedDescription)"
         }
-        skillStatusLabel.stringValue = "Opened agent-rules.md. Rule changes apply right away; a new description reaches installed skills when you come back to Snippets."
+        rebuildPlaces()
     }
 }

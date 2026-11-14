@@ -71,7 +71,7 @@ private let agents = AgentSkill.Place.target(.agents)
         #expect(AgentSkill.stubURL(for: .target(.codex), in: home.environment).path
             == "/tmp/codex-home/skills/snippets-cli/SKILL.md")
         // The app never sees XDG_CONFIG_HOME, so the CLI must not follow it either.
-        #expect(AgentSkill.rulesURL(in: home.environment) == home.url(".config/snippets/agent-rules.md"))
+        #expect(AgentSkill.rulesURL(in: home.environment) == home.url(".config/snippets/agent-skill/rules.md"))
     }
 
     // MARK: Install and uninstall
@@ -111,11 +111,11 @@ private let agents = AgentSkill.Place.target(.agents)
     @Test func uninstallRemovesOnlyOurStubAndLeavesTheRules() throws {
         let home = try TemporaryHome()
         _ = try AgentSkill.install([agents], in: home.environment)
-        try AgentSkill.createRulesFile(in: home.environment)
+        try AgentSkill.createEditableFiles(in: home.environment)
         let changes = try AgentSkill.uninstall([.target(.claude), agents], in: home.environment)
         #expect(changes.map(\.outcome) == [.absent, .removed])
         #expect(!home.exists(".agents/skills/snippets-cli"))
-        #expect(home.exists(".config/snippets/agent-rules.md"))
+        #expect(home.exists(".config/snippets/agent-skill/rules.md"))
     }
 
     @Test func uninstallKeepsAFolderThatHoldsOtherFiles() throws {
@@ -179,7 +179,7 @@ private let agents = AgentSkill.Place.target(.agents)
 
         #expect(try AgentSkill.uninstall([place], in: home.environment).map(\.outcome) == [.removed])
         #expect(AgentSkill.rememberedFolders(in: home.environment).isEmpty)
-        #expect(!home.exists(".config/snippets/agent-skill.json"))
+        #expect(!home.exists(".config/snippets/agent-skill/.state.json"))
     }
 
     @Test func aVanishedFolderIsMissingAndNeverRecreated() throws {
@@ -234,7 +234,7 @@ private let agents = AgentSkill.Place.target(.agents)
         let home = try TemporaryHome()
         try home.write(
             "---\ndescription: My \"saved\" stuff:\n  with a colon\n---\n- Be brief.\n",
-            to: ".config/snippets/agent-rules.md")
+            to: ".config/snippets/agent-skill/rules.md")
         let rules = try AgentSkill.currentRules(in: home.environment)
         #expect(rules.isCustom)
         #expect(rules.description == "My \"saved\" stuff:")
@@ -246,7 +246,7 @@ private let agents = AgentSkill.Place.target(.agents)
 
     @Test func aRulesFileWithoutADescriptionKeepsTheDefault() throws {
         let home = try TemporaryHome()
-        try home.write("- Only this rule.\n", to: ".config/snippets/agent-rules.md")
+        try home.write("- Only this rule.\n", to: ".config/snippets/agent-skill/rules.md")
         let rules = try AgentSkill.currentRules(in: home.environment)
         #expect(rules.description == AgentSkill.defaultRules.description)
         #expect(rules.body == "- Only this rule.")
@@ -261,13 +261,82 @@ private let agents = AgentSkill.Place.target(.agents)
         #expect(stub.components(separatedBy: "\nname: ").count == 2)
     }
 
-    @Test func createRulesFileNeverOverwrites() throws {
+    // MARK: Editable guide and rules
+
+    private func state(_ home: TemporaryHome) -> AgentSkill.Files {
+        (try? AgentSkill.syncFiles(in: home.environment))!
+    }
+
+    /// What `.state.json` says when a copy was taken from older defaults.
+    private func pretendCopiedFrom(_ old: String, _ file: AgentSkill.SkillFile, _ home: TemporaryHome) throws {
+        let json = #"{"version":1,"folders":[],"defaults":{"\#(file.rawValue)":"\#(AgentSkill.sha256(old))"}}"#
+        try home.write(json, to: ".config/snippets/agent-skill/.state.json")
+    }
+
+    @Test func copiesAreMadeFromTheDefaultsAndOriginalsAreReadOnly() throws {
         let home = try TemporaryHome()
-        #expect(try AgentSkill.createRulesFile(in: home.environment))
-        #expect(try home.read(".config/snippets/agent-rules.md") == AgentSkillText.defaultRules)
-        try home.write("- mine\n", to: ".config/snippets/agent-rules.md")
-        #expect(try !AgentSkill.createRulesFile(in: home.environment))
-        #expect(try home.read(".config/snippets/agent-rules.md") == "- mine\n")
+        #expect(state(home).areDefaults)
+        #expect(try AgentSkill.createEditableFiles(in: home.environment) == [.guide, .rules])
+        #expect(try home.read(".config/snippets/agent-skill/guide.md") == AgentSkillText.guide)
+        #expect(try home.read(".config/snippets/agent-skill/rules.md") == AgentSkillText.defaultRules)
+        #expect(try AgentSkill.createEditableFiles(in: home.environment).isEmpty)
+        #expect(state(home).areDefaults)
+
+        let original = "Library/Application Support/SnippetsClone/AgentSkill/guide.md"
+        #expect(try home.read(original) == AgentSkillText.guide)
+        let mode = try FileManager.default.attributesOfItem(atPath: home.url(original).path)[.posixPermissions] as? Int
+        #expect(mode == 0o444)
+    }
+
+    @Test func anEditedGuideIsWhatAgentsRead() throws {
+        let home = try TemporaryHome()
+        try AgentSkill.createEditableFiles(in: home.environment)
+        try home.write("# My guide\nUse snippets-cli search.\n", to: ".config/snippets/agent-skill/guide.md")
+        #expect(state(home).guide == .edited)
+        #expect(state(home).rules == .default)
+        let printed = try AgentSkill.guide(in: home.environment)
+        #expect(printed.hasPrefix("# My guide"))
+        #expect(printed.contains("Search the library before asking"))
+        #expect(printed.contains("the user's files in"))
+        #expect(!printed.contains("may name commands"))
+    }
+
+    @Test func anUneditedCopyFollowsNewDefaults() throws {
+        let home = try TemporaryHome()
+        let old = "# The guide of an older version\n"
+        try home.write(old, to: ".config/snippets/agent-skill/guide.md")
+        try pretendCopiedFrom(old, .guide, home)
+        #expect(state(home).guide == .default)
+        #expect(try home.read(".config/snippets/agent-skill/guide.md") == AgentSkillText.guide)
+    }
+
+    @Test func anEditedCopyIsKeptButFlaggedWhenTheDefaultsChange() throws {
+        let home = try TemporaryHome()
+        try home.write("# Edited long ago\n", to: ".config/snippets/agent-skill/guide.md")
+        try pretendCopiedFrom("# The guide of an older version\n", .guide, home)
+        #expect(state(home).guide == .outdated)
+        #expect(try home.read(".config/snippets/agent-skill/guide.md") == "# Edited long ago\n")
+        #expect(try AgentSkill.guide(in: home.environment).contains("may name commands or flags"))
+    }
+
+    @Test func resetPutsTheDefaultsBackAndKeepsEdits() throws {
+        let home = try TemporaryHome()
+        try AgentSkill.createEditableFiles(in: home.environment)
+        try home.write("---\ndescription: Mine\n---\n- Mine.\n", to: ".config/snippets/agent-skill/rules.md")
+        #expect(try AgentSkill.currentRules(in: home.environment).description == "Mine")
+
+        let backups = try AgentSkill.resetFiles(in: home.environment)
+        #expect(backups.map(\.lastPathComponent) == ["rules.md.bak"])
+        #expect(try home.read(".config/snippets/agent-skill/rules.md.bak").contains("- Mine."))
+        #expect(try home.read(".config/snippets/agent-skill/rules.md") == AgentSkillText.defaultRules)
+        #expect(state(home).areDefaults)
+        #expect(try AgentSkill.resetFiles(in: home.environment).isEmpty)
+    }
+
+    @Test func rulesThatMatchTheDefaultsAreNotCustom() throws {
+        let home = try TemporaryHome()
+        try AgentSkill.createEditableFiles(in: home.environment)
+        #expect(try !AgentSkill.currentRules(in: home.environment).isCustom)
     }
 
     @Test func theGuideEndsWithTheRulesAndWhereTheyLive() throws {
@@ -277,10 +346,10 @@ private let agents = AgentSkill.Place.target(.agents)
         #expect(defaults.contains("Search the library before asking"))
         #expect(defaults.contains("These are the defaults"))
         #expect(!defaults.contains("description:"))
-        try home.write("- Custom rule.\n", to: ".config/snippets/agent-rules.md")
+        try home.write("- Custom rule.\n", to: ".config/snippets/agent-skill/rules.md")
         let custom = try AgentSkill.guide(in: home.environment)
         #expect(custom.contains("- Custom rule."))
-        #expect(custom.contains("Rules file: \(AgentSkill.rulesURL(in: home.environment).path)"))
+        #expect(custom.contains(AgentSkill.filesFolder(in: home.environment).path))
     }
 
     @Test func theMacGuideHasNoLinuxOnlySection() {
