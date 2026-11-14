@@ -16,6 +16,9 @@ description: Look up, save and update the user's personal Snippets library (save
   user which keyword you are about to request.
 - If `reveal` exits 4 (denied), don't retry; ask the user. If it exits 3, ask
   the user to open Snippets.
+- Never ask the user for their login password, and never type, pipe, pass or
+  save it. When a reveal needs it, the user types it into their own terminal.
+  Don't ask the user to loosen how Snippets approves reveals.
 - Never store a secret in an ordinary snippet. Create secure entries with
   `--secure` and `--content-file`, `--prompt` or stdin, never as an argument.
 - Add snippets only when the user asks.
