@@ -126,6 +126,7 @@ final class ControlServer: NSObject {
 
     private let session: VaultSession
     private let secureStore: SecureSnippetStore
+    private let terminalAccess: TerminalRevealAccess
     private let socketURL: URL
 
     private var listenerDescriptor: Int32 = -1
@@ -168,10 +169,12 @@ final class ControlServer: NSObject {
     private let prepareSecureCreation: () throws -> Void
 
     init(session: VaultSession, secureStore: SecureSnippetStore,
+         terminalAccess: TerminalRevealAccess,
          prepareSecureCreation: @escaping () throws -> Void = {},
          socketURL: URL = SnippetsIPC.socketURL()) {
         self.session = session
         self.secureStore = secureStore
+        self.terminalAccess = terminalAccess
         self.prepareSecureCreation = prepareSecureCreation
         self.socketURL = socketURL
         super.init()
@@ -254,12 +257,17 @@ final class ControlServer: NSObject {
             return
         }
 
-        guard let request = try? UnixSocket.receive(SnippetsIPC.Request.self, on: descriptor) else {
+        guard var request = try? UnixSocket.receive(SnippetsIPC.Request.self, on: descriptor) else {
             Self.respond(.failure(.error, "malformed request"), on: descriptor)
             return
         }
+        // Move the password out of the request at once, so one owner holds the only
+        // reference and can wipe it in place when the request is over.
+        let password = PasswordBuffer(request.password)
+        request.password = nil
 
         guard request.v == SnippetsIPC.protocolVersion else {
+            password.wipe()
             Self.respond(
                 .failure(
                     .unsupported,
@@ -270,11 +278,12 @@ final class ControlServer: NSObject {
         }
 
         Task { @MainActor [weak self] in
+            defer { password.wipe() }
             guard let self else {
                 Self.respond(.failure(.error, "Snippets is shutting down"), on: descriptor)
                 return
             }
-            let response = await self.handle(request, from: peer)
+            let response = await self.handle(request, password: password, from: peer)
             Self.respond(response, on: descriptor)
         }
     }
@@ -290,7 +299,7 @@ final class ControlServer: NSObject {
     }
 
     private func handle(
-        _ request: SnippetsIPC.Request, from peer: PeerIdentity
+        _ request: SnippetsIPC.Request, password: PasswordBuffer, from peer: PeerIdentity
     ) async -> SnippetsIPC.Response {
         switch request.command {
         case SnippetsIPC.Command.ping:
@@ -300,7 +309,8 @@ final class ControlServer: NSObject {
             return SnippetsIPC.Response(
                 status: .ok,
                 secureCount: secureStore.count,
-                unlocked: session.state.isUnlocked)
+                unlocked: session.state.isUnlocked,
+                terminalReveal: terminalAccess.isEnabled)
 
         case SnippetsIPC.Command.addSecure:
             guard let input = request.secureAdd, input.isValid else {
@@ -313,6 +323,10 @@ final class ControlServer: NSObject {
                 keyword: request.keyword ?? "",
                 invocation: request.invocation,
                 peer: peer)
+
+        case SnippetsIPC.Command.revealWithPassword:
+            return await revealWithPassword(
+                keyword: request.keyword ?? "", password: password.data ?? Data(), peer: peer)
 
         default:
             return .failure(.unsupported, "unknown command \"\(request.command)\"")
@@ -430,6 +444,134 @@ final class ControlServer: NSObject {
             return .failure(.locked, "\(error)")
         }
     }
+
+    // MARK: - Terminal reveal
+
+    /// A reveal approved by the macOS login password typed into the terminal, for
+    /// people reaching this Mac over SSH or Rex with nobody at its desktop.
+    ///
+    /// There is no consent window and no focus change: the password is the approval.
+    /// What stays the same as the desktop path is everything around it — the caller's
+    /// signature, the shared rate limit, one request at a time, a fresh one-use key
+    /// that never outlives the reveal, and an audit record. What is added: the caller
+    /// must run as this app's own user, the feature must be switched on at this Mac,
+    /// and that switch is verified against the vault key on every reveal.
+    /// Internal rather than private so the macOS tests can drive it without a socket.
+    func revealWithPassword(
+        keyword: String,
+        password: Data,
+        peer: PeerIdentity
+    ) async -> SnippetsIPC.Response {
+        // The socket lives in this user's support folder, so another account should
+        // not reach it at all. Make that an explicit check rather than an assumption
+        // about file permissions, since a password is about to be examined.
+        guard peer.userID == getuid() else {
+            return .failure(.refused, "unrecognised caller")
+        }
+        let lookup = Snippet.sanitizedKeyword(keyword)
+        guard !lookup.isEmpty else { return .failure(.notFound, "no keyword given") }
+        guard secureStore.document != nil else {
+            return .failure(.locked, "set up Secure Snippets in the app first")
+        }
+        // Gate and budget before anything else touches the keychain or the log, so a
+        // loop of requests (even ones that are bound to be refused) stays bounded.
+        guard !revealInFlight else {
+            recordReveal(.busy, keyword: lookup, peer: peer, terminal: true)
+            return .failure(.refused, "another secure request is already in progress; try again shortly")
+        }
+        guard allowanceRemains() else {
+            recordReveal(.rateLimited, keyword: lookup, peer: peer, terminal: true)
+            return .failure(.refused, "too many reveal requests in the last minute; wait and try again")
+        }
+        guard terminalAccess.isEnabled else {
+            recordReveal(.disabled, keyword: lookup, peer: peer, terminal: true)
+            return .failure(.disabled, Self.terminalRevealOffMessage)
+        }
+
+        let key = SnippetTagging.filterKey(for: lookup)
+        guard let shell = secureStore.shells.first(where: {
+            SnippetTagging.filterKey(for: $0.normalizedKeyword) == key
+        }) else {
+            return .failure(.notFound, "no secure snippet with keyword '\(keyword)'")
+        }
+
+        guard !password.isEmpty, password.count <= SnippetsIPC.Request.maximumPasswordBytes else {
+            return .failure(.denied, "the password was not accepted")
+        }
+
+        revealInFlight = true
+        defer { revealInFlight = false }
+
+        var check = TerminalRevealAccess.PasswordCheck.unavailable
+        do {
+            let content = try await session.withOneUseKey(verifiedBy: { [terminalAccess] in
+                check = await terminalAccess.checkPassword(password)
+                return check == .accepted
+            }) {
+                // The key is loaded only now, after the password. The switch is a
+                // claim until it verifies under that key; a forged, replayed or
+                // foreign record stops here, before anything is decrypted.
+                guard let document = secureStore.document,
+                      let salt = document.vaultSaltBytes
+                else { throw TerminalRevealAccess.Failure.authorizationUnavailable }
+                switch terminalAccess.authorization(
+                    keyring: try session.keyring(vaultSalt: salt), vaultKID: document.kid) {
+                case .valid: break
+                case .invalid: throw TerminalRevealAccess.Failure.authorizationInvalid
+                case .absent: throw TerminalRevealAccess.Failure.authorizationAbsent
+                case .unavailable: throw TerminalRevealAccess.Failure.authorizationUnavailable
+                }
+                return try secureStore.content(for: shell.id)
+            }
+            terminalAccess.recordSuccess()
+            recordReveal(.revealed, keyword: lookup, peer: peer, terminal: true)
+            return SnippetsIPC.Response(status: .ok, content: content)
+        } catch VaultSession.Failure.authentication {
+            switch check {
+            case .rejected:
+                recordReveal(.wrongPassword, keyword: lookup, peer: peer, terminal: true)
+                if terminalAccess.recordRejectedPassword() {
+                    return .failure(
+                        .disabled,
+                        "too many incorrect passwords; terminal reveal has been turned off on this Mac. "
+                            + "Turn it on again at this Mac in Snippets Settings → Secure Snippets")
+                }
+                return .failure(.denied, "the password was not accepted")
+            case .unavailable, .accepted:
+                recordReveal(.denied, keyword: lookup, peer: peer, terminal: true)
+                return .failure(
+                    .denied,
+                    "this account cannot authenticate with a password right now (it may be locked by policy)")
+            }
+        } catch TerminalRevealAccess.Failure.authorizationInvalid {
+            // Not this vault's, not this Mac's, or not ours at all. Remove it so the
+            // switch in Settings tells the truth, and make the owner turn it on again.
+            try? terminalAccess.disable(revoked: true)
+            recordReveal(.disabled, keyword: lookup, peer: peer, terminal: true)
+            return .failure(
+                .disabled,
+                "terminal reveal is not validly enabled on this Mac; turn it on again at this Mac in Snippets Settings → Secure Snippets")
+        } catch TerminalRevealAccess.Failure.authorizationAbsent {
+            // Turned off while the password was being checked.
+            recordReveal(.disabled, keyword: lookup, peer: peer, terminal: true)
+            return .failure(.disabled, Self.terminalRevealOffMessage)
+        } catch TerminalRevealAccess.Failure.authorizationUnavailable {
+            recordReveal(.failed, keyword: lookup, peer: peer, terminal: true)
+            return .failure(.locked, "terminal access could not be confirmed right now; try again")
+        } catch VaultSession.Failure.noKey {
+            recordReveal(.failed, keyword: lookup, peer: peer, terminal: true)
+            return .failure(.locked, "the key for this vault is not on this Mac")
+        } catch {
+            // Never reflect arbitrary errors: this answer goes to a remote terminal.
+            recordReveal(.failed, keyword: lookup, peer: peer, terminal: true)
+            return .failure(
+                .locked,
+                "the vault could not be opened; the login keychain may be locked or another request is in progress")
+        }
+    }
+
+    private static let terminalRevealOffMessage =
+        "terminal reveal is off on this Mac; turn it on at this Mac in Snippets Settings → Secure Snippets → Terminal Access"
 
     private func allowanceRemains() -> Bool {
         let cutoff = Date().addingTimeInterval(-Self.revealWindow)
@@ -762,18 +904,22 @@ final class ControlServer: NSObject {
     private func recordReveal(
         _ outcome: DiagnosticSecureRevealOutcome,
         keyword: String,
-        peer: PeerIdentity
+        peer: PeerIdentity,
+        terminal: Bool = false
     ) {
         Diagnostics.record(.secureReveal(
             keyword: DiagnosticKeyword(keyword),
             outcome: outcome,
-            caller: peer.isTrusted ? .trusted : .untrusted))
+            caller: !peer.isTrusted ? .untrusted : (terminal ? .trustedTerminal : .trusted)))
     }
 }
 
 /// Who is on the other end of the socket.
 nonisolated struct PeerIdentity: Sendable {
     let pid: Int32
+    /// The connecting process's effective uid from the kernel (`getpeereid`), or `nil`
+    /// when it could not be read. Only terminal reveals require it to match ours.
+    let userID: uid_t?
     let isTrusted: Bool
     /// Short, human-facing name used where the verified path has its own UI row.
     let applicationName: String
@@ -799,6 +945,10 @@ nonisolated struct PeerIdentity: Sendable {
             getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, $0, &pidSize)
         }
         pid = reportedPID
+
+        var peerUID = uid_t.max
+        var peerGID = gid_t.max
+        userID = getpeereid(descriptor, &peerUID, &peerGID) == 0 ? peerUID : nil
 
         guard gotToken else {
             self.isTrusted = false
@@ -885,5 +1035,25 @@ nonisolated struct PeerIdentity: Sendable {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
         guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
         return info.kp_eproc.e_ppid
+    }
+}
+
+/// The single owner of a received terminal password, so it can be overwritten in place
+/// once the request is over. Best effort, like every wipe of Foundation storage: the
+/// JSON decoder's buffers, the `String` handed to Open Directory and Open Directory's own
+/// copies are out of reach.
+nonisolated final class PasswordBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Data?
+
+    init(_ data: Data?) { storage = data }
+
+    var data: Data? { lock.withLock { storage } }
+
+    func wipe() {
+        lock.withLock {
+            if storage != nil { SecureMemory.wipe(&storage!) }
+            storage = nil
+        }
     }
 }

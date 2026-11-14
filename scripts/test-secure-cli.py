@@ -58,4 +58,31 @@ with tempfile.TemporaryDirectory(prefix='scli-', dir='/tmp') as directory:
         assert result.returncode == 1
         assert b'different-test-secret' not in result.stdout + result.stderr
         assert (root/'snippets.json').read_bytes() == before
-print('PASS: input-source validation, no-app refusal, impostor receives no data, ordinary add preserved')
+    # reveal --terminal: no app is exit 3, a typo is refused, and an impostor socket
+    # gets no request at all, so no password prompt ever appears.
+    (root/'Sync'/'ipc.sock').unlink(missing_ok=True)
+    result = run('reveal', '--terminal', 'synthetic')
+    assert result.returncode == 3, result.returncode
+    for flags in [['reveal', '--terminl', 'synthetic'], ['reveal', '--terminal'],
+                  ['reveal', 'synthetic', 'other']]:
+        result = run(*flags)
+        assert result.returncode == 1, (flags, result.returncode)
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(root/'Sync'/'ipc.sock'))
+    listener.listen(1)
+    received = []
+    def accept_one():
+        conn, _ = listener.accept()
+        with conn:
+            conn.settimeout(5)
+            received.append(conn.recv(4096))
+    thread = threading.Thread(target=accept_one)
+    thread.start()
+    result = run('reveal', '--terminal', 'synthetic')
+    thread.join(timeout=6)
+    listener.close()
+    assert result.returncode == 1, result.returncode
+    assert received == [b''], 'reveal --terminal spoke to an unverified peer'
+    assert b'password' not in (result.stdout + result.stderr).lower()
+print('PASS: input-source validation, no-app refusal, impostor receives no data, ordinary add preserved, '
+      'terminal reveal refuses impostors before prompting')

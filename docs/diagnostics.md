@@ -110,6 +110,15 @@ baseline. Together their process sequence reconstructs state-update/fetch/send r
 persisting record identifiers, opaque CKSyncEngine serialization, account identifiers, snippet
 metadata, or ciphertext.
 
+`secure_reveal` records each CLI reveal attempt: the sanitized keyword, a closed outcome and
+the caller class. A reveal approved with the login password typed into a terminal
+(`snippets-cli reveal --terminal`) uses caller `trusted_terminal`; its outcomes add
+`wrong_password` and `disabled` (requested while terminal reveal is off or its authorization did
+not verify). The password, Open Directory errors, the device identifier the authorization is
+bound to, and the peer's uid or pid are never recorded. `vault_action` records
+`terminal_reveal_enabled`, `terminal_reveal_disabled`, and `terminal_reveal_revoked` (switched off
+automatically after repeated wrong passwords or an invalid authorization).
+
 The `secure_editor_transition` event explains iPhone and iPad reveal behavior without
 identifying a snippet. It records only the editor surface, the closed reveal-policy states
 before and after the transition, a closed cause such as `store_refresh_remote_sync`,

@@ -336,6 +336,7 @@ read the returned value, so its own output and transcript handling matter.
 | `add`, `update`, `delete` | Manage ordinary entries by keyword or ID, including tags, pins, and enabled state. |
 | `secure-status` | Check secure-entry count, app availability, and vault status. |
 | `reveal` | Request a secure body through the app's human approval and authentication flow. |
+| `reveal --terminal` | Over SSH, approve with your Mac login password typed in the terminal instead. Off until turned on at that Mac in Settings → Secure Snippets → Terminal Access; while on, anyone who can run commands as you and knows your password can reveal every secure snippet. |
 | `skill` | Print the guide for AI agents, or install, uninstall or edit it. |
 
 Data commands return JSON; successful `reveal` deliberately returns the raw text.

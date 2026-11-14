@@ -144,8 +144,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     lazy var secureStore = SecureSnippetStore(session: vaultSession, deviceID: store.deviceID)
     /// Answers `snippets-cli`. Started unconditionally: `status` has to work whether or
     /// not a vault exists, and the socket is how the CLI discovers the app is running.
+    /// The per-Mac switch for password-authenticated terminal reveals. Off unless the
+    /// owner turned it on at this Mac; see `TerminalRevealAccess` for what it costs.
+    let terminalRevealAccess = TerminalRevealAccess()
     private lazy var controlServer = ControlServer(
         session: vaultSession, secureStore: secureStore,
+        terminalAccess: terminalRevealAccess,
         prepareSecureCreation: { [weak self] in
             guard let self else { throw CocoaError(.userCancelled) }
             for controller in NSApp.windows.compactMap({ $0.contentViewController as? ViewController }) {

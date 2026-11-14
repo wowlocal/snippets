@@ -582,6 +582,9 @@ private struct MacSettingsSearchEntry {
         .init(title: "Secure Snippet Storage", pane: .secure,
               terms: ["health", "encrypted on disk", "keychain"],
               needles: ["Storage"]),
+        .init(title: "Reveal Secure Snippets from the Terminal", pane: .secure,
+              terms: ["ssh", "rex", "remote", "cli", "command line", "snippets-cli", "login password"],
+              needles: ["Terminal Access"]),
         .init(title: "Forget Secure Snippets", pane: .secure,
               terms: ["delete vault", "remove", "reset secure"],
               needles: ["Forget Secure Snippets"]),
@@ -1871,6 +1874,11 @@ private final class VaultSettingsViewController: NSViewController {
     private let lockButton = NSButton(title: "Lock Now", target: nil, action: nil)
     private let resetButton = NSButton(title: "Forget Secure Snippets", target: nil, action: nil)
     private let healthLabel = NSTextField(wrappingLabelWithString: "")
+    private let terminalCheckbox = NSButton(
+        checkboxWithTitle: "Allow revealing secure snippets from the terminal with my login password",
+        target: nil, action: nil)
+    private let terminalStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private var terminalChangeInFlight = false
 
     override func loadView() {
         let (rootView, stack) = makeSettingsPane()
@@ -1916,6 +1924,16 @@ private final class VaultSettingsViewController: NSViewController {
         let healthTitle = NSTextField(labelWithString: "Storage")
         healthTitle.font = .systemFont(ofSize: 13, weight: .semibold)
 
+        let terminalTitle = NSTextField(labelWithString: "Terminal Access")
+        terminalTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        terminalCheckbox.target = self
+        terminalCheckbox.action = #selector(toggleTerminalAccess)
+        let terminalInfo = makeTertiaryLabel(
+            "For SSH or Rex sessions with nobody at this Mac: snippets-cli reveal --terminal asks for your "
+            + "Mac login password instead of approval on this screen. While this is on, anything that can run "
+            + "commands as you and knows your login password can reveal every secure snippet. "
+            + "Applies to this Mac only. Off by default.")
+
         stack.addArrangedSubview(title)
         stack.addArrangedSubview(intro)
         stack.addArrangedSubview(statusLabel)
@@ -1923,13 +1941,28 @@ private final class VaultSettingsViewController: NSViewController {
         stack.addArrangedSubview(buttonRow)
         stack.addArrangedSubview(limits)
         stack.addArrangedSubview(NSBox.horizontalSeparator())
+        stack.addArrangedSubview(terminalTitle)
+        stack.addArrangedSubview(terminalCheckbox)
+        stack.addArrangedSubview(terminalStatusLabel)
+        stack.addArrangedSubview(terminalInfo)
+        stack.addArrangedSubview(NSBox.horizontalSeparator())
         stack.addArrangedSubview(healthTitle)
         stack.addArrangedSubview(healthLabel)
         stack.addArrangedSubview(resetButton)
 
-        for label in [intro, limits, statusLabel, tierLabel, healthLabel] {
+        for label in [intro, limits, statusLabel, tierLabel, healthLabel, terminalStatusLabel, terminalInfo] {
             label.preferredMaxLayoutWidth = 620
         }
+
+        // A reveal from the terminal can switch the feature off (repeated wrong
+        // passwords, an invalid record); the checkbox has to follow.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(terminalAccessChanged),
+            name: TerminalRevealAccess.didChangeNotification, object: nil)
+    }
+
+    @objc private func terminalAccessChanged() {
+        reloadFromStorage()
     }
 
     override func viewWillAppear() {
@@ -1992,6 +2025,16 @@ private final class VaultSettingsViewController: NSViewController {
         }
 
         tierLabel.stringValue = session.keychainStatusDescription
+
+        let terminalEnabled = app.terminalRevealAccess.isEnabled
+        let vaultUsable = !secure.isUnreadable && secure.hasVault && session.state != .noKey
+        terminalCheckbox.state = terminalEnabled ? .on : .off
+        // Turning it off is always allowed; turning it on needs a vault whose key is here.
+        terminalCheckbox.isEnabled = !terminalChangeInFlight && (terminalEnabled || vaultUsable)
+        terminalStatusLabel.stringValue = terminalEnabled
+            ? "On. Terminal reveals on this Mac accept your login password. Each one asks for it again."
+            : (vaultUsable ? "Off." : "Off. Set up Secure Snippets on this Mac first.")
+        terminalStatusLabel.textColor = terminalEnabled ? .systemOrange : .secondaryLabelColor
         tierLabel.textColor = session.syncsBetweenDevices ? .secondaryLabelColor : .tertiaryLabelColor
         resetButton.isHidden = secure.isUnreadable || !secure.hasVault
 
@@ -2134,10 +2177,72 @@ private final class VaultSettingsViewController: NSViewController {
             try app.secureStore.forgetEverything(
                 syncIsQuiescent: app.syncCoordinator.isQuiescent)
             app.syncLibrary.forgetSecureProjectionMetadata()
+            // The record is bound to the forgotten vault and could never verify again.
+            try? app.terminalRevealAccess.disable()
         } catch {
             showVaultError(error)
         }
         reloadFromStorage()
+    }
+
+    // MARK: Terminal access
+
+    @objc private func toggleTerminalAccess() {
+        guard let app = NSApp.delegate as? AppDelegate, !terminalChangeInFlight else { return }
+        // The checkbox has already flipped; the stored state decides what happens.
+        guard !app.terminalRevealAccess.isEnabled else {
+            do {
+                try app.terminalRevealAccess.disable()
+            } catch {
+                showVaultError(error)
+            }
+            reloadFromStorage()
+            return
+        }
+        guard confirmTerminalAccess() else {
+            reloadFromStorage()
+            return
+        }
+        terminalChangeInFlight = true
+        reloadFromStorage()
+        Task { @MainActor [weak self] in
+            do {
+                try await app.terminalRevealAccess.enable(
+                    session: app.vaultSession, secureStore: app.secureStore)
+            } catch VaultSession.Failure.authentication {
+                // Declined or failed at the system sheet (VaultSession wraps the
+                // LocalAuthentication error): nothing was stored.
+            } catch {
+                self?.showVaultError(error)
+            }
+            self?.terminalChangeInFlight = false
+            self?.reloadFromStorage()
+        }
+    }
+
+    /// The warning says what is actually given up, including the part that is easy to
+    /// understate: one captured password reveals everything, not one snippet.
+    private func confirmTerminalAccess() -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Allow secure reveals from the terminal?"
+        alert.informativeText =
+            "snippets-cli reveal --terminal will accept your Mac login password typed into a terminal, "
+            + "for example over SSH or Rex, instead of approval on this Mac's screen.\n\n"
+            + "This weakens a security boundary. While it is on, any program that can run commands as you "
+            + "and knows your login password can reveal every secure snippet, not just one. A program that "
+            + "captures your password when you type it to reveal one snippet can reuse it to reveal all of "
+            + "them. Only type your password into terminals and remote clients you trust.\n\n"
+            + "Each reveal asks for the password again and the password is never saved. Five wrong passwords "
+            + "in a row turn this off. It applies to this Mac only, and you can turn it off at any time. "
+            + "Next, confirm with Touch ID or your login password."
+        let enable = alert.addButton(withTitle: "Enable Terminal Access")
+        let cancel = alert.addButton(withTitle: "Cancel")
+        // Return must not be the button that weakens protection.
+        enable.keyEquivalent = ""
+        enable.hasDestructiveAction = true
+        cancel.keyEquivalent = "\r"
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func showVaultError(_ error: any Error) {

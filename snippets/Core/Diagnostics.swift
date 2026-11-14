@@ -333,6 +333,11 @@ nonisolated enum DiagnosticVaultAction: String, Codable, Sendable {
     case removedSharedIdentity = "removed_shared_identity"
     case reconciledInterruptedMove = "reconciled_interrupted_move"
     case forgotLocalVault = "forgot_local_vault"
+    /// Terminal (password) reveals switched on, off, or off automatically after
+    /// repeated wrong passwords.
+    case terminalRevealEnabled = "terminal_reveal_enabled"
+    case terminalRevealDisabled = "terminal_reveal_disabled"
+    case terminalRevealRevoked = "terminal_reveal_revoked"
 }
 
 nonisolated enum DiagnosticSecureRevealOutcome: String, Codable, Sendable {
@@ -342,6 +347,10 @@ nonisolated enum DiagnosticSecureRevealOutcome: String, Codable, Sendable {
     case timedOut = "timed_out"
     case revealed
     case failed
+    /// Terminal reveal: the typed login password was wrong.
+    case wrongPassword = "wrong_password"
+    /// Terminal reveal requested while it is switched off on this Mac.
+    case disabled
     case other
 
     init(legacyValue: String) {
@@ -359,6 +368,9 @@ nonisolated enum DiagnosticSecureRevealOutcome: String, Codable, Sendable {
 
 nonisolated enum DiagnosticCallerClass: String, Codable, Sendable {
     case trusted
+    /// Our signed CLI, same uid, authenticating with the login password typed into a
+    /// terminal rather than approval on the desktop.
+    case trustedTerminal = "trusted_terminal"
     case untrusted
     case unknown
 }

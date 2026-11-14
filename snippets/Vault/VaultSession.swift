@@ -299,6 +299,62 @@ final class VaultSession {
         return try operation()
     }
 
+    #if os(macOS)
+    /// Opens the vault for one synchronous operation after an owner check other than
+    /// LocalAuthentication has succeeded. Used only by terminal reveals, where nobody
+    /// may be at this Mac's desktop to answer a system sheet and the macOS login
+    /// password typed into the terminal is verified instead.
+    ///
+    /// Shaped like `withOneUseAuthentication`, deliberately: once the owner check has
+    /// passed, any open in-app window is ended (the requester is provably not the person
+    /// at the keyboard), the key is loaded only after `verifyOwner` returns `true`, and
+    /// it is discarded on every exit. The verifier is a parameter rather than something the caller does first so
+    /// that no path reaches the key without it.
+    func withOneUseKey<T>(
+        verifiedBy verifyOwner: () async throws -> Bool,
+        operation: @MainActor () throws -> T
+    ) async throws -> T {
+        // Never invalidate somebody else's in-flight system prompt.
+        if authenticationContext != nil, !state.isUnlocked {
+            throw Failure.locked
+        }
+        guard let keyID else { throw Failure.noKey }
+
+        // Nothing is locked or invalidated before the owner check succeeds: a request
+        // with a wrong password must not close the owner's in-app window, and a system
+        // sheet the owner opens while this suspends must not be cancelled by us.
+        guard try await verifyOwner() else {
+            throw Failure.authentication("the password was not accepted")
+        }
+        // A vault adopted or replaced meanwhile is not the vault the caller asked about.
+        guard self.keyID == keyID else { throw Failure.locked }
+        // The owner started a system prompt during the check: leave it alone.
+        if authenticationContext != nil, !state.isUnlocked { throw Failure.locked }
+
+        // From here on there is no suspension, so the deferred lock can only ever close
+        // the window this call opens (and any in-app one it ends deliberately).
+        lock()
+        defer { lock() }
+
+        var data: Data
+        do {
+            data = try keychain.loadKey(keyID: keyID)
+        } catch KeychainSecretStore.Failure.notFound {
+            transition(to: .noKey)
+            throw Failure.noKey
+        } catch {
+            throw Failure.keychain("\(error)")
+        }
+        defer { SecureMemory.wipe(&data) }
+
+        libraryKey = SymmetricKey(data: data)
+        let authenticationTime = now()
+        authenticatedAt = authenticationTime
+        guard extendWindow(at: authenticationTime) else { throw Failure.locked }
+        return try operation()
+    }
+    #endif
+
     /// The key, if the vault is already open. Never prompts.
     ///
     /// This is what the expansion path uses: raising a modal authentication sheet while
