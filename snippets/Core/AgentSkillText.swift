@@ -89,8 +89,10 @@ description: Look up, save and update the user's personal Snippets library (save
   the user to open Snippets.
 - Never store a secret in an ordinary snippet. Create secure entries with
   `--secure` and `--content-file`, `--prompt` or stdin, never as an argument.
-- Add snippets only when the user asks. Confirm before `delete`, and before
-  `update --content` replaces existing text.
+- Add snippets only when the user asks.
+- Before `delete`, make sure exactly one snippet matches; confirm which one
+  unless the user named it. Confirm before `update --content` replaces
+  existing text.
 """#
 
     static let stubTemplate = #"""
