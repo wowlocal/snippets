@@ -14,7 +14,7 @@ final class MacGitSyncViewController: NSViewController, NSTextFieldDelegate {
     private let requestProviderSwitch: () -> Void
     var close: (() -> Void)?
 
-    let urlField = NSTextField()
+    let urlField = GrowingTextField()
     let branchField = NSTextField()
     let usernameField = NSTextField()
     let tokenField = NSSecureTextField()

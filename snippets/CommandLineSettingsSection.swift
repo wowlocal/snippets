@@ -22,7 +22,7 @@ final class CommandLineSettingsSection: NSObject {
     private let cliStatusLabel = NSTextField(wrappingLabelWithString: "")
 
     private let skillIntroLabel = makeSecondaryLabel(
-        "Teaches Claude Code, Codex and other coding agents to use snippets-cli. Rules are advice to agents; secure snippets still need your approval.")
+        "Teaches coding agents such as Claude Code and Codex to use snippets-cli. Secure snippets still need your approval.")
     private let placesStack = NSStackView()
     private let addFolderButton = NSButton(title: "Add Folder…", target: nil, action: nil)
     private let showFilesButton = NSButton(title: "Show in Finder", target: nil, action: nil)
@@ -62,7 +62,6 @@ final class CommandLineSettingsSection: NSObject {
         let skillButtonRow = row([addFolderButton, showFilesButton, NSView(), resetFilesButton])
 
         let views: [NSView] = [
-            NSBox.horizontalSeparator(),
             makeSettingsSectionTitle("Command Line Tool"),
             makeSecondaryLabel("Install snippets-cli to /usr/local/bin so agents and terminal scripts can interact with your snippets."),
             cliRow,
@@ -222,6 +221,7 @@ final class CommandLineSettingsSection: NSObject {
         // Rows and a wrapping status line change the pane's height; re-measuring is cheap.
         defer { NotificationCenter.default.post(name: .settingsPaneContentDidChange, object: nil) }
         placesStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        replaceablePlaces.removeAll()
 
         let enabled = cliIsInstalled
         addFolderButton.isEnabled = enabled
@@ -239,7 +239,10 @@ final class CommandLineSettingsSection: NSObject {
             skillStatusLabel.stringValue = ""
         }
 
-        for place in status.places {
+        // Codex also reads ~/.agents/skills, so its own folder is shown only when
+        // something is in it.
+        for place in status.places
+        where !(place.place == .target(.codex) && place.state == .notInstalled) {
             let rowView = makeRow(for: place, enabled: enabled)
             placesStack.addArrangedSubview(rowView)
             rowView.widthAnchor.constraint(equalTo: placesStack.widthAnchor).isActive = true
@@ -279,6 +282,9 @@ final class CommandLineSettingsSection: NSObject {
             // Unticking stays possible without the CLI, so the skill can always be removed.
             checkbox.isEnabled = place.state != .foreign && (enabled || place.state == .installed)
             checkbox.widthAnchor.constraint(equalToConstant: 200).isActive = true
+            if place.state == .foreign {
+                return row([checkbox, path, NSView(), state, replaceButton(for: place.place)])
+            }
             return row([checkbox, path, NSView(), state])
 
         case .folder(let url):
@@ -296,8 +302,42 @@ final class CommandLineSettingsSection: NSObject {
             remove.identifier = NSUserInterfaceItemIdentifier(url.path)
             remove.toolTip = "Remove the skill from this folder"
             LiquidGlassDesign.configureActionButton(remove, symbolName: "minus.circle")
+            if place.state == .foreign {
+                return row([title, path, NSView(), state, replaceButton(for: place.place), remove])
+            }
             return row([title, path, NSView(), state, remove])
         }
+    }
+
+    private var replaceablePlaces: [Int: AgentSkill.Place] = [:]
+
+    private func replaceButton(for place: AgentSkill.Place) -> NSButton {
+        let button = NSButton(title: "Replace…", target: self, action: #selector(replaceSkill(_:)))
+        button.tag = replaceablePlaces.count + 1
+        replaceablePlaces[button.tag] = place
+        button.toolTip = Self.foreignSentence
+        LiquidGlassDesign.configureActionButton(button, symbolName: "arrow.triangle.2.circlepath")
+        return button
+    }
+
+    @objc private func replaceSkill(_ sender: NSButton) {
+        guard let place = replaceablePlaces[sender.tag] else { return }
+        let folder = displayPath(AgentSkill.skillsFolder(for: place, in: environment))
+        let alert = NSAlert()
+        alert.messageText = "Replace the other snippets-cli skill in \(folder)?"
+        alert.informativeText = "Snippets didn't write it. Its SKILL.md is kept beside it as SKILL.md.bak, so agents stop loading it, and Snippets installs its own skill there."
+        alert.addButton(withTitle: "Replace")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            let backup = try AgentSkill.replace(place, in: environment)
+            skillStatusLabel.stringValue = backup.map {
+                "Replaced. The other skill is kept as \(displayPath($0))."
+            } ?? "Installed."
+        } catch {
+            skillStatusLabel.stringValue = "Could not replace the skill: \(error.localizedDescription)"
+        }
+        rebuildPlaces()
     }
 
     private func apply(_ action: () throws -> [AgentSkill.Change]) {
@@ -390,7 +430,7 @@ final class CommandLineSettingsSection: NSObject {
         }
         NSWorkspace.shared.activateFileViewerSelecting(
             AgentSkill.SkillFile.allCases.map { AgentSkill.fileURL($0, in: environment) })
-        skillStatusLabel.stringValue = "Edit guide.md and rules.md in any editor. Changes apply the next time an agent reads the skill; a new description reaches installed skills when you come back to Snippets."
+        skillStatusLabel.stringValue = ""
         rebuildPlaces()
     }
 
@@ -412,5 +452,23 @@ final class CommandLineSettingsSection: NSObject {
             skillStatusLabel.stringValue = "Could not reset the guide and rules: \(error.localizedDescription)"
         }
         rebuildPlaces()
+    }
+}
+
+/// Settings › Agents: the command line tool and the agent skill.
+@MainActor
+final class AgentsSettingsViewController: NSViewController {
+    private let section = CommandLineSettingsSection()
+
+    override func loadView() {
+        let (rootView, stack) = makeSettingsPane()
+        view = rootView
+        section.add(to: stack)
+        section.reload()
+    }
+
+    func reloadFromStorage() {
+        guard isViewLoaded else { return }
+        section.reload()
     }
 }

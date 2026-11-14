@@ -337,7 +337,7 @@ Library/Application Support/SnippetsClone/Vault/vault.json
 - `snippets/Core/AgentSkill.swift` and `snippets-linux/src/agent_skill.rs` must keep the
   same places, folder rules, states, outcomes and `skill status` JSON. The CLIs
   (`snippets-cli/main.swift`, `snippets-linux/src/bin/cli_skill/`) and Settings
-  (`snippets/CommandLineSettingsSection.swift` in Integrations,
+  (`snippets/CommandLineSettingsSection.swift`, the Agents tab,
   `snippets-linux/src/agent_skill_ui.rs` in General) only call them.
 - Install and uninstall never touch a `SKILL.md` without the `snippets-cli-stub:` marker,
   and never delete the user's guide or rules. Only custom folders are remembered (in

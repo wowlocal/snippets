@@ -99,6 +99,27 @@ private let agents = AgentSkill.Place.target(.agents)
         #expect(status.state == .foreign)
     }
 
+    @Test func replaceKeepsTheOtherSkillAsABackupAndInstallsOurs() throws {
+        let home = try TemporaryHome()
+        let foreign = "---\nname: snippets-cli\ndescription: mine\n---\nHand-written.\n"
+        try home.write(foreign, to: ".codex/skills/snippets-cli/SKILL.md")
+        try home.write("notes", to: ".codex/skills/snippets-cli/notes.md")
+
+        let backup = try AgentSkill.replace(.target(.codex), in: home.environment)
+        #expect(backup?.lastPathComponent == "SKILL.md.bak")
+        #expect(try home.read(".codex/skills/snippets-cli/SKILL.md.bak") == foreign)
+        #expect(try home.read(".codex/skills/snippets-cli/notes.md") == "notes")
+        #expect(AgentSkill.placeStatus(.target(.codex), in: home.environment).state == .installed)
+
+        // Replacing again finds ours there: nothing to move.
+        #expect(try AgentSkill.replace(.target(.codex), in: home.environment) == nil)
+
+        // A second foreign file does not overwrite the first backup.
+        try home.write(foreign, to: ".codex/skills/snippets-cli/SKILL.md")
+        let second = try AgentSkill.replace(.target(.codex), in: home.environment)
+        #expect(second?.lastPathComponent == "SKILL.md.bak2")
+    }
+
     @Test func installReplacesAnOlderStubOfOurs() throws {
         let home = try TemporaryHome()
         try home.write(
