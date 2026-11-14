@@ -214,6 +214,12 @@ impl AgentSkillControls {
                         environment.display(&environment.skills_folder(place))
                     )),
                     Some(agent_skill::Outcome::Missing) => self.toast("That folder was not found."),
+                    // A vanished folder: nothing to delete, but it leaves the list.
+                    Some(agent_skill::Outcome::Absent) if matches!(place, Place::Folder(_)) => self
+                        .toast(&format!(
+                            "Removed {} from the list.",
+                            environment.display(&environment.skills_folder(place))
+                        )),
                     Some(agent_skill::Outcome::Wrote) => self
                         .toast("Installed. Restart running agent sessions to pick up the skill."),
                     _ => {}

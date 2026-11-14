@@ -311,6 +311,12 @@ final class CommandLineSettingsSection: NSObject {
                 skillStatusLabel.stringValue = "Not changed: another skill named snippets-cli is already in \(folder(skipped))."
             } else if let missing = changes.first(where: { $0.outcome == .missing }) {
                 skillStatusLabel.stringValue = "\(folder(missing)) was not found."
+            } else if let forgotten = changes.first(where: {
+                if case .folder = $0.place { return $0.outcome == .absent }
+                return false
+            }) {
+                // A vanished folder: nothing to delete, but it leaves the list.
+                skillStatusLabel.stringValue = "Removed \(folder(forgotten)) from the list."
             } else if changes.contains(where: { $0.outcome == .wrote }) {
                 skillStatusLabel.stringValue = "Installed. Restart running agent sessions to pick up the skill."
             } else {

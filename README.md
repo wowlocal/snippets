@@ -284,7 +284,10 @@ always matches the commands your version has. Run again with no options, `instal
 updates every place it is installed. `--for claude|agents|codex` picks a built-in agent
 folder; `--dir` takes your own skills folder (given `.claude`, it uses `.claude/skills`)
 and remembers it, and `uninstall --dir` removes the skill there and forgets the folder.
-Neither command ever touches a `SKILL.md` it did not write.
+Neither command ever touches a `SKILL.md` it did not write. The first time an agent
+uses the skill, Claude Code asks you to allow it; after that, the read-only commands
+(`search`, `get`, `list`, `tags`, `secure-status`) run without prompts, while `add`,
+`update`, `delete` and `reveal` still ask.
 
 Your rules live in `~/.config/snippets/agent-rules.md` (on Linux, under
 `$XDG_CONFIG_HOME`). Updates never change that file, and deleting it restores the
