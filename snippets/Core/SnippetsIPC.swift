@@ -58,6 +58,15 @@ nonisolated enum SnippetsIPC {
         /// what they are approving. Never trusted for any decision.
         var invocation: String?
         var secureAdd: SecureAdd?
+        /// For `reveal-password` only: the macOS login password typed into the
+        /// terminal. Sent only after the CLI has verified the app's code signature on
+        /// this connection, never reflected into a response or diagnostics, and wiped
+        /// by both ends as far as Foundation allows (the JSON encoding makes copies).
+        var password: Data?
+
+        /// Upper bound for `password`, so a request cannot make the app hand an
+        /// arbitrarily large buffer to OpenDirectory.
+        static let maximumPasswordBytes = 1024
     }
 
     /// Input only: never reflected into responses or diagnostics.
@@ -87,6 +96,9 @@ nonisolated enum SnippetsIPC {
         var secureCount: Int?
         var unlocked: Bool?
         var createdID: UUID?
+        /// From `status`: whether terminal (password) reveals are switched on for this
+        /// Mac. Presence only — it is verified cryptographically at each reveal.
+        var terminalReveal: Bool?
 
         enum Status: String, Codable, Sendable {
             case ok
@@ -99,6 +111,9 @@ nonisolated enum SnippetsIPC {
             case refused
             /// This build does not implement the command.
             case unsupported
+            /// `reveal-password` while terminal reveals are switched off on this Mac.
+            /// Only that command produces it, so older CLIs never receive it.
+            case disabled
             case error
         }
 
@@ -111,6 +126,11 @@ nonisolated enum SnippetsIPC {
         static let ping = "ping"
         static let status = "status"
         static let reveal = "reveal"
+        /// A reveal authenticated by the macOS login password typed into the terminal
+        /// instead of approval on the desktop. A separate command rather than a field
+        /// on `reveal`, so an app that predates it answers `.unsupported` instead of
+        /// silently falling back to the desktop prompt with a password in hand.
+        static let revealWithPassword = "reveal-password"
         static let addSecure = "add-secure"
     }
 
@@ -124,6 +144,8 @@ nonisolated enum SnippetsIPC {
         case locked = 5
         case notFound = 6
         case protocolMismatch = 7
+        /// `reveal --terminal` while terminal reveals are switched off on this Mac.
+        case terminalRevealDisabled = 8
     }
 
     // MARK: - Where the socket lives

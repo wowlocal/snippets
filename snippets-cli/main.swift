@@ -262,11 +262,107 @@ private func cmdReveal(keyword: String) {
         case .unsupported:
             fail(response.message ?? "unsupported request",
                  code: SnippetsIPC.ExitCode.protocolMismatch.rawValue)
-        case .refused, .error:
+        case .refused, .error, .disabled:
             fail(response.message ?? "the request was refused")
         }
     } catch {
         fail("\(error)")
+    }
+}
+
+/// `reveal --terminal`: approval by the macOS login password typed here, for SSH or
+/// Rex sessions with nobody at the Mac's desktop. The owner must have switched it on
+/// at that Mac (Settings → Secure Snippets → Terminal Access).
+///
+/// Unlike plain `reveal`, this direction carries a secret, so the app is verified by
+/// code signature on **both** connections before anything is read from the terminal
+/// or sent. A same-user process that rebinds the socket gets neither the prompt nor
+/// the password.
+private func cmdRevealWithPassword(keyword: String) {
+    let url = SnippetsIPC.socketURL()
+
+    // Preflight, so nobody types a password into a request that cannot succeed.
+    let preflight: SnippetsIPC.Response
+    do {
+        guard let descriptor = try? UnixSocket.connect(to: url) else {
+            fail("Snippets is not running on this Mac. It must be running in your login session; "
+                 + "start it there and try again.", code: SnippetsIPC.ExitCode.appNotRunning.rawValue)
+        }
+        defer { close(descriptor) }
+        guard isTrustedApp(descriptor) else { fail("the receiving process is not a trusted Snippets app") }
+        try UnixSocket.send(SnippetsIPC.Request(command: SnippetsIPC.Command.status), on: descriptor)
+        preflight = try UnixSocket.receive(SnippetsIPC.Response.self, on: descriptor)
+    } catch {
+        fail("could not ask Snippets whether terminal reveal is on")
+    }
+    guard preflight.v == SnippetsIPC.protocolVersion, preflight.status == .ok else {
+        fail("update the app and CLI together", code: SnippetsIPC.ExitCode.protocolMismatch.rawValue)
+    }
+    switch preflight.terminalReveal {
+    case .some(true):
+        break
+    case .some(false):
+        fail("terminal reveal is off on this Mac. Turn it on at this Mac in Snippets Settings → "
+             + "Secure Snippets → Terminal Access, or run `snippets-cli reveal` without --terminal "
+             + "to approve on the desktop.",
+             code: SnippetsIPC.ExitCode.terminalRevealDisabled.rawValue)
+    case .none:
+        fail("this Snippets app does not support terminal reveal; update the app and CLI together",
+             code: SnippetsIPC.ExitCode.protocolMismatch.rawValue)
+    }
+
+    var password: Data
+    do {
+        password = try SecureInput.readLoginPassword(maximumBytes: SnippetsIPC.Request.maximumPasswordBytes)
+    } catch SecureInput.Failure.unavailable {
+        fail("--terminal needs an interactive terminal to read your login password with echo off")
+    } catch {
+        fail("the password could not be read")
+    }
+    defer { SecureInput.wipe(&password) }
+
+    let descriptor: Int32
+    do {
+        descriptor = try UnixSocket.connect(to: url, timeout: SnippetsIPC.revealSocketTimeout)
+    } catch {
+        fail("Snippets stopped answering; try again", code: SnippetsIPC.ExitCode.appNotRunning.rawValue)
+    }
+    defer { close(descriptor) }
+    // Again, on this connection: the preflight proved nothing about this socket's peer.
+    guard isTrustedApp(descriptor) else { fail("the receiving process is not a trusted Snippets app") }
+
+    let response: SnippetsIPC.Response
+    do {
+        var request = SnippetsIPC.Request(
+            command: SnippetsIPC.Command.revealWithPassword, keyword: keyword, password: password)
+        defer { if request.password != nil { SecureInput.wipe(&request.password!) } }
+        try UnixSocket.send(request, on: descriptor)
+        response = try UnixSocket.receive(SnippetsIPC.Response.self, on: descriptor)
+    } catch {
+        fail("the reveal could not be completed")
+    }
+    guard response.v == SnippetsIPC.protocolVersion else {
+        fail("update the app and CLI together", code: SnippetsIPC.ExitCode.protocolMismatch.rawValue)
+    }
+
+    switch response.status {
+    case .ok:
+        // Bare content on stdout, exactly as plain `reveal`.
+        if let content = response.content { print(content) }
+    case .denied:
+        fail(response.message ?? "the password was not accepted", code: SnippetsIPC.ExitCode.denied.rawValue)
+    case .disabled:
+        fail(response.message ?? "terminal reveal is off on this Mac",
+             code: SnippetsIPC.ExitCode.terminalRevealDisabled.rawValue)
+    case .locked:
+        fail(response.message ?? "the vault could not be unlocked", code: SnippetsIPC.ExitCode.locked.rawValue)
+    case .notFound:
+        fail(response.message ?? "no such secure snippet", code: SnippetsIPC.ExitCode.notFound.rawValue)
+    case .unsupported:
+        fail("this Snippets app does not support terminal reveal; update the app and CLI together",
+             code: SnippetsIPC.ExitCode.protocolMismatch.rawValue)
+    case .refused, .error:
+        fail(response.message ?? "the request was refused")
     }
 }
 
@@ -336,6 +432,9 @@ private func cmdSecureStatus() {
         let appRunning: Bool
         let secureCount: Int
         let unlocked: Bool?
+        /// Whether `reveal --terminal` is switched on at this Mac; `nil` when the app is
+        /// not running or predates the feature. Omitted from the JSON when `nil`.
+        var terminalReveal: Bool? = nil
         let socket: String
     }
 
@@ -360,6 +459,7 @@ private func cmdSecureStatus() {
             appRunning: true,
             secureCount: response.secureCount ?? secureShells().count,
             unlocked: response.unlocked,
+            terminalReveal: response.terminalReveal,
             socket: url.path))
     case .denied:
         fail(response.message ?? "the request was not approved",
@@ -373,7 +473,7 @@ private func cmdSecureStatus() {
     case .unsupported:
         fail(response.message ?? "unsupported request",
              code: SnippetsIPC.ExitCode.protocolMismatch.rawValue)
-    case .refused, .error:
+    case .refused, .error, .disabled:
         fail(response.message ?? "the request was refused")
     }
 }
@@ -789,9 +889,15 @@ private func usage() -> Never {
                                      CLI cannot decrypt anything itself.
                                      Exit codes: 3 app not running, 4 denied,
                                      5 locked, 6 not found.
+        --terminal                   Approve with your Mac login password typed in
+                                     this terminal instead of on the desktop (for SSH).
+                                     Off until turned on at that Mac in Settings →
+                                     Secure Snippets → Terminal Access. Exit code 8
+                                     when it is off.
 
-      secure-status                  Report how many secure snippets exist and whether
-                                     the vault is currently unlocked.
+      secure-status                  Report how many secure snippets exist, whether
+                                     the vault is currently unlocked, and whether
+                                     reveal --terminal is turned on at this Mac.
 
       tags                           List all tags with usage counts
 
@@ -888,8 +994,30 @@ case "get":
     cmdGet(keyword: args[1])
 
 case "reveal":
-    guard args.count >= 2 else { fail("reveal requires a keyword argument") }
-    cmdReveal(keyword: args[1])
+    var terminal = false
+    var revealKeyword: String?
+    var optionsEnded = false
+    for argument in args.dropFirst() {
+        if !optionsEnded && argument == "--" {
+            // `reveal -- --odd-keyword` for a keyword that starts with dashes.
+            optionsEnded = true
+        } else if !optionsEnded && argument == "--terminal" {
+            terminal = true
+        } else if !optionsEnded && argument.hasPrefix("--") {
+            // Refuse unknown flags rather than treating one as a keyword: a typo of
+            // --terminal must not quietly become a desktop prompt or a lookup.
+            fail("unknown reveal option \(argument)")
+        } else {
+            guard revealKeyword == nil else { fail("reveal takes exactly one keyword") }
+            revealKeyword = argument
+        }
+    }
+    guard let revealKeyword else { fail("reveal requires a keyword argument") }
+    if terminal {
+        cmdRevealWithPassword(keyword: revealKeyword)
+    } else {
+        cmdReveal(keyword: revealKeyword)
+    }
 
 case "secure-status":
     cmdSecureStatus()

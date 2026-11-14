@@ -49,13 +49,27 @@ curl -H "Authorization: Bearer $(snippets-cli reveal api-token)" https://example
 `reveal` asks the running Snippets app. The user approves the request in the
 app, then confirms with Touch ID or their Mac password. The bare value goes to
 stdout.
+
+When the user is away from the Mac, for example over SSH or Rex, they can
+approve with their Mac login password instead: `reveal --terminal KEYWORD`.
+It works only if they turned it on at the Mac (Settings → Secure → Terminal
+Access); `secure-status` shows `"terminalReveal": true` then. Use it only when
+the user asks for it or confirms they are away. The password is read from an
+interactive terminal, never from arguments or stdin, so it fails in a shell
+without one, as most agent tool calls are. Then ask the user to run the whole
+command that needs the value in their own terminal.
 <!-- /mac -->
 <!-- linux -->
 `reveal` asks the running Snippets app. The user approves the request in the
 app's native prompt and authenticates. The bare value goes to stdout.
 <!-- /linux -->
+
 Exit codes: 3 the app is not running, 4 denied or cancelled, 5 the vault is
 locked or not set up, 6 no such secure entry.
+<!-- mac -->
+With `--terminal`, 4 also means a wrong password and 8 means terminal reveal
+is turned off on this Mac. Don't retry either; ask the user.
+<!-- /mac -->
 
 To create one without the value ever appearing in a command line:
 

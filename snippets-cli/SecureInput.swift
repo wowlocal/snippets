@@ -26,22 +26,7 @@ enum SecureInput {
         let data: Data
         switch self {
         case .prompt:
-            // libc restores termios on handled signals (including Ctrl-C), requires
-            // /dev/tty, and never falls back to echoing stdin. Read one extra byte so
-            // an overlong line cannot silently become a different, truncated secret.
-            var buffer = [CChar](repeating: -91, count: maximumBytes + 2)
-            defer { buffer.withUnsafeMutableBytes { _ = memset_s($0.baseAddress!, $0.count, 0, $0.count) } }
-            let result = buffer.withUnsafeMutableBufferPointer {
-                readpassphrase("Secure content (one line): ", $0.baseAddress!, $0.count,
-                               RPP_ECHO_OFF | RPP_REQUIRE_TTY)
-            }
-            guard result != nil, let end = buffer.lastIndex(where: { $0 != -91 }) else {
-                throw Failure.unavailable
-            }
-            // The terminating NUL differs from the sentinel even when the user types
-            // NUL bytes. Preserve every entered byte before it; never use strlen.
-            guard end <= maximumBytes else { throw Failure.tooLarge }
-            data = buffer.withUnsafeBytes { Data($0.prefix(end)) }
+            data = try Self.readHiddenLine(prompt: "Secure content (one line): ", maximumBytes: maximumBytes)
         case .file(let path):
             let fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
             guard fd >= 0 else { throw Failure.unsafeFile }
@@ -60,6 +45,44 @@ enum SecureInput {
         }
         guard !data.isEmpty, String(data: data, encoding: .utf8) != nil else { throw Failure.invalidText }
         return data
+    }
+
+    /// The macOS login password for `reveal --terminal`. Only from the controlling
+    /// terminal with echo off: never argv, the environment, stdin or a file, so it does
+    /// not land in shell history, `ps`, or a script's pipeline by accident.
+    static func readLoginPassword(maximumBytes: Int) throws -> Data {
+        let data = try readHiddenLine(
+            prompt: "Mac login password for \(NSUserName()): ", maximumBytes: maximumBytes)
+        guard !data.isEmpty, String(data: data, encoding: .utf8) != nil else { throw Failure.invalidText }
+        return data
+    }
+
+    /// Overwrites a buffer this process owns. Best effort: copies Foundation made
+    /// elsewhere (JSON encoding, for one) are out of reach.
+    static func wipe(_ data: inout Data) {
+        data.withUnsafeMutableBytes { buffer in
+            guard let base = buffer.baseAddress, !buffer.isEmpty else { return }
+            _ = memset_s(base, buffer.count, 0, buffer.count)
+        }
+        data.removeAll(keepingCapacity: false)
+    }
+
+    /// libc restores termios on handled signals (including Ctrl-C), requires /dev/tty,
+    /// and never falls back to echoing stdin. Read one extra byte so an overlong line
+    /// cannot silently become a different, truncated secret.
+    private static func readHiddenLine(prompt: String, maximumBytes: Int) throws -> Data {
+        var buffer = [CChar](repeating: -91, count: maximumBytes + 2)
+        defer { buffer.withUnsafeMutableBytes { _ = memset_s($0.baseAddress!, $0.count, 0, $0.count) } }
+        let result = buffer.withUnsafeMutableBufferPointer {
+            readpassphrase(prompt, $0.baseAddress!, $0.count, RPP_ECHO_OFF | RPP_REQUIRE_TTY)
+        }
+        guard result != nil, let end = buffer.lastIndex(where: { $0 != -91 }) else {
+            throw Failure.unavailable
+        }
+        // The terminating NUL differs from the sentinel even when the user types
+        // NUL bytes. Preserve every entered byte before it; never use strlen.
+        guard end <= maximumBytes else { throw Failure.tooLarge }
+        return buffer.withUnsafeBytes { Data($0.prefix(end)) }
     }
 
     private static func validate(_ fd: Int32, requireRegular: Bool) throws {

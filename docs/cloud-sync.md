@@ -478,6 +478,76 @@ socket is removed on quit, and `reveal` on an unknown keyword returns exit 6 wit
 raising a prompt. The approved path — a real reveal — still needs a human and has not
 been exercised.
 
+### Terminal reveal: the login password instead of the desktop (opt-in, per Mac)
+
+`snippets-cli reveal --terminal <keyword>` is for SSH or Rex sessions where nobody is at the
+Mac's desktop to click Reveal and answer Touch ID. It asks for the macOS login password on the
+controlling terminal (`readpassphrase`, echo off, `/dev/tty` only — never argv, the environment,
+stdin or a file) and the app verifies it with Open Directory (`ODRecord.verifyPassword` on the
+record whose uid is the app's own), without `sudo` or a privileged helper. Accepting `sudo`
+was rejected: cached timestamps and `NOPASSWD` mean a successful `sudo` proves nothing fresh.
+
+**What it gives away.** While it is on, anything that can run commands as this user and knows
+the login password can reveal every secure snippet, one request at a time. Per-reveal
+authentication does not make the password single-use: a program that captures the password
+when the user types it to reveal one snippet can reuse it for all of them, and the rate limit
+only slows that down. A program that already controls the desktop *and* knows the password
+could do the same through the desktop prompts; the new exposure is shell access plus the
+password without the desktop. Desktop control without the password is still not enough on
+either path. The Settings warning says this in those words.
+
+Controls, in the order a request meets them:
+
+1. **Off by default, per Mac.** Turning it on (Settings → Secure Snippets → Terminal Access)
+   shows that warning, with Cancel as the default button, and then a fresh one-use
+   `deviceOwnerAuthentication`. The resulting `TerminalRevealAuthorization` is an
+   HMAC-SHA256 under an HKDF subkey of `K_lib` (`snip.terminal-reveal.v1`) over a fresh nonce,
+   the vault `kid`, the uid and the IOKit platform UUID, so a same-user process cannot mint
+   one and a `defaults write` cannot turn the feature on. The HMAC does not stop *replay* of a
+   genuine record after the owner turns it off; the storage does. Signed builds keep it in the
+   data-protection keychain under the app's own access group, non-synchronizable and
+   `AfterFirstUnlockThisDeviceOnly` (service `com.khm.snippets.terminal-reveal`): other
+   processes cannot read, plant, restore or delete it. Entitlement-free builds fall back to
+   the login keychain, always deleting and re-creating the item (an update would keep the
+   access list of an item another process planted, possibly one open to every app) and
+   verifying that a removal really removed it. That fallback is weaker, since anyone with the
+   login password can read the keychain file offline.
+2. **The CLI verifies the app before the password exists.** `reveal --terminal` checks the
+   peer's code signature (team and app identifier) on the preflight `status` connection and
+   again on the request connection, before prompting and before sending. Unlike plain
+   `reveal`, a same-user socket squatter gets neither a prompt nor the password.
+3. **The app verifies the caller**: the existing team-anchored signature check, plus the
+   kernel-reported peer uid (`getpeereid`) must equal the app's own. The request is a separate
+   command (`reveal-password`) so an app that predates it answers `unsupported` instead of
+   falling back to the desktop prompt with a password in hand.
+4. **Shared limits.** The same one-at-a-time gate and five-per-minute budget as desktop reveals.
+5. **Password, then key, then the switch.** `VaultSession.withOneUseKey(verifiedBy:)` runs the
+   password check first and touches nothing until it passes, so a wrong password neither
+   closes the owner's in-app window nor cancels a system sheet they opened meanwhile. Only
+   then does it end any in-app window and load `K_lib` for one synchronous operation. Inside
+   it the authorization record is verified under that key before anything is decrypted; a
+   forged, replayed, foreign-vault or other-Mac record is deleted and refused (a record that
+   merely cannot be read right now is refused without being treated as tampering). The key is
+   discarded on every exit.
+6. **Wrong passwords.** Only Open Directory's "credentials invalid" counts; five consecutive
+   ones turn the feature off, so it has to be turned on again at the Mac. The count is kept in
+   the same protected store, so restarting the app does not reset it, and it is enforced on
+   its own even if the record could not be deleted. Account policy (lockout, disabled or
+   expired accounts) is refused without counting. Requests made while the feature is off
+   still spend the shared budget, which bounds the log.
+
+Responses never reflect Open Directory or keychain errors. Diagnostics record the attempt
+as `secure_reveal` with caller `trusted_terminal` (outcomes include `wrong_password` and
+`disabled`), and enabling, disabling and automatic revocation as `vault_action`. Exit code 8
+means terminal reveal is off at that Mac. The app moves the received password into a single
+owner as soon as the request is decoded and overwrites it when the request ends; the CLI
+does the same with its buffers. Copies made by JSON encoding and decoding, `String`
+conversion and Open Directory are outside that guarantee. Reads of the switch never raise a
+keychain dialog, so a locked keychain answers "unavailable" instead of blocking the app on a
+desktop nobody is watching. The Mac still has to be logged in with Snippets running and its login keychain
+available; `--terminal` does not unlock a locked keychain or a logged-out session. Linux keeps
+its own PAM-based design and does not offer this yet.
+
 Tags and keyword uniqueness deliberately *do* span both stores: a tag used only by secure snippets
 must still appear in the filter bar, and a plaintext snippet must not be able to claim a keyword a
 secure one already uses, or the expander becomes ambiguous with no way for the user to see why.
@@ -988,6 +1058,7 @@ notarization does **not** check that.
 | Vault identity rides iCloud Keychain | It has to be readable before the first round, and it is not secret; the key was already on that channel | A CloudKit record (needs a sealer that needs a vault); `NSUbiquitousKeyValueStore` (another entitlement) |
 | First publisher wins the identity slot | Deterministic without a protocol, and it can never re-point an existing vault at a key its records were not sealed under | Last writer wins; merging two vaults automatically |
 | CLI reveal is app-brokered | A CLI that can decrypt unattended makes every `curl \| sh` an exfiltration primitive; routing through the app puts a human in the loop | Never revealing at all (simpler, ~900 lines lighter); giving the CLI the Keychain group unconditionally |
+| Terminal reveal is opt-in, per Mac, password-verified by the app | Remote users need a path without the desktop; the switch is MAC'd under `K_lib` so a same-user process cannot turn it on, and the password goes only to a signature-verified app | Accepting `sudo` success (cached/`NOPASSWD`); a `defaults` flag; giving the CLI the key; a synced switch |
 | Peer check anchored to the team ID | The CLI is a bare Mach-O with its own signing identifier, so a bundle-id requirement would not match it | Checking the bundle id; trusting `LOCAL_PEERPID` alone (racy — pids are reused) |
 
 Snippets Cloud account login now uses a server-generated account key backed by the server's

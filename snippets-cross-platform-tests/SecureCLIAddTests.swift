@@ -6,6 +6,15 @@ import CryptoKit
 @testable import Snippets
 #endif
 
+#if os(macOS)
+/// Terminal reveal stays off for these tests and never touches the real keychain.
+private struct EmptyTerminalRevealStore: TerminalRevealRecordStoring {
+    func load(account: String) throws -> Data? { nil }
+    func replace(_ data: Data, account: String) throws {}
+    func remove(account: String) throws {}
+}
+#endif
+
 @MainActor
 final class SecureCLIAddTests: XCTestCase {
     private var root: URL!
@@ -166,6 +175,7 @@ final class SecureCLIAddTests: XCTestCase {
         XCTAssertTrue(ordinary.update(draft))
         XCTAssertEqual(try LibraryWriter.read(from: SnippetStorageLocations.snippetsFileURL).snippets.first?.keyword, "")
         let server = ControlServer(session: session, secureStore: secure,
+            terminalAccess: TerminalRevealAccess(store: EmptyTerminalRevealStore()),
             prepareSecureCreation: { try ordinary.flushPendingWritesForSync() })
         let input = SnippetsIPC.SecureAdd(name: "", keyword: draft.keyword, body: Data("synthetic".utf8),
             tags: [], isEnabled: true, isPinned: false)

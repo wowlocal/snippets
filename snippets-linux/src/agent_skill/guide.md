@@ -41,6 +41,7 @@ curl -H "Authorization: Bearer $(snippets-cli reveal api-token)" https://example
 
 `reveal` asks the running Snippets app. The user approves the request in the
 app's native prompt and authenticates. The bare value goes to stdout.
+
 Exit codes: 3 the app is not running, 4 denied or cancelled, 5 the vault is
 locked or not set up, 6 no such secure entry.
 
