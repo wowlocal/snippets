@@ -269,6 +269,29 @@ snippets-cli search "Atlas API token"
 snippets-cli reveal atlas-token
 ```
 
+### Teach your agents once
+
+```sh
+snippets-cli skill install                    # Claude Code (if set up) and ~/.agents/skills
+snippets-cli skill install --dir ~/src/app/.claude/skills   # also a project or another agent
+snippets-cli skill status                     # JSON: where it is installed, and your rules
+snippets-cli skill edit                       # your do/don't rules and the skill description
+```
+
+`install` writes a small `SKILL.md` that tells the agent to run `snippets-cli skill`,
+which prints the guide built into your installed CLI followed by your rules, so the guide
+always matches the commands your version has. Run again with no options, `install`
+updates every place it is installed. `--for claude|agents|codex` picks a built-in agent
+folder; `--dir` takes your own skills folder (given `.claude`, it uses `.claude/skills`)
+and remembers it, and `uninstall --dir` removes the skill there and forgets the folder.
+Neither command ever touches a `SKILL.md` it did not write.
+
+Your rules live in `~/.config/snippets/agent-rules.md` (on Linux, under
+`$XDG_CONFIG_HOME`). Updates never change that file, and deleting it restores the
+defaults. The same controls are in **Settings → Integrations → Agent Skill** on the Mac
+and **Settings → General → Agent Skill** on Linux. The rules are advice to the agent:
+Snippets' approval is what protects secure entries.
+
 ### The agent asks; you authorize the secret
 
 For example, ask your agent:
@@ -300,6 +323,7 @@ read the returned value, so its own output and transcript handling matter.
 | `add`, `update`, `delete` | Manage ordinary entries by keyword or ID, including tags, pins, and enabled state. |
 | `secure-status` | Check secure-entry count, app availability, and vault status. |
 | `reveal` | Request a secure body through the app's human approval and authentication flow. |
+| `skill` | Print the guide for AI agents, or install, uninstall or edit it. |
 
 Data commands return JSON; successful `reveal` deliberately returns the raw text.
 Errors go to stderr with a nonzero exit code. Run `snippets-cli help` for all flags.

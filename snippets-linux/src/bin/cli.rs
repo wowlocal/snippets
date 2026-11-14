@@ -1,4 +1,5 @@
 mod cli_git;
+mod cli_skill;
 
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
@@ -68,6 +69,11 @@ enum Operation {
         #[command(subcommand)]
         command: cli_git::GitOperation,
     },
+    /// Print the guide for AI agents with your rules, or install, uninstall or edit it.
+    Skill {
+        #[command(subcommand)]
+        command: Option<cli_skill::SkillOperation>,
+    },
 }
 #[derive(Subcommand)]
 enum ExpansionOperation {
@@ -115,11 +121,11 @@ struct Edit {
     tags: Option<String>,
     #[arg(long, conflicts_with = "no_pinned")]
     pinned: bool,
-    #[arg(long)]
+    #[arg(long, alias = "unpinned")]
     no_pinned: bool,
     #[arg(long, conflicts_with = "no_enabled")]
     enabled: bool,
-    #[arg(long)]
+    #[arg(long, alias = "disabled")]
     no_enabled: bool,
 }
 fn find(library: &Library, identifier: &str) -> Result<Snippet> {
@@ -259,6 +265,7 @@ fn execute(command: Operation, library: &mut Library) -> Result<Value> {
             Err(Error("Secure commands require the running desktop app."))
         }
         Operation::Git { .. } => unreachable!("git routing"),
+        Operation::Skill { .. } => unreachable!("skill routing"),
     }
 }
 fn private_add(values: &Edit) -> Result<(Addition, Source)> {
@@ -463,7 +470,12 @@ fn git_command(root: PathBuf, command: cli_git::GitOperation) -> u8 {
     }
 }
 fn main() -> std::process::ExitCode {
-    let options = Options::parse();
+    let options = match Options::parse().command {
+        Operation::Skill { command } => {
+            return std::process::ExitCode::from(cli_skill::run(command));
+        }
+        command => Options { command },
+    };
     if matches!(&options.command, Operation::Update { edit, .. } if edit.secure) {
         eprintln!(
             "Secure updates require the desktop editor; add --secure only creates new entries."
@@ -550,5 +562,98 @@ mod tests {
         ] {
             assert!(Options::try_parse_from(args).is_err());
         }
+    }
+
+    /// Splits one example line like a shell would, for the quoting the guide uses.
+    fn shell_words(line: &str) -> Vec<String> {
+        let (mut words, mut word, mut quoted, mut started) = (vec![], String::new(), false, false);
+        for c in line.chars() {
+            match c {
+                '"' => (quoted, started) = (!quoted, true),
+                '#' if !quoted && word.is_empty() => break,
+                c if c.is_whitespace() && !quoted => {
+                    if started {
+                        words.push(std::mem::take(&mut word));
+                    }
+                    started = false;
+                }
+                c => (word, started) = (word + &c.to_string(), true),
+            }
+        }
+        if started {
+            words.push(word);
+        }
+        words
+    }
+
+    /// Every `snippets-cli` example in the agent guide parses, so the guide cannot
+    /// teach an agent a command or flag this CLI does not have.
+    #[test]
+    fn the_agent_guide_examples_parse() {
+        let mut in_code = false;
+        let mut checked = 0;
+        for line in snippets_linux::agent_skill::GUIDE.lines() {
+            if line.starts_with("```") {
+                in_code = !in_code;
+                continue;
+            }
+            let line = line.trim();
+            if !in_code || !line.starts_with("snippets-cli ") {
+                continue;
+            }
+            let words = shell_words(line);
+            if let Err(error) = Options::try_parse_from(&words) {
+                panic!("guide example does not parse: {line}\n{error}");
+            }
+            checked += 1;
+        }
+        assert!(checked >= 12, "only {checked} examples found");
+    }
+
+    #[test]
+    fn mac_spellings_of_the_negative_flags_are_accepted() {
+        let options =
+            Options::try_parse_from(["snippets-cli", "update", "addr", "--unpinned", "--disabled"])
+                .unwrap();
+        let Operation::Update { edit, .. } = options.command else {
+            panic!("not an update");
+        };
+        assert!(edit.no_pinned && edit.no_enabled);
+    }
+
+    #[test]
+    fn skill_commands_parse() {
+        for args in [
+            vec!["snippets-cli", "skill"],
+            vec!["snippets-cli", "skill", "install"],
+            vec![
+                "snippets-cli",
+                "skill",
+                "install",
+                "--for",
+                "claude",
+                "--for",
+                "codex",
+            ],
+            vec!["snippets-cli", "skill", "uninstall", "--for", "agents"],
+            vec!["snippets-cli", "skill", "status"],
+            vec![
+                "snippets-cli",
+                "skill",
+                "install",
+                "--dir",
+                "a",
+                "--dir",
+                "b",
+                "--for",
+                "codex",
+            ],
+            vec!["snippets-cli", "skill", "edit"],
+        ] {
+            assert!(Options::try_parse_from(&args).is_ok(), "{args:?}");
+        }
+        assert!(
+            Options::try_parse_from(["snippets-cli", "skill", "install", "--for", "vim"]).is_err()
+        );
     }
 }

@@ -53,6 +53,18 @@ is refused for a public repository, and where Snippets cannot check the reposito
 needs `--confirm-private`. Joining one needs `git join --accept-plain-text`. These commands work headless, with
 no window. See [GIT_SYNC.md](GIT_SYNC.md).
 
+## Agent skill
+
+`snippets-cli skill` prints the guide for AI agents with the user's rules.
+`skill status` (JSON), `skill install [--for claude|agents|codex]... [--dir PATH]...`,
+`skill uninstall [--for …] [--dir …]` and `skill edit` manage the installed `SKILL.md`
+stubs, the remembered custom folders in `$XDG_CONFIG_HOME/snippets/agent-skill.json` and
+the rules in `$XDG_CONFIG_HOME/snippets/agent-rules.md`. **Settings → General → Agent
+Skill** shows the same places (`src/agent_skill_ui.rs`); the logic is
+`src/agent_skill.rs`, shared by the CLI and the app. Both platforms share the text in
+`agent-skill/`; regenerate the copies with `scripts/agent-skill.py`. `update` also accepts
+the Mac spellings `--unpinned` and `--disabled`.
+
 ## Coverage and remaining work
 
 This table keeps the full CLI request visible. Launching a GUI window from a

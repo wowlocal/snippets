@@ -558,6 +558,184 @@ private func readContent(from arg: String) -> String {
 
 // MARK: - Usage
 
+// MARK: - Agent skill
+
+/// `~/…` for paths under the home directory, so the summary reads at a glance.
+private func displayPath(_ url: URL, home: URL) -> String {
+    let path = url.path, homePath = home.path
+    return path.hasPrefix(homePath + "/") ? "~" + path.dropFirst(homePath.count) : path
+}
+
+/// `--for T` and `--dir PATH`, both repeatable. Nil when neither was given.
+private func parseSkillPlaces(
+    _ args: [String], environment: AgentSkill.Environment, mustExist: Bool = true
+) -> [AgentSkill.Place]? {
+    var places: [AgentSkill.Place] = []
+    let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    var i = 0
+    while i < args.count {
+        guard args[i] == "--for" || args[i] == "--dir" else {
+            fail("unknown skill option '\(args[i])'; run snippets-cli help")
+        }
+        let value = nextArg(args, after: i, flag: args[i])
+        let place: AgentSkill.Place
+        switch args[i] {
+        case "--for":
+            guard let target = AgentSkill.Target(rawValue: value) else {
+                fail("--for takes claude, agents or codex")
+            }
+            place = .target(target)
+        case "--dir":
+            do {
+                place = try AgentSkill.resolveFolder(
+                    value, currentDirectory: currentDirectory, in: environment, mustExist: mustExist)
+            } catch {
+                fail("\(error)")
+            }
+        default:
+            fail("unknown skill option '\(args[i])'; run snippets-cli help")
+        }
+        if !places.contains(place) { places.append(place) }
+        i += 2
+    }
+    return places.isEmpty ? nil : places
+}
+
+private func printSkillChanges(_ changes: [AgentSkill.Change], home: URL) {
+    let paths = changes.map { displayPath($0.url, home: home) }
+    let width = paths.map(\.count).max() ?? 0
+    for (change, path) in zip(changes, paths) {
+        let padded = path.padding(toLength: width, withPad: " ", startingAt: 0)
+        let note: String = switch change.outcome {
+        case .skipped: "another skill named snippets-cli is already here; left alone"
+        case .missing: "folder not found; `skill uninstall --dir` forgets it"
+        default: change.place.displayName
+        }
+        var label = change.outcome.rawValue
+        // Uninstalling a custom folder also forgets it, even when nothing was there.
+        if case .folder = change.place, change.outcome == .absent { label = "forgot" }
+        print("  \(label.padding(toLength: 9, withPad: " ", startingAt: 0)) \(padded)  (\(note))")
+    }
+}
+
+/// `skill status`: the model both Settings windows show, as JSON.
+private func printSkillStatus(_ status: AgentSkill.Status) {
+    struct Rules: Encodable { let path: String; let custom: Bool }
+    struct Place: Encodable {
+        let target: String
+        let folder: String
+        let path: String
+        let detected: Bool
+        let state: String
+    }
+    struct Output: Encodable { let rules: Rules; let places: [Place] }
+    printJSON(Output(
+        rules: Rules(path: status.rulesURL.path, custom: status.rulesAreCustom),
+        places: status.places.map { place in
+            let target: String = switch place.place {
+            case .target(let target): target.rawValue
+            case .folder: "folder"
+            }
+            return Place(
+                target: target, folder: place.skillsFolder.path, path: place.stubURL.path,
+                detected: place.detected, state: place.state.rawValue)
+        }))
+}
+
+private func cmdSkill(_ args: [String]) {
+    let environment = AgentSkill.Environment.current
+    let home = environment.home
+    let rulesPath = displayPath(AgentSkill.rulesURL(in: environment), home: home)
+    do {
+        switch args.first {
+        case nil:
+            print(try AgentSkill.guide(in: environment), terminator: "")
+
+        case "status":
+            guard args.count == 1 else { fail("skill status takes no options") }
+            printSkillStatus(try AgentSkill.status(in: environment))
+
+        case "install":
+            let places = try parseSkillPlaces(Array(args.dropFirst()), environment: environment)
+                ?? AgentSkill.refreshPlaces(in: environment)
+            let changes = try AgentSkill.install(places, in: environment)
+            let installed = changes.filter { $0.outcome == .wrote || $0.outcome == .unchanged }
+            print(installed.isEmpty ? "Did not install the snippets-cli skill:" : "Installed the snippets-cli skill:")
+            printSkillChanges(changes, home: home)
+            if installed.contains(where: { $0.place == .target(.claude) }) {
+                print("Pre-approved in Claude Code: skill, search, get, list, tags and secure-status (read-only).")
+            }
+            let custom = try AgentSkill.currentRules(in: environment).isCustom
+            print(custom
+                ? "Your rules: \(rulesPath)"
+                : "Rules: the defaults. `snippets-cli skill edit` creates \(rulesPath) to change them.")
+            print("Rules guide agents; Snippets still asks you before revealing a secure snippet.")
+            if installed.isEmpty { exit(1) }
+            print("Restart running agent sessions to pick up the skill.")
+
+        case "uninstall":
+            let places = try parseSkillPlaces(
+                Array(args.dropFirst()), environment: environment, mustExist: false)
+                ?? AgentSkill.status(in: environment).places.map(\.place)
+            let changes = try AgentSkill.uninstall(places, in: environment).filter {
+                if case .folder = $0.place { return true }
+                return $0.outcome != .absent
+            }
+            if changes.isEmpty {
+                print("The snippets-cli skill is not installed there.")
+            } else {
+                print("Uninstalled the snippets-cli skill:")
+                printSkillChanges(changes, home: home)
+            }
+            if try AgentSkill.currentRules(in: environment).isCustom {
+                print("Your rules stay in \(rulesPath).")
+            }
+
+        case "edit":
+            guard args.count == 1 else { fail("skill edit takes no options") }
+            try cmdSkillEdit(environment: environment)
+
+        default:
+            fail("unknown skill command '\(args[0])'; use status, install, uninstall or edit")
+        }
+    } catch {
+        fail("\(error)")
+    }
+    exit(0)
+}
+
+/// Opens the rules file in the user's editor, or prints its path for an agent.
+private func cmdSkillEdit(environment: AgentSkill.Environment) throws {
+    let url = AgentSkill.rulesURL(in: environment)
+    let created = try AgentSkill.createRulesFile(in: environment)
+    guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else {
+        // No terminal: an agent or a script. Hand it the file instead of an editor.
+        print(url.path)
+        if created { fputs("Created from the defaults.\n", stderr) }
+        fputs("After changing its description, run `snippets-cli skill install`.\n", stderr)
+        return
+    }
+    let variables = environment.variables
+    let editor = [variables["VISUAL"], variables["EDITOR"]]
+        .compactMap { $0 }.first { !$0.isEmpty } ?? "vi"
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    // The editor setting may carry its own arguments (`code -w`); the path stays one word.
+    process.arguments = ["-c", "\(editor) \"$1\"", "sh", url.path]
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        fail("the editor exited with status \(process.terminationStatus)")
+    }
+    // The description lives in the installed stubs too; bring them up to date.
+    let updated = try AgentSkill.install(AgentSkill.installedPlaces(in: environment), in: environment)
+        .filter { $0.outcome == .wrote }
+    if !updated.isEmpty {
+        print("Updated the skill description:")
+        printSkillChanges(updated, home: environment.home)
+    }
+}
+
 private func usage() -> Never {
     print("""
     Usage: snippets-cli <command> [options]
@@ -614,8 +792,20 @@ private func usage() -> Never {
 
       delete <keyword-or-id>         Delete a snippet by keyword or UUID
 
+      skill                          Print the guide for AI agents, with your rules
+      skill status                   Where the skill is installed, and the rules file
+      skill install                  Install the skill for AI agents. With no options:
+                                     update where it is installed, else Claude Code
+                                     (if set up) and ~/.agents/skills
+          --for <claude|agents|codex>  A built-in agent folder (repeatable)
+          --dir <path>               Your own skills folder (repeatable; remembered)
+      skill uninstall [--for …] [--dir …]
+                                     Remove it (all places by default); --dir forgets
+      skill edit                     Edit your agent rules and the skill description
+
     Tags are matched ignoring case and diacritics, like the app.
-    All output is JSON. Errors are written to stderr with a non-zero exit code.
+    Output is JSON, except for skill, skill install/uninstall/edit, which print text.
+    Errors are written to stderr with a non-zero exit code.
     """)
     exit(0)
 }
@@ -780,6 +970,9 @@ case "update":
 case "delete":
     guard args.count >= 2 else { fail("delete requires a keyword or UUID argument") }
     cmdDelete(keywordOrID: args[1])
+
+case "skill":
+    cmdSkill(Array(args.dropFirst()))
 
 case "help", "--help", "-h":
     usage()

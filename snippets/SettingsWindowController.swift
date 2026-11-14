@@ -154,8 +154,19 @@ private final class SettingsTabViewController: NSTabViewController, NSSearchFiel
         fatalError("init(coder:) has not been implemented")
     }
 
+    private var paneContentObserver: NSObjectProtocol?
+
     override func viewDidAppear() {
         super.viewDidAppear()
+        if paneContentObserver == nil {
+            paneContentObserver = NotificationCenter.default.addObserver(
+                forName: .settingsPaneContentDidChange, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.resizeForCurrentPane(animated: self?.view.window?.isVisible == true)
+                }
+            }
+        }
         guard let toolbar = view.window?.toolbar else { return }
         toolbar.displayMode = .iconAndLabel
         toolbar.allowsUserCustomization = false
@@ -500,9 +511,12 @@ private struct MacSettingsSearchEntry {
         .init(title: "Cmd+Q Behavior", pane: .general,
               terms: ["quit", "close", "hide", "menu bar", "ask every time"],
               needles: ["Pressing Cmd+Q"]),
-        .init(title: "Install Command Line Tool", pane: .general,
+        .init(title: "Install Command Line Tool", pane: .integrations,
               terms: ["cli", "terminal", "snippets-cli", "/usr/local/bin"],
               needles: ["Command Line Tool"]),
+        .init(title: "Agent Skill", pane: .integrations,
+              terms: ["agent", "skill", "claude", "codex", "ai", "rules"],
+              needles: ["Agent Skill"]),
         .init(title: "Global Shortcuts", pane: .expansion,
               terms: ["hotkey", "keyboard", "secure paste", "command backslash"],
               needles: ["Global Shortcuts"]),
@@ -791,12 +805,6 @@ private final class GeneralSettingsViewController: NSViewController {
     private let selectionSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let promptSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let resetButton = NSButton(title: "Reset to Ask Every Time", target: nil, action: nil)
-    private let cliInstallButton = NSButton(title: "Install CLI Tool", target: nil, action: nil)
-    private let cliStatusLabel = NSTextField(wrappingLabelWithString: "")
-
-    private static let cliInstallURL = URL(filePath: "/usr/local/bin/snippets-cli")
-
-    private static let cliBinaryName = "snippets-cli"
 
     override func loadView() {
         let (rootView, stack) = makeSettingsPane()
@@ -835,40 +843,16 @@ private final class GeneralSettingsViewController: NSViewController {
         resetRow.orientation = .horizontal
         resetRow.alignment = .centerY
 
-        let cliSeparator = NSBox.horizontalSeparator()
-        let cliTitle = makeSettingsSectionTitle("Command Line Tool")
-
-        let cliIntroLabel = makeSecondaryLabel("Install snippets-cli to /usr/local/bin so agents and terminal scripts can interact with your snippets.")
-
-        cliInstallButton.target = self
-        cliInstallButton.action = #selector(installCLI)
-        LiquidGlassDesign.configureActionButton(cliInstallButton, symbolName: "terminal")
-
-        cliStatusLabel.font = .systemFont(ofSize: 12)
-        cliStatusLabel.textColor = .secondaryLabelColor
-
-        let cliRow = NSStackView(views: [cliInstallButton, NSView()])
-        cliRow.orientation = .horizontal
-        cliRow.alignment = .centerY
-
         stack.addArrangedSubview(closingTitle)
         stack.addArrangedSubview(introLabel)
         stack.addArrangedSubview(behaviorRow)
         stack.addArrangedSubview(selectionSummaryLabel)
         stack.addArrangedSubview(promptSummaryLabel)
         stack.addArrangedSubview(resetRow)
-        stack.addArrangedSubview(cliSeparator)
-        stack.addArrangedSubview(cliTitle)
-        stack.addArrangedSubview(cliIntroLabel)
-        stack.addArrangedSubview(cliRow)
-        stack.addArrangedSubview(cliStatusLabel)
 
         behaviorRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         selectionSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         promptSummaryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        cliSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        cliIntroLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        cliStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         configureQuitBehaviorPopup()
         reloadFromStorage()
@@ -902,98 +886,6 @@ private final class GeneralSettingsViewController: NSViewController {
         }
 
         resetButton.isEnabled = appDelegate.hasRememberedQuitBehavior
-        updateCLIStatus()
-    }
-
-    private func updateCLIStatus() {
-        let installURL = Self.cliInstallURL
-        let fm = FileManager.default
-
-        guard let cliSourceURL = Bundle.main.executableURL?
-            .deletingLastPathComponent()
-            .appendingPathComponent(Self.cliBinaryName)
-        else {
-            cliInstallButton.isEnabled = false
-            cliStatusLabel.stringValue = "snippets-cli not found in app bundle."
-            return
-        }
-
-        cliInstallButton.isEnabled = true
-
-        let destExists = fm.fileExists(atPath: installURL.path)
-        let pointsHere: Bool = {
-            guard let dest = try? fm.destinationOfSymbolicLink(atPath: installURL.path) else { return false }
-            return dest == cliSourceURL.path
-        }()
-
-        if destExists && pointsHere {
-            cliInstallButton.title = "Reinstall CLI Tool"
-            cliStatusLabel.stringValue = "Installed at \(installURL.path)"
-        } else if destExists {
-            cliInstallButton.title = "Install CLI Tool"
-            cliStatusLabel.stringValue = "\(installURL.path) exists but points elsewhere. Clicking install will replace it."
-        } else {
-            cliInstallButton.title = "Install CLI Tool"
-            cliStatusLabel.stringValue = "Not installed."
-        }
-    }
-
-    @objc private func installCLI() {
-        guard let cliSourceURL = Bundle.main.executableURL?
-            .deletingLastPathComponent()
-            .appendingPathComponent(Self.cliBinaryName)
-        else {
-            cliStatusLabel.stringValue = "Could not locate snippets-cli inside the app bundle."
-            return
-        }
-
-        let installURL = Self.cliInstallURL
-        let fm = FileManager.default
-
-        do {
-            let binDir = installURL.deletingLastPathComponent()
-            if !fm.fileExists(atPath: binDir.path) {
-                try fm.createDirectory(at: binDir, withIntermediateDirectories: true)
-            }
-            if fm.fileExists(atPath: installURL.path) {
-                try fm.removeItem(at: installURL)
-            }
-            try fm.createSymbolicLink(at: installURL, withDestinationURL: cliSourceURL)
-            updateCLIStatus()
-        } catch {
-            installCLIWithPrivileges(source: cliSourceURL, destination: installURL)
-        }
-    }
-
-    /// Escapes a value for embedding in an AppleScript double-quoted string
-    /// literal (backslashes and double quotes are the only escapes needed).
-    private func appleScriptStringLiteral(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
-    }
-
-    private func installCLIWithPrivileges(source: URL, destination: URL) {
-        // Two escaping layers: paths become AppleScript string literals (escaping
-        // \ and "), and AppleScript's `quoted form of` handles shell quoting.
-        // Raw paths are never interpolated into the shell command itself.
-        let script = """
-        set srcPath to \(appleScriptStringLiteral(source.path))
-        set dstPath to \(appleScriptStringLiteral(destination.path))
-        set dirPath to \(appleScriptStringLiteral(destination.deletingLastPathComponent().path))
-        do shell script "mkdir -p " & quoted form of dirPath & " && ln -sf " & quoted form of srcPath & " " & quoted form of dstPath with administrator privileges
-        """
-
-        var appleScriptError: NSDictionary?
-        NSAppleScript(source: script)?.executeAndReturnError(&appleScriptError)
-
-        if let errDict = appleScriptError {
-            let msg = errDict[NSAppleScript.errorMessage] as? String ?? "unknown error"
-            cliStatusLabel.stringValue = "Installation failed: \(msg)"
-        } else {
-            updateCLIStatus()
-        }
     }
 
     @objc private func handleQuitBehaviorChanged(_ sender: NSPopUpButton) {
@@ -1629,6 +1521,7 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
     private let tableView = NSTableView()
     private let removeButton = NSButton(title: "Remove Selected", target: nil, action: nil)
     private let clearButton = NSButton(title: "Clear All", target: nil, action: nil)
+    private let commandLineSection = CommandLineSettingsSection()
 
     private var customBundleIDs: [String] = []
     private var rows: [BundleIDRow] = []
@@ -1727,6 +1620,8 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
+        commandLineSection.add(to: stack)
+
         reloadFromStorage()
     }
 
@@ -1734,6 +1629,7 @@ private final class BrowserSettingsViewController: NSViewController, NSTableView
         customBundleIDs = ChromiumBundleIDSettings.additionalBundleIDs()
         statusLabel.stringValue = ""
         rebuildRows()
+        commandLineSection.reload()
     }
 
     @objc private func addApp() {
@@ -2257,7 +2153,7 @@ private final class VaultSettingsViewController: NSViewController {
     }
 }
 
-private extension NSBox {
+extension NSBox {
     static func horizontalSeparator() -> NSBox {
         let box = NSBox()
         box.boxType = .separator
@@ -4245,21 +4141,21 @@ private func makeSettingsPane() -> (NSView, NSStackView) {
     return (rootView, stack)
 }
 
-private func makeSettingsSectionTitle(_ text: String) -> NSTextField {
+func makeSettingsSectionTitle(_ text: String) -> NSTextField {
     let label = NSTextField(labelWithString: text)
     label.font = .systemFont(ofSize: 14, weight: .semibold)
     label.textColor = .labelColor
     return label
 }
 
-private func makeSecondaryLabel(_ text: String) -> NSTextField {
+func makeSecondaryLabel(_ text: String) -> NSTextField {
     let label = NSTextField(wrappingLabelWithString: text)
     label.font = .systemFont(ofSize: 13)
     label.textColor = .secondaryLabelColor
     return label
 }
 
-private func makeTertiaryLabel(_ text: String) -> NSTextField {
+func makeTertiaryLabel(_ text: String) -> NSTextField {
     let label = NSTextField(wrappingLabelWithString: text)
     label.font = .systemFont(ofSize: 12)
     label.textColor = .tertiaryLabelColor
