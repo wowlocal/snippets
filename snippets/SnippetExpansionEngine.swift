@@ -1122,24 +1122,29 @@ final class SnippetExpansionEngine {
     }
 
     private func securePasteWindowFrame(_ window: AXUIElement, budget: AXMessagingBudget) -> NSRect? {
+        guard let frame = accessibilityFrame(of: window, budget: budget),
+              let screen = NSScreen.screens.first else { return nil }
+        return NSRect(x: frame.minX, y: screen.frame.maxY - frame.maxY,
+                      width: frame.width, height: frame.height)
+    }
+
+    private func accessibilityFrame(of element: AXUIElement, budget: AXMessagingBudget) -> CGRect? {
         var positionValue: CFTypeRef?
         var sizeValue: CFTypeRef?
-        guard copyAttributeValue(of: window, attribute: kAXPositionAttribute as CFString,
+        guard copyAttributeValue(of: element, attribute: kAXPositionAttribute as CFString,
                                  into: &positionValue, axBudget: budget) == .success,
-              copyAttributeValue(of: window, attribute: kAXSizeAttribute as CFString,
+              copyAttributeValue(of: element, attribute: kAXSizeAttribute as CFString,
                                  into: &sizeValue, axBudget: budget) == .success,
               let positionValue, let sizeValue,
               CFGetTypeID(positionValue) == AXValueGetTypeID(),
-              CFGetTypeID(sizeValue) == AXValueGetTypeID(),
-              let screen = NSScreen.screens.first else { return nil }
+              CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
         var point = CGPoint.zero
         var size = CGSize.zero
         guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &point),
               AXValueGetValue(sizeValue as! AXValue, .cgSize, &size),
               point.x.isFinite, point.y.isFinite, size.width.isFinite, size.height.isFinite,
               size.width > 0, size.height > 0 else { return nil }
-        return NSRect(x: point.x, y: screen.frame.maxY - point.y - size.height,
-                      width: size.width, height: size.height)
+        return CGRect(origin: point, size: size)
     }
 
     /// Existing targets retain exact-focus identity checks. Container targets also
@@ -1931,12 +1936,19 @@ final class SnippetExpansionEngine {
         /// Carries the context itself: the Accessibility path needs the trigger text, not just its
         /// length, to prove what sits before the caret before it overwrites anything.
         case confirmed(SuggestionTriggerContext)
-        case mismatch
+        case mismatch(earlierPrefix: Bool)
         case missingTrigger
         case unavailable(AXContextUnavailable)
         /// The host text before the caret contains multi-scalar graphemes;
         /// no backspace count is reliable there.
         case unsafe
+
+        var mayPrecedeTypedQuery: Bool {
+            switch self {
+            case .mismatch(earlierPrefix: true), .missingTrigger: true
+            default: false
+            }
+        }
 
     }
 
@@ -1955,7 +1967,7 @@ final class SnippetExpansionEngine {
             if normalizedForSuggestionMatching(context.query) == normalizedForSuggestionMatching(query) {
                 return .confirmed(context)
             }
-            return .mismatch
+            return .mismatch(earlierPrefix: query.hasPrefix(context.query))
         case .missingTrigger:
             return .missingTrigger
         case .unavailable(let unavailable):
@@ -1967,10 +1979,11 @@ final class SnippetExpansionEngine {
     /// panel). The snippet must be captured by the caller BEFORE any context
     /// refresh so that re-ranking can never change what the user picked.
     ///
-    /// The delete count is normally taken from one fresh exact AX read. There
-    /// is no retry delay. A never-confirmed AXTextArea may instead use the
+    /// A fresh exact AX read supplies the delete count. An older Chromium prefix
+    /// can be refreshed after the accept key. A never-confirmed AXTextArea may use the
     /// separately guarded local session while its exact target still matches.
     private func acceptSelectedSuggestion(_ snippet: Snippet) {
+        guard !isInjecting else { return }
         let localQuery = suggestionQuery
         let stateBefore = suggestionContextState
 
@@ -1988,13 +2001,58 @@ final class SnippetExpansionEngine {
             return
         }
 
-        let deletion: TriggerDeletion
-        switch readAcceptContext(
-            matchingQuery: localQuery,
-            axBudget: AXMessagingBudget(
+        func readContext() -> AcceptContextRead {
+            readAcceptContext(matchingQuery: localQuery, axBudget: AXMessagingBudget(
                 totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
-                perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
-        ) {
+                perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds))
+        }
+        let read = readContext()
+        guard read.mayPrecedeTypedQuery, stateBefore == .localDisplayOnly,
+              printableObservationDeadline != nil,
+              let field = suggestionTargetElement, let pid = suggestionTargetPID,
+              isChromiumFamily(bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        else {
+            finishAccepting(snippet, query: localQuery, stateBefore: stateBefore, read: read)
+            return
+        }
+
+        // Tab can reach the event tap before Chrome publishes the preceding printable.
+        // Freeze this pick and cancel any competing auto-match. The injection guard
+        // invalidates the pending pick on new input, including typing in the same field.
+        let session = suggestionSessionGeneration
+        let generation = injectionContextGeneration
+        suggestionSyncGeneration += 1
+        pendingAutomaticMatch = nil
+        beginInjection()
+        Task { @MainActor in
+            defer { self.endInjection() }
+            @MainActor func originalFieldIsFocused() -> Bool {
+                self.currentFocusMatches(field, axBudget: AXMessagingBudget(
+                    totalTimeoutSeconds: self.confirmationAXMessagingTimeoutSeconds,
+                    perMessageTimeoutSeconds: self.confirmationAXMessagingTimeoutSeconds))
+            }
+            for delay in [15, 35, 75] {
+                self.refreshChromiumAccessibility(for: field)
+                await self.settle(for: .milliseconds(delay))
+                guard self.suggestionActive, self.suggestionSessionGeneration == session else { return }
+                guard self.injectionIsAllowed(generation: generation, targetPID: pid),
+                      originalFieldIsFocused() else { break }
+                let fresh = readContext()
+                if case .confirmed = fresh, originalFieldIsFocused() {
+                    self.finishAccepting(snippet, query: localQuery, stateBefore: stateBefore, read: fresh)
+                    return
+                }
+                if !fresh.mayPrecedeTypedQuery { break }
+            }
+            // A retry can only upgrade the original rejection to an exact proof.
+            self.finishAccepting(snippet, query: localQuery, stateBefore: stateBefore, read: read)
+        }
+    }
+
+    private func finishAccepting(_ snippet: Snippet, query localQuery: String,
+                                 stateBefore: SuggestionContextState, read: AcceptContextRead) {
+        let deletion: TriggerDeletion
+        switch read {
         case .confirmed(let confirmed):
             deletion = .confirmed(confirmed)
             suggestionContextState = .axConfirmed
@@ -2627,6 +2685,7 @@ final class SnippetExpansionEngine {
                 if self.suggestionSyncGeneration == generation { self.pendingAutomaticMatch = nil }
             }
             for delay in [25, 75, 150] {
+                self.refreshChromiumAccessibility(for: retryField)
                 do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
                 guard self.suggestionActive, self.suggestionSyncGeneration == generation,
                       self.pendingAutomaticMatch != nil, self.suggestionQuery == expectedQuery,
@@ -3445,6 +3504,32 @@ final class SnippetExpansionEngine {
 
     // MARK: - Accessibility replacement
 
+    /// Chromium can serve the same cached range indefinitely while the renderer is
+    /// already editing. A process-scoped hit test schedules a renderer accessibility
+    /// update. Its reply is never a focus target or evidence that an edit succeeded.
+    private func refreshChromiumAccessibility(for field: AXUIElement) {
+        let budget = AXMessagingBudget(totalTimeoutSeconds: 0.025, perMessageTimeoutSeconds: 0.025)
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              isChromiumFamily(bundleIdentifier: app.bundleIdentifier),
+              processIdentifier(of: field) == app.processIdentifier,
+              let frame = accessibilityFrame(of: field, budget: budget) else { return }
+        let application = AXUIElementCreateApplication(app.processIdentifier)
+        guard budget.bind(application) else { return }
+        var hit: AXUIElement?
+        _ = AXUIElementCopyElementAtPosition(application, Float(frame.midX), Float(frame.midY), &hit)
+    }
+
+    /// Give ordinary AX updates one poll to arrive. Slow or cancelled edits can
+    /// stay pending for many polls, so limit the extra cross-process work.
+    private func refreshWhileWaiting(for field: AXUIElement?) -> () -> Void {
+        var next = ContinuousClock.now.advanced(by: SelectionPasteTransaction.pollInterval)
+        return {
+            guard let field, ContinuousClock.now >= next else { return }
+            self.refreshChromiumAccessibility(for: field)
+            next = .now.advanced(by: .milliseconds(50))
+        }
+    }
+
     private func inlineExpansionField(_ element: AXUIElement) -> InlineExpansionField? {
         guard let app = NSWorkspace.shared.frontmostApplication,
               processIdentifier(of: element) == app.processIdentifier else { return nil }
@@ -3859,6 +3944,7 @@ final class SnippetExpansionEngine {
             return triggerSelectionMatches(prepared, originalSelection: true, budget: AXMessagingBudget())
                 ? .notNeeded : .skippedContextChanged
         }
+        let refresh = refreshWhileWaiting(for: prepared.element)
         return await SelectionPasteTransaction.restore(
             contextIsValid: {
                 let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
@@ -3875,7 +3961,10 @@ final class SnippetExpansionEngine {
                 return setSelectedRange(prepared.verification.originalSelection,
                                         on: prepared.element, axBudget: budget)
             },
-            wait: { await settle(for: $0) })
+            wait: { delay in
+                refresh()
+                await settle(for: delay)
+            })
     }
 
     /// No Undo or text rewrite: only give back an unchanged selection we can still prove ours.
@@ -4024,6 +4113,7 @@ final class SnippetExpansionEngine {
             await settle(for: pasteboardWriteSettleDelay)
             progress.stage = .selectionValidation
             var lastRequested: NSRange?
+            var refresh = refreshWhileWaiting(for: preparedSelection.element)
             let report = await SelectionPasteTransaction.run(steps: selectionPlan.steps,
                 contextIsValid: {
                     // No destructive edit has happened: cancellation need not finish a paste.
@@ -4036,11 +4126,15 @@ final class SnippetExpansionEngine {
                 observeSelection: { observeTriggerSelection(preparedSelection, before: $0.before, after: $0.range) },
                 selectTrigger: { step in
                     lastRequested = step.range
+                    refresh = refreshWhileWaiting(for: preparedSelection.element)
                     return requestSelection(step, on: preparedSelection.element, targetPID: targetPID)
                 },
                 captureBaseline: captureConfirmationBaseline,
                 postPaste: postPaste,
-                wait: { await settle(for: $0) })
+                wait: { delay in
+                    refresh()
+                    await settle(for: delay)
+                })
             progress.selectionConfirmation = report.progress
             if report.result != .posted {
                 // Return the borrowed text before waiting on selection-only cleanup. The queue
@@ -4142,6 +4236,7 @@ final class SnippetExpansionEngine {
     ) async -> PasteConfirmationVerdict {
         var baseline = baseline
         var focusChanged = false
+        let refresh = refreshWhileWaiting(for: expectedFocusedElement)
         let start = ContinuousClock.now
         var attempt = 0
 
@@ -4195,7 +4290,7 @@ final class SnippetExpansionEngine {
             case .confirmed, .abandoned:
                 return verdict
             case .keepWaiting:
-                break
+                if target != nil { refresh() }
             }
 
             await settle(for: pasteConfirmationTuning.pollInterval)

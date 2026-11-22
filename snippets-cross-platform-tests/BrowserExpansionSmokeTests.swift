@@ -39,7 +39,7 @@ final class BrowserExpansionSmokeTests: XCTestCase {
         try await exerciseBrowser(.electron)
     }
 
-    private enum Browser { case chrome, electron, safari, webKit(URL) }
+    private enum Browser: Equatable { case chrome, electron, safari, webKit(URL) }
 
     private func exerciseBrowser(_ browser: Browser) async throws {
         try DesktopExpansionFixture.requireAccess()
@@ -61,6 +61,7 @@ final class BrowserExpansionSmokeTests: XCTestCase {
             Scenario(surface: "shadow", prefix: "inside "), Scenario(surface: "text", limited: true),
             Scenario(cancelPaste: true), Scenario(rewrite: true), Scenario(interrupt: true)
         ]
+        let loadingSearch = browser == .chrome
         let casesJSON = String(decoding: try JSONEncoder().encode(scenarios), as: UTF8.self)
         try """
             <!doctype html><meta charset=utf-8><title>starting</title>
@@ -213,7 +214,60 @@ final class BrowserExpansionSmokeTests: XCTestCase {
                 };
                 state('history-area-ready');
             };
-            setTimeout(prepare, 500);
+            // An unfinished child document keeps Chromium serving its old AX snapshot
+            // after Shift-Left has already changed the DOM selection. No network needed.
+            const loadingFrame = \(loadingSearch) ? document.createElement('iframe') : null;
+            if (loadingFrame) {
+                document.body.appendChild(loadingFrame);
+                loadingFrame.contentDocument.open();
+                loadingFrame.contentDocument.write('loading');
+                const search = document.getElementById('search');
+                search.focus();
+                let pastes = 0;
+                const prefix = 'keep 🐝 ', suffix = ' tail';
+                search.onpaste = () => { pastes++ };
+                search.oninput = event => {
+                    if (event.inputType !== 'insertFromPaste') return;
+                    const first = pastes === 1;
+                    const caret = (first ? 0 : prefix.length) + replacement.length;
+                    if (document.readyState === 'complete' || pastes > 2 ||
+                        search.value !== (first ? replacement : prefix + replacement + suffix) ||
+                        search.selectionStart !== caret || search.selectionEnd !== caret) {
+                        state('incorrect-loading-paste'); return;
+                    }
+                    if (first) {
+                        setTimeout(() => {
+                            search.value = prefix + suffix;
+                            search.setSelectionRange(prefix.length, prefix.length);
+                            state('loading-tab-ready');
+                        }, 400);
+                    } else {
+                        setTimeout(() => {
+                            search.value = '';
+                            state('loading-cancel-ready');
+                            // Hold the last printable until after Tab. Another user key
+                            // cancels that pick even if the original word then appears.
+                            search.onkeydown = e => {
+                                if (e.key === 'q') e.preventDefault();
+                                if (e.key !== 'x') return;
+                                e.preventDefault();
+                                search.value = String.fromCharCode(92) + 'zq';
+                                setTimeout(() => {
+                                    if (pastes !== 2 || search.value !== String.fromCharCode(92) + 'zq') {
+                                        state('unexpected-delayed-paste'); return;
+                                    }
+                                    search.onkeydown = search.oninput = search.onpaste = null;
+                                    loadingFrame.contentDocument.close();
+                                    prepare();
+                                }, 500);
+                            };
+                        }, 400);
+                    }
+                };
+                state('loading-ready');
+            } else {
+                setTimeout(prepare, 500);
+            }
             </script>
             """.write(to: fixture, atomically: true, encoding: .utf8)
 
@@ -322,7 +376,7 @@ final class BrowserExpansionSmokeTests: XCTestCase {
         AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         func waitForTitle(_ title: String) async throws {
             for _ in 0..<120 {
-                if title == "case-0-ready", fixtureTitle() == nil,
+                if (title == "case-0-ready" || title == "loading-ready"), fixtureTitle() == nil,
                    let windows = attribute(app, "AXWindows") as? [AXUIElement],
                    let ours = windows.first(where: { fixtureTitle(of: $0) != nil }) {
                     AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, ours)
@@ -332,7 +386,7 @@ final class BrowserExpansionSmokeTests: XCTestCase {
                     if isFrontmost() { return }
                     // A completed scenario may have lost foreground while the next one was loading.
                     // Only restore it between scenarios and only for this test's focused window.
-                    if title.hasPrefix("case-") {
+                    if title.hasPrefix("case-") || title == "loading-ready" {
                         DesktopExpansionFixture.activate(appInstance, app: app)
                     }
                 }
@@ -340,7 +394,41 @@ final class BrowserExpansionSmokeTests: XCTestCase {
             }
             throw FixtureFailure.missingBrowserState(expected: title, observed: fixtureTitle(), frontmost: isFrontmost())
         }
+        func waitForFocusedField(search: Bool = false) async throws -> AXUIElement {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            repeat {
+                if let object = attribute(app, "AXFocusedUIElement"), CFGetTypeID(object) == AXUIElementGetTypeID() {
+                    let field = object as! AXUIElement
+                    if !search || attribute(field, "AXSubrole") as? String == "AXSearchField" { return field }
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            } while ContinuousClock.now < deadline
+            throw FixtureFailure.missingBrowserState(expected: "focused field", observed: fixtureTitle(), frontmost: isFrontmost())
+        }
         do {
+            if loadingSearch {
+                try await waitForTitle("loading-ready")
+                let field = try await waitForFocusedField(search: true)
+                try await DesktopExpansionFixture.withEngine(in: directory.appendingPathComponent("loading"),
+                    replacement: replacement, keyword: "zqfixture") { engine in
+                    @MainActor func type(_ keys: String, interval: Duration = .milliseconds(40)) async throws {
+                        try await DesktopExpansionFixture.typeKeys(keys, to: appInstance, interval: interval) {
+                            guard let focused = attribute(app, "AXFocusedUIElement") else { return false }
+                            return CFEqual(focused, field)
+                        }
+                    }
+                    try await type("\\zqfixture")
+                    try await waitForTitle("loading-tab-ready")
+                    XCTAssertEqual(engine.statusText, "Expanded Fixture.")
+                    try await type("\\z")
+                    try await type("q\t", interval: .milliseconds(1))
+                    try await waitForTitle("loading-cancel-ready")
+                    XCTAssertEqual(engine.statusText, "Expanded Fixture.")
+                    try await type("\\z")
+                    try await type("q\tx", interval: .milliseconds(1))
+                    try await waitForTitle("case-0-ready")
+                }
+            }
             try await DesktopExpansionFixture.withEngine(in: directory, replacement: replacement) { engine in
                 for (index, scenario) in scenarios.enumerated() {
                     try await waitForTitle("case-\(index)-ready")
@@ -350,11 +438,7 @@ final class BrowserExpansionSmokeTests: XCTestCase {
                     }
                     // A new WKWebView publishes its AX tree asynchronously on the first read.
                     // Start delivery only after the fixture has an actual, focused text field.
-                    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-                    while attribute(app, "AXFocusedUIElement") == nil, ContinuousClock.now < deadline {
-                        try await Task.sleep(for: .milliseconds(10))
-                    }
-                    _ = try XCTUnwrap(attribute(app, "AXFocusedUIElement"))
+                    _ = try await waitForFocusedField()
                     try await DesktopExpansionFixture.expand(query: scenario.query, using: engine)
                 }
                 try await waitForTitle("password-ready")

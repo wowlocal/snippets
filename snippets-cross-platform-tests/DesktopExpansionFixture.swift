@@ -46,7 +46,8 @@ enum DesktopExpansionFixture {
 
     nonisolated private static let fixtureEventTag: Int64 = 0x53504E5454455354
 
-    static func typeKeys(_ text: String, to editor: NSRunningApplication, stillFocused: () -> Bool) async throws {
+    static func typeKeys(_ text: String, to editor: NSRunningApplication, interval: Duration = .milliseconds(40),
+                         stillFocused: () -> Bool) async throws {
         // PID-addressed events bypass the session tap. Exercise the real session
         // path, and consume our tagged keystrokes if the OS routes them elsewhere.
         let keyboard = CGEventMask(1 << CGEventType.keyDown.rawValue | 1 << CGEventType.keyUp.rawValue)
@@ -64,7 +65,7 @@ enum DesktopExpansionFixture {
             CFMachPortInvalidate(filter)
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
         }
-        let keyCodes: [Character: CGKeyCode] = ["\\": 42, "z": 6, "q": 12, "f": 3,
+        let keyCodes: [Character: CGKeyCode] = ["\t": 48, "\\": 42, "z": 6, "q": 12, "f": 3,
             "i": 34, "x": 7, "t": 17, "u": 32, "r": 15, "e": 14]
         for character in text {
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == editor.processIdentifier,
@@ -79,7 +80,7 @@ enum DesktopExpansionFixture {
                 key.setIntegerValueField(.eventSourceUserData, value: Self.fixtureEventTag)
                 key.post(tap: .cgSessionEventTap)
             }
-            try await Task.sleep(for: .milliseconds(40))
+            try await Task.sleep(for: interval)
         }
     }
 
