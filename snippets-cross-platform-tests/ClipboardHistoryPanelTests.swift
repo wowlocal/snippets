@@ -691,14 +691,14 @@ final class ClipboardHistoryPanelTests: XCTestCase {
 }
 
 @MainActor
-private final class PanelTestPasteboard: ClipboardHistoryPasteboardReading {
+final class PanelTestPasteboard: ClipboardHistoryPasteboardReading {
     var changeCount = 0
     var typeNames = ["public.utf8-plain-text"]
     var text: String?
     func readText() -> String? { text }
 }
 
-nonisolated private struct PanelTestStorage: ClipboardHistoryPersisting {
+nonisolated struct PanelTestStorage: ClipboardHistoryPersisting {
     let entries: [ClipboardHistoryEntry]
     var directoryExists: Bool { true }
     func prepareDirectory() throws {}

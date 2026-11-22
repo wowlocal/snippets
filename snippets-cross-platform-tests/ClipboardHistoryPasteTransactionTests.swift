@@ -5,6 +5,17 @@ import XCTest
 
 @MainActor
 final class ClipboardHistoryPasteTransactionTests: XCTestCase {
+    func testWebPasswordFieldAllowsExplicitPasteWithSecureKeyboardEntry() {
+        for secureInput in [false, true] {
+            XCTAssertTrue(ClipboardHistoryPasteTransaction.supportsTarget(isSecureField: true,
+                secureInputEnabled: secureInput, isWebField: true))
+            XCTAssertFalse(ClipboardHistoryPasteTransaction.supportsTarget(isSecureField: true,
+                secureInputEnabled: secureInput, isWebField: false))
+            XCTAssertEqual(ClipboardHistoryPasteTransaction.supportsTarget(isSecureField: false,
+                secureInputEnabled: secureInput, isWebField: true), !secureInput)
+        }
+    }
+
     func testLiteralHistoryRemainsCurrentAndCanBePastedAgainWithoutWaiting() async throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }

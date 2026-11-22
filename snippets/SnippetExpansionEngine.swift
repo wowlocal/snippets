@@ -50,6 +50,7 @@ final class SnippetExpansionEngine {
     let callbackContext = SnippetExpansionCallbackContext()
     private(set) var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var eventTapHealthTimer: Timer?
     private var localMonitor: Any?
     private var globalMouseMonitor: Any?
     private var workspaceActivationObserver: NSObjectProtocol?
@@ -108,6 +109,7 @@ final class SnippetExpansionEngine {
     /// The exact focused object and its role are retained only for the live session.
     /// A text surface with no usable insertion-caret AX range may use local tracking
     /// only while keyboard focus remains on this same object.
+    private var suggestionTargetWindow: AXUIElement?
     private var suggestionTargetElement: AXUIElement?
     private var suggestionTargetRole: String?
     private var suggestionHasReadableAXContext = false
@@ -119,7 +121,9 @@ final class SnippetExpansionEngine {
     private var suggestionAXObserver: AXObserver?
     private var suggestionAXObserverSource: CFRunLoopSource?
     private var suggestionObserverRegistration: SuggestionObserverRegistration?
-    private var suggestionObserverAllowsAutoExpand = false
+    // AX notifications can arrive for the preceding key after a new tap callback.
+    private var printableObservationDeadline: ContinuousClock.Instant?
+    private var pendingAutomaticMatch: (query: String, field: AXUIElement)?
     /// Non-nil only while LocalAuthentication is servicing an explicit secure
     /// suggestion. Its own activation/secure-input transitions must not invalidate
     /// the target we are about to restore and re-check.
@@ -209,6 +213,14 @@ final class SnippetExpansionEngine {
         let selection: NSRange?
     }
 
+    /// Resolve these capabilities on the captured field once, before requesting any edit.
+    private struct InlineExpansionField {
+        let element: AXUIElement
+        let nativeWrite: AccessibilityInsertionPolicy.Strategy
+        let editorHandlesSelection: Bool
+        let allowsAXSelection: Bool
+    }
+
     private struct PreparedTriggerSelection {
         let element: AXUIElement
         let verification: VerifiedTriggerSelection
@@ -216,7 +228,7 @@ final class SnippetExpansionEngine {
 
     private enum TriggerSelectionPreparation {
         case unavailable
-        case prepared(PreparedTriggerSelection)
+        case prepared(PreparedTriggerSelection, InlineSelectionPlan)
         case rejected(DiagnosticPasteReason)
     }
 
@@ -341,6 +353,7 @@ final class SnippetExpansionEngine {
     }
 
     isolated deinit {
+        eventTapHealthTimer?.invalidate()
         // A worker weak-load can perform the last release. Keep teardown serialized
         // with the C callbacks and retain their context until both sources detach.
         if let eventTap {
@@ -368,7 +381,15 @@ final class SnippetExpansionEngine {
             // Pay initial metadata preparation before installing the keyboard tap,
             // so the first backslash doesn't build the whole search index.
             _ = suggestionSearchSnapshot()
-            installEventTap()
+        }
+        ensureEventTapIsListening()
+        if eventTapHealthTimer == nil {
+            let timer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.checkEventTapHealth() }
+            }
+            timer.tolerance = 2
+            RunLoop.main.add(timer, forMode: .common)
+            eventTapHealthTimer = timer
         }
 
         if localMonitor == nil {
@@ -426,7 +447,6 @@ final class SnippetExpansionEngine {
             }
         }
 
-        listening = true
         refreshAccessibilityStatus(prompt: false)
     }
 
@@ -440,6 +460,51 @@ final class SnippetExpansionEngine {
         injectionInvalidationReason = reason
         injectionInvalidationOrigin = nil
         dismissSuggestions()
+    }
+
+    /// A missing or invalid Mach port cannot deliver its own disabled notification.
+    /// Check independently of key traffic, including after the machine wakes up.
+    func checkEventTapHealth() {
+        guard !isPreparingForTermination else { return }
+        if listening && eventTapIsEnabled { return }
+        let wasListening = listening
+        let trusted = AXIsProcessTrusted()
+        if trusted != accessibilityGranted {
+            refreshAccessibilityStatus(prompt: false)
+        }
+        ensureEventTapIsListening()
+        if listening != wasListening { refreshAccessibilityStatus(prompt: false) }
+    }
+
+    private var eventTapIsEnabled: Bool {
+        guard let tap = eventTap, CFMachPortIsValid(tap) else { return false }
+        return CGEvent.tapIsEnabled(tap: tap)
+    }
+
+    private func ensureEventTapIsListening() {
+        if eventTapIsEnabled {
+            listening = true
+            return
+        }
+        if listening {
+            acceptanceKeys.reset()
+            resetTypingContext(reason: .monitorsRestarted)
+        }
+        listening = false
+        guard accessibilityGranted else { return }
+        if let tap = eventTap, CFMachPortIsValid(tap) {
+            CGEvent.tapEnable(tap: tap, enable: true)
+            if CGEvent.tapIsEnabled(tap: tap) {
+                listening = true
+                return
+            }
+        }
+        if let tap = eventTap { CFMachPortInvalidate(tap) }
+        if let source = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        runLoopSource = nil
+        eventTap = nil
+        installEventTap()
+        listening = eventTapIsEnabled
     }
 
     /// Install a CGEvent tap so we can intercept (suppress) keys like TAB
@@ -499,10 +564,10 @@ final class SnippetExpansionEngine {
             // Input may have passed while the tap was disabled, including the release of
             // an accepted Tab. Neither held-key ownership nor insertion authority survives.
             acceptanceKeys.reset()
-            injectionContextGeneration &+= 1
-            injectionInvalidationReason = .monitorsRestarted
-            injectionInvalidationOrigin = nil
+            resetTypingContext(reason: .monitorsRestarted)
             CGEvent.tapEnable(tap: tap, enable: true)
+            listening = eventTapIsEnabled
+            if !listening { refreshAccessibilityStatus(prompt: false) }
         }
     }
 
@@ -613,7 +678,7 @@ final class SnippetExpansionEngine {
                 // expansion silently dead with nothing else to go on.
                 statusText = "Paused while an app has secure keyboard entry on."
             } else {
-                statusText = listening ? "Listening for snippet keywords in all apps." : "Ready to start listening."
+                statusText = listening ? "Listening for snippet keywords in all apps." : "Keyboard monitoring is unavailable. Snippets will retry automatically."
             }
         } else {
             statusText = SnippetExpansionEngine.accessibilityRequiredStatus
@@ -717,8 +782,14 @@ final class SnippetExpansionEngine {
         defer { statusText = previousStatus }
         var focusRead = SecurePasteFocusRead()
         guard case .target(let target) = captureSecurePasteTargetImpl(focusRead: &focusRead),
-              !target.isSecureTextField, !target.secureInputWasEnabledAtCapture else { return nil }
+              clipboardHistorySupports(target) else { return nil }
         return target
+    }
+
+    private func clipboardHistorySupports(_ target: SecurePasteTarget) -> Bool {
+        ClipboardHistoryPasteTransaction.supportsTarget(isSecureField: target.isSecureTextField,
+            secureInputEnabled: target.secureInputWasEnabledAtCapture,
+            isWebField: elementIsInsideWebArea(target.textElement, axBudget: AXMessagingBudget()))
     }
 
     func setClipboardHistoryPickerActive(_ active: Bool) {
@@ -755,7 +826,7 @@ final class SnippetExpansionEngine {
         completion: @escaping (String?) -> Void
     ) {
         guard !text.isEmpty, !isPreparingForTermination, accessibilityGranted,
-              !target.isSecureTextField else {
+              clipboardHistorySupports(target) else {
             completion("Could not paste into the original field.")
             return
         }
@@ -789,8 +860,14 @@ final class SnippetExpansionEngine {
             let result = ClipboardHistoryPasteTransaction.paste(text, to: NSPasteboard.general,
                 validateTarget: {
                     guard !Task.isCancelled else { return .contextChanged }
-                    if let reason = self.injectionBlockReason(generation: generation, targetPID: target.targetPID) {
+                    if let reason = self.injectionBlockReason(generation: generation, targetPID: target.targetPID,
+                        allowingSecureHistoryField: target.isSecureTextField) {
                         return reason
+                    }
+                    if target.isSecureTextField,
+                       self.stringAttribute(of: target.textElement, attribute: kAXSubroleAttribute as CFString,
+                                            axBudget: AXMessagingBudget()) != (kAXSecureTextFieldSubrole as String) {
+                        return .focusedElementChanged
                     }
                     return self.securePasteTargetStillMatches(target, budget: AXMessagingBudget())
                         ? nil : .focusedElementChanged
@@ -1619,6 +1696,8 @@ final class SnippetExpansionEngine {
         suggestionTargetPID = processIdentifier(of: anchorFocusedElement)
             ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         suggestionTargetElement = anchorFocusedElement
+        suggestionTargetWindow = elementAttribute(of: anchorFocusedElement, attribute: kAXWindowAttribute as CFString,
+                                                  axBudget: axBudget)
         suggestionTargetRole = stringAttribute(
             of: anchorFocusedElement,
             attribute: kAXRoleAttribute as CFString,
@@ -1627,7 +1706,8 @@ final class SnippetExpansionEngine {
         suggestionCaretUnavailable = false
         pendingSpaceShortcutFocusValidation = false
         pendingSpaceShortcutInputSourceID = nil
-        suggestionObserverAllowsAutoExpand = false
+        printableObservationDeadline = nil
+        pendingAutomaticMatch = nil
         suggestionFrecency = usage.makeRankingSnapshot()
         suggestionResultsUpdater.reset()
         pendingSelectionMemoryQuery = nil
@@ -1800,7 +1880,7 @@ final class SnippetExpansionEngine {
             operation: .observerNotification,
             expectedQuery: nil,
             readIsAuthoritative: true,
-            allowAutoExpand: suggestionObserverAllowsAutoExpand,
+            allowAutoExpand: pendingAutomaticMatch != nil,
             dismissOnMissingTrigger: true,
             notificationStage: stage)
     }
@@ -1981,8 +2061,11 @@ final class SnippetExpansionEngine {
             : nil
         let ordinaryTarget = store.isSecure(snippet.id) ? nil : captureExpansionTarget()
         if !store.isSecure(snippet.id) {
+            let confirmedQuery = deletion.provenance == .accessibilityConfirmed ? localQuery : nil
+            let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                           perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
             guard let ordinaryTarget,
-                  suggestionTargetElement.map({ CFEqual($0, ordinaryTarget.element) }) ?? false else {
+                  suggestionOwns(ordinaryTarget.element, confirming: confirmedQuery, axBudget: budget) else {
                 Diagnostics.record(.pasteDelivery(outcome: .interrupted, restoration: .notBorrowed,
                     durationMilliseconds: 0, hadFingerprint: false,
                     progress: .init(reason: .focusedElementChanged, plannedDeletes: deletion.characterCount)))
@@ -2326,6 +2409,7 @@ final class SnippetExpansionEngine {
         stopSuggestionAccessibilityObserver()
         suggestionTargetPID = nil
         suggestionTargetElement = nil
+        suggestionTargetWindow = nil
         suggestionTargetRole = nil
         suggestionHasReadableAXContext = false
         suggestionCaretUnavailable = false
@@ -2338,7 +2422,8 @@ final class SnippetExpansionEngine {
         suggestionQuery = ""
         suggestionDeleteCount = 1
         suggestionContextState = .localDisplayOnly
-        suggestionObserverAllowsAutoExpand = false
+        printableObservationDeadline = nil
+        pendingAutomaticMatch = nil
         suggestionSyncGeneration += 1
         suggestionFrecency = .empty
         suggestionPanel.dismiss()
@@ -2512,6 +2597,11 @@ final class SnippetExpansionEngine {
         suggestionSyncGeneration += 1
         let generation = suggestionSyncGeneration
 
+        let retryField = allowAutoExpand && unambiguousExactMatch(for: expectedQuery) != nil
+            ? fieldForFinalPrintableKey(query: expectedQuery) : nil
+        pendingAutomaticMatch = retryField.map { (expectedQuery, $0) }
+        printableObservationDeadline = .now.advanced(by: .milliseconds(300))
+
         Task { @MainActor [weak self] in
             // Yield only to get out of the event-tap callback and let the host
             // receive the key. This is scheduling, not a wall-clock debounce.
@@ -2528,14 +2618,71 @@ final class SnippetExpansionEngine {
                 readIsAuthoritative: false,
                 allowAutoExpand: allowAutoExpand,
                 dismissOnMissingTrigger: false)
+
+            // Some editors publish the completed word after this read and never
+            // deliver a selection notification. Retry only an exact ordinary
+            // candidate, while its original edit and field still own the request.
+            guard let retryField, self.pendingAutomaticMatch != nil else { return }
+            defer {
+                if self.suggestionSyncGeneration == generation { self.pendingAutomaticMatch = nil }
+            }
+            for delay in [25, 75, 150] {
+                do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
+                guard self.suggestionActive, self.suggestionSyncGeneration == generation,
+                      self.pendingAutomaticMatch != nil, self.suggestionQuery == expectedQuery,
+                      !self.isInjecting, !self.secureEventInputEnabled,
+                      let pid = self.suggestionTargetPID,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+                      self.currentFocusMatches(retryField, axBudget: AXMessagingBudget(
+                        totalTimeoutSeconds: self.confirmationAXMessagingTimeoutSeconds,
+                        perMessageTimeoutSeconds: self.confirmationAXMessagingTimeoutSeconds)) else { return }
+                self.refreshSuggestionContextFromFocusedText(
+                    operation: operation,
+                    expectedQuery: expectedQuery,
+                    readIsAuthoritative: false,
+                    allowAutoExpand: true,
+                    dismissOnMissingTrigger: false)
+                if self.pendingAutomaticMatch == nil { return }
+            }
         }
+    }
+
+    /// Monaco can retire its original accessibility object when it first enters
+    /// screen-reader mode. Bind the final user key to its actual recipient before
+    /// the host receives it. A different live field cannot inherit the session.
+    private func fieldForFinalPrintableKey(query: String) -> AXUIElement? {
+        let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                       perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+        guard let field = frontmostFocusedElement(axBudget: budget),
+              suggestionOwns(field, confirming: String(query.dropLast()), axBudget: budget) else { return nil }
+        return field
+    }
+
+    private func suggestionOwns(_ field: AXUIElement, confirming query: String?, axBudget budget: AXMessagingBudget) -> Bool {
+        guard let original = suggestionTargetElement, let pid = suggestionTargetPID,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }
+        if CFEqual(field, original) { return true }
+        var role: CFTypeRef?
+        guard let query, let expectedRole = suggestionTargetRole,
+              copyAttributeValue(of: original, attribute: kAXRoleAttribute as CFString,
+                                 into: &role, axBudget: budget) == .invalidUIElement,
+              processIdentifier(of: field) == pid,
+              let originalWindow = suggestionTargetWindow,
+              let window = elementAttribute(of: field, attribute: kAXWindowAttribute as CFString, axBudget: budget),
+              CFEqual(window, originalWindow),
+              stringAttribute(of: field, attribute: kAXRoleAttribute as CFString, axBudget: budget) == expectedRole,
+              case .value(let before) = detailedTextBeforeCaret(in: field, maxCharacters: maxBufferLength, axBudget: budget),
+              SuggestionTriggerContext.context(inTextBeforeCaret: before)?.query == query
+        else { return false }
+        return true
     }
 
     private func appendLocalSuggestionCharacter(_ character: Character) {
         guard suggestionActive else { return }
         let stateBefore = suggestionContextState
         suggestionContextState = suggestionContextState.afterLocalPrintableEdit
-        suggestionObserverAllowsAutoExpand = true
+        printableObservationDeadline = nil
+        pendingAutomaticMatch = nil
         suggestionQuery.append(character)
         suggestionDeleteCount = 1 + suggestionQuery.count
         recordExpansionAccessibility(
@@ -2548,9 +2695,11 @@ final class SnippetExpansionEngine {
 
     private func applyLocalSuggestionBackspace() {
         guard suggestionActive else { return }
+        suggestionSyncGeneration += 1
         let stateBefore = suggestionContextState
         suggestionContextState = suggestionContextState.afterAmbiguousHostEdit
-        suggestionObserverAllowsAutoExpand = false
+        printableObservationDeadline = nil
+        pendingAutomaticMatch = nil
 
         if suggestionQuery.isEmpty {
             recordExpansionAccessibility(
@@ -2574,9 +2723,11 @@ final class SnippetExpansionEngine {
 
     private func markSuggestionUncertainAfterHostEdit() {
         guard suggestionActive else { return }
+        suggestionSyncGeneration += 1
         let stateBefore = suggestionContextState
         suggestionContextState = suggestionContextState.afterAmbiguousHostEdit
-        suggestionObserverAllowsAutoExpand = false
+        printableObservationDeadline = nil
+        pendingAutomaticMatch = nil
         recordExpansionAccessibility(
             operation: .hostEdit,
             outcome: .observing,
@@ -2597,10 +2748,16 @@ final class SnippetExpansionEngine {
 
         switch focusedTriggerContext(axBudget: AXMessagingBudget()) {
         case .found(let context):
-            if !readIsAuthoritative,
-               let expectedQuery,
+            let automatic = pendingAutomaticMatch
+            // A notification is authoritative for host-owned edits. While a typed
+            // key is in flight an older prefix still describes the previous key.
+            let awaitingPrintable = printableObservationDeadline.map { ContinuousClock.now < $0 } ?? false
+            let earlierPrefix = awaitingPrintable && suggestionQuery.hasPrefix(context.query)
+            let observedQuery = automatic?.query ?? (earlierPrefix ? suggestionQuery : nil)
+            let pendingQuery = readIsAuthoritative ? observedQuery : expectedQuery
+            if let pendingQuery,
                normalizedForSuggestionMatching(context.query)
-                   != normalizedForSuggestionMatching(expectedQuery) {
+                   != normalizedForSuggestionMatching(pendingQuery) {
                 // The host has not applied our just-observed key yet. Never
                 // roll the optimistic panel backwards based on this stale read.
                 recordExpansionAccessibility(
@@ -2619,7 +2776,8 @@ final class SnippetExpansionEngine {
             // One printable key grants at most one opportunity to auto-expand.
             // Duplicate or later programmatic AX notifications may still
             // reconcile the panel, but cannot spend the same authorization.
-            suggestionObserverAllowsAutoExpand = false
+            printableObservationDeadline = nil
+            pendingAutomaticMatch = nil
             recordExpansionAccessibility(
                 operation: operation,
                 outcome: .confirmed,
@@ -2627,10 +2785,11 @@ final class SnippetExpansionEngine {
                 stateAfter: .axConfirmed,
                 stage: notificationStage)
 
-            if allowAutoExpand,
-               !context.query.isEmpty,
-               let snippet = unambiguousExactMatch(for: context.query) {
-                selectSuggestion(snippet, deletion: .confirmed(context))
+            if allowAutoExpand, let automatic,
+               let snippet = unambiguousExactMatch(for: context.query),
+               let target = captureExpansionTarget(), CFEqual(target.element, automatic.field) {
+                dismissSuggestions()
+                enqueueExpansion(of: snippet, deletion: .confirmed(context), expectedTarget: target)
                 return
             }
 
@@ -2643,7 +2802,8 @@ final class SnippetExpansionEngine {
                 stateBefore: stateBefore,
                 stateAfter: stateBefore,
                 stage: notificationStage)
-            if dismissOnMissingTrigger {
+            let awaitingPrintable = printableObservationDeadline.map { ContinuousClock.now < $0 } ?? false
+            if dismissOnMissingTrigger && !awaitingPrintable {
                 typedBuffer = ""
                 dismissSuggestions()
             }
@@ -3075,7 +3235,7 @@ final class SnippetExpansionEngine {
             statusText = "Skipped \(snippet.displayName): the original input field did not regain keyboard focus."
             return
         }
-        let expectedElement = secureFocusTarget?.element ?? ordinaryTarget?.element
+        let expectedElement = secureFocusTarget?.element ?? ordinaryTarget?.element ?? frontmostFocusedElement()
         if let ordinaryTarget,
            !expansionTargetMatches(ordinaryTarget, checkSelection: deletion.provenance == .accessibilityConfirmed) {
             Diagnostics.record(.pasteDelivery(outcome: .interrupted, restoration: .notBorrowed,
@@ -3123,11 +3283,11 @@ final class SnippetExpansionEngine {
 
         let accessibilityStart = ContinuousClock.now
         var accessibilityProgress = DiagnosticAccessibilityReplacementProgress()
+        let field = expectedElement.flatMap(inlineExpansionField)
         let replacement = replaceUsingAccessibility(
             deletion: deletion,
             with: resolvedText,
-            expectedFocusedElement: expectedElement,
-            generation: generation, targetPID: targetPID,
+            field: field, generation: generation, targetPID: targetPID,
             progress: &accessibilityProgress)
         let accessibilityElapsed = accessibilityStart.duration(to: .now).components
         let accessibilityDuration = accessibilityElapsed.seconds * 1_000
@@ -3172,7 +3332,7 @@ final class SnippetExpansionEngine {
             targetPID: targetPID,
             isConcealed: authorization.concealsPasteboard,
             expectedFocusedElement: expectedElement,
-            deletion: deletion,
+            deletion: deletion, field: field,
             accessibilityOutcome: replacement == .unavailable ? .unavailable : .rejected
         )
         switch eventOutcome {
@@ -3251,12 +3411,13 @@ final class SnippetExpansionEngine {
     private func injectionBlockReason(
         generation: UInt,
         targetPID: pid_t?,
-        allowingTerminationDrain: Bool = false
+        allowingTerminationDrain: Bool = false,
+        allowingSecureHistoryField: Bool = false
     ) -> DiagnosticPasteReason? {
         if isPreparingForTermination, !allowingTerminationDrain { return .quitting }
         if generation != injectionContextGeneration { return injectionInvalidationReason }
         if !listening && !clipboardHistoryInsertionActive { return .listeningStopped }
-        if secureEventInputEnabled { return .secureInputEnabled }
+        if secureEventInputEnabled && !allowingSecureHistoryField { return .secureInputEnabled }
         guard let targetPID else {
             return frontmostProcessIsThisApp() ? .ownAppFrontmost : nil
         }
@@ -3284,30 +3445,42 @@ final class SnippetExpansionEngine {
 
     // MARK: - Accessibility replacement
 
+    private func inlineExpansionField(_ element: AXUIElement) -> InlineExpansionField? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              processIdentifier(of: element) == app.processIdentifier else { return nil }
+        let budget = AXMessagingBudget()
+        let ancestry = webAreaAncestry(element, axBudget: budget)
+        var markers: CFTypeRef?
+        let configured = accessibilityWriteStrategy(for: app)
+        var renderer = ancestry == true
+        if !renderer,
+           budget.copyAttributeValue(of: element, attribute: kAXSelectedTextMarkerRangeAttribute as CFString,
+                                     into: &markers) == .success,
+           let markers, CFGetTypeID(markers) == AXTextMarkerRangeGetTypeID() {
+            // Some browser UI controls expose markers too. The proven native omnibox
+            // has a separate whole-value write contract.
+            renderer = !(configured == .wholeValue && ancestry == false && elementIsBrowserChrome(element))
+        }
+        return InlineExpansionField(element: element, nativeWrite: !renderer && ancestry == false ? configured : .none,
+                                    editorHandlesSelection: renderer, allowsAXSelection: configured != .none)
+    }
+
     /// Direct replacement without synthetic events or clipboard involvement. It is synchronous
     /// to avoid scheduling gaps, but cross-process AX reads and writes are not atomic.
     private func replaceUsingAccessibility(
         deletion: TriggerDeletion,
         with replacement: String,
-        expectedFocusedElement: AXUIElement?,
+        field: InlineExpansionField?,
         generation: UInt,
         targetPID: pid_t?,
         progress: inout DiagnosticAccessibilityReplacementProgress
     ) -> AccessibilityReplacement {
-        guard accessibilityGranted,
-              deletion.isSelfConsistent,
-              let app = NSWorkspace.shared.frontmostApplication
+        guard accessibilityGranted, deletion.isSelfConsistent, let field,
+              field.nativeWrite != .none else { return .unavailable }
+        let element = field.element
+        guard currentFocusMatches(element) else { return .cancelledBeforeText }
+        guard let caret = selectedRange(of: element), caret.location >= 0, caret.length >= 0
         else { return .unavailable }
-
-        let strategy = accessibilityWriteStrategy(for: app)
-        guard strategy != .none,
-              // Only the focused element, never an ancestor: reading from a parent is safe, writing
-              // into one is not.
-              let element = frontmostFocusedElement(),
-              let caret = selectedRange(of: element),
-              caret.location >= 0, caret.length >= 0
-        else { return .unavailable }
-        guard expectedFocusedElement.map({ CFEqual(element, $0) }) ?? true else { return .cancelledBeforeText }
 
         let caretRange = NSRange(location: caret.location, length: caret.length)
         // Enough text that a trigger made of surrogate pairs cannot be clipped by the read window.
@@ -3330,7 +3503,7 @@ final class SnippetExpansionEngine {
             return planResult == .rejected ? .rejected : .unavailable
         }
 
-        if strategy == .wholeValue {
+        if field.nativeWrite == .wholeValue {
             // Proven here rather than in the policy: it takes Accessibility reads, and they are
             // wasted on every host that is not Chromium.
             guard elementIsBrowserChrome(element) else { return .unavailable }
@@ -3378,7 +3551,7 @@ final class SnippetExpansionEngine {
                 && currentFocusMatches(element, axBudget: budget)
         }
         let result = AccessibilitySelectedTextTransaction.run(
-            targetIsInsideWebArea: securePasteWebAncestry(element, axBudget: AXMessagingBudget()),
+            targetIsInsideWebArea: webAreaAncestry(element, axBudget: AXMessagingBudget()),
             contextIsValid: contextIsValid,
             originalSelectionMatches: {
                 guard let selected = selectedRange(of: element),
@@ -3583,38 +3756,49 @@ final class SnippetExpansionEngine {
     /// Prepare without changing either the field or clipboard. A host that can select a
     /// range but cannot write AXSelectedText can still perform its own native paste.
     private func prepareTriggerSelection(
-        deletion: TriggerDeletion?, element: AXUIElement?
+        deletion: TriggerDeletion?, field: InlineExpansionField?
     ) -> TriggerSelectionPreparation {
-        guard let deletion, deletion.provenance == .accessibilityConfirmed,
-              let app = NSWorkspace.shared.frontmostApplication,
-              accessibilityWriteStrategy(for: app) != .none,
-              let element else { return .unavailable }
+        guard let deletion, let field else { return .unavailable }
+        let renderer = field.editorHandlesSelection
+        guard renderer || (deletion.provenance == .accessibilityConfirmed && field.allowsAXSelection)
+        else { return .unavailable }
+        let element = field.element
         let budget = AXMessagingBudget()
         guard currentFocusMatches(element, axBudget: budget) else { return .rejected(.focusedElementChanged) }
-        guard attributeIsSettable(kAXSelectedTextRangeAttribute as CFString, on: element, axBudget: budget),
-              let original = selectedRange(of: element, axBudget: budget) else { return .unavailable }
+        // Locally tracked keyboards may be ahead of the renderer. Keep that established
+        // compatibility path if the host cannot yet prove the trigger. An AX-confirmed
+        // renderer must never downgrade a lost selection proof into destructive backspaces.
+        let unavailable: TriggerSelectionPreparation = renderer && deletion.provenance == .accessibilityConfirmed
+            ? .rejected(.selectionUnavailable) : .unavailable
+        guard let original = selectedRange(of: element, axBudget: budget) else { return unavailable }
         guard original.location >= 0, original.length >= 0,
               original.location <= Int.max - original.length else { return .rejected(.selectionChanged) }
         let readLength = max(maxBufferLength, deletion.expectedText.utf16.count)
         guard readLength <= VerifiedTriggerSelection.maximumReadUTF16Length,
-              original.length <= VerifiedTriggerSelection.maximumReadUTF16Length - readLength else { return .unavailable }
+              original.length <= VerifiedTriggerSelection.maximumReadUTF16Length - readLength else { return unavailable }
         guard let before = textBeforeCaret(in: element, caretLocation: original.location,
                   maxCharacters: readLength, allowFullValueFallback: false, axBudget: budget)
-        else { return .unavailable }
+        else { return unavailable }
         // The prefix is authoritative even if a later selected-suffix read fails.
         let verification: VerifiedTriggerSelection
         switch VerifiedTriggerSelection.prepare(deletion: deletion, textBeforeCaret: before,
             originalSelection: NSRange(location: original.location, length: original.length),
             readSelectedText: { stringForRange(of: element, range: original, axBudget: budget) }) {
         case .verified(let selection): verification = selection
-        case .unavailable: return .unavailable
-        case .rejected: return .rejected(.triggerChanged)
+        case .unavailable: return unavailable
+        case .rejected: return deletion.provenance == .localTracking ? .unavailable : .rejected(.triggerChanged)
         }
         let prepared = PreparedTriggerSelection(element: element, verification: verification)
         guard triggerSelectionMatches(prepared, originalSelection: true, budget: budget) else {
             return .rejected(.selectionChanged)
         }
-        return .prepared(prepared)
+        guard let plan = InlineSelectionPlan(proof: verification, editorHandlesSelection: renderer,
+            fieldLength: integerAttribute(of: element, attribute: kAXNumberOfCharactersAttribute as CFString,
+                                          axBudget: budget),
+            canSetRange: field.allowsAXSelection && attributeIsSettable(kAXSelectedTextRangeAttribute as CFString,
+                                                                        on: element, axBudget: budget))
+        else { return unavailable }
+        return .prepared(prepared, plan)
     }
 
     private func triggerSelectionMatches(
@@ -3649,26 +3833,33 @@ final class SnippetExpansionEngine {
         return proof.matches(range: proof.replacementRange, text: text)
     }
 
-    private func observeTriggerSelection(_ prepared: PreparedTriggerSelection) -> TriggerSelectionObservation {
+    private func observeTriggerSelection(_ prepared: PreparedTriggerSelection,
+                                         before: NSRange, after: NSRange) -> TriggerSelectionObservation {
         let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
                                        perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
         let actual = selectedRange(of: prepared.element, axBudget: budget)
             .map { NSRange(location: $0.location, length: $0.length) }
         let proof = prepared.verification
         // Avoid fetching any text at a range that already proves a conflict.
-        guard actual == proof.originalSelection || actual == proof.replacementRange else {
+        guard actual == before || actual == after else {
             return actual == nil ? .unavailable : .rangeChanged
         }
         let text = stringForRange(of: prepared.element,
             range: CFRange(location: proof.replacementRange.location, length: proof.replacementRange.length),
             axBudget: budget)
-        return proof.observation(range: actual, text: text)
+        return proof.observation(range: actual, text: text, before: before, after: after)
     }
 
     private func restorePendingTriggerSelection(
-        _ prepared: PreparedTriggerSelection, generation: UInt, targetPID: pid_t?
+        _ prepared: PreparedTriggerSelection, lastRequested: NSRange, generation: UInt, targetPID: pid_t?
     ) async -> DiagnosticPasteSelectionRestoration {
-        await SelectionPasteTransaction.restore(
+        if lastRequested == prepared.verification.originalSelection {
+            // The last movement itself requested the original range. Another write cannot
+            // improve the result and could race an unacknowledged movement.
+            return triggerSelectionMatches(prepared, originalSelection: true, budget: AXMessagingBudget())
+                ? .notNeeded : .skippedContextChanged
+        }
+        return await SelectionPasteTransaction.restore(
             contextIsValid: {
                 let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
                                                perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
@@ -3676,7 +3867,8 @@ final class SnippetExpansionEngine {
                                           allowingTerminationDrain: true)
                     && currentFocusMatches(prepared.element, axBudget: budget)
             },
-            observeSelection: { observeTriggerSelection(prepared) },
+            observeSelection: { observeTriggerSelection(prepared, before: prepared.verification.originalSelection,
+                                                        after: lastRequested) },
             restoreOriginal: {
                 let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
                                                perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
@@ -3715,6 +3907,7 @@ final class SnippetExpansionEngine {
         isConcealed: Bool = false,
         expectedFocusedElement: AXUIElement? = nil,
         deletion: TriggerDeletion? = nil,
+        field: InlineExpansionField? = nil,
         accessibilityOutcome: DiagnosticPasteAccessibilityOutcome? = nil
     ) async -> EventReplacementOutcome {
         let start = ContinuousClock.now
@@ -3756,22 +3949,22 @@ final class SnippetExpansionEngine {
             return .failed
         }
         progress.stage = .selectionPreparation
-        let preparedSelection: PreparedTriggerSelection?
-        switch prepareTriggerSelection(deletion: deletion, element: expectedFocusedElement) {
+        let selection: (target: PreparedTriggerSelection, plan: InlineSelectionPlan)?
+        switch prepareTriggerSelection(deletion: deletion, field: field) {
         case .unavailable:
-            preparedSelection = nil
+            selection = nil
         case .rejected(let reason):
             progress.reason = reason
             progress.selection = .rejected
             return .failed
-        case .prepared(let prepared):
-            preparedSelection = prepared
+        case .prepared(let prepared, let plan):
+            selection = (prepared, plan)
             progress.transport = .selectionPaste
         }
         // Build the complete shortcut before borrowing the clipboard or deleting the trigger.
         progress.stage = .eventPreparation
         guard let pasteEvents = makePasteShortcutEvents(),
-              let deleteEvents = makeDeleteEvents(count: preparedSelection == nil ? characterCount : 0) else {
+              let deleteEvents = makeDeleteEvents(count: selection == nil ? characterCount : 0) else {
             diagnosticOutcome = .eventCreationFailed
             progress.reason = .eventCreationFailed
             return .failed
@@ -3827,10 +4020,11 @@ final class SnippetExpansionEngine {
             progress.pastePosted = true
         }
 
-        if let preparedSelection {
+        if let (preparedSelection, selectionPlan) = selection {
             await settle(for: pasteboardWriteSettleDelay)
             progress.stage = .selectionValidation
-            let report = await SelectionPasteTransaction.run(
+            var lastRequested: NSRange?
+            let report = await SelectionPasteTransaction.run(steps: selectionPlan.steps,
                 contextIsValid: {
                     // No destructive edit has happened: cancellation need not finish a paste.
                     guard !Task.isCancelled else {
@@ -3839,12 +4033,10 @@ final class SnippetExpansionEngine {
                     }
                     return insertionIsAllowed(allowingTerminationDrain: true) && clipboardIsOwned()
                 },
-                observeSelection: { observeTriggerSelection(preparedSelection) },
-                selectTrigger: {
-                    let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
-                                                   perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
-                    return setSelectedRange(preparedSelection.verification.replacementRange,
-                                            on: preparedSelection.element, axBudget: budget)
+                observeSelection: { observeTriggerSelection(preparedSelection, before: $0.before, after: $0.range) },
+                selectTrigger: { step in
+                    lastRequested = step.range
+                    return requestSelection(step, on: preparedSelection.element, targetPID: targetPID)
                 },
                 captureBaseline: captureConfirmationBaseline,
                 postPaste: postPaste,
@@ -3855,9 +4047,9 @@ final class SnippetExpansionEngine {
                 // and injection guard stay held until cleanup ends; no detached task can later
                 // restore an obsolete range into a newer expansion.
                 finishPendingPasteboardOwnership(schedulingRetryOnFailure: true, finishingInFlightLease: lease)
-                if report.progress.writeAttempted {
+                if let lastRequested, field?.allowsAXSelection == true {
                     progress.selectionRestoration = await restorePendingTriggerSelection(
-                        preparedSelection, generation: generation, targetPID: targetPID)
+                        preparedSelection, lastRequested: lastRequested, generation: generation, targetPID: targetPID)
                 }
             }
             switch report.result {
@@ -3909,7 +4101,10 @@ final class SnippetExpansionEngine {
             lease: lease,
             targetPID: targetPID,
             expectedFocusedElement: confirmationElement,
-            allowsDeletionRebaseline: preparedSelection == nil
+            readback: field?.editorHandlesSelection == true ? selection.flatMap {
+                InlinePasteReadback(location: $0.target.verification.replacementRange.location, text: replacement)
+            } : nil,
+            allowsDeletionRebaseline: selection == nil
         )
         diagnosticOutcome = verdict.diagnosticOutcome
         switch verdict {
@@ -3942,7 +4137,8 @@ final class SnippetExpansionEngine {
         lease: TemporaryPasteboardLease,
         targetPID: pid_t?,
         expectedFocusedElement: AXUIElement?,
-        allowsDeletionRebaseline: Bool = true
+        readback: InlinePasteReadback?,
+        allowsDeletionRebaseline: Bool
     ) async -> PasteConfirmationVerdict {
         var baseline = baseline
         var focusChanged = false
@@ -3961,15 +4157,29 @@ final class SnippetExpansionEngine {
             }
             // A different field cannot acknowledge this paste. Keep the bounded lease alive:
             // renderer node replacement or focus movement may precede consumption of Cmd+V.
-            let current = abort == nil && !focusChanged && expectedFocusedElement != nil
-                ? focused.flatMap { focusedCaretFingerprint(in: $0, axBudget: axBudget) } : nil
-
-            let progress = SnippetPasteConfirmationPolicy.progress(
-                before: baseline,
-                after: current,
-                pastedText: pastedText,
-                tailLength: pasteConfirmationTuning.fingerprintTailLength
-            )
+            let target = !focusChanged && expectedFocusedElement != nil ? focused : nil
+            var progress: PasteProgress
+            if let readback {
+                progress = target.map { element in
+                    readback.progress(caret: selectedRange(of: element, axBudget: axBudget)) { range in
+                        stringForRange(of: element, range: range, axBudget: axBudget)
+                    }
+                } ?? .unreadable
+            } else {
+                let current = target.flatMap { focusedCaretFingerprint(in: $0, axBudget: axBudget) }
+                progress = SnippetPasteConfirmationPolicy.progress(
+                    before: baseline, after: current, pastedText: pastedText,
+                    tailLength: pasteConfirmationTuning.fingerprintTailLength)
+                if allowsDeletionRebaseline, progress == .pendingEditObserved, let current { baseline = current }
+            }
+            if progress == .pasteObserved {
+                if let reason = pasteConfirmationAbort(lease: lease, targetPID: targetPID) { return .abandoned(reason) }
+                if let expectedFocusedElement, !currentFocusMatches(expectedFocusedElement, axBudget: axBudget) {
+                    // Recheck after the cross-process read. An expired budget can be retried
+                    // on the next poll; a different observed field latches focusChanged above.
+                    progress = .unreadable
+                }
+            }
             let verdict = SnippetPasteConfirmationPolicy.verdict(
                 SnippetPasteConfirmationPolicy.Input(
                     attempt: attempt,
@@ -3988,9 +4198,6 @@ final class SnippetExpansionEngine {
                 break
             }
 
-            // Our own backspaces can still be landing. Re-baseline, or the caret moving back and
-            // then forward again would read as a paste that has not happened yet.
-            if allowsDeletionRebaseline, progress == .pendingEditObserved, let current { baseline = current }
             await settle(for: pasteConfirmationTuning.pollInterval)
             attempt += 1
         }
@@ -4207,6 +4414,29 @@ final class SnippetExpansionEngine {
             selectionLength: max(0, range.length),
             textBeforeCaret: tail
         )
+    }
+
+    private func requestSelection(_ step: InlineSelectionPlan.Step, on element: AXUIElement, targetPID: pid_t) -> Bool {
+        let key: UInt16
+        let flags: CGEventFlags
+        switch step.command {
+        case .setRange:
+            let budget = AXMessagingBudget(totalTimeoutSeconds: confirmationAXMessagingTimeoutSeconds,
+                                           perMessageTimeoutSeconds: confirmationAXMessagingTimeoutSeconds)
+            return setSelectedRange(step.range, on: element, axBudget: budget)
+        case .selectAll:
+            key = UInt16(kVK_ANSI_A)
+            flags = .maskCommand
+        case .collapseRight:
+            key = UInt16(kVK_RightArrow)
+            flags = []
+        case .extendLeft:
+            key = UInt16(kVK_LeftArrow)
+            flags = .maskShift
+        }
+        guard let events = makeKeyEvents([(key, true, flags), (key, false, flags)]) else { return false }
+        for event in events { event.postToPid(targetPID) }
+        return true
     }
 
     private func makePasteShortcutEvents() -> [CGEvent]? {
@@ -4916,7 +5146,7 @@ final class SnippetExpansionEngine {
             attribute: kAXRoleAttribute as CFString,
             axBudget: budget
         )
-        let ancestry = securePasteWebAncestry(target.textElement, axBudget: budget)
+        let ancestry = webAreaAncestry(target.textElement, axBudget: budget)
         if targetIsSecureTextField && ancestry == nil {
             reason = budget.canContinue ? .unsupportedTarget : .budgetExhausted
             return nil
@@ -5726,12 +5956,12 @@ final class SnippetExpansionEngine {
         _ element: AXUIElement,
         axBudget: AXMessagingBudget
     ) -> Bool {
-        securePasteWebAncestry(element, axBudget: axBudget) == true
+        webAreaAncestry(element, axBudget: axBudget) == true
     }
 
     /// Unknown ancestry must not select the native password setter: it can be an
     /// incomplete browser tree. Reaching a window/application establishes native.
-    private func securePasteWebAncestry(
+    private func webAreaAncestry(
         _ element: AXUIElement, axBudget: AXMessagingBudget
     ) -> Bool? {
         SecurePasteDeliveryPolicy.webAncestry(of: element, canContinue: { axBudget.canContinue },

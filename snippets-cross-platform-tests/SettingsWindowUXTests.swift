@@ -14,6 +14,7 @@ final class SettingsWindowUXTests: XCTestCase {
         "Secure",
         "Backup",
         "Integrations",
+        "Agents",
         "Diagnostics",
     ]
 
@@ -27,14 +28,14 @@ final class SettingsWindowUXTests: XCTestCase {
         settle()
 
         XCTAssertTrue(window.styleMask.contains(.resizable))
-        XCTAssertEqual(window.contentMinSize.width, 620, accuracy: 1)
+        XCTAssertEqual(window.contentMinSize.width, 700, accuracy: 1)
         XCTAssertEqual(tabs.tabViewItems.count, expectedPanes.count)
         XCTAssertFalse(window.contentViewController is NSSplitViewController)
 
         let paneIdentifiers = tabs.tabViewItems.compactMap { $0.identifier as? String }
         XCTAssertEqual(
             paneIdentifiers,
-            ["general", "expansion", "clipboardHistory", "sync", "secure", "backup", "integrations", "diagnostics"]
+            ["general", "expansion", "clipboardHistory", "sync", "secure", "backup", "integrations", "agents", "diagnostics"]
         )
 
         for (index, title) in expectedPanes.enumerated() {
@@ -335,8 +336,9 @@ final class SettingsWindowUXTests: XCTestCase {
         let tabs = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         defer { window.close() }
 
-        tabs.selectedTabViewItemIndex = 7
-        let diagnosticsView = try XCTUnwrap(tabs.tabViewItems[7].viewController?.view)
+        let index = try XCTUnwrap(tabs.tabViewItems.firstIndex { $0.identifier as? String == "diagnostics" })
+        tabs.selectedTabViewItemIndex = index
+        let diagnosticsView = try XCTUnwrap(tabs.tabViewItems[index].viewController?.view)
         let buttons = descendants(of: diagnosticsView).compactMap { $0 as? NSButton }
         let exportButton = try XCTUnwrap(buttons.first { $0.title == "Export Logs…" })
         let deleteButton = try XCTUnwrap(buttons.first { $0.title == "Delete Logs" })

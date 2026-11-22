@@ -209,7 +209,7 @@ Handled intentionally:
 - Plain typing changes `axConfirmed` to `localDisplayOnly`. `Backspace`, `Ctrl+H`, `Option+Delete`, `Ctrl+W`, and other host-owned edits change it to `uncertainAfterHostEdit`.
 - The engine observes `AXValueChanged` and `AXSelectedTextChanged` on the focused control and readable ancestors. A notification triggers an immediate read of `AXSelectedTextRange` plus the text before the caret.
 - A nonempty `AXSelectedTextRange` is valid context: Chrome may select its autocomplete suffix while the typed trigger remains immediately before the selection start. Both Tab acceptance and whole-keyword expansion confirm that prefix and replace the trigger plus selected suffix. Text inside the selection cannot supply a trigger; a selection starting at zero has an empty prefix. Only a collapsed `{0, 0}` range needs terminal-placeholder capability checks.
-- There are no 18/60 ms suggestion resync sleeps. A single next-run-loop read is also attempted after activation and printable input; `Backspace` and other host-owned edits never start a timer or poll. A value that still describes the preceding printable keystroke is classified as stale and never rolls the panel backwards.
+- There are no 18/60 ms suggestion resync sleeps. A next-run-loop read is attempted after activation and printable input. A still-pending exact ordinary match can receive three additional bounded reads on its original target; `Backspace` and other host-owned edits never start a timer or poll. A value that still describes the preceding printable keystroke is classified as stale and never rolls the panel backwards.
 - Normally, only `axConfirmed` may auto-expand or authorize trigger deletion. `localDisplayOnly` and `uncertainAfterHostEdit` keep the UI responsive but are display-only.
 - A never-AX-confirmed `AXTextArea` is the narrow capability-based exception. It may use local tracking only while the session remains uninterrupted and the target PID plus exact focused AX object still match. Backspace, another host-owned edit, a pane/tab focus change, or any earlier AX confirmation revokes this authority. No bundle identifier or terminal-emulator allow-list participates in the decision; ordinary `AXTextField` controls do not qualify.
 - An unambiguous exact ordinary keyword on such a surface uses the same suppressed-final-key strategy as the panel-less fallback. Explicit Tab/Return/click acceptance still performs a fresh AX read first; only `missingTrigger` or unavailable text may use local tracking. A mismatch or unsafe query leaves the typed trigger untouched.
@@ -451,19 +451,53 @@ integration probe, negative cases, performance measurements and remaining limits
 
 ## Expansion and pasteboard timing quirks
 
-Direct Accessibility replacement is preferred. If that transport is unavailable before any
-write attempt, the event path first tries to select the verified trigger and paste over it once.
-Synthetic backspaces remain a compatibility path for fields without a verifiable writable
-selection. These operations are not atomic across application processes.
+Inline expansion chooses a delivery method from the captured control. A field inside an
+`AXWebArea`, or one that returns a live `AXSelectedTextMarkerRange`, uses its editor's
+selection commands and native paste. Native controls with writable attributes can receive
+direct Accessibility edits. Chromium's verified single-line address bar keeps its whole-value
+write, and incomplete ancestry prevents direct text writes.
 
-Ordinary expansion uses `AXSelectedText` only after ancestry positively identifies a native
-control. Web page inputs (including Safari) and unknown/incomplete ancestry skip that transport
-before any selection or text write, leaving the original trigger for verified selection + native
-paste. A writable `AXSelectedText` attribute is not proof that the page's editing model accepts
-it. Safari's native address bar retains selected-text replacement; Chromium's separate
-browser-chrome whole-value strategy is unchanged. An AX-confirmed trigger mismatch still fails
-closed before this transport decision, and an attempted but unconfirmed text write still
-forbids fallback.
+For a readable renderer, Snippets proves the trigger and any selected suffix against the
+original field. At a collapsed caret it extends the selection backwards by one grapheme per
+key. With an existing selection it first moves to its far end, so either selection direction
+works. After each movement the field must report the expected UTF-16 range and the same text.
+A long selected suffix can use Select All when the verified range covers the entire field,
+or a single writable range request when available. The final proof authorizes one Command-V. For a single-line replacement within the
+10,000 UTF-16 unit read limit, confirmation checks the final caret and compares the full
+inserted range with the replacement. Multiline and larger payloads use the bounded caret
+fingerprint because a renderer can normalize line endings or split the replacement across nodes.
+Field changes, unexpected movement, and timeouts stop the operation.
+
+Run `scripts/test-browser-expansion.sh` on an unlocked Mac with Accessibility enabled for
+the Snippets test host. It opens temporary Chrome and Electron profiles, a local Safari tab,
+a nonpersistent WKWebView, and disposable native app instances. Cursor, Zed and Electron
+run when available. A quarantined Electron runtime must pass macOS launch assessment.
+Set `TEST_RUNNER_SNIPPETS_ELECTRON_APP` to select a particular Electron.app.
+Browser cases feed the app's event callback a trigger already present in the editor. Selection
+and paste go through the real target process. The page checks edit counts, full text, caret, and
+the neighboring field in search, URL, telephone, shadow DOM, multiline, and rich-text fields.
+It also tests focus loss, cancelled paste, truncated or rewritten text, and a field becoming
+read-only. The history picker pastes into password fields and replaces selected text.
+Preview exercises its PDF Find field. The document tests read back TextEdit files and Script
+Editor source and compiled scripts after saving. The plain TextEdit case invalidates the
+event tap, waits for its timer to recover it, and types through the macOS session event stream.
+The runner checks Safari for fixture URLs under this run's temporary directory during cleanup.
+
+Cursor’s Monaco editor can retire its initial accessibility object when it creates its
+screen-reader text area. The editor can also publish the final character after the first
+AX read, without sending a selection notification. For an unambiguous ordinary keyword,
+Snippets binds the final printable key to its recipient. If the original AX object is
+invalid, the focused replacement must belong to the original process and window, have the same role,
+and already contain the typed trigger through the penultimate character. Tab and Return can also use the replacement object when the entire typed trigger is confirmed. A different
+live control cannot inherit the match. A notification that still shows an earlier prefix during the 300 ms following a printable key cannot roll the query back. Snippets retries the full keyword check with successive waits of 25, 75 and 150 ms as needed. Further edits, focus changes and dismissal invalidate this
+authorization. These checks read text before insertion and never resend a paste.
+
+The code-editor fixtures verify the saved document and the Find query in Cursor with
+automatic and explicit screen-reader support, and in Zed with and without its experimental
+accessibility tree. Zed 1.29.2 exposes no editable AX object for either control in these
+tests. An exact ordinary keyword can still expand from tracked keystrokes. Snippets
+reports unconfirmed delivery because it cannot read the result. Clipboard History defaults
+to Copy, and the editor accepts the user’s subsequent Command-V.
 
 Ordinary suggestion acceptance captures the original focused AX object and, when readable, its
 selection before queueing work. AX-confirmed insertion validates that selection when the queued
@@ -534,12 +568,12 @@ path.
 
 `UserDefaults` keys `SnippetsAccessibilityInsertionEnabled` (set to `false`) and
 `SnippetsAccessibilityInsertionExcludedBundleIDs` disable AX writing globally or per app. This
-also disables the selection setter in the event path; an excluded host keeps the compatibility
-backspace path instead of acquiring a different AX write strategy.
+also disables the selection setter and AX rollback in the event path. A renderer can still
+use keyboard selection with read-only AX verification.
 
 ### Event fallback
 
-1. For an AX-confirmed trigger with AX writes enabled, try to prepare a bounded proof of the
+1. For a renderer or an AX-confirmed native trigger with AX writes enabled, prepare a bounded proof of the
    original selection, exact trigger text, and any selected suffix. This changes neither text nor
    selection. The proof uses exact UTF-16 equality and a 10,000-unit aggregate read limit.
    A readable trigger mismatch rejects insertion immediately, even when a later selected-suffix

@@ -105,8 +105,9 @@ insertion, and it does not show an unconfirmed-paste warning.
 A pending snippet clipboard loan must finish before a history entry can replace it.
 Focus, secure-input state, and clipboard generation are checked before dispatch; a
 changed destination or newer copy prevents the paste. Picker search keystrokes are
-excluded from expansion tracking. Protected fields use the existing Secure Paste
-feature; history falls back to Copy when it cannot capture a supported ordinary destination.
+excluded from expansion tracking. An explicit paste into a focused web password field sends the
+same Command-V without reading the password. Other protected fields and unresolved
+destinations fall back to Copy.
 
 New history files must not disturb the library's directory observer. A previously enabled
 service prepares its directory before SnippetStore initialization. First-time enablement

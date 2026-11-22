@@ -279,11 +279,15 @@ nonisolated struct VerifiedTriggerSelection: Equatable {
     /// A browser can accept a selection request before its AX cache observes it. Only the
     /// unchanged original range is pending; another range or changed text is a real conflict.
     func observation(range: NSRange?, text: String?) -> TriggerSelectionObservation {
+        observation(range: range, text: text, before: originalSelection, after: replacementRange)
+    }
+
+    func observation(range: NSRange?, text: String?, before: NSRange, after: NSRange) -> TriggerSelectionObservation {
         guard let range else { return .unavailable }
-        guard range == originalSelection || range == replacementRange else { return .rangeChanged }
+        guard range == before || range == after else { return .rangeChanged }
         guard let text else { return .unavailable }
         guard text.utf16.elementsEqual(expectedText.utf16) else { return .textChanged }
-        return range == replacementRange ? .replacement : .original
+        return range == after ? .replacement : .original
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -342,7 +346,7 @@ nonisolated enum AccessibilitySelectedTextTransaction {
 
 typealias TriggerSelectionObservation = DiagnosticSelectionObservation
 
-/// One selection request, bounded asynchronous AX acknowledgement, then at most one native paste.
+/// Bounded, acknowledged selection requests followed by at most one native paste.
 /// AX setters acknowledge dispatch, not renderer completion. Never turn a stale read into either
 /// permission to paste or a destructive fallback. All host callbacks stay on the caller's main actor.
 nonisolated enum SelectionPasteTransaction {
@@ -384,47 +388,74 @@ nonisolated enum SelectionPasteTransaction {
         wait: (Duration) async -> Void,
         now: () -> ContinuousClock.Instant = { .now }
     ) async -> Report {
+        await run(steps: [()], contextIsValid: contextIsValid,
+                  observeSelection: { _ in observeSelection() }, selectTrigger: { _ in selectTrigger() },
+                  captureBaseline: captureBaseline, postPaste: postPaste, wait: wait, now: now)
+    }
+
+    /// A keyboard selection may require several movements. Verify each against the same
+    /// original text and focus, and send the single paste only after the final movement.
+    @MainActor
+    static func run<Step>(
+        steps: [Step],
+        contextIsValid: () -> Bool,
+        observeSelection: (Step) -> TriggerSelectionObservation,
+        selectTrigger: (Step) -> Bool,
+        captureBaseline: () -> Void,
+        postPaste: () -> Void,
+        wait: (Duration) async -> Void,
+        now: () -> ContinuousClock.Instant = { .now }
+    ) async -> Report {
         var progress = Progress()
         func finish(_ result: Result) -> Report { Report(result: result, progress: progress) }
-        guard contextIsValid() else { return finish(.contextChanged) }
-        progress.observation = observeSelection()
-        guard contextIsValid() else { return finish(.contextChanged) }
-        guard progress.observation == .original else { return finish(.originalSelectionChanged) }
-        progress.phase = .selectionRequest
-        progress.writeAttempted = true
-        guard selectTrigger() else { return finish(.selectionWriteFailed) }
+        guard let finalStep = steps.last else { return finish(.originalSelectionChanged) }
 
-        progress.phase = .confirmation
         let start = now()
-        while true {
-            let allowedBeforeRead = contextIsValid()
-            progress.waitMilliseconds = milliseconds(start.duration(to: now()))
-            guard allowedBeforeRead else { return finish(.contextChanged) }
-            guard start.duration(to: now()) < timeout else { return finish(.selectionTimedOut) }
-            progress.observation = observeSelection()
-            progress.polls += 1
-            let contextMatches = contextIsValid() // Recheck after every blocking AX reply.
-            let elapsed = start.duration(to: now())
-            progress.waitMilliseconds = milliseconds(elapsed)
-            guard contextMatches else { return finish(.contextChanged) }
-            guard elapsed < timeout else { return finish(.selectionTimedOut) }
-            switch progress.observation {
-            case .replacement:
-                captureBaseline()
-                progress.phase = .finalValidation
-                progress.observation = observeSelection()
+        let deadline = start.advanced(by: .seconds(3))
+        for step in steps {
+            progress.phase = .originalValidation
+            guard contextIsValid() else { return finish(.contextChanged) }
+            progress.observation = observeSelection(step)
+            guard contextIsValid() else { return finish(.contextChanged) }
+            guard progress.observation == .original else { return finish(.originalSelectionChanged) }
+            guard now() < deadline else { return finish(.selectionTimedOut) }
+            progress.phase = .selectionRequest
+            progress.writeAttempted = true
+            guard selectTrigger(step) else { return finish(.selectionWriteFailed) }
+
+            progress.phase = .confirmation
+            let stepDeadline = min(deadline, now().advanced(by: timeout))
+            var stepPolls = 0
+            repeat {
                 guard contextIsValid() else { return finish(.contextChanged) }
-                // Once confirmed, loss of that proof is not a pending initial request anymore.
-                guard progress.observation == .replacement else { return finish(.selectionChanged) }
-                postPaste() // No await between the final proof, context check and dispatch.
-                return finish(.posted)
-            case .original, .unavailable:
-                guard progress.polls < maximumPolls else { return finish(.selectionTimedOut) }
-                await wait(min(pollInterval, timeout - elapsed))
-            case .rangeChanged, .textChanged, .notRead:
-                return finish(.selectionChanged)
-            }
+                progress.waitMilliseconds = milliseconds(start.duration(to: now()))
+                guard now() < stepDeadline else { return finish(.selectionTimedOut) }
+                progress.observation = observeSelection(step)
+                stepPolls += 1
+                progress.polls += 1
+                guard contextIsValid() else { return finish(.contextChanged) }
+                let readAt = now()
+                progress.waitMilliseconds = milliseconds(start.duration(to: readAt))
+                guard readAt < stepDeadline else { return finish(.selectionTimedOut) }
+                switch progress.observation {
+                case .replacement: break
+                case .original, .unavailable:
+                    guard stepPolls < maximumPolls else { return finish(.selectionTimedOut) }
+                    await wait(min(pollInterval, readAt.duration(to: stepDeadline)))
+                case .rangeChanged, .textChanged, .notRead:
+                    return finish(.selectionChanged)
+                }
+            } while progress.observation != .replacement
         }
+
+        captureBaseline()
+        progress.phase = .finalValidation
+        progress.observation = observeSelection(finalStep)
+        guard contextIsValid() else { return finish(.contextChanged) }
+        guard progress.observation == .replacement else { return finish(.selectionChanged) }
+        guard now() < deadline else { return finish(.selectionTimedOut) }
+        postPaste()
+        return finish(.posted)
     }
 
     /// Called only after an attempted selection with no paste. An original-range reply may predate

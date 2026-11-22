@@ -33,6 +33,30 @@ final class SnippetExpansionEngineLifetimeTests: XCTestCase {
         super.tearDown()
     }
 
+    func testListeningReflectsGlobalTapAvailability() {
+        let engine = SnippetExpansionEngine(store: SnippetStore(configuration: .iOS), usage: SnippetUsageStore())
+        engine.startIfNeeded()
+        let enabled = engine.eventTap.map { CFMachPortIsValid($0) && CGEvent.tapIsEnabled(tap: $0) } ?? false
+        XCTAssertEqual(engine.listening, enabled)
+    }
+
+    func testHealthCheckRecoversDisabledAndInvalidatedTaps() throws {
+        let engine = SnippetExpansionEngine(store: SnippetStore(configuration: .iOS), usage: SnippetUsageStore())
+        engine.startIfNeeded()
+        guard AXIsProcessTrusted() else { throw XCTSkip("Event tap recovery requires Accessibility access") }
+        let original = try XCTUnwrap(engine.eventTap)
+        CGEvent.tapEnable(tap: original, enable: false)
+        engine.checkEventTapHealth()
+        XCTAssertTrue(CGEvent.tapIsEnabled(tap: original))
+        CFMachPortInvalidate(original)
+        engine.checkEventTapHealth()
+        let replacement = try XCTUnwrap(engine.eventTap)
+        XCTAssertFalse(replacement === original)
+        XCTAssertTrue(CFMachPortIsValid(replacement))
+        XCTAssertTrue(CGEvent.tapIsEnabled(tap: replacement))
+        XCTAssertTrue(engine.listening)
+    }
+
     func testDeallocationInvalidatesEventTapRetainedByRunLoop() throws {
         let store = SnippetStore(configuration: .iOS)
         let usage = SnippetUsageStore()

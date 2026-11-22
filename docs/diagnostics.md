@@ -193,12 +193,12 @@ confirmation wait, not individual AX reads. They distinguish rejection before th
 pending browser acknowledgement, a real conflict, and loss of proof after baseline capture.
 `selection_confirmation_timed_out` is distinct from a timeout after Cmd+V.
 
-The selection setter is sent once. Its unchanged original range or temporarily unreadable
-AX cache can be polled for up to 400 ms; an unrelated range or changed text aborts immediately.
-The final exact proof and context/clipboard checks still precede paste without an intervening
-await. Cleanup also waits for a pending selection before restoring it once and confirming the
-restore. A stale original-range reply alone cannot establish `not_needed`; unacknowledged
-cleanup is `timed_out`. No text is deleted, pasted, or retried on a failed selection proof.
+Each planned selection command is sent once. An unchanged range or temporarily unreadable
+selection can be polled for up to 400 ms per movement, with a three-second limit across
+the sequence. The poll count aggregates those checks and saturates at 40 in the log.
+A different range, changed text, or lost focus aborts delivery. After the final proof
+and clipboard check, Snippets posts one paste. Before dispatch, cleanup may restore the
+original selection once when the last requested range and its text are still verifiable.
 All fields remain content-free and are recorded without enabling verbose Accessibility logs.
 
 For opt-in GUI regression verification, run `./scripts/test-selection-paste-browser.sh`.

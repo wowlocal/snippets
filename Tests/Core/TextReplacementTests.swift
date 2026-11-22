@@ -685,6 +685,46 @@ struct TextReplacementTests {
             }
         }
 
+        @Test func severalSelectionMovementsDispatchOnlyAfterTheLastProof() async {
+            var selectedLength = 0
+            var requests: [Int] = []
+            var baselineAt: [Int] = []
+            var postedAt: [Int] = []
+            let report = await SelectionPasteTransaction.run(steps: [1, 2, 3],
+                contextIsValid: { true },
+                observeSelection: { step in
+                    if selectedLength == step - 1 { return .original }
+                    return selectedLength == step ? .replacement : .rangeChanged
+                },
+                selectTrigger: { step in requests.append(step); selectedLength = step; return true },
+                captureBaseline: { baselineAt.append(selectedLength) },
+                postPaste: { postedAt.append(selectedLength) }, wait: { _ in })
+            #expect(report.result == .posted)
+            #expect(requests == [1, 2, 3])
+            #expect(baselineAt == [3])
+            #expect(postedAt == [3])
+        }
+
+        @Test func delayedMovementsCannotExtendTheOverallDeadline() async {
+            var clock = ContinuousClock.now
+            var current = 0
+            var requests = 0
+            let report = await SelectionPasteTransaction.run(steps: Array(1...25),
+                contextIsValid: { true }, observeSelection: { step in
+                    if step == current {
+                        clock = clock.advanced(by: .milliseconds(250))
+                        return .replacement
+                    }
+                    return .original
+                }, selectTrigger: { current = $0; requests += 1; return true },
+                captureBaseline: { Issue.record("Timed-out selection reached the baseline") },
+                postPaste: { Issue.record("Timed-out selection posted paste") },
+                wait: { _ in }, now: { clock })
+            #expect(report.result == .selectionTimedOut)
+            #expect(requests == 12)
+            #expect(report.progress.writeAttempted)
+        }
+
         @Test func oneVerifiedSelectionProducesExactlyOnePaste() async {
             let host = Host()
             #expect(await host.run() == .posted)

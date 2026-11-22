@@ -6,6 +6,14 @@ import AppKit
 enum ClipboardHistoryPasteTransaction {
     static let internalType = NSPasteboard.PasteboardType(ClipboardHistoryCapturePolicy.internalType)
 
+    /// A password field can receive an explicitly chosen history entry through native paste.
+    /// Check web ancestry only for protected controls, where it determines eligibility.
+    static func supportsTarget(isSecureField: Bool, secureInputEnabled: Bool,
+                               isWebField: @autoclosure () -> Bool) -> Bool {
+        if isSecureField { return isWebField() }
+        return !secureInputEnabled
+    }
+
     enum Result: Equatable {
         case dispatched
         case interrupted
