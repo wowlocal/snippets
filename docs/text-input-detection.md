@@ -193,7 +193,7 @@ This reduces off-screen or wrong-monitor placement.
 
 Handled intentionally:
 
-- `Ctrl+N/P` and arrow keys navigate list and are suppressed.
+- `Ctrl+N/P` and Up/Down navigate the list and are suppressed. With nothing to select they go to the host, where they move the caret or recall shell history: an arrow then ends the session like the other caret keys, and the chord is treated as a host-owned edit.
 - `Ctrl+C` dismisses the suggestion panel and is passed through to the host app.
 - `Tab`, `Return`, and keypad Enter select a suggestion. Once its key-down is consumed, repeats
   and the matching key-up are consumed through release, even if insertion or authentication has
@@ -206,13 +206,13 @@ Handled intentionally:
 - Printable characters and deletion shortcuts are generally passed through so the host app edits real text first.
 - The panel applies printable input and simple backspace immediately; it never waits on an AX timer before repainting.
 - The query carries one of three authority states: `axConfirmed`, `localDisplayOnly`, or `uncertainAfterHostEdit`.
-- Plain typing changes `axConfirmed` to `localDisplayOnly`. `Backspace`, `Ctrl+H`, `Option+Delete`, `Ctrl+W`, and other host-owned edits change it to `uncertainAfterHostEdit`.
+- Plain typing changes `axConfirmed` to `localDisplayOnly`. `Backspace`, `Ctrl+H`, `Option+Delete`, `Ctrl+W`, and other host-owned edits change it to `uncertainAfterHostEdit`. The exception is a plain `Backspace` or `Ctrl+H` in the caretless text area described below.
 - The engine observes `AXValueChanged` and `AXSelectedTextChanged` on the focused control and readable ancestors. A notification triggers an immediate read of `AXSelectedTextRange` plus the text before the caret.
 - A nonempty `AXSelectedTextRange` is valid context: Chrome may select its autocomplete suffix while the typed trigger remains immediately before the selection start. Both Tab acceptance and whole-keyword expansion confirm that prefix and replace the trigger plus selected suffix. Text inside the selection cannot supply a trigger; a selection starting at zero has an empty prefix. Only a collapsed `{0, 0}` range needs terminal-placeholder capability checks.
 - There are no 18/60 ms suggestion resync sleeps. A next-run-loop read is attempted after activation and printable input. A still-pending exact ordinary match can receive three additional bounded reads on its original target; `Backspace` and other host-owned edits never start a timer or poll. A value that still describes the preceding printable keystroke is classified as stale and never rolls the panel backwards.
 - Normally, only `axConfirmed` may auto-expand or authorize trigger deletion. `localDisplayOnly` and `uncertainAfterHostEdit` keep the UI responsive but are display-only.
-- A never-AX-confirmed `AXTextArea` is the narrow capability-based exception. It may use local tracking only while the session remains uninterrupted and the target PID plus exact focused AX object still match. Backspace, another host-owned edit, a pane/tab focus change, or any earlier AX confirmation revokes this authority. No bundle identifier or terminal-emulator allow-list participates in the decision; ordinary `AXTextField` controls do not qualify.
-- An unambiguous exact ordinary keyword on such a surface uses the same suppressed-final-key strategy as the panel-less fallback. Explicit Tab/Return/click acceptance still performs a fresh AX read first; only `missingTrigger` or unavailable text may use local tracking. A mismatch or unsafe query leaves the typed trigger untouched.
+- A never-AX-confirmed `AXTextArea` is the narrow capability-based exception. It may use local tracking only while the session remains uninterrupted and the target PID plus exact focused AX object still match. A word or line delete (`Option+Delete`, `Ctrl+W`), another host-owned shortcut (`Ctrl+A`, `Ctrl+U`, a multiplexer prefix, …), a pane/tab focus change, or any earlier AX confirmation revokes this authority. A host-owned edit also ends the session there instead of leaving it `uncertainAfterHostEdit`: in a terminal nothing could restore the count, and an open panel would only swallow the next Tab or Return. The same rule applies to a text area whose Accessibility has not answered yet (a Chromium or Monaco editor before its first readable read); there the user retypes the trigger, where a later notification might have reconciled the session. A plain `Backspace` or `Ctrl+H` does not: no AX read would ever confirm it there, so the session would stay open but unable to expand. It removes one character from the local count, as each typed key added one, provided the removed character is a single Unicode scalar; hosts disagree on how much of a longer grapheme one Backspace deletes. "Plain" means `Backspace` with no modifier at all, or `Control` alone with a key that produces the backspace control code (U+0008); `Shift+Backspace` and other modified forms are host-owned edits and end the session. The count trusts the program in the terminal to treat `Ctrl+H` as a one-character delete: where it is bound to something else (a multiplexer's pane navigation, a word delete), the count no longer describes the text. The panel-less typed-buffer fallback is unchanged: `Backspace` shortens its buffer and `Ctrl+H` clears it. No bundle identifier or terminal-emulator allow-list participates in the decision; ordinary `AXTextField` controls do not qualify.
+- An unambiguous exact ordinary keyword on such a surface uses the same suppressed-final-key strategy as the panel-less fallback. Explicit Tab/Return/click acceptance still performs a fresh AX read first; only unavailable text may use local tracking. A missing trigger, a mismatch or an unsafe query leaves the typed trigger untouched.
 - Secure snippets never auto-expand. An explicit secure selection may carry a full locally tracked trigger across Local Authentication. After authentication, Secure Event Input must be off, the original PID and exact focused AX object must match, the input generation must be unchanged, and two consecutive fresh reads must still be unable to provide the trigger. A readable mismatch permanently revokes the local fallback; a readable match upgrades it to an AX-confirmed deletion.
 - This is what handles browser autocomplete correctly: deleting a host-owned completion may produce a temporary local `jaz`, while the following AX notification confirms that the real field still contains `jazz` and restores the displayed query without ever authorizing the wrong delete count.
 - Cmd/Option combos mostly dismiss suggestion mode.
@@ -498,6 +498,19 @@ accessibility tree. Zed 1.29.2 exposes no editable AX object for either control 
 tests. An exact ordinary keyword can still expand from tracked keystrokes. Snippets
 reports unconfirmed delivery because it cannot read the result. Clipboard History defaults
 to Copy, and the editor accepts the user’s subsequent Command-V.
+
+`scripts/test-terminal-expansion.sh` covers the caretless text area in a real terminal. It
+starts a disposable Ghostty with no user configuration, running bash's readline as a line
+reader, and feeds each key to the engine before the terminal, as the session tap would. The
+lines readline records are the only evidence: a whole keyword, a keyword finished after
+`Backspace` or `Ctrl+H`, and Tab after `Backspace` must expand; `Ctrl+W`, `Ctrl+A`, Up with
+nothing to select, `Shift+Backspace` and a `Backspace` past the trigger must end the session
+without expanding or swallowing Return. Ghostty is launched through `open`, not
+`NSWorkspace`: with the test host's environment it ignores its `command` and starts the
+user's login shell, and the test types nothing until its own reader reports ready. Measured
+on Ghostty 1.4.1: the surface is an `AXTextArea` whose `AXSelectedTextRange` is a
+non-settable `{0, 0}` with no bounds, and every split is a different focused element, so
+moving to another split fails the target check.
 
 Ordinary suggestion acceptance captures the original focused AX object and, when readable, its
 selection before queueing work. AX-confirmed insertion validates that selection when the queued

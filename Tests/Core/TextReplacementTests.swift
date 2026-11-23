@@ -82,8 +82,90 @@ struct TextReplacementTests {
             #expect(
                 SuggestionContextState.localDisplayOnly.afterAmbiguousHostEdit
                     == .uncertainAfterHostEdit,
-                "Backspace always makes host text uncertain until AX confirms it"
+                "a host-owned edit makes host text uncertain until AX confirms it"
             )
+            #expect(
+                SuggestionContextState.localDisplayOnly.afterBackspace(countedLocally: false)
+                    == .uncertainAfterHostEdit,
+                "Backspace makes host text uncertain wherever AX can still confirm it"
+            )
+            #expect(
+                SuggestionContextState.localDisplayOnly.afterBackspace(countedLocally: true)
+                    == .localDisplayOnly,
+                "a counted Backspace keeps an uninterrupted local session"
+            )
+            for state in [SuggestionContextState.axConfirmed, .uncertainAfterHostEdit] {
+                #expect(
+                    state.afterBackspace(countedLocally: true) == .uncertainAfterHostEdit,
+                    "a counted Backspace cannot create or repair local authority"
+                )
+            }
+        }
+
+        @Test func aCaretlessTextAreaCountsAPlainBackspaceLocally() {
+            func counts(
+                _ character: Character = "r",
+                role: String? = "AXTextArea",
+                state: SuggestionContextState = .localDisplayOnly,
+                readable: Bool = false,
+                caretUnavailable: Bool = true
+            ) -> Bool {
+                UnconfirmedTextAreaSuggestionPolicy.canCountBackspaceLocally(
+                    removing: character,
+                    focusedRole: role,
+                    contextState: state,
+                    hasReadableAXContext: readable,
+                    caretUnavailable: caretUnavailable)
+            }
+
+            #expect(counts(), "a terminal deletes the one character a Backspace names")
+            #expect(counts("я"))
+            #expect(!counts(role: "AXTextField"), "ordinary fields wait for their readable caret")
+            #expect(!counts(role: nil))
+            #expect(!counts(state: .uncertainAfterHostEdit), "an earlier ambiguous edit stays ambiguous")
+            #expect(!counts(state: .axConfirmed), "a confirmed host is confirmed again by AX, not by counting")
+            #expect(!counts(readable: true), "a host that once supplied AX context may not fall back")
+            #expect(!counts(caretUnavailable: false), "a caret that may yet be read is not counted around")
+            #expect(!counts("e\u{301}"), "hosts disagree on how much of a combined grapheme one Backspace deletes")
+            #expect(!counts("👨‍👩‍👧"))
+
+            // An edit that is not counted ends a session only where nothing can restore the count.
+            func localOnly(
+                role: String? = "AXTextArea",
+                state: SuggestionContextState = .localDisplayOnly,
+                readable: Bool = false,
+                caretUnavailable: Bool = true
+            ) -> Bool {
+                UnconfirmedTextAreaSuggestionPolicy.isLocalOnlySession(
+                    focusedRole: role,
+                    contextState: state,
+                    hasReadableAXContext: readable,
+                    caretUnavailable: caretUnavailable)
+            }
+            #expect(localOnly())
+            #expect(!localOnly(role: "AXTextField"))
+            #expect(!localOnly(state: .axConfirmed))
+            #expect(!localOnly(state: .uncertainAfterHostEdit))
+            #expect(!localOnly(readable: true), "a readable host reconciles an ambiguous edit through AX")
+            #expect(!localOnly(caretUnavailable: false))
+
+            // \mer, Backspace, then "rch": the session that could expand before can still expand.
+            let state = SuggestionContextState.localDisplayOnly
+                .afterLocalPrintableEdit
+                .afterBackspace(countedLocally: counts())
+                .afterLocalPrintableEdit
+            #expect(UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
+                focusedRole: "AXTextArea",
+                contextState: state,
+                hasReadableAXContext: false,
+                caretUnavailable: true,
+                targetStillMatches: true))
+            #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
+                focusedRole: "AXTextArea",
+                contextState: state,
+                hasReadableAXContext: false,
+                caretUnavailable: true,
+                targetStillMatches: false), "the target is still checked when the count is spent")
         }
 
         @Test func anyUnconfirmedTextAreaCanUseAnUnchangedLocalSession() {
@@ -111,7 +193,7 @@ struct TextReplacementTests {
                 contextState: .uncertainAfterHostEdit,
                 hasReadableAXContext: false,
                 caretUnavailable: true,
-                targetStillMatches: true), "Backspace and other host edits revoke local authority")
+                targetStillMatches: true), "an ambiguous host edit revokes local authority")
             #expect(!UnconfirmedTextAreaSuggestionPolicy.canAuthorizeLocalTracking(
                 focusedRole: "AXTextArea",
                 contextState: .localDisplayOnly,

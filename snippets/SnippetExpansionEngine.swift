@@ -2492,15 +2492,20 @@ final class SnippetExpansionEngine {
         let ctrl = event.modifierFlags.contains(.control)
         let command = event.modifierFlags.contains(.command)
         let option = event.modifierFlags.contains(.option)
+        let heldModifiers = event.modifierFlags.intersection([.command, .control, .option, .shift, .function])
 
         // Arrow keys / Ctrl+N/P navigate the list - suppress so target app doesn't see them
         if event.keyCode == UInt16(kVK_DownArrow) || (ctrl && event.keyCode == UInt16(kVK_ANSI_N)) {
-            guard suggestionPanel.hasSelectableItems else { return false }
+            guard suggestionPanel.hasSelectableItems else {
+                return listNavigationKeyReachesHost(isArrow: event.keyCode == UInt16(kVK_DownArrow))
+            }
             suggestionPanel.moveSelectionDown()
             return true
         }
         if event.keyCode == UInt16(kVK_UpArrow) || (ctrl && event.keyCode == UInt16(kVK_ANSI_P)) {
-            guard suggestionPanel.hasSelectableItems else { return false }
+            guard suggestionPanel.hasSelectableItems else {
+                return listNavigationKeyReachesHost(isArrow: event.keyCode == UInt16(kVK_UpArrow))
+            }
             suggestionPanel.moveSelectionUp()
             return true
         }
@@ -2513,9 +2518,12 @@ final class SnippetExpansionEngine {
             return false
         }
 
-        // Emacs Ctrl+H - treat as backspace
+        // Emacs Ctrl+H - treat as backspace. Only the chord that really produces the
+        // backspace control code may be counted: the same physical key is another
+        // letter on other layouts, and Shift can select a different host binding.
         if ctrl && !command && !option && event.keyCode == UInt16(kVK_ANSI_H) {
-            applyLocalSuggestionBackspace()
+            applyLocalSuggestionBackspace(
+                isPlainDelete: heldModifiers == .control && event.characters == "\u{8}")
             return false
         }
 
@@ -2585,7 +2593,7 @@ final class SnippetExpansionEngine {
 
         // Backspace - let through to target app (it needs to delete characters too)
         if event.keyCode == UInt16(kVK_Delete) {
-            applyLocalSuggestionBackspace()
+            applyLocalSuggestionBackspace(isPlainDelete: heldModifiers.isEmpty)
             return false
         }
 
@@ -2645,6 +2653,27 @@ final class SnippetExpansionEngine {
             dismissSuggestions()
         }
         return false
+    }
+
+    /// With nothing to select, Up/Down and Ctrl+N/P go to the host, where they move
+    /// the caret or replace the line with a shell history entry. An arrow ends the
+    /// session like the other caret keys; the chords are host-owned like any other.
+    private func listNavigationKeyReachesHost(isArrow: Bool) -> Bool {
+        if isArrow {
+            dismissSuggestions()
+        } else {
+            markSuggestionUncertainAfterHostEdit()
+        }
+        return false
+    }
+
+    /// See `UnconfirmedTextAreaSuggestionPolicy.isLocalOnlySession`.
+    private var suggestionSessionIsLocalOnly: Bool {
+        UnconfirmedTextAreaSuggestionPolicy.isLocalOnlySession(
+            focusedRole: suggestionTargetRole,
+            contextState: suggestionContextState,
+            hasReadableAXContext: suggestionHasReadableAXContext,
+            caretUnavailable: suggestionCaretUnavailable)
     }
 
     private func scheduleSuggestionContextRefresh(
@@ -2752,15 +2781,17 @@ final class SnippetExpansionEngine {
         updateSuggestionResults()
     }
 
-    private func applyLocalSuggestionBackspace() {
+    /// `isPlainDelete`: Backspace with no modifier, or Ctrl+H alone.
+    private func applyLocalSuggestionBackspace(isPlainDelete: Bool) {
         guard suggestionActive else { return }
         suggestionSyncGeneration += 1
         let stateBefore = suggestionContextState
-        suggestionContextState = suggestionContextState.afterAmbiguousHostEdit
+        let wasLocalOnly = suggestionSessionIsLocalOnly
         printableObservationDeadline = nil
         pendingAutomaticMatch = nil
 
-        if suggestionQuery.isEmpty {
+        guard let removed = suggestionQuery.popLast() else {
+            suggestionContextState = stateBefore.afterAmbiguousHostEdit
             recordExpansionAccessibility(
                 operation: .hostEdit,
                 outcome: .observing,
@@ -2770,13 +2801,26 @@ final class SnippetExpansionEngine {
             return
         }
 
-        suggestionQuery.removeLast()
+        // A caretless text area (a terminal) never confirms this edit through
+        // Accessibility, so its session keeps the local count instead of going dead.
+        let countedLocally = isPlainDelete && UnconfirmedTextAreaSuggestionPolicy.canCountBackspaceLocally(
+            removing: removed,
+            focusedRole: suggestionTargetRole,
+            contextState: stateBefore,
+            hasReadableAXContext: suggestionHasReadableAXContext,
+            caretUnavailable: suggestionCaretUnavailable)
+        suggestionContextState = stateBefore.afterBackspace(countedLocally: countedLocally)
         suggestionDeleteCount = 1 + suggestionQuery.count
         recordExpansionAccessibility(
             operation: .hostEdit,
             outcome: .observing,
             stateBefore: stateBefore,
             stateAfter: suggestionContextState)
+        if wasLocalOnly && !countedLocally {
+            // The count is lost for good; see `isLocalOnlySession`.
+            dismissSuggestions()
+            return
+        }
         updateSuggestionResults()
     }
 
@@ -2784,6 +2828,7 @@ final class SnippetExpansionEngine {
         guard suggestionActive else { return }
         suggestionSyncGeneration += 1
         let stateBefore = suggestionContextState
+        let wasLocalOnly = suggestionSessionIsLocalOnly
         suggestionContextState = suggestionContextState.afterAmbiguousHostEdit
         printableObservationDeadline = nil
         pendingAutomaticMatch = nil
@@ -2792,6 +2837,10 @@ final class SnippetExpansionEngine {
             outcome: .observing,
             stateBefore: stateBefore,
             stateAfter: suggestionContextState)
+        if wasLocalOnly {
+            // The count is lost for good; see `isLocalOnlySession`.
+            dismissSuggestions()
+        }
     }
 
     private func refreshSuggestionContextFromFocusedText(

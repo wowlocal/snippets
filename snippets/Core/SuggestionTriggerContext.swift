@@ -69,7 +69,8 @@ nonisolated struct TriggerDeletion: Equatable {
 /// Display stays optimistic for responsiveness, but only an Accessibility-confirmed
 /// context may authorize deletion. In particular, a physical Backspace says nothing
 /// about whether the host deleted a character, an autocomplete selection, or merely
-/// dismissed UI.
+/// dismissed UI. The one exception is a text area that can never confirm anything
+/// (`UnconfirmedTextAreaSuggestionPolicy`).
 nonisolated enum SuggestionContextState: String, Codable, Equatable, Sendable {
     case axConfirmed = "ax_confirmed"
     case localDisplayOnly = "local_display_only"
@@ -88,18 +89,26 @@ nonisolated enum SuggestionContextState: String, Codable, Equatable, Sendable {
     nonisolated var afterAmbiguousHostEdit: SuggestionContextState {
         .uncertainAfterHostEdit
     }
+
+    /// A Backspace the caller could count
+    /// (`UnconfirmedTextAreaSuggestionPolicy.canCountBackspaceLocally`) leaves an
+    /// uninterrupted local session as it was. Any other Backspace is an ambiguous
+    /// host edit.
+    nonisolated func afterBackspace(countedLocally: Bool) -> SuggestionContextState {
+        countedLocally && self == .localDisplayOnly ? .localDisplayOnly : afterAmbiguousHostEdit
+    }
 }
 
 /// Capability-based fallback for text areas that expose a focused Accessibility
 /// object but no usable insertion-caret range.
 ///
 /// Local tracking is allowed only while every other signal still proves that this
-/// is the same uninterrupted suggestion session. In particular, a Backspace or
-/// other host-owned edit moves the state to `uncertainAfterHostEdit`, and a control
-/// that has ever supplied readable AX insertion context (even without a trigger)
-/// is never allowed to fall back. A missing trigger is not a missing caret. The
-/// decision deliberately takes no bundle identifier: terminal emulators and other
-/// custom text surfaces qualify (or fail) by their observable capabilities.
+/// is the same uninterrupted suggestion session. In particular, a host-owned edit
+/// moves the state to `uncertainAfterHostEdit`, and a control that has ever supplied
+/// readable AX insertion context (even without a trigger) is never allowed to fall
+/// back. A missing trigger is not a missing caret. The decision deliberately takes no
+/// bundle identifier: terminal emulators and other custom text surfaces qualify (or
+/// fail) by their observable capabilities.
 nonisolated enum UnconfirmedTextAreaSuggestionPolicy {
     private static let textAreaRole = "AXTextArea"
 
@@ -110,11 +119,52 @@ nonisolated enum UnconfirmedTextAreaSuggestionPolicy {
         caretUnavailable: Bool,
         targetStillMatches: Bool
     ) -> Bool {
+        isLocalOnlySession(
+            focusedRole: focusedRole,
+            contextState: contextState,
+            hasReadableAXContext: hasReadableAXContext,
+            caretUnavailable: caretUnavailable)
+            && targetStillMatches
+    }
+
+    /// The local key count is the only authority this session has. In a terminal it
+    /// is the only one it will ever get: no Accessibility read confirms or corrects it.
+    ///
+    /// Two rules follow for keys that reach the host. A key the count can follow
+    /// (`canCountBackspaceLocally`) keeps the session. Any other key that may edit
+    /// the text or move the caret ends it, because a panel left open could no longer
+    /// expand anything and would only swallow the next Tab or Return.
+    static func isLocalOnlySession(
+        focusedRole: String?,
+        contextState: SuggestionContextState,
+        hasReadableAXContext: Bool,
+        caretUnavailable: Bool
+    ) -> Bool {
         focusedRole == textAreaRole
             && contextState == .localDisplayOnly
             && !hasReadableAXContext
             && caretUnavailable
-            && targetStillMatches
+    }
+
+    /// A plain Backspace (or Ctrl+H) on such a surface removes the one character
+    /// before the caret, just as the keys that built the query each added one, so the
+    /// session keeps counting. The removed character must be a single scalar: hosts
+    /// disagree on how much of a longer grapheme one Backspace deletes. Word and line
+    /// deletes are not counted for the same reason. The target is not checked here; it
+    /// is checked again whenever the count is about to authorize a deletion.
+    static func canCountBackspaceLocally(
+        removing character: Character,
+        focusedRole: String?,
+        contextState: SuggestionContextState,
+        hasReadableAXContext: Bool,
+        caretUnavailable: Bool
+    ) -> Bool {
+        character.unicodeScalars.count == 1
+            && isLocalOnlySession(
+                focusedRole: focusedRole,
+                contextState: contextState,
+                hasReadableAXContext: hasReadableAXContext,
+                caretUnavailable: caretUnavailable)
     }
 }
 
