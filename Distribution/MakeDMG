@@ -5,6 +5,13 @@ set -e
 cd "$(dirname "$0")"
 source common.sh
 
+# Standalone and no-update builds also use Distribution/.env. Keep its other
+# settings out of this script and honor an explicitly supplied profile.
+if [ -z "${NOTARY_KEYCHAIN_PROFILE:-}" ] && [ -f .env ]; then
+    NOTARY_KEYCHAIN_PROFILE=$(source ./.env >/dev/null && printf '%s' "${NOTARY_KEYCHAIN_PROFILE:-}")
+fi
+NOTARY_KEYCHAIN_PROFILE="${NOTARY_KEYCHAIN_PROFILE:-NotaryProfile}"
+
 function has_modern_create_dmg() {
     if ! command -v create-dmg >/dev/null 2>&1; then
         return 1
@@ -86,7 +93,7 @@ normal_text
 gray_text
 echo "Notarizing $APP_NAME..."
 ditto -c -k --keepParent "$APP_INPUT_PATH" "$APP_INPUT_PATH.zip"
-xcrun notarytool submit -p "${NOTARY_KEYCHAIN_PROFILE:-NotaryProfile}" --verbose "$APP_INPUT_PATH.zip" --wait --timeout 1h
+xcrun notarytool submit -p "$NOTARY_KEYCHAIN_PROFILE" --verbose "$APP_INPUT_PATH.zip" --wait --timeout 1h
 rm "$APP_INPUT_PATH.zip"
 normal_text
 
@@ -184,7 +191,7 @@ normal_text
 
 # notarize
 gray_text
-xcrun notarytool submit -p "${NOTARY_KEYCHAIN_PROFILE:-NotaryProfile}" --verbose "$DMG_OUTPUT_PATH" --wait --timeout 1h
+xcrun notarytool submit -p "$NOTARY_KEYCHAIN_PROFILE" --verbose "$DMG_OUTPUT_PATH" --wait --timeout 1h
 normal_text
 
 xcrun stapler staple "$DMG_OUTPUT_PATH"
