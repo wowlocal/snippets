@@ -33,17 +33,26 @@ scripts/check.sh                      # the tests above, the API 28 check and li
 
 ## Devices
 
-Use the emulator `emulator-5554` only. It is shared: do not wipe or reboot it, change its
-settings, or uninstall anything you did not install. Never target the attached phone:
-always pass `-s emulator-5554` to adb and set `ANDROID_SERIAL=emulator-5554` for Gradle.
+Use the dedicated emulator `emulator-5556` (AVD `snippets-api35`, API 35, 192 MB app heap) and
+nothing else. Start it when it is not running:
+
+```sh
+"$HOME/Library/Android/sdk/emulator/emulator" -avd snippets-api35 -port 5556 -no-window -no-audio -no-boot-anim &
+```
+
+It is a tablet image. For phone layouts it is set to `wm size 1080x2400` and `wm density 420`;
+`wm size reset` and `wm density reset` give the 2560x1600 tablet. Put it back to the phone size
+when you finish. `emulator-5554` belongs to other projects and the attached phone is personal:
+never target either. Always pass `-s emulator-5556` to adb and set `ANDROID_SERIAL=emulator-5556`
+for Gradle.
 
 ```sh
 ADB="$HOME/Library/Android/sdk/platform-tools/adb"
 
-$ADB -s emulator-5554 install -r app/build/outputs/apk/debug/app-debug.apk
-$ADB -s emulator-5554 shell am start -W -n com.khm.snippets.android.debug/com.khm.snippets.android.MainActivity
+$ADB -s emulator-5556 install -r app/build/outputs/apk/debug/app-debug.apk
+$ADB -s emulator-5556 shell am start -W -n com.khm.snippets.android.debug/com.khm.snippets.android.MainActivity
 
-ANDROID_SERIAL=emulator-5554 ./gradlew :app:connectedDebugAndroidTest
+ANDROID_SERIAL=emulator-5556 ./gradlew :app:connectedDebugAndroidTest
 ```
 
 `connectedDebugAndroidTest` uninstalls the debug app when it finishes, which also deletes
