@@ -28,7 +28,8 @@ animalsniffer {
 dependencies {
     signature(variantOf(libs.android.api28.signature) { artifactType("signature") })
 
-    implementation(libs.kotlinx.coroutines.core)
+    // Public API exposes Flow and StateFlow.
+    api(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
 
