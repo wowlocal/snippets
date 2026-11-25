@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window theme only; all UI is drawn by Compose (see ui/theme/Theme.kt). -->
+    <style name="Theme.Snippets" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <style name="Theme.Snippets.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Snippets</item>
+    </style>
+</resources>
