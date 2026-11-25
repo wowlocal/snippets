@@ -1,0 +1,305 @@
+{
+  "format": "snippets-swift-interop/G01-git-manifest/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "GitSyncManifest.encoded() bytes for schema 1 and 2, encrypted and plain-text, and GitSyncManifest.decode outcomes (brief 03 §2.2)",
+  "notes": ["notALibrary means the branch is foreign data; incompatibleSchema is git_sync_schema_unsupported.", "The two over/exactly-16384-byte inputs are the compact-ok bytes followed by spaces; their text is omitted."],
+  "cases": [
+    {
+      "name": "encode-encrypted-schema-1",
+      "kind": "encode",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "mode": "encrypted",
+      "recordProfile": "snippets-wire-v1",
+      "schemaVersion": 1,
+      "fileText": "{\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"format\" : \"snippets-git-sync\",\n  \"recordProfile\" : \"snippets-wire-v1\",\n  \"schemaVersion\" : 1\n}\n",
+      "fileHex": "7b0a20202264617461736574494422203a202236313761303030312d303030302d343030302d383030302d303030303030303030306161222c0a202022666f726d617422203a2022736e6970706574732d6769742d73796e63222c0a2020227265636f726450726f66696c6522203a2022736e6970706574732d776972652d7631222c0a202022736368656d6156657273696f6e22203a20310a7d0a",
+      "blobID": "6ecc220dd10f2eb435e438c369dc59f8218b8473"
+    },
+    {
+      "name": "encode-encrypted-schema-2",
+      "kind": "encode",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "mode": "encrypted",
+      "recordProfile": "snippets-wire-v1",
+      "schemaVersion": 2,
+      "fileText": "{\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"format\" : \"snippets-git-sync\",\n  \"recordProfile\" : \"snippets-wire-v1\",\n  \"schemaVersion\" : 2\n}\n",
+      "fileHex": "7b0a20202264617461736574494422203a202236313761303030312d303030302d343030302d383030302d303030303030303030306161222c0a202022666f726d617422203a2022736e6970706574732d6769742d73796e63222c0a2020227265636f726450726f66696c6522203a2022736e6970706574732d776972652d7631222c0a202022736368656d6156657273696f6e22203a20320a7d0a",
+      "blobID": "c3ba22abab7b75ec5331086bd3075e61319320aa"
+    },
+    {
+      "name": "encode-plain-schema-1",
+      "kind": "encode",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "mode": "plainText",
+      "recordProfile": "snippets-plain-v1",
+      "schemaVersion": 1,
+      "fileText": "{\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"format\" : \"snippets-git-sync\",\n  \"recordProfile\" : \"snippets-plain-v1\",\n  \"schemaVersion\" : 1\n}\n",
+      "fileHex": "7b0a20202264617461736574494422203a202236313761303030312d303030302d343030302d383030302d303030303030303030306161222c0a202022666f726d617422203a2022736e6970706574732d6769742d73796e63222c0a2020227265636f726450726f66696c6522203a2022736e6970706574732d706c61696e2d7631222c0a202022736368656d6156657273696f6e22203a20310a7d0a",
+      "blobID": "d82c773fbcf99bdb84c08261ea0ffcae56292b51"
+    },
+    {
+      "name": "encode-plain-schema-2",
+      "kind": "encode",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "mode": "plainText",
+      "recordProfile": "snippets-plain-v1",
+      "schemaVersion": 2,
+      "fileText": "{\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"format\" : \"snippets-git-sync\",\n  \"recordProfile\" : \"snippets-plain-v1\",\n  \"schemaVersion\" : 2\n}\n",
+      "fileHex": "7b0a20202264617461736574494422203a202236313761303030312d303030302d343030302d383030302d303030303030303030306161222c0a202022666f726d617422203a2022736e6970706574732d6769742d73796e63222c0a2020227265636f726450726f66696c6522203a2022736e6970706574732d706c61696e2d7631222c0a202022736368656d6156657273696f6e22203a20320a7d0a",
+      "blobID": "d2791d5d5175429daf5395a68d94a95ff247b8a5"
+    },
+    {
+      "name": "decode-compact-ok",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 134,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a317d",
+      "ok": {
+        "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+        "recordProfile": "snippets-wire-v1",
+        "schemaVersion": 1
+      }
+    },
+    {
+      "name": "decode-plain-profile",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-plain-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 135,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d706c61696e2d7631222c22736368656d6156657273696f6e223a317d",
+      "ok": {
+        "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+        "recordProfile": "snippets-plain-v1",
+        "schemaVersion": 1
+      }
+    },
+    {
+      "name": "decode-schema-2",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":2}",
+      "fileByteCount": 134,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a327d",
+      "ok": {
+        "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+        "recordProfile": "snippets-wire-v1",
+        "schemaVersion": 2
+      }
+    },
+    {
+      "name": "decode-schema-0",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":0}",
+      "fileByteCount": 134,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a307d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-schema-3",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":3}",
+      "fileByteCount": 134,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a337d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-schema-as-string",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":\"1\"}",
+      "fileByteCount": 136,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a2231227d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-schema-as-double",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1.0}",
+      "fileByteCount": 136,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a312e307d",
+      "ok": {
+        "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+        "recordProfile": "snippets-wire-v1",
+        "schemaVersion": 1
+      }
+    },
+    {
+      "name": "decode-schema-fraction",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1.5}",
+      "fileByteCount": 136,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a312e357d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-unknown-profile",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v2\",\"schemaVersion\":1}",
+      "fileByteCount": 134,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7632222c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-profile-not-string",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":1,\"schemaVersion\":1}",
+      "fileByteCount": 117,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a312c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-wrong-format-marker",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"other\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 122,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a226f74686572222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.notALibrary"
+    },
+    {
+      "name": "decode-format-not-string",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":1,\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 116,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a312c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.notALibrary"
+    },
+    {
+      "name": "decode-format-missing",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 105,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.notALibrary"
+    },
+    {
+      "name": "decode-extra-key",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"note\":\"x\",\"schemaVersion\":1}",
+      "fileByteCount": 145,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c226e6f7465223a2278222c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-extra-key-with-wrong-format",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"other\",\"recordProfile\":\"snippets-wire-v1\",\"note\":\"x\",\"schemaVersion\":1}",
+      "fileByteCount": 133,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a226f74686572222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c226e6f7465223a2278222c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.notALibrary"
+    },
+    {
+      "name": "decode-missing-dataset",
+      "kind": "decode",
+      "fileText": "{\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 83,
+      "fileHex": "7b22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-dataset-uppercase",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617A0001-0000-4000-8000-0000000000AA\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 134,
+      "fileHex": "7b22646174617365744944223a2236313741303030312d303030302d343030302d383030302d303030303030303030304141222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-dataset-not-uuid",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"library\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 105,
+      "fileHex": "7b22646174617365744944223a226c696272617279222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-dataset-braced",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"{617a0001-0000-4000-8000-0000000000aa}\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 136,
+      "fileHex": "7b22646174617365744944223a227b36313761303030312d303030302d343030302d383030302d3030303030303030303061617d222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a317d",
+      "error": "GitSyncLayoutError.incompatibleSchema"
+    },
+    {
+      "name": "decode-not-json",
+      "kind": "decode",
+      "fileText": "# not a manifest\n",
+      "fileByteCount": 17,
+      "fileHex": "23206e6f742061206d616e69666573740a",
+      "error": "GitSyncLayoutError.notALibrary"
+    },
+    {
+      "name": "decode-json-array",
+      "kind": "decode",
+      "fileText": "[]",
+      "fileByteCount": 2,
+      "fileHex": "5b5d",
+      "error": "GitSyncLayoutError.notALibrary"
+    },
+    {
+      "name": "decode-empty",
+      "kind": "decode",
+      "fileText": "",
+      "fileByteCount": 0,
+      "fileHex": "",
+      "error": "GitSyncLayoutError.notALibrary"
+    },
+    {
+      "name": "decode-over-16384-bytes",
+      "kind": "decode",
+      "fileText": null,
+      "fileByteCount": 16518,
+      "fileHex": null,
+      "error": "GitSyncLayoutError.notALibrary"
+    },
+    {
+      "name": "decode-exactly-16384-bytes",
+      "kind": "decode",
+      "fileText": null,
+      "fileByteCount": 16384,
+      "fileHex": null,
+      "ok": {
+        "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+        "recordProfile": "snippets-wire-v1",
+        "schemaVersion": 1
+      }
+    },
+    {
+      "name": "decode-with-bom",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 137,
+      "fileHex": "efbbbf7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a317d",
+      "ok": {
+        "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+        "recordProfile": "snippets-wire-v1",
+        "schemaVersion": 1
+      }
+    },
+    {
+      "name": "decode-crlf-pretty",
+      "kind": "decode",
+      "fileText": "{\r\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\r\n  \"format\" : \"snippets-git-sync\",\r\n  \"recordProfile\" : \"snippets-wire-v1\",\r\n  \"schemaVersion\" : 1\r\n}\r\n",
+      "fileByteCount": 162,
+      "fileHex": "7b0d0a20202264617461736574494422203a202236313761303030312d303030302d343030302d383030302d303030303030303030306161222c0d0a202022666f726d617422203a2022736e6970706574732d6769742d73796e63222c0d0a2020227265636f726450726f66696c6522203a2022736e6970706574732d776972652d7631222c0d0a202022736368656d6156657273696f6e22203a20310d0a7d0d0a",
+      "ok": {
+        "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+        "recordProfile": "snippets-wire-v1",
+        "schemaVersion": 1
+      }
+    },
+    {
+      "name": "decode-duplicate-key",
+      "kind": "decode",
+      "fileText": "{\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"format\":\"snippets-git-sync\",\"format\":\"snippets-git-sync\",\"recordProfile\":\"snippets-wire-v1\",\"schemaVersion\":1}",
+      "fileByteCount": 163,
+      "fileHex": "7b22646174617365744944223a2236313761303030312d303030302d343030302d383030302d303030303030303030306161222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c22666f726d6174223a22736e6970706574732d6769742d73796e63222c227265636f726450726f66696c65223a22736e6970706574732d776972652d7631222c22736368656d6156657273696f6e223a317d",
+      "ok": {
+        "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+        "recordProfile": "snippets-wire-v1",
+        "schemaVersion": 1
+      }
+    }
+  ]
+}

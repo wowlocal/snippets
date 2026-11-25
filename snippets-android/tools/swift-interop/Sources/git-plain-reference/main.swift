@@ -1,0 +1,1 @@
+../../../../../snippets-linux/tests/reference/git-plain-vectors.swift

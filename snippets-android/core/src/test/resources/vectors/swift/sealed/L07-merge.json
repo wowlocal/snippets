@@ -1,0 +1,2962 @@
+{
+  "format": "snippets-swift-interop/L07-merge/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "SyncMerge.mergeEnvelopeOutcome for each field rule, plain conflict copies, mergeScalar / mergeTags, SyncMerge.mergeLocal, payloadDigest, DeletionGuard and SyncDeletionSafety (brief 01 §4 Three-way merge, Conflict copies, Deletion guard)",
+  "notes": ["Envelopes are given as canonical ten-key JSON text (parse it with the canonical parser; dates are doubles since 2001). null is an absent record.", "Every merge-* case is also run with local and remote swapped; mirroredGivesSameResult records whether the outcome is identical (the merge is meant to be symmetric).", "conflict-copy-* has the shape of snippets-linux/tests/fixtures/conflict-copy-v1.json (source, copy, copyID, fingerprint). The copy name is \"<displayName> (conflict yyyy-MM-dd HH:mm UTC)\", en_US_POSIX, UTC.", "merge-local-* is the local-file merge over Snippet arrays (SyncMerge.mergeLocal); its conflict-copy id is deterministicUUID(record id, \"conflict|\" + loser.content + \"|\" + loser updatedAt in ms since 1970).", "allowedDeletions = max(5, (2 × max(0, liveCount) + 9) / 10) with integer division; a batch is refused only when deletions exceed it.", "deletion fingerprint = SHA-256 over the UPPERCASE UUID strings, sorted, joined with LF."],
+  "cases": [
+    {
+      "name": "merge-all-absent",
+      "kind": "merge-envelope",
+      "base": null,
+      "local": null,
+      "remote": null,
+      "survivor": null,
+      "survivorHash": null,
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-only-local",
+      "kind": "merge-envelope",
+      "base": null,
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"c5f26b4efad1a65b9b23503e0ba609365c97a92272be650070cebc36b98045e9\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": null,
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"c5f26b4efad1a65b9b23503e0ba609365c97a92272be650070cebc36b98045e9\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "c5f26b4efad1a65b9b23503e0ba609365c97a92272be650070cebc36b98045e9",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-only-remote",
+      "kind": "merge-envelope",
+      "base": null,
+      "local": null,
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-only-remote-with-base-is-not-a-delete",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": null,
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-identical-fields-remote-clock-higher",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"c5f26b4efad1a65b9b23503e0ba609365c97a92272be650070cebc36b98045e9\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-identical-fields-local-clock-higher",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"70b6b6e1f39242d37c816a4d5c70372e5d9d1e2ced24bee6e284750b812395a7\",\"hlc\":\"000000000fa0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"70b6b6e1f39242d37c816a4d5c70372e5d9d1e2ced24bee6e284750b812395a7\",\"hlc\":\"000000000fa0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "70b6b6e1f39242d37c816a4d5c70372e5d9d1e2ced24bee6e284750b812395a7",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-identical-fields-x-union",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"62365ede54a43c2675c70b0ae067f5500a9ebcbcbe1c27e9b3361041f3667dcf\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"both\":\"local\",\"l\":1}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"dd5eae5dc0b3958bc3985c56604a7f65c6ef6cf4efb94ceaca7bf865081623b9\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"both\":\"remote\",\"r\":2}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"7a3191a7aa3b9e8e802f52c945823f80f3b253b472836b934aff933fec663d8e\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"both\":\"remote\",\"l\":1,\"r\":2}}",
+      "survivorHash": "7a3191a7aa3b9e8e802f52c945823f80f3b253b472836b934aff933fec663d8e",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-name-changed-locally",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"f24e8b4db896049aa5a2f3b98c8b843df3ef8dd4bd12d65a2d457c95a69ef6fc\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"d89d62d70edccbba0f081183c1fe0558195d90c7444b02ac7582dfe5c17ea573\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "d89d62d70edccbba0f081183c1fe0558195d90c7444b02ac7582dfe5c17ea573",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-name-changed-remotely",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"c5f26b4efad1a65b9b23503e0ba609365c97a92272be650070cebc36b98045e9\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-name-changed-both-remote-newer",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"f24e8b4db896049aa5a2f3b98c8b843df3ef8dd4bd12d65a2d457c95a69ef6fc\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-name-changed-both-local-newer",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"93f6b2fa5d908016f3089af428044efda81d9fa91440ebc86519d4750a999cac\",\"hlc\":\"000000000fa0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"93f6b2fa5d908016f3089af428044efda81d9fa91440ebc86519d4750a999cac\",\"hlc\":\"000000000fa0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "93f6b2fa5d908016f3089af428044efda81d9fa91440ebc86519d4750a999cac",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-name-changed-both-to-same",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Same\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"b8d78826738d53fc67939a160d8ffe119169a2c392cd9f93a5da3a0648d6d497\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Same\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"5107fb0a9885ace2d815ece2cc4178bc4ff85ebd04568fd8345d1815809fd675\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Same\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"5107fb0a9885ace2d815ece2cc4178bc4ff85ebd04568fd8345d1815809fd675\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "5107fb0a9885ace2d815ece2cc4178bc4ff85ebd04568fd8345d1815809fd675",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-keyword-local-name-remote",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"lk\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"a2bd94215122ac81f64decde46517053c7b55a7af2f061628aea03a05a7d1174\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"lk\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"c12cffe206cd5d8d72412891cf3343d10b00d14d5dd189be56375628b07f42fc\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "c12cffe206cd5d8d72412891cf3343d10b00d14d5dd189be56375628b07f42fc",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-keyword-changed-both",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"lk\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"a2bd94215122ac81f64decde46517053c7b55a7af2f061628aea03a05a7d1174\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"rk\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"61543dfdf6366ff1a271383f24e658e5f1f1b38311d4b6eadcd34546d1506b6c\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"rk\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"61543dfdf6366ff1a271383f24e658e5f1f1b38311d4b6eadcd34546d1506b6c\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "61543dfdf6366ff1a271383f24e658e5f1f1b38311d4b6eadcd34546d1506b6c",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-enabled-local-pinned-remote",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"98eac786eb5a32522db6422b76ee947e69d274a6f9568217664549f424437a6e\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"dc505d4ac1e1a65e21d10b16250744971e8b16db1282de0e9d5fa9fb56b40bd7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":true,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"4b170eddbf759b0077cdf432b27399c0f45cff4720b350fb92e32700fd8955df\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "4b170eddbf759b0077cdf432b27399c0f45cff4720b350fb92e32700fd8955df",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-enabled-toggled-both-ways",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"ba7017e6b001266d07e35dfe658f240dc4f1d11c4371a5a736d266a0bdce5d86\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"c5f26b4efad1a65b9b23503e0ba609365c97a92272be650070cebc36b98045e9\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":true,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"4b170eddbf759b0077cdf432b27399c0f45cff4720b350fb92e32700fd8955df\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"dc505d4ac1e1a65e21d10b16250744971e8b16db1282de0e9d5fa9fb56b40bd7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "dc505d4ac1e1a65e21d10b16250744971e8b16db1282de0e9d5fa9fb56b40bd7",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-tags-added-each-side",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\",\"local\"],\"updatedAt\":100.0},\"hash\":\"bd288fd5f115b08ea2bcccb84a8a51ba78c81b1748e4cc629198738af26bd726\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\",\"remote\"],\"updatedAt\":100.0},\"hash\":\"a8ac28136f65f610a6ca65298bd702bd5cadc599fe498dad4ac19b2bbe6f5f3f\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\",\"local\",\"remote\"],\"updatedAt\":100.0},\"hash\":\"1e2934320b92ca67c146a88d133d46567e4f1732472f8f57fdcf1fb515c1fa9a\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "1e2934320b92ca67c146a88d133d46567e4f1732472f8f57fdcf1fb515c1fa9a",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-tags-removed-locally-added-remotely",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"a\",\"b\",\"c\"],\"updatedAt\":100.0},\"hash\":\"aecb4fdc79f6ba613d3cf5ee0bfe01f33cb284fb239e03a751ae57b318759825\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"a\",\"c\"],\"updatedAt\":100.0},\"hash\":\"f7a013f314423e589d26e515d88356c4990090b23808455cad87b455a0268c60\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"a\",\"b\",\"c\",\"d\"],\"updatedAt\":100.0},\"hash\":\"909fbbcadcaf13e8c4bc8a1903aebdf8072d4c8bc6300f5809a7e95b1d366a7d\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"a\",\"c\",\"d\"],\"updatedAt\":100.0},\"hash\":\"18c9e98468e2beb798a34e1b4b13bc795d5b8ef13786d944651b4e724ff8d3ef\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "18c9e98468e2beb798a34e1b4b13bc795d5b8ef13786d944651b4e724ff8d3ef",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-tags-respelled",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\",\"Café\"],\"updatedAt\":100.0},\"hash\":\"f4b54115a57ec8fb08ac0f303816ac0596ae345284b27dfb330dde857dc2c2d0\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"WORK\",\"Café\"],\"updatedAt\":100.0},\"hash\":\"cd31c2fd89686a719f3c8a22fdb555ca6f56d0abdd067a31bf1687d6fe79cb78\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\",\"cafe\"],\"updatedAt\":100.0},\"hash\":\"3daa3e513118fc32380b36934341183d3e739014c941a008c1972994b409c3ac\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\",\"cafe\"],\"updatedAt\":100.0},\"hash\":\"3daa3e513118fc32380b36934341183d3e739014c941a008c1972994b409c3ac\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "3daa3e513118fc32380b36934341183d3e739014c941a008c1972994b409c3ac",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-tags-reordered-only",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"a\",\"b\"],\"updatedAt\":100.0},\"hash\":\"ffa55cf0b9cd1923d2f9fe3ea8f7abcbfd06fd532e62e0165bc9bcfefc66effd\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"b\",\"a\"],\"updatedAt\":100.0},\"hash\":\"38686265cfb58240b195d6505aedb1ca3922b4ba36352482fe12145ac18c1477\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"a\",\"b\"],\"updatedAt\":100.0},\"hash\":\"9d48ee2ca2b1b403abfd478926f6e7b678f327708be0db338c44d4e7220d7868\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"a\",\"b\"],\"updatedAt\":100.0},\"hash\":\"9d48ee2ca2b1b403abfd478926f6e7b678f327708be0db338c44d4e7220d7868\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "9d48ee2ca2b1b403abfd478926f6e7b678f327708be0db338c44d4e7220d7868",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-tags-no-base",
+      "kind": "merge-envelope",
+      "base": null,
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"x\",\"Shared\"],\"updatedAt\":100.0},\"hash\":\"63947dff9abc6dd351d8f8a4af636d6e2450d56fe5ed93512802d618ed1dff29\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"shared\",\"y\"],\"updatedAt\":100.0},\"hash\":\"b5fc6b0c8ed99be938998a44ff049184d0c8dd485cc38679148141b5a9d89e8b\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"shared\",\"y\",\"x\"],\"updatedAt\":100.0},\"hash\":\"ce9a7d3eef2d77b6a4bb50a732f97ccf65e3a11f0f7f7d26f95659e7c8d255ef\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "ce9a7d3eef2d77b6a4bb50a732f97ccf65e3a11f0f7f7d26f95659e7c8d255ef",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-tags-added-sorted-by-key",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\",\"zeta\",\"Alpha\"],\"updatedAt\":100.0},\"hash\":\"0096cc24d22c4d7ec1214b38f34649fcfcc4d526d929144d588466f6a8d6b525\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\",\"émile\",\"beta\"],\"updatedAt\":100.0},\"hash\":\"aed317d7ff68dc613658e21f8cdec98eb12f630d2eef05292b2155b98c665955\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\",\"Alpha\",\"beta\",\"émile\",\"zeta\"],\"updatedAt\":100.0},\"hash\":\"da91ddfd093e3b6e1d3e36959748826002a009b7cfde3a98c3b41189bd308cba\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "da91ddfd093e3b6e1d3e36959748826002a009b7cfde3a98c3b41189bd308cba",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-dates-min-created-max-updated",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":50.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":300.0},\"hash\":\"0fab27efa9cfa0ca63d41cc5248fa1d750985aacf778fe4a30b3947239c40604\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":80.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":200.0},\"hash\":\"489b77c6408e99f4d90d9d4589a391183b1be32453988afca5fa199bf3e560bd\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":50.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":300.0},\"hash\":\"aa3c64155b7f3794d2de59b5cb00c93e28da8b351ea1ed63e3f8faebfadd1474\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "aa3c64155b7f3794d2de59b5cb00c93e28da8b351ea1ed63e3f8faebfadd1474",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-content-changed-locally",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"53df5793a0fbaff5e6df16a7302272aa4aca73aebc625b2bbc9058ff05fd77db\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"f4094798973fdc7f3e2a7b5748848ba14bea27f4923e40df83664800288d29c4\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "f4094798973fdc7f3e2a7b5748848ba14bea27f4923e40df83664800288d29c4",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-content-changed-remotely",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"f24e8b4db896049aa5a2f3b98c8b843df3ef8dd4bd12d65a2d457c95a69ef6fc\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"4a0ad07d869acb188fb10449fdefe9a5ff2c07ebdf937868fa98018598094161\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"5af927501c7cdf83397e97017b39cde145bebcb9eb00e70ba4ce6f4a157f34a4\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "5af927501c7cdf83397e97017b39cde145bebcb9eb00e70ba4ce6f4a157f34a4",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-content-changed-both-to-same",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"0967115f2813a3541eaef77de9d9d5773f1c0c04314b0bbfe4ff3b3b1c55b5d5\",\"deleted\":false,\"fields\":{\"content\":\"same\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"edfe8880257340aebfd07b39e73f40dbf349c6f4624f0653b176b2fecd190db8\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"0967115f2813a3541eaef77de9d9d5773f1c0c04314b0bbfe4ff3b3b1c55b5d5\",\"deleted\":false,\"fields\":{\"content\":\"same\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"c3a17b13a9b0c502b36ec8c62266720ed5e02eda355caee923dbf6dfc4880f82\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"0967115f2813a3541eaef77de9d9d5773f1c0c04314b0bbfe4ff3b3b1c55b5d5\",\"deleted\":false,\"fields\":{\"content\":\"same\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"c3a17b13a9b0c502b36ec8c62266720ed5e02eda355caee923dbf6dfc4880f82\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "c3a17b13a9b0c502b36ec8c62266720ed5e02eda355caee923dbf6dfc4880f82",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-content-conflict-remote-wins",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":200.0},\"hash\":\"ff9d39408f9de6f362f659c8d5fcdd74786b7c36de531aedf31e48e6211d218d\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":300.0},\"hash\":\"b02038fdb9f956f989b24ac20da6fc51125ff9eb2313ff5ac8bdc727d5ab787d\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":300.0},\"hash\":\"b02038fdb9f956f989b24ac20da6fc51125ff9eb2313ff5ac8bdc727d5ab787d\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "b02038fdb9f956f989b24ac20da6fc51125ff9eb2313ff5ac8bdc727d5ab787d",
+      "conflictCopies": ["{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Name (conflict 2001-01-01 00:03 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":200.0},\"hash\":\"5099fb456f537a3dc57d6b7d0706ac3a8a28115cdaba152e9b87451dd1c382b9\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"07088be0-0b07-5501-a94e-e02b86834e61\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"b7122cb3e06f48780b41af88dcbf2213cdc6a29f8024768bbe785426e257e003\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}"],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-content-conflict-local-wins",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":200.0},\"hash\":\"d7ad11091e16cb610f3d2ba24b7cfd4ed2f0f503ecf217f67909cab74ed6ef6f\",\"hlc\":\"000000000fa0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":300.0},\"hash\":\"b02038fdb9f956f989b24ac20da6fc51125ff9eb2313ff5ac8bdc727d5ab787d\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":300.0},\"hash\":\"f7eab84e6c803467c90695f3401b6aa742dbc7c43a40231ad9b4adc8d109a9c2\",\"hlc\":\"000000000fa0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "f7eab84e6c803467c90695f3401b6aa742dbc7c43a40231ad9b4adc8d109a9c2",
+      "conflictCopies": ["{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Name (conflict 2001-01-01 00:05 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":300.0},\"hash\":\"a1307ce72397dca86f047dbdb6e1b6c1af06772c39ecab8a35dde3252fdce587\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"134c738c-5165-5599-aad3-eeaf5118ebb0\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"d92358ae1f5433a95287d3fb82aee2ac2ced0fba3c9995b0bb4a7ab3278059cf\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}"],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-content-conflict-no-base",
+      "kind": "merge-envelope",
+      "base": null,
+      "local": "{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"53df5793a0fbaff5e6df16a7302272aa4aca73aebc625b2bbc9058ff05fd77db\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"4a0ad07d869acb188fb10449fdefe9a5ff2c07ebdf937868fa98018598094161\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"4a0ad07d869acb188fb10449fdefe9a5ff2c07ebdf937868fa98018598094161\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "4a0ad07d869acb188fb10449fdefe9a5ff2c07ebdf937868fa98018598094161",
+      "conflictCopies": ["{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Name (conflict 2001-01-01 00:01 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":100.0},\"hash\":\"5e1f5cd80a664c93d4f9c7fd0a1543bae06909e8b9fa349f5d2548e86f447fdc\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"81a604c3-ded7-5882-99ac-ca349902d675\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"9280aa1e17b96945ae8b41feb96a9872ac31d90200f785567eb26f48b11b4a6f\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}"],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-content-conflict-equal-hlc-payload-rank",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"22d7d01892c89c410365ed49593afd3c3c889087186a22178e3698d2fb76542f\",\"hlc\":\"000000001388-0001-cccccccc\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"cccccccc\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"a4cc2b35142acf8769f72c7f98bd0297c12a29354a5c8f3a15f8f2f75ce7d50a\",\"hlc\":\"000000001388-0001-cccccccc\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"cccccccc\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"22d7d01892c89c410365ed49593afd3c3c889087186a22178e3698d2fb76542f\",\"hlc\":\"000000001388-0001-cccccccc\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"cccccccc\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "22d7d01892c89c410365ed49593afd3c3c889087186a22178e3698d2fb76542f",
+      "conflictCopies": ["{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Name (conflict 2001-01-01 00:01 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":100.0},\"hash\":\"31735217bb51be267f17292cfbf6349a3e392941b46bf484491e4bf524f99c23\",\"hlc\":\"000000001388-0001-cccccccc\",\"id\":\"3eedb54e-1886-5568-b7e2-9800fb672202\",\"origin\":\"cccccccc\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"5dbbcf8a4b4bb6054f7faad57911d599297638e76cb749dac4b6f8409bf83088\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}"],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-content-conflict-loser-unnamed",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"34ff5dd1b27e5bb60c40f45905e063939b176b3aa1462329000c67540dee6d5e\",\"deleted\":false,\"fields\":{\"content\":\"first line\\nsecond\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"\",\"tags\":[\"work\"],\"updatedAt\":120.0},\"hash\":\"b7e06dfb4dea714d79409e2bf0cfa72f61b3340a9cf6f9f92d686f388100a97e\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"4a0ad07d869acb188fb10449fdefe9a5ff2c07ebdf937868fa98018598094161\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"\",\"tags\":[\"work\"],\"updatedAt\":120.0},\"hash\":\"48e69bfd642a96c2228e48c398f4538ec73771fde980114487247843d0ad2ea2\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "48e69bfd642a96c2228e48c398f4538ec73771fde980114487247843d0ad2ea2",
+      "conflictCopies": ["{\"contentHash\":\"34ff5dd1b27e5bb60c40f45905e063939b176b3aa1462329000c67540dee6d5e\",\"deleted\":false,\"fields\":{\"content\":\"first line\\nsecond\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"first line (conflict 2001-01-01 00:02 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":120.0},\"hash\":\"a58ebf2649a1d0692d28ea852171e28b233af892756cf57e500f81130fad6e6e\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"edd67ed2-51e9-5709-be9f-c45e823bba85\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"66407063e4e65e83a05a967247bef00d913b17bd6286f75f023af852a2e8aefa\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}"],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-content-conflict-loser-has-x-and-conflict-tag",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"Conflict\",\"work\"],\"updatedAt\":100.0},\"hash\":\"59c5fdd5aeff24548ade608b7bf229cf2a10c32ad3229de841531b81484454ad\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"future\":{\"k\":1}}}",
+      "remote": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"4a0ad07d869acb188fb10449fdefe9a5ff2c07ebdf937868fa98018598094161\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"7fa6931a112c5639298e1b64068105379d8c58a5a900722a040ac1f36ec588e0\",\"deleted\":false,\"fields\":{\"content\":\"remote body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\",\"Conflict\"],\"updatedAt\":100.0},\"hash\":\"0fb03bca3193d35bdfcbdf652042b2d441c96aafef5ae237053774e63ed06efc\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"future\":{\"k\":1}}}",
+      "survivorHash": "0fb03bca3193d35bdfcbdf652042b2d441c96aafef5ae237053774e63ed06efc",
+      "conflictCopies": ["{\"contentHash\":\"7394c61abd32c55af9b8c2397241b67dc85b6db530af4c5d3da320b053e9fbd4\",\"deleted\":false,\"fields\":{\"content\":\"local body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Name (conflict 2001-01-01 00:01 UTC)\",\"tags\":[\"Conflict\",\"work\"],\"updatedAt\":100.0},\"hash\":\"17d07b9f1c4f12e6e8b8688a615580f8ed10ddc1b01f6e09bd8adfb60b2e4048\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"84d6d76c-6076-5782-92a6-ef4fa0cb6b8c\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"dd55b2b9f291eb909b1a432d6447bbaee6710fcdbc0176cdeec16ea98f69e3c7\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1},\"future\":{\"k\":1}}}"],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-delete-local-edit-remote",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"e18f5668459528c9ee1e4bca81c0699e30b537ad5a33c92663cac717b96258da\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Remote\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "18521028433cc34fe478c4846e3de5bcb281ce8c1a76dd6d380959ad53b55850",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-delete-local-unchanged-remote",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"e18f5668459528c9ee1e4bca81c0699e30b537ad5a33c92663cac717b96258da\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"e18f5668459528c9ee1e4bca81c0699e30b537ad5a33c92663cac717b96258da\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "e18f5668459528c9ee1e4bca81c0699e30b537ad5a33c92663cac717b96258da",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-edit-local-delete-remote",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"f24e8b4db896049aa5a2f3b98c8b843df3ef8dd4bd12d65a2d457c95a69ef6fc\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"ac7f9f85845eead3db309e050bffbea4cd8a33b005646dd1248d476797575ced\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Local\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"f24e8b4db896049aa5a2f3b98c8b843df3ef8dd4bd12d65a2d457c95a69ef6fc\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "f24e8b4db896049aa5a2f3b98c8b843df3ef8dd4bd12d65a2d457c95a69ef6fc",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-unchanged-local-delete-remote",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"ac7f9f85845eead3db309e050bffbea4cd8a33b005646dd1248d476797575ced\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"ac7f9f85845eead3db309e050bffbea4cd8a33b005646dd1248d476797575ced\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "ac7f9f85845eead3db309e050bffbea4cd8a33b005646dd1248d476797575ced",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-delete-both-higher-clock-wins",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"197637c123cd913e63877cc9a0172b883d90a3128d9da57ebd43197cbedef024\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"e18f5668459528c9ee1e4bca81c0699e30b537ad5a33c92663cac717b96258da\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"ac7f9f85845eead3db309e050bffbea4cd8a33b005646dd1248d476797575ced\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"ac7f9f85845eead3db309e050bffbea4cd8a33b005646dd1248d476797575ced\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "ac7f9f85845eead3db309e050bffbea4cd8a33b005646dd1248d476797575ced",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-delete-local-live-remote-no-base",
+      "kind": "merge-envelope",
+      "base": null,
+      "local": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"e18f5668459528c9ee1e4bca81c0699e30b537ad5a33c92663cac717b96258da\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "1b6a85f8db5cc538236aa2d6ec97df1d1e952b30f6a8032092983d946be72bb7",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-delete-both-no-base",
+      "kind": "merge-envelope",
+      "base": null,
+      "local": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"c4b8b938054d6583c800beed40ec70240f2c04bf22b6ea82682905e445bb8ac7\",\"hlc\":\"000000002328-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"ac7f9f85845eead3db309e050bffbea4cd8a33b005646dd1248d476797575ced\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"c4b8b938054d6583c800beed40ec70240f2c04bf22b6ea82682905e445bb8ac7\",\"hlc\":\"000000002328-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "c4b8b938054d6583c800beed40ec70240f2c04bf22b6ea82682905e445bb8ac7",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-recreate-after-delete",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"39edfaca0c9650205fc3667cde945bdbb5ad86562928d4ab2986f6bf672efc25\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Again\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"f3cea9296e39d33c24ecb5cf7d2d515534135468ee95e455e0a03b4f12999747\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"39edfaca0c9650205fc3667cde945bdbb5ad86562928d4ab2986f6bf672efc25\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivor": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Again\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"f3cea9296e39d33c24ecb5cf7d2d515534135468ee95e455e0a03b4f12999747\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "survivorHash": "f3cea9296e39d33c24ecb5cf7d2d515534135468ee95e455e0a03b4f12999747",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-secure-rename-remote-body-local",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"9790f250b3c67531691377e806ea03c3645be88d54611d6b52b5ea72ffafd964\",\"deleted\":false,\"fields\":{\"content\":\"v1.YWFhYWFhYWFhYWFh.lPj1-xUZgqJ8gQLiLYd_vz2zJ_a__h2K8MjFOe2j8-Trnzbh35XE1Us-a55k1lOedaAHMVkVBFzS0Ba9r5FujXFGTrbO5UmF2vd_LmgaHLrnRjsbhl5npr1sqrYDBPTtwW6aahSATYFUmiu1ZE3gfZBMF2A8X2vxpnsHW72YvOKLaES39B3wuHry-ybvbLqYCbhBiBNbT_Rqva_s-ZhfGPL9G-e2Gt-pDTkQv0qkRy30gX5jOFmZ8SHnBQFaSu21jHyQTWKgvReIpX-8oVzkAVEp1Ye8Y5o07oO5KeFonmTEhqg6i9M4IcI9Jab0l7LkiNSuai6KB3s5-buXLWsEGqdpqmYoYIz11AaKwy-1vqU\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"4391af57646a2e24e0a537024fa4cab44f9906e28bd2539fbdf1af517afd9ca4\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"5a572014a18be9d84c4ed0f203620b23\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "local": "{\"contentHash\":\"2fea28a0b211e7fad8413745ca06bcf48b4b6d906283a25337bf7b0d4ac9e6ec\",\"deleted\":false,\"fields\":{\"content\":\"v1.YmJiYmJiYmJiYmJi.ncEG5bveY7owVxBNhTwyzAkxA9alCMDmMmGP7spbHZsqkcZ13Y2rUCvpSxT7s-zcm4uaxTb4_6dVslP9NdKnWIfG2PHmOsQUKOH8sw8MqPwNFZI6WbVDQlcl_UYCVdOsORpkc2i2HkorCKDBB7fO-FroEReK5xnvdZNw0kjgXsfpbRC-cRXWGXmTSOQHh9qASZJIb179OoLNj1_28fSyCwK4fxRYVQHepeGjNTFPQkIGf3CdKa2_0WId8AGSy4s5WGcUrEYksPpouHGge9RNy6YVo0SVOEQ1l-G7R1Rbtrr_Aw5KTMdwWBmTrm5GiTaZOjJUt4IoYjZ6Hqz5TmTFYsPo1CunNvUP_pLMP3TgUHI\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"db98e949a7c894db70f8b88cf1998261cf336bff84c094c21f6ebe0ad9ece809\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"e7065052c3f63a813055b2e69745b05b\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "remote": "{\"contentHash\":\"9790f250b3c67531691377e806ea03c3645be88d54611d6b52b5ea72ffafd964\",\"deleted\":false,\"fields\":{\"content\":\"v1.YWFhYWFhYWFhYWFh.lPj1-xUZgqJ8gQLiLYd_vz2zJ_a__h2K8MjFOe2j8-Trnzbh35XE1Us-a55k1lOedaAHMVkVBFzS0Ba9r5FujXFGTrbO5UmF2vd_LmgaHLrnRjsbhl5npr1sqrYDBPTtwW6aahSATYFUmiu1ZE3gfZBMF2A8X2vxpnsHW72YvOKLaES39B3wuHry-ybvbLqYCbhBiBNbT_Rqva_s-ZhfGPL9G-e2Gt-pDTkQv0qkRy30gX5jOFmZ8SHnBQFaSu21jHyQTWKgvReIpX-8oVzkAVEp1Ye8Y5o07oO5KeFonmTEhqg6i9M4IcI9Jab0l7LkiNSuai6KB3s5-buXLWsEGqdpqmYoYIz11AaKwy-1vqU\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret renamed\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"34f01cbb50aaf3df34fad8eb2073f50d003781459f4bb1a5ac8ec49261ee9909\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"5a572014a18be9d84c4ed0f203620b23\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "survivor": "{\"contentHash\":\"2fea28a0b211e7fad8413745ca06bcf48b4b6d906283a25337bf7b0d4ac9e6ec\",\"deleted\":false,\"fields\":{\"content\":\"v1.YmJiYmJiYmJiYmJi.ncEG5bveY7owVxBNhTwyzAkxA9alCMDmMmGP7spbHZsqkcZ13Y2rUCvpSxT7s-zcm4uaxTb4_6dVslP9NdKnWIfG2PHmOsQUKOH8sw8MqPwNFZI6WbVDQlcl_UYCVdOsORpkc2i2HkorCKDBB7fO-FroEReK5xnvdZNw0kjgXsfpbRC-cRXWGXmTSOQHh9qASZJIb179OoLNj1_28fSyCwK4fxRYVQHepeGjNTFPQkIGf3CdKa2_0WId8AGSy4s5WGcUrEYksPpouHGge9RNy6YVo0SVOEQ1l-G7R1Rbtrr_Aw5KTMdwWBmTrm5GiTaZOjJUt4IoYjZ6Hqz5TmTFYsPo1CunNvUP_pLMP3TgUHI\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret renamed\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"f31784d535fd220aa43d72fb665b5195683156499dc2fbdba30b7432f833c958\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"e7065052c3f63a813055b2e69745b05b\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "survivorHash": "f31784d535fd220aa43d72fb665b5195683156499dc2fbdba30b7432f833c958",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-secure-both-bodies-changed",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"9790f250b3c67531691377e806ea03c3645be88d54611d6b52b5ea72ffafd964\",\"deleted\":false,\"fields\":{\"content\":\"v1.YWFhYWFhYWFhYWFh.lPj1-xUZgqJ8gQLiLYd_vz2zJ_a__h2K8MjFOe2j8-Trnzbh35XE1Us-a55k1lOedaAHMVkVBFzS0Ba9r5FujXFGTrbO5UmF2vd_LmgaHLrnRjsbhl5npr1sqrYDBPTtwW6aahSATYFUmiu1ZE3gfZBMF2A8X2vxpnsHW72YvOKLaES39B3wuHry-ybvbLqYCbhBiBNbT_Rqva_s-ZhfGPL9G-e2Gt-pDTkQv0qkRy30gX5jOFmZ8SHnBQFaSu21jHyQTWKgvReIpX-8oVzkAVEp1Ye8Y5o07oO5KeFonmTEhqg6i9M4IcI9Jab0l7LkiNSuai6KB3s5-buXLWsEGqdpqmYoYIz11AaKwy-1vqU\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"4391af57646a2e24e0a537024fa4cab44f9906e28bd2539fbdf1af517afd9ca4\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"5a572014a18be9d84c4ed0f203620b23\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "local": "{\"contentHash\":\"2fea28a0b211e7fad8413745ca06bcf48b4b6d906283a25337bf7b0d4ac9e6ec\",\"deleted\":false,\"fields\":{\"content\":\"v1.YmJiYmJiYmJiYmJi.ncEG5bveY7owVxBNhTwyzAkxA9alCMDmMmGP7spbHZsqkcZ13Y2rUCvpSxT7s-zcm4uaxTb4_6dVslP9NdKnWIfG2PHmOsQUKOH8sw8MqPwNFZI6WbVDQlcl_UYCVdOsORpkc2i2HkorCKDBB7fO-FroEReK5xnvdZNw0kjgXsfpbRC-cRXWGXmTSOQHh9qASZJIb179OoLNj1_28fSyCwK4fxRYVQHepeGjNTFPQkIGf3CdKa2_0WId8AGSy4s5WGcUrEYksPpouHGge9RNy6YVo0SVOEQ1l-G7R1Rbtrr_Aw5KTMdwWBmTrm5GiTaZOjJUt4IoYjZ6Hqz5TmTFYsPo1CunNvUP_pLMP3TgUHI\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"db98e949a7c894db70f8b88cf1998261cf336bff84c094c21f6ebe0ad9ece809\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"e7065052c3f63a813055b2e69745b05b\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "remote": "{\"contentHash\":\"d161fe4b92cc576c6fb0d0e1a0fe86f6765550dca554971a6821015a7f882d82\",\"deleted\":false,\"fields\":{\"content\":\"v1.Y2NjY2NjY2NjY2Nj.NgyBfG59SSlSE-xvrGfQLsxnfEg22V4MmYUC8eCs4kA13h9n1ItFbz1lnZ9M_YbQmp5w5ey-xYPkHNNR2nnM5PtGf4ttEu6fhQFZ2H2Wv7Tyiew_STAAt0TmrBHyDqJ7qtzThf7akmxzZMDVG8aVJTAh6XZ1g0-W7iTsuIrE-e3XJElkR2UKe9mnIVfv3VoEF2YmNLaJ_3rNqHhQZRJ8ffPhyVjP3wWtWBnr3QNf5wWOul1Ie52KYFsI0jIDp8DCVeFlqyJ5pJYypLggIrLTUZRPh2iZOgjh9zSPMo_m8YAWPfF-o0DgUS1ADeqwxNfD5ry19rN26RQT-GwSlh-kIPv96E00YQk9mvBXWSnHpFY\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"d07ab88ce1377c92abe6ffe5c1316e424a171783b0649149bd2308f0cf56ef71\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"fd817623a200f6704e99b38264789c0a\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "survivor": "{\"contentHash\":\"d161fe4b92cc576c6fb0d0e1a0fe86f6765550dca554971a6821015a7f882d82\",\"deleted\":false,\"fields\":{\"content\":\"v1.Y2NjY2NjY2NjY2Nj.NgyBfG59SSlSE-xvrGfQLsxnfEg22V4MmYUC8eCs4kA13h9n1ItFbz1lnZ9M_YbQmp5w5ey-xYPkHNNR2nnM5PtGf4ttEu6fhQFZ2H2Wv7Tyiew_STAAt0TmrBHyDqJ7qtzThf7akmxzZMDVG8aVJTAh6XZ1g0-W7iTsuIrE-e3XJElkR2UKe9mnIVfv3VoEF2YmNLaJ_3rNqHhQZRJ8ffPhyVjP3wWtWBnr3QNf5wWOul1Ie52KYFsI0jIDp8DCVeFlqyJ5pJYypLggIrLTUZRPh2iZOgjh9zSPMo_m8YAWPfF-o0DgUS1ADeqwxNfD5ry19rN26RQT-GwSlh-kIPv96E00YQk9mvBXWSnHpFY\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"767c9914b5588df6dc8a4987d556d0472ec90b41bb43dd34da160ef4dd8bdf59\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"contentConflict.v1.9360d1f28b90e4b3d40f74f7be88db8fd22c59d93a45b8349945e9d35f046948\":{\"copyID\":\"c83fd5bc-388c-5a02-927d-1daa0aa9dcfd\",\"fields\":{\"content\":\"v1.YmJiYmJiYmJiYmJi.ncEG5bveY7owVxBNhTwyzAkxA9alCMDmMmGP7spbHZsqkcZ13Y2rUCvpSxT7s-zcm4uaxTb4_6dVslP9NdKnWIfG2PHmOsQUKOH8sw8MqPwNFZI6WbVDQlcl_UYCVdOsORpkc2i2HkorCKDBB7fO-FroEReK5xnvdZNw0kjgXsfpbRC-cRXWGXmTSOQHh9qASZJIb179OoLNj1_28fSyCwK4fxRYVQHepeGjNTFPQkIGf3CdKa2_0WId8AGSy4s5WGcUrEYksPpouHGge9RNy6YVo0SVOEQ1l-G7R1Rbtrr_Aw5KTMdwWBmTrm5GiTaZOjJUt4IoYjZ6Hqz5TmTFYsPo1CunNvUP_pLMP3TgUHI\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"secure\":true,\"sourceHLC\":\"0000000007d0-0000-aaaaaaaa\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"sourceOrigin\":\"aaaaaaaa\",\"version\":1,\"x\":{\"vaultContentHash\":\"e7065052c3f63a813055b2e69745b05b\",\"vaultKID\":\"k-7f3a91c0-1b2\"}},\"vaultContentHash\":\"fd817623a200f6704e99b38264789c0a\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "survivorHash": "767c9914b5588df6dc8a4987d556d0472ec90b41bb43dd34da160ef4dd8bdf59",
+      "conflictCopies": [],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "merge-secure-variant-then-delete-refused",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"d161fe4b92cc576c6fb0d0e1a0fe86f6765550dca554971a6821015a7f882d82\",\"deleted\":false,\"fields\":{\"content\":\"v1.Y2NjY2NjY2NjY2Nj.NgyBfG59SSlSE-xvrGfQLsxnfEg22V4MmYUC8eCs4kA13h9n1ItFbz1lnZ9M_YbQmp5w5ey-xYPkHNNR2nnM5PtGf4ttEu6fhQFZ2H2Wv7Tyiew_STAAt0TmrBHyDqJ7qtzThf7akmxzZMDVG8aVJTAh6XZ1g0-W7iTsuIrE-e3XJElkR2UKe9mnIVfv3VoEF2YmNLaJ_3rNqHhQZRJ8ffPhyVjP3wWtWBnr3QNf5wWOul1Ie52KYFsI0jIDp8DCVeFlqyJ5pJYypLggIrLTUZRPh2iZOgjh9zSPMo_m8YAWPfF-o0DgUS1ADeqwxNfD5ry19rN26RQT-GwSlh-kIPv96E00YQk9mvBXWSnHpFY\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"767c9914b5588df6dc8a4987d556d0472ec90b41bb43dd34da160ef4dd8bdf59\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"contentConflict.v1.9360d1f28b90e4b3d40f74f7be88db8fd22c59d93a45b8349945e9d35f046948\":{\"copyID\":\"c83fd5bc-388c-5a02-927d-1daa0aa9dcfd\",\"fields\":{\"content\":\"v1.YmJiYmJiYmJiYmJi.ncEG5bveY7owVxBNhTwyzAkxA9alCMDmMmGP7spbHZsqkcZ13Y2rUCvpSxT7s-zcm4uaxTb4_6dVslP9NdKnWIfG2PHmOsQUKOH8sw8MqPwNFZI6WbVDQlcl_UYCVdOsORpkc2i2HkorCKDBB7fO-FroEReK5xnvdZNw0kjgXsfpbRC-cRXWGXmTSOQHh9qASZJIb179OoLNj1_28fSyCwK4fxRYVQHepeGjNTFPQkIGf3CdKa2_0WId8AGSy4s5WGcUrEYksPpouHGge9RNy6YVo0SVOEQ1l-G7R1Rbtrr_Aw5KTMdwWBmTrm5GiTaZOjJUt4IoYjZ6Hqz5TmTFYsPo1CunNvUP_pLMP3TgUHI\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"secure\":true,\"sourceHLC\":\"0000000007d0-0000-aaaaaaaa\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"sourceOrigin\":\"aaaaaaaa\",\"version\":1,\"x\":{\"vaultContentHash\":\"e7065052c3f63a813055b2e69745b05b\",\"vaultKID\":\"k-7f3a91c0-1b2\"}},\"vaultContentHash\":\"fd817623a200f6704e99b38264789c0a\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "local": "{\"contentHash\":\"d161fe4b92cc576c6fb0d0e1a0fe86f6765550dca554971a6821015a7f882d82\",\"deleted\":false,\"fields\":{\"content\":\"v1.Y2NjY2NjY2NjY2Nj.NgyBfG59SSlSE-xvrGfQLsxnfEg22V4MmYUC8eCs4kA13h9n1ItFbz1lnZ9M_YbQmp5w5ey-xYPkHNNR2nnM5PtGf4ttEu6fhQFZ2H2Wv7Tyiew_STAAt0TmrBHyDqJ7qtzThf7akmxzZMDVG8aVJTAh6XZ1g0-W7iTsuIrE-e3XJElkR2UKe9mnIVfv3VoEF2YmNLaJ_3rNqHhQZRJ8ffPhyVjP3wWtWBnr3QNf5wWOul1Ie52KYFsI0jIDp8DCVeFlqyJ5pJYypLggIrLTUZRPh2iZOgjh9zSPMo_m8YAWPfF-o0DgUS1ADeqwxNfD5ry19rN26RQT-GwSlh-kIPv96E00YQk9mvBXWSnHpFY\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"767c9914b5588df6dc8a4987d556d0472ec90b41bb43dd34da160ef4dd8bdf59\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"contentConflict.v1.9360d1f28b90e4b3d40f74f7be88db8fd22c59d93a45b8349945e9d35f046948\":{\"copyID\":\"c83fd5bc-388c-5a02-927d-1daa0aa9dcfd\",\"fields\":{\"content\":\"v1.YmJiYmJiYmJiYmJi.ncEG5bveY7owVxBNhTwyzAkxA9alCMDmMmGP7spbHZsqkcZ13Y2rUCvpSxT7s-zcm4uaxTb4_6dVslP9NdKnWIfG2PHmOsQUKOH8sw8MqPwNFZI6WbVDQlcl_UYCVdOsORpkc2i2HkorCKDBB7fO-FroEReK5xnvdZNw0kjgXsfpbRC-cRXWGXmTSOQHh9qASZJIb179OoLNj1_28fSyCwK4fxRYVQHepeGjNTFPQkIGf3CdKa2_0WId8AGSy4s5WGcUrEYksPpouHGge9RNy6YVo0SVOEQ1l-G7R1Rbtrr_Aw5KTMdwWBmTrm5GiTaZOjJUt4IoYjZ6Hqz5TmTFYsPo1CunNvUP_pLMP3TgUHI\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"secure\":true,\"sourceHLC\":\"0000000007d0-0000-aaaaaaaa\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"sourceOrigin\":\"aaaaaaaa\",\"version\":1,\"x\":{\"vaultContentHash\":\"e7065052c3f63a813055b2e69745b05b\",\"vaultKID\":\"k-7f3a91c0-1b2\"}},\"vaultContentHash\":\"fd817623a200f6704e99b38264789c0a\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "remote": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"c4b8b938054d6583c800beed40ec70240f2c04bf22b6ea82682905e445bb8ac7\",\"hlc\":\"000000002328-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "error": "SyncMerge.EnvelopeFailure.unresolvedContentConflictDeletion"
+    },
+    {
+      "name": "merge-promotion-versus-plain-edit",
+      "kind": "merge-envelope",
+      "base": "{\"contentHash\":\"90aa29738b78cfd6b4baaea7e40652fc79a95bf2f92a0981d444ebb8bc49de0f\",\"deleted\":false,\"fields\":{\"content\":\"plain body\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"a2e7b0117ef975033c79611adbe9bb4efbc67d33fe2be39b8725a76c0d532a98\",\"hlc\":\"0000000003e8-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "local": "{\"contentHash\":\"d48b8dfbdeb93720b5f9c18f66e79a92abce622c81798923b49db8b4a289874c\",\"deleted\":false,\"fields\":{\"content\":\"edited plain body\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"4665f8884d886878fec1b6d093d2dd8de18963ce38de43a094fe50c1cd498c9f\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "remote": "{\"contentHash\":\"d161fe4b92cc576c6fb0d0e1a0fe86f6765550dca554971a6821015a7f882d82\",\"deleted\":false,\"fields\":{\"content\":\"v1.Y2NjY2NjY2NjY2Nj.NgyBfG59SSlSE-xvrGfQLsxnfEg22V4MmYUC8eCs4kA13h9n1ItFbz1lnZ9M_YbQmp5w5ey-xYPkHNNR2nnM5PtGf4ttEu6fhQFZ2H2Wv7Tyiew_STAAt0TmrBHyDqJ7qtzThf7akmxzZMDVG8aVJTAh6XZ1g0-W7iTsuIrE-e3XJElkR2UKe9mnIVfv3VoEF2YmNLaJ_3rNqHhQZRJ8ffPhyVjP3wWtWBnr3QNf5wWOul1Ie52KYFsI0jIDp8DCVeFlqyJ5pJYypLggIrLTUZRPh2iZOgjh9zSPMo_m8YAWPfF-o0DgUS1ADeqwxNfD5ry19rN26RQT-GwSlh-kIPv96E00YQk9mvBXWSnHpFY\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"d07ab88ce1377c92abe6ffe5c1316e424a171783b0649149bd2308f0cf56ef71\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"fd817623a200f6704e99b38264789c0a\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "survivor": "{\"contentHash\":\"d161fe4b92cc576c6fb0d0e1a0fe86f6765550dca554971a6821015a7f882d82\",\"deleted\":false,\"fields\":{\"content\":\"v1.Y2NjY2NjY2NjY2Nj.NgyBfG59SSlSE-xvrGfQLsxnfEg22V4MmYUC8eCs4kA13h9n1ItFbz1lnZ9M_YbQmp5w5ey-xYPkHNNR2nnM5PtGf4ttEu6fhQFZ2H2Wv7Tyiew_STAAt0TmrBHyDqJ7qtzThf7akmxzZMDVG8aVJTAh6XZ1g0-W7iTsuIrE-e3XJElkR2UKe9mnIVfv3VoEF2YmNLaJ_3rNqHhQZRJ8ffPhyVjP3wWtWBnr3QNf5wWOul1Ie52KYFsI0jIDp8DCVeFlqyJ5pJYypLggIrLTUZRPh2iZOgjh9zSPMo_m8YAWPfF-o0DgUS1ADeqwxNfD5ry19rN26RQT-GwSlh-kIPv96E00YQk9mvBXWSnHpFY\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Secret\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"d07ab88ce1377c92abe6ffe5c1316e424a171783b0649149bd2308f0cf56ef71\",\"hlc\":\"000000000bb8-0000-bbbbbbbb\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"bbbbbbbb\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"fd817623a200f6704e99b38264789c0a\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "survivorHash": "d07ab88ce1377c92abe6ffe5c1316e424a171783b0649149bd2308f0cf56ef71",
+      "conflictCopies": ["{\"contentHash\":\"d48b8dfbdeb93720b5f9c18f66e79a92abce622c81798923b49db8b4a289874c\",\"deleted\":false,\"fields\":{\"content\":\"edited plain body\",\"createdAt\":807004800.5,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Secret (conflict 2026-10-01 20:20 UTC)\",\"tags\":[\"home\",\"conflict\"],\"updatedAt\":812578800.123456},\"hash\":\"5c949857ff6b9a6327254c300c0cba1fb7f95e6175c57d110b377e079cf6711f\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"d11098e0-58e0-5791-ac7f-d8c63482076e\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"e925709e6f0a539d8f6ddf1c2f5f6181656a9033a3e6138a7f89ff525c400890\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}"],
+      "mirroredGivesSameResult": true
+    },
+    {
+      "name": "conflict-copy-named",
+      "kind": "conflict-copy",
+      "source": "{\"contentHash\":\"0ae0e053d6ac8e752b36ecd455d69ab0541943b704b4b4aeccfd99f03f739d6d\",\"deleted\":false,\"fields\":{\"content\":\"Fictional lost body 🦀\\n\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":120.0},\"hash\":\"1473f956c39c09a6554280d7982e59d8e34540367cbb2d8fe4c0a6ca3a45fb29\",\"hlc\":\"00000001d4c0-0002-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "copy": "{\"contentHash\":\"0ae0e053d6ac8e752b36ecd455d69ab0541943b704b4b4aeccfd99f03f739d6d\",\"deleted\":false,\"fields\":{\"content\":\"Fictional lost body 🦀\\n\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Name (conflict 2001-01-01 00:02 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":120.0},\"hash\":\"f66bd1b3d40394a9b9f6bd2c254736b07c6a398d6cefe7d77ecd7907a77cebb3\",\"hlc\":\"00000001d4c0-0002-aaaaaaaa\",\"id\":\"2c714641-3ca5-57bd-b678-202117cffb26\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"bb89241acd74d9c5a601c272f86887907a6c8867f41c2a69103b2595e01989fa\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}",
+      "copyID": "2c714641-3ca5-57bd-b678-202117cffb26",
+      "fingerprint": "bb89241acd74d9c5a601c272f86887907a6c8867f41c2a69103b2595e01989fa",
+      "copyName": "Name (conflict 2001-01-01 00:02 UTC)"
+    },
+    {
+      "name": "conflict-copy-unnamed-uses-first-line",
+      "kind": "conflict-copy",
+      "source": "{\"contentHash\":\"f32ef6f4d3b96ffc71944f4735027b88eadf6facb89d694281619b7d18e630e8\",\"deleted\":false,\"fields\":{\"content\":\"\\n  first line  \\nsecond\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"  \",\"tags\":[\"work\"],\"updatedAt\":59.999},\"hash\":\"6fffd2070b51965c74472c82921cc2675e9d9ac06e9d770502584041a9833108\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "copy": "{\"contentHash\":\"f32ef6f4d3b96ffc71944f4735027b88eadf6facb89d694281619b7d18e630e8\",\"deleted\":false,\"fields\":{\"content\":\"\\n  first line  \\nsecond\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"first line (conflict 2001-01-01 00:00 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":59.999},\"hash\":\"dae7ba7f72ead8a4904d801133031a47aedb1612a75e1139f39bc977d56f06be\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"2b5482be-b867-581a-863e-34d72e64adbb\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"5bc4fa08ca14fe1383feb7b256529ed061413016cbefc34783b9f4e7ebc34c12\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}",
+      "copyID": "2b5482be-b867-581a-863e-34d72e64adbb",
+      "fingerprint": "5bc4fa08ca14fe1383feb7b256529ed061413016cbefc34783b9f4e7ebc34c12",
+      "copyName": "first line (conflict 2001-01-01 00:00 UTC)"
+    },
+    {
+      "name": "conflict-copy-unnamed-empty-body",
+      "kind": "conflict-copy",
+      "source": "{\"contentHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"deleted\":false,\"fields\":{\"content\":\"\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"\",\"tags\":[\"work\"],\"updatedAt\":0.0},\"hash\":\"c798182f9712a8d344d127afb40c11cf9740a3bd8263e6bf9d572f231870d5e1\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "copy": "{\"contentHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"deleted\":false,\"fields\":{\"content\":\"\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Untitled Snippet (conflict 2001-01-01 00:00 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":0.0},\"hash\":\"b8748d4d4b527248efb766ff69e1edaa4f74bea98b2d6f49e72114593163936e\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"b7dbeb26-558a-555b-a3f6-4680b92a7aa1\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"2c183b13fba374cdf5ebffdb0c271ba68533989c8166bff07d49564950b7b8d7\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}",
+      "copyID": "b7dbeb26-558a-555b-a3f6-4680b92a7aa1",
+      "fingerprint": "2c183b13fba374cdf5ebffdb0c271ba68533989c8166bff07d49564950b7b8d7",
+      "copyName": "Untitled Snippet (conflict 2001-01-01 00:00 UTC)"
+    },
+    {
+      "name": "conflict-copy-long-first-line",
+      "kind": "conflict-copy",
+      "source": "{\"contentHash\":\"42f2d97335669f86846b721a8aa58551a46564eaf6977e3b4836d4645e3e3ed2\",\"deleted\":false,\"fields\":{\"content\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"\",\"tags\":[\"work\"],\"updatedAt\":86399.5},\"hash\":\"c1fbccc8060f768f9513d3b744bda478d4266ba3114743709da0761ba6c43a8b\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "copy": "{\"contentHash\":\"42f2d97335669f86846b721a8aa58551a46564eaf6977e3b4836d4645e3e3ed2\",\"deleted\":false,\"fields\":{\"content\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… (conflict 2001-01-01 23:59 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":86399.5},\"hash\":\"7f08ae34cb12a66294ff85c14584c2b6f3fd900f852b2686babd9e02282cf5df\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"52c510c9-5a44-5d62-a0a6-14cd24c41039\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"a954f5b09a04c145017cfc92452e3e499222f01e1ad2ccd2dde836143fefae1a\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}",
+      "copyID": "52c510c9-5a44-5d62-a0a6-14cd24c41039",
+      "fingerprint": "a954f5b09a04c145017cfc92452e3e499222f01e1ad2ccd2dde836143fefae1a",
+      "copyName": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… (conflict 2001-01-01 23:59 UTC)"
+    },
+    {
+      "name": "conflict-copy-already-tagged-conflict",
+      "kind": "conflict-copy",
+      "source": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"CONFLICT\",\"a\"],\"updatedAt\":978307200.0},\"hash\":\"b140680de8c0bf542c6088d1da40031d07d8767c558843a1ab29c2c8af65f282\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "copy": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Name (conflict 2032-01-02 00:00 UTC)\",\"tags\":[\"CONFLICT\",\"a\"],\"updatedAt\":978307200.0},\"hash\":\"d58331ad06a083cfd9662e41fd9d2d54c24e8a72e8aedfe61828a9f0c3117178\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"c7683d66-03c2-5b51-bd6d-504fc20a0f0d\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"6fdc72b417d30ca3eae2ccbc999e03d56f1fc9807c3275070ca6322228a465a2\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}",
+      "copyID": "c7683d66-03c2-5b51-bd6d-504fc20a0f0d",
+      "fingerprint": "6fdc72b417d30ca3eae2ccbc999e03d56f1fc9807c3275070ca6322228a465a2",
+      "copyName": "Name (conflict 2032-01-02 00:00 UTC)"
+    },
+    {
+      "name": "conflict-copy-with-extensions",
+      "kind": "conflict-copy",
+      "source": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"70543e1ea8d9d82629a9750e8f0bccde9b73ecb59946fde8ee84d4d4bf994897\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"abababababababababababababababababababababababababababababababab\",\"sourceID\":\"11111111-2222-4333-8444-555555555555\",\"version\":1},\"future\":1}}",
+      "copy": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Name (conflict 2001-01-01 00:01 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":100.0},\"hash\":\"42325d7febe615f517d5c3756ce6cd09992a59298df59c5fb47fb2de1737f07d\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"bfb158cf-aa09-5585-8d82-398f1caf76fe\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"a2fc07558d99c65be2722eb8d87e66ca35a47be684f506789ced19ba917cdcfe\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1},\"future\":1}}",
+      "copyID": "bfb158cf-aa09-5585-8d82-398f1caf76fe",
+      "fingerprint": "a2fc07558d99c65be2722eb8d87e66ca35a47be684f506789ced19ba917cdcfe",
+      "copyName": "Name (conflict 2001-01-01 00:01 UTC)"
+    },
+    {
+      "name": "conflict-copy-pre-2001-date",
+      "kind": "conflict-copy",
+      "source": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":-86400.5},\"hash\":\"3480da047e49c4097509536ddb43ff5589928a702d866b67961f6afef668bbcb\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "copy": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Name (conflict 2000-12-30 23:59 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":-86400.5},\"hash\":\"3a91d4ad57f01e1b69903da8d81d31087ebd50ae4f2e5a9d4ab47dee68d8887b\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"67065c45-43ae-5048-ac08-39cf61d007bc\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"c40e009c283e7e9304083ec83bac599c4a8c0ea2aa8d914dab67dae29a6afce6\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}",
+      "copyID": "67065c45-43ae-5048-ac08-39cf61d007bc",
+      "fingerprint": "c40e009c283e7e9304083ec83bac599c4a8c0ea2aa8d914dab67dae29a6afce6",
+      "copyName": "Name (conflict 2000-12-30 23:59 UTC)"
+    },
+    {
+      "name": "conflict-copy-pinned-disabled-with-keyword",
+      "kind": "conflict-copy",
+      "source": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":true,\"keyword\":\"kw\",\"name\":\"Name\",\"tags\":[\"work\"],\"updatedAt\":100.0},\"hash\":\"1573aeb39738a88917624e49ae3bbe1f032a19f1a327e10effa4aa9c01e0e4ca\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"abcdef01-1234-4000-8000-000000000001\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "copy": "{\"contentHash\":\"230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5\",\"deleted\":false,\"fields\":{\"content\":\"body\",\"createdAt\":100.0,\"isEnabled\":false,\"isPinned\":false,\"keyword\":\"\",\"name\":\"Name (conflict 2001-01-01 00:01 UTC)\",\"tags\":[\"work\",\"conflict\"],\"updatedAt\":100.0},\"hash\":\"e864db6e9818cfe16a9e6da4d44abc6abfd1ee7b9c065abf7c6a40c9450ef554\",\"hlc\":\"0000000007d0-0000-aaaaaaaa\",\"id\":\"93f1b563-8833-518b-9fc5-dc996ea62f72\",\"origin\":\"aaaaaaaa\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"conflictCopy.v1\":{\"fingerprint\":\"d5fdc2e4a26280ea9ac55dccb53222d335e947f7a7d9a77bf1d486000eefb7d1\",\"sourceID\":\"abcdef01-1234-4000-8000-000000000001\",\"version\":1}}}",
+      "copyID": "93f1b563-8833-518b-9fc5-dc996ea62f72",
+      "fingerprint": "d5fdc2e4a26280ea9ac55dccb53222d335e947f7a7d9a77bf1d486000eefb7d1",
+      "copyName": "Name (conflict 2001-01-01 00:01 UTC)"
+    },
+    {
+      "name": "scalar-0",
+      "kind": "mergeScalar",
+      "base": "b",
+      "local": "b",
+      "remote": "b",
+      "localWins": true,
+      "merged": "b"
+    },
+    {
+      "name": "scalar-1",
+      "kind": "mergeScalar",
+      "base": "b",
+      "local": "l",
+      "remote": "b",
+      "localWins": true,
+      "merged": "l"
+    },
+    {
+      "name": "scalar-2",
+      "kind": "mergeScalar",
+      "base": "b",
+      "local": "b",
+      "remote": "r",
+      "localWins": true,
+      "merged": "r"
+    },
+    {
+      "name": "scalar-3",
+      "kind": "mergeScalar",
+      "base": "b",
+      "local": "l",
+      "remote": "r",
+      "localWins": true,
+      "merged": "l"
+    },
+    {
+      "name": "scalar-4",
+      "kind": "mergeScalar",
+      "base": "b",
+      "local": "l",
+      "remote": "r",
+      "localWins": false,
+      "merged": "r"
+    },
+    {
+      "name": "scalar-5",
+      "kind": "mergeScalar",
+      "base": null,
+      "local": "l",
+      "remote": "r",
+      "localWins": true,
+      "merged": "l"
+    },
+    {
+      "name": "scalar-6",
+      "kind": "mergeScalar",
+      "base": null,
+      "local": "l",
+      "remote": "r",
+      "localWins": false,
+      "merged": "r"
+    },
+    {
+      "name": "scalar-7",
+      "kind": "mergeScalar",
+      "base": null,
+      "local": "s",
+      "remote": "s",
+      "localWins": false,
+      "merged": "s"
+    },
+    {
+      "name": "scalar-8",
+      "kind": "mergeScalar",
+      "base": "b",
+      "local": "s",
+      "remote": "s",
+      "localWins": true,
+      "merged": "s"
+    },
+    {
+      "name": "tags-0-local-wins",
+      "kind": "mergeTags",
+      "base": ["a", "b"],
+      "local": ["a", "b"],
+      "remote": ["a", "b"],
+      "localWins": true,
+      "merged": ["a", "b"]
+    },
+    {
+      "name": "tags-0-remote-wins",
+      "kind": "mergeTags",
+      "base": ["a", "b"],
+      "local": ["a", "b"],
+      "remote": ["a", "b"],
+      "localWins": false,
+      "merged": ["a", "b"]
+    },
+    {
+      "name": "tags-1-local-wins",
+      "kind": "mergeTags",
+      "base": ["a", "b"],
+      "local": ["a"],
+      "remote": ["a", "b", "c"],
+      "localWins": true,
+      "merged": ["a", "c"]
+    },
+    {
+      "name": "tags-1-remote-wins",
+      "kind": "mergeTags",
+      "base": ["a", "b"],
+      "local": ["a"],
+      "remote": ["a", "b", "c"],
+      "localWins": false,
+      "merged": ["a", "c"]
+    },
+    {
+      "name": "tags-2-local-wins",
+      "kind": "mergeTags",
+      "base": ["a", "b"],
+      "local": ["b", "a"],
+      "remote": ["a", "b"],
+      "localWins": true,
+      "merged": ["a", "b"]
+    },
+    {
+      "name": "tags-2-remote-wins",
+      "kind": "mergeTags",
+      "base": ["a", "b"],
+      "local": ["b", "a"],
+      "remote": ["a", "b"],
+      "localWins": false,
+      "merged": ["a", "b"]
+    },
+    {
+      "name": "tags-3-local-wins",
+      "kind": "mergeTags",
+      "base": ["a"],
+      "local": ["A"],
+      "remote": ["a", "x"],
+      "localWins": true,
+      "merged": ["A", "x"]
+    },
+    {
+      "name": "tags-3-remote-wins",
+      "kind": "mergeTags",
+      "base": ["a"],
+      "local": ["A"],
+      "remote": ["a", "x"],
+      "localWins": false,
+      "merged": ["a", "x"]
+    },
+    {
+      "name": "tags-4-local-wins",
+      "kind": "mergeTags",
+      "base": ["a"],
+      "local": ["a", "Z", "m"],
+      "remote": ["a", "É", "b"],
+      "localWins": true,
+      "merged": ["a", "b", "É", "m", "Z"]
+    },
+    {
+      "name": "tags-4-remote-wins",
+      "kind": "mergeTags",
+      "base": ["a"],
+      "local": ["a", "Z", "m"],
+      "remote": ["a", "É", "b"],
+      "localWins": false,
+      "merged": ["a", "b", "É", "m", "Z"]
+    },
+    {
+      "name": "tags-5-local-wins",
+      "kind": "mergeTags",
+      "base": null,
+      "local": ["x", "Shared"],
+      "remote": ["shared", "y"],
+      "localWins": true,
+      "merged": ["x", "Shared", "y"]
+    },
+    {
+      "name": "tags-5-remote-wins",
+      "kind": "mergeTags",
+      "base": null,
+      "local": ["x", "Shared"],
+      "remote": ["shared", "y"],
+      "localWins": false,
+      "merged": ["shared", "y", "x"]
+    },
+    {
+      "name": "tags-6-local-wins",
+      "kind": "mergeTags",
+      "base": null,
+      "local": [],
+      "remote": ["only"],
+      "localWins": true,
+      "merged": ["only"]
+    },
+    {
+      "name": "tags-6-remote-wins",
+      "kind": "mergeTags",
+      "base": null,
+      "local": [],
+      "remote": ["only"],
+      "localWins": false,
+      "merged": ["only"]
+    },
+    {
+      "name": "tags-7-local-wins",
+      "kind": "mergeTags",
+      "base": ["a", "b", "c"],
+      "local": [],
+      "remote": ["a", "b", "c"],
+      "localWins": true,
+      "merged": []
+    },
+    {
+      "name": "tags-7-remote-wins",
+      "kind": "mergeTags",
+      "base": ["a", "b", "c"],
+      "local": [],
+      "remote": ["a", "b", "c"],
+      "localWins": false,
+      "merged": []
+    },
+    {
+      "name": "tags-8-local-wins",
+      "kind": "mergeTags",
+      "base": ["a"],
+      "local": ["a", "new"],
+      "remote": ["a", "NEW"],
+      "localWins": true,
+      "merged": ["a", "new"]
+    },
+    {
+      "name": "tags-8-remote-wins",
+      "kind": "mergeTags",
+      "base": ["a"],
+      "local": ["a", "new"],
+      "remote": ["a", "NEW"],
+      "localWins": false,
+      "merged": ["a", "NEW"]
+    },
+    {
+      "name": "tags-9-local-wins",
+      "kind": "mergeTags",
+      "base": ["Café"],
+      "local": ["cafe"],
+      "remote": ["CAFÉ"],
+      "localWins": true,
+      "merged": ["cafe"]
+    },
+    {
+      "name": "tags-9-remote-wins",
+      "kind": "mergeTags",
+      "base": ["Café"],
+      "local": ["cafe"],
+      "remote": ["CAFÉ"],
+      "localWins": false,
+      "merged": ["CAFÉ"]
+    },
+    {
+      "name": "tags-10-local-wins",
+      "kind": "mergeTags",
+      "base": [],
+      "local": ["l"],
+      "remote": ["r"],
+      "localWins": true,
+      "merged": ["l", "r"]
+    },
+    {
+      "name": "tags-10-remote-wins",
+      "kind": "mergeTags",
+      "base": [],
+      "local": ["l"],
+      "remote": ["r"],
+      "localWins": false,
+      "merged": ["l", "r"]
+    },
+    {
+      "name": "tags-11-local-wins",
+      "kind": "mergeTags",
+      "base": ["dup", "DUP"],
+      "local": ["dup"],
+      "remote": ["dup", "x"],
+      "localWins": true,
+      "merged": ["dup", "x"]
+    },
+    {
+      "name": "tags-11-remote-wins",
+      "kind": "mergeTags",
+      "base": ["dup", "DUP"],
+      "local": ["dup"],
+      "remote": ["dup", "x"],
+      "localWins": false,
+      "merged": ["dup", "x"]
+    },
+    {
+      "name": "merge-local-independent-edits",
+      "kind": "merge-local",
+      "base": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "local": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "L",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "R",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "L",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "R",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        }
+      ],
+      "conflictCopies": [],
+      "disabledByKeywordCollision": [],
+      "needsUserAttention": false
+    },
+    {
+      "name": "merge-local-add-on-each-side",
+      "kind": "merge-local",
+      "base": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "local": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "local add",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000003",
+          "name": "remote add",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "local add",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000003",
+          "name": "remote add",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "conflictCopies": [],
+      "disabledByKeywordCollision": [],
+      "needsUserAttention": false
+    },
+    {
+      "name": "merge-local-delete-local-edit-remote",
+      "kind": "merge-local",
+      "base": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "local": [],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "R",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "R",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        }
+      ],
+      "conflictCopies": [],
+      "disabledByKeywordCollision": [],
+      "needsUserAttention": false
+    },
+    {
+      "name": "merge-local-delete-local-unchanged-remote",
+      "kind": "merge-local",
+      "base": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "local": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "conflictCopies": [],
+      "disabledByKeywordCollision": [],
+      "needsUserAttention": false
+    },
+    {
+      "name": "merge-local-delete-remote-unchanged-local",
+      "kind": "merge-local",
+      "base": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "local": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "conflictCopies": [],
+      "disabledByKeywordCollision": [],
+      "needsUserAttention": false
+    },
+    {
+      "name": "merge-local-content-conflict-remote-newer",
+      "kind": "merge-local",
+      "base": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "local": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "local",
+          "contentUtf8Hex": "6c6f63616c",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        }
+      ],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "remote",
+          "contentUtf8Hex": "72656d6f7465",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "remote",
+          "contentUtf8Hex": "72656d6f7465",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        },
+        {
+          "id": "94060420-d430-5ce2-b029-be2b8d01ab61",
+          "name": "n (conflict 2001-01-01 00:03 UTC)",
+          "keyword": "",
+          "content": "local",
+          "contentUtf8Hex": "6c6f63616c",
+          "tags": ["conflict"],
+          "isEnabled": false,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        }
+      ],
+      "conflictCopies": [
+        {
+          "id": "94060420-d430-5ce2-b029-be2b8d01ab61",
+          "name": "n (conflict 2001-01-01 00:03 UTC)",
+          "keyword": "",
+          "content": "local",
+          "contentUtf8Hex": "6c6f63616c",
+          "tags": ["conflict"],
+          "isEnabled": false,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        }
+      ],
+      "disabledByKeywordCollision": [],
+      "needsUserAttention": true
+    },
+    {
+      "name": "merge-local-content-conflict-local-newer",
+      "kind": "merge-local",
+      "base": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "local": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "local",
+          "contentUtf8Hex": "6c6f63616c",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4079000000000000",
+            "swift": "400.0"
+          }
+        }
+      ],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "remote",
+          "contentUtf8Hex": "72656d6f7465",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "local",
+          "contentUtf8Hex": "6c6f63616c",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4079000000000000",
+            "swift": "400.0"
+          }
+        },
+        {
+          "id": "85e840f6-fb7e-599a-b024-65bd7e59d1b1",
+          "name": "n (conflict 2001-01-01 00:05 UTC)",
+          "keyword": "",
+          "content": "remote",
+          "contentUtf8Hex": "72656d6f7465",
+          "tags": ["conflict"],
+          "isEnabled": false,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "conflictCopies": [
+        {
+          "id": "85e840f6-fb7e-599a-b024-65bd7e59d1b1",
+          "name": "n (conflict 2001-01-01 00:05 UTC)",
+          "keyword": "",
+          "content": "remote",
+          "contentUtf8Hex": "72656d6f7465",
+          "tags": ["conflict"],
+          "isEnabled": false,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "disabledByKeywordCollision": [],
+      "needsUserAttention": true
+    },
+    {
+      "name": "merge-local-content-conflict-same-time-digest-rank",
+      "kind": "merge-local",
+      "base": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "local": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "local",
+          "contentUtf8Hex": "6c6f63616c",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "remote",
+          "contentUtf8Hex": "72656d6f7465",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "",
+          "content": "local",
+          "contentUtf8Hex": "6c6f63616c",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        },
+        {
+          "id": "85e840f6-fb7e-599a-b024-65bd7e59d1b1",
+          "name": "n (conflict 2001-01-01 00:05 UTC)",
+          "keyword": "",
+          "content": "remote",
+          "contentUtf8Hex": "72656d6f7465",
+          "tags": ["conflict"],
+          "isEnabled": false,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "conflictCopies": [
+        {
+          "id": "85e840f6-fb7e-599a-b024-65bd7e59d1b1",
+          "name": "n (conflict 2001-01-01 00:05 UTC)",
+          "keyword": "",
+          "content": "remote",
+          "contentUtf8Hex": "72656d6f7465",
+          "tags": ["conflict"],
+          "isEnabled": false,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "disabledByKeywordCollision": [],
+      "needsUserAttention": true
+    },
+    {
+      "name": "merge-local-keyword-collision-after-merge",
+      "kind": "merge-local",
+      "base": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "a",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "b",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "local": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "sig",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "b",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "a",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "SIG",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "sig",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": false,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "SIG",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "conflictCopies": [],
+      "disabledByKeywordCollision": ["10ca1000-0000-4000-8000-000000000001"],
+      "needsUserAttention": true
+    },
+    {
+      "name": "merge-local-keyword-collision-untouched-pair-left-alone",
+      "kind": "merge-local",
+      "base": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "dup",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "DUP",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "local": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "dup",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "DUP",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "dup",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "DUP",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000003",
+          "name": "new",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "n",
+          "keyword": "dup",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000002",
+          "name": "n",
+          "keyword": "DUP",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "10ca1000-0000-4000-8000-000000000003",
+          "name": "new",
+          "keyword": "",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        }
+      ],
+      "conflictCopies": [],
+      "disabledByKeywordCollision": [],
+      "needsUserAttention": false
+    },
+    {
+      "name": "merge-local-no-base-same-id-differs",
+      "kind": "merge-local",
+      "base": [],
+      "local": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "L",
+          "keyword": "",
+          "content": "l",
+          "contentUtf8Hex": "6c",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        }
+      ],
+      "remote": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "R",
+          "keyword": "",
+          "content": "r",
+          "contentUtf8Hex": "72",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        }
+      ],
+      "snippets": [
+        {
+          "id": "10ca1000-0000-4000-8000-000000000001",
+          "name": "R",
+          "keyword": "",
+          "content": "r",
+          "contentUtf8Hex": "72",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4072c00000000000",
+            "swift": "300.0"
+          }
+        },
+        {
+          "id": "b2d647a6-e694-5eab-8097-72c3d2e021a9",
+          "name": "L (conflict 2001-01-01 00:03 UTC)",
+          "keyword": "",
+          "content": "l",
+          "contentUtf8Hex": "6c",
+          "tags": ["conflict"],
+          "isEnabled": false,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        }
+      ],
+      "conflictCopies": [
+        {
+          "id": "b2d647a6-e694-5eab-8097-72c3d2e021a9",
+          "name": "L (conflict 2001-01-01 00:03 UTC)",
+          "keyword": "",
+          "content": "l",
+          "contentUtf8Hex": "6c",
+          "tags": ["conflict"],
+          "isEnabled": false,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4069000000000000",
+            "swift": "200.0"
+          }
+        }
+      ],
+      "disabledByKeywordCollision": [],
+      "needsUserAttention": true
+    },
+    {
+      "name": "payload-digest-0",
+      "kind": "payloadDigest",
+      "snippet": {
+        "id": "10ca1000-0000-4000-8000-000000000001",
+        "name": "n",
+        "keyword": "",
+        "content": "c",
+        "contentUtf8Hex": "63",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        },
+        "updatedAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        }
+      },
+      "digest": "74d3eb9264fccedd1797daa697699699bc576294c39e97bb7157b6c7af844ba8"
+    },
+    {
+      "name": "payload-digest-1",
+      "kind": "payloadDigest",
+      "snippet": {
+        "id": "10ca1000-0000-4000-8000-000000000001",
+        "name": "ab",
+        "keyword": "c",
+        "content": "c",
+        "contentUtf8Hex": "63",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        },
+        "updatedAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        }
+      },
+      "digest": "ce96e0ac1b94e7268de4e8c50b13cf56833c63ad4975087f7784e5ef6d43212b"
+    },
+    {
+      "name": "payload-digest-2",
+      "kind": "payloadDigest",
+      "snippet": {
+        "id": "10ca1000-0000-4000-8000-000000000001",
+        "name": "a",
+        "keyword": "bc",
+        "content": "c",
+        "contentUtf8Hex": "63",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        },
+        "updatedAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        }
+      },
+      "digest": "e95c9a3af5d7aeb317ff5ae6efe28a3167ca1c53468187981b42f8f6f7ad1ac6"
+    },
+    {
+      "name": "payload-digest-3",
+      "kind": "payloadDigest",
+      "snippet": {
+        "id": "10ca1000-0000-4000-8000-000000000001",
+        "name": "n",
+        "keyword": "",
+        "content": "c",
+        "contentUtf8Hex": "63",
+        "tags": ["a", "b"],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        },
+        "updatedAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        }
+      },
+      "digest": "b23034217838ae9ff664b0b1c1a52c47c1d00b119ab7e377e02ae53f93a6f2e9"
+    },
+    {
+      "name": "payload-digest-4",
+      "kind": "payloadDigest",
+      "snippet": {
+        "id": "10ca1000-0000-4000-8000-000000000001",
+        "name": "n",
+        "keyword": "",
+        "content": "c",
+        "contentUtf8Hex": "63",
+        "tags": ["a\u0001b"],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        },
+        "updatedAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        }
+      },
+      "digest": "b23034217838ae9ff664b0b1c1a52c47c1d00b119ab7e377e02ae53f93a6f2e9"
+    },
+    {
+      "name": "payload-digest-5",
+      "kind": "payloadDigest",
+      "snippet": {
+        "id": "10ca1000-0000-4000-8000-000000000001",
+        "name": "Café ☕",
+        "keyword": "",
+        "content": "🔑",
+        "contentUtf8Hex": "f09f9491",
+        "tags": [],
+        "isEnabled": false,
+        "isPinned": true,
+        "createdAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        },
+        "updatedAt": {
+          "bits": "4059000000000000",
+          "swift": "100.0"
+        }
+      },
+      "digest": "f7a659edefcf1b12a87daddb18eef861fce07ee23373f7c777defe2a9d308afb"
+    },
+    {
+      "name": "allowed-deletions-0",
+      "kind": "allowedDeletions",
+      "liveCount": 0,
+      "allowedDeletions": 5,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-1",
+      "kind": "allowedDeletions",
+      "liveCount": 1,
+      "allowedDeletions": 5,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-4",
+      "kind": "allowedDeletions",
+      "liveCount": 4,
+      "allowedDeletions": 5,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-5",
+      "kind": "allowedDeletions",
+      "liveCount": 5,
+      "allowedDeletions": 5,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-6",
+      "kind": "allowedDeletions",
+      "liveCount": 6,
+      "allowedDeletions": 5,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-24",
+      "kind": "allowedDeletions",
+      "liveCount": 24,
+      "allowedDeletions": 5,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-25",
+      "kind": "allowedDeletions",
+      "liveCount": 25,
+      "allowedDeletions": 5,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-26",
+      "kind": "allowedDeletions",
+      "liveCount": 26,
+      "allowedDeletions": 6,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-27",
+      "kind": "allowedDeletions",
+      "liveCount": 27,
+      "allowedDeletions": 6,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-29",
+      "kind": "allowedDeletions",
+      "liveCount": 29,
+      "allowedDeletions": 6,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-30",
+      "kind": "allowedDeletions",
+      "liveCount": 30,
+      "allowedDeletions": 6,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-31",
+      "kind": "allowedDeletions",
+      "liveCount": 31,
+      "allowedDeletions": 7,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-34",
+      "kind": "allowedDeletions",
+      "liveCount": 34,
+      "allowedDeletions": 7,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-35",
+      "kind": "allowedDeletions",
+      "liveCount": 35,
+      "allowedDeletions": 7,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-36",
+      "kind": "allowedDeletions",
+      "liveCount": 36,
+      "allowedDeletions": 8,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-49",
+      "kind": "allowedDeletions",
+      "liveCount": 49,
+      "allowedDeletions": 10,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-50",
+      "kind": "allowedDeletions",
+      "liveCount": 50,
+      "allowedDeletions": 10,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-51",
+      "kind": "allowedDeletions",
+      "liveCount": 51,
+      "allowedDeletions": 11,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-99",
+      "kind": "allowedDeletions",
+      "liveCount": 99,
+      "allowedDeletions": 20,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-100",
+      "kind": "allowedDeletions",
+      "liveCount": 100,
+      "allowedDeletions": 20,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-101",
+      "kind": "allowedDeletions",
+      "liveCount": 101,
+      "allowedDeletions": 21,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-1000",
+      "kind": "allowedDeletions",
+      "liveCount": 1000,
+      "allowedDeletions": 200,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions-100000",
+      "kind": "allowedDeletions",
+      "liveCount": 100000,
+      "allowedDeletions": 20000,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "allowed-deletions--1",
+      "kind": "allowedDeletions",
+      "liveCount": -1,
+      "allowedDeletions": 5,
+      "atLimit": "true",
+      "oneOverLimit": "false"
+    },
+    {
+      "name": "evaluate-0-0",
+      "kind": "evaluate",
+      "liveCount": 0,
+      "deletions": 0,
+      "allowed": true,
+      "refusal": null
+    },
+    {
+      "name": "evaluate-0-5",
+      "kind": "evaluate",
+      "liveCount": 0,
+      "deletions": 5,
+      "allowed": true,
+      "refusal": null
+    },
+    {
+      "name": "evaluate-0-6",
+      "kind": "evaluate",
+      "liveCount": 0,
+      "deletions": 6,
+      "allowed": false,
+      "refusal": {
+        "liveCount": 0,
+        "requestedDeletions": 6,
+        "allowedDeletions": 5,
+        "requestedFraction": {
+          "bits": "3ff0000000000000",
+          "swift": "1.0"
+        },
+        "description": "cloud sync reported a batch deleting 6 of 0 snippets. Sync paused before completing this batch. Applied in full to the reviewed library state, it keeps at least 0 snippets; up to 5 deletions may be applied without confirmation"
+      }
+    },
+    {
+      "name": "evaluate-3-3",
+      "kind": "evaluate",
+      "liveCount": 3,
+      "deletions": 3,
+      "allowed": true,
+      "refusal": null
+    },
+    {
+      "name": "evaluate-3-6",
+      "kind": "evaluate",
+      "liveCount": 3,
+      "deletions": 6,
+      "allowed": false,
+      "refusal": {
+        "liveCount": 3,
+        "requestedDeletions": 6,
+        "allowedDeletions": 5,
+        "requestedFraction": {
+          "bits": "4000000000000000",
+          "swift": "2.0"
+        },
+        "description": "cloud sync reported a batch deleting 6 of 3 snippets. Sync paused before completing this batch. Applied in full to the reviewed library state, it keeps at least 0 snippets; up to 5 deletions may be applied without confirmation"
+      }
+    },
+    {
+      "name": "evaluate-10-5",
+      "kind": "evaluate",
+      "liveCount": 10,
+      "deletions": 5,
+      "allowed": true,
+      "refusal": null
+    },
+    {
+      "name": "evaluate-10-6",
+      "kind": "evaluate",
+      "liveCount": 10,
+      "deletions": 6,
+      "allowed": false,
+      "refusal": {
+        "liveCount": 10,
+        "requestedDeletions": 6,
+        "allowedDeletions": 5,
+        "requestedFraction": {
+          "bits": "3fe3333333333333",
+          "swift": "0.6"
+        },
+        "description": "cloud sync reported a batch deleting 6 of 10 snippets. Sync paused before completing this batch. Applied in full to the reviewed library state, it keeps at least 4 snippets; up to 5 deletions may be applied without confirmation"
+      }
+    },
+    {
+      "name": "evaluate-10-10",
+      "kind": "evaluate",
+      "liveCount": 10,
+      "deletions": 10,
+      "allowed": false,
+      "refusal": {
+        "liveCount": 10,
+        "requestedDeletions": 10,
+        "allowedDeletions": 5,
+        "requestedFraction": {
+          "bits": "3ff0000000000000",
+          "swift": "1.0"
+        },
+        "description": "cloud sync reported a batch deleting 10 of 10 snippets. Sync paused before completing this batch. Applied in full to the reviewed library state, it keeps at least 0 snippets; up to 5 deletions may be applied without confirmation"
+      }
+    },
+    {
+      "name": "evaluate-30-6",
+      "kind": "evaluate",
+      "liveCount": 30,
+      "deletions": 6,
+      "allowed": true,
+      "refusal": null
+    },
+    {
+      "name": "evaluate-30-7",
+      "kind": "evaluate",
+      "liveCount": 30,
+      "deletions": 7,
+      "allowed": false,
+      "refusal": {
+        "liveCount": 30,
+        "requestedDeletions": 7,
+        "allowedDeletions": 6,
+        "requestedFraction": {
+          "bits": "3fcdddddddddddde",
+          "swift": "0.23333333333333334"
+        },
+        "description": "cloud sync reported a batch deleting 7 of 30 snippets. Sync paused before completing this batch. Applied in full to the reviewed library state, it keeps at least 23 snippets; up to 6 deletions may be applied without confirmation"
+      }
+    },
+    {
+      "name": "evaluate-100-20",
+      "kind": "evaluate",
+      "liveCount": 100,
+      "deletions": 20,
+      "allowed": true,
+      "refusal": null
+    },
+    {
+      "name": "evaluate-100-21",
+      "kind": "evaluate",
+      "liveCount": 100,
+      "deletions": 21,
+      "allowed": false,
+      "refusal": {
+        "liveCount": 100,
+        "requestedDeletions": 21,
+        "allowedDeletions": 20,
+        "requestedFraction": {
+          "bits": "3fcae147ae147ae1",
+          "swift": "0.21"
+        },
+        "description": "cloud sync reported a batch deleting 21 of 100 snippets. Sync paused before completing this batch. Applied in full to the reviewed library state, it keeps at least 79 snippets; up to 20 deletions may be applied without confirmation"
+      }
+    },
+    {
+      "name": "evaluate-1-1",
+      "kind": "evaluate",
+      "liveCount": 1,
+      "deletions": 1,
+      "allowed": true,
+      "refusal": null
+    },
+    {
+      "name": "evaluate-ids-five-of-ten",
+      "kind": "evaluate-ids",
+      "live": [
+        "de1e7e00-0000-4000-8000-000000000001",
+        "de1e7e00-0000-4000-8000-000000000002",
+        "de1e7e00-0000-4000-8000-000000000003",
+        "de1e7e00-0000-4000-8000-000000000004",
+        "de1e7e00-0000-4000-8000-000000000005",
+        "de1e7e00-0000-4000-8000-000000000006",
+        "de1e7e00-0000-4000-8000-000000000007",
+        "de1e7e00-0000-4000-8000-000000000008",
+        "de1e7e00-0000-4000-8000-000000000009",
+        "de1e7e00-0000-4000-8000-00000000000a"
+      ],
+      "deleting": ["de1e7e00-0000-4000-8000-000000000001", "de1e7e00-0000-4000-8000-000000000002", "de1e7e00-0000-4000-8000-000000000003", "de1e7e00-0000-4000-8000-000000000004", "de1e7e00-0000-4000-8000-000000000005"],
+      "allowed": true,
+      "facts": {
+        "liveCount": 10,
+        "requestedDeletions": 5,
+        "batchFingerprint": "7c3184079cbe9cf8ed3e272bcdbecce3e47f771caea99846aa9d9716a7e7b2bc"
+      },
+      "reviewRequired": false
+    },
+    {
+      "name": "evaluate-ids-six-of-ten",
+      "kind": "evaluate-ids",
+      "live": [
+        "de1e7e00-0000-4000-8000-000000000001",
+        "de1e7e00-0000-4000-8000-000000000002",
+        "de1e7e00-0000-4000-8000-000000000003",
+        "de1e7e00-0000-4000-8000-000000000004",
+        "de1e7e00-0000-4000-8000-000000000005",
+        "de1e7e00-0000-4000-8000-000000000006",
+        "de1e7e00-0000-4000-8000-000000000007",
+        "de1e7e00-0000-4000-8000-000000000008",
+        "de1e7e00-0000-4000-8000-000000000009",
+        "de1e7e00-0000-4000-8000-00000000000a"
+      ],
+      "deleting": ["de1e7e00-0000-4000-8000-000000000001", "de1e7e00-0000-4000-8000-000000000002", "de1e7e00-0000-4000-8000-000000000003", "de1e7e00-0000-4000-8000-000000000004", "de1e7e00-0000-4000-8000-000000000005", "de1e7e00-0000-4000-8000-000000000006"],
+      "allowed": false,
+      "facts": {
+        "liveCount": 10,
+        "requestedDeletions": 6,
+        "batchFingerprint": "a6dcedbf4154a5c279eb10c11b1c417823528705acf82ab8a2715052115e7d5d"
+      },
+      "reviewRequired": true
+    },
+    {
+      "name": "evaluate-ids-six-with-duplicates-and-unknown-ids",
+      "kind": "evaluate-ids",
+      "live": [
+        "de1e7e00-0000-4000-8000-000000000001",
+        "de1e7e00-0000-4000-8000-000000000002",
+        "de1e7e00-0000-4000-8000-000000000003",
+        "de1e7e00-0000-4000-8000-000000000004",
+        "de1e7e00-0000-4000-8000-000000000005",
+        "de1e7e00-0000-4000-8000-000000000006",
+        "de1e7e00-0000-4000-8000-000000000007",
+        "de1e7e00-0000-4000-8000-000000000008",
+        "de1e7e00-0000-4000-8000-000000000009",
+        "de1e7e00-0000-4000-8000-00000000000a"
+      ],
+      "deleting": ["de1e7e00-0000-4000-8000-000000000001", "de1e7e00-0000-4000-8000-000000000002", "de1e7e00-0000-4000-8000-000000000003", "de1e7e00-0000-4000-8000-000000000004", "de1e7e00-0000-4000-8000-000000000005", "de1e7e00-0000-4000-8000-000000000001", "0ff51de0-0000-4000-8000-000000000001", "0ff51de0-0000-4000-8000-000000000001"],
+      "allowed": true,
+      "facts": {
+        "liveCount": 10,
+        "requestedDeletions": 5,
+        "batchFingerprint": "7c3184079cbe9cf8ed3e272bcdbecce3e47f771caea99846aa9d9716a7e7b2bc"
+      },
+      "reviewRequired": false
+    },
+    {
+      "name": "evaluate-ids-all-ten",
+      "kind": "evaluate-ids",
+      "live": [
+        "de1e7e00-0000-4000-8000-000000000001",
+        "de1e7e00-0000-4000-8000-000000000002",
+        "de1e7e00-0000-4000-8000-000000000003",
+        "de1e7e00-0000-4000-8000-000000000004",
+        "de1e7e00-0000-4000-8000-000000000005",
+        "de1e7e00-0000-4000-8000-000000000006",
+        "de1e7e00-0000-4000-8000-000000000007",
+        "de1e7e00-0000-4000-8000-000000000008",
+        "de1e7e00-0000-4000-8000-000000000009",
+        "de1e7e00-0000-4000-8000-00000000000a"
+      ],
+      "deleting": [
+        "de1e7e00-0000-4000-8000-000000000001",
+        "de1e7e00-0000-4000-8000-000000000002",
+        "de1e7e00-0000-4000-8000-000000000003",
+        "de1e7e00-0000-4000-8000-000000000004",
+        "de1e7e00-0000-4000-8000-000000000005",
+        "de1e7e00-0000-4000-8000-000000000006",
+        "de1e7e00-0000-4000-8000-000000000007",
+        "de1e7e00-0000-4000-8000-000000000008",
+        "de1e7e00-0000-4000-8000-000000000009",
+        "de1e7e00-0000-4000-8000-00000000000a"
+      ],
+      "allowed": false,
+      "facts": {
+        "liveCount": 10,
+        "requestedDeletions": 10,
+        "batchFingerprint": "62273597e918636e3c8a8541e65e293be1a9000b1e7b6c0cda549d33aa0b4e2d"
+      },
+      "reviewRequired": true
+    },
+    {
+      "name": "evaluate-ids-none",
+      "kind": "evaluate-ids",
+      "live": [
+        "de1e7e00-0000-4000-8000-000000000001",
+        "de1e7e00-0000-4000-8000-000000000002",
+        "de1e7e00-0000-4000-8000-000000000003",
+        "de1e7e00-0000-4000-8000-000000000004",
+        "de1e7e00-0000-4000-8000-000000000005",
+        "de1e7e00-0000-4000-8000-000000000006",
+        "de1e7e00-0000-4000-8000-000000000007",
+        "de1e7e00-0000-4000-8000-000000000008",
+        "de1e7e00-0000-4000-8000-000000000009",
+        "de1e7e00-0000-4000-8000-00000000000a"
+      ],
+      "deleting": [],
+      "allowed": true,
+      "facts": null,
+      "reviewRequired": false
+    },
+    {
+      "name": "deletion-fingerprint-linux-fixture-id",
+      "kind": "deletionFingerprint",
+      "ids": ["abcdef01-1234-4000-8000-000000000001"],
+      "preimageText": "ABCDEF01-1234-4000-8000-000000000001",
+      "fingerprint": "a8556583b64e73d990147a6ab2a167f3e2544f3f7a6b988d54ea71a455fb2b3c"
+    },
+    {
+      "name": "deletion-fingerprint-three-ids",
+      "kind": "deletionFingerprint",
+      "ids": ["a0b1c2d3-e4f5-4607-8899-aabbccddeeff", "11111111-2222-4333-8444-555555555555", "ffffffff-ffff-4fff-bfff-ffffffffffff"],
+      "preimageText": "11111111-2222-4333-8444-555555555555\nA0B1C2D3-E4F5-4607-8899-AABBCCDDEEFF\nFFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF",
+      "fingerprint": "ff3234f0adc81507b1d0656e0d718429706e1994cd8bfe43eaf97925bde13853"
+    },
+    {
+      "name": "deletion-fingerprint-empty",
+      "kind": "deletionFingerprint",
+      "ids": [],
+      "preimageText": "",
+      "fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

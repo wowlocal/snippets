@@ -1,0 +1,161 @@
+{
+  "format": "snippets-swift-interop/manifest/v1",
+  "files": {
+    "G01-git-manifest.json": {
+      "cases": 31,
+      "sha256": "c81bdacff16488d90bf7c9c4e9e112653bc4ec224fcc92e65d0c8541cef20feb"
+    },
+    "G02-git-readme.json": {
+      "cases": 2,
+      "sha256": "8908e338893e2c13e7c1ca2bdb4dae07cd58364e286c92f7f0c4f6962c95df85"
+    },
+    "G03-git-record-file.json": {
+      "cases": 89,
+      "sha256": "3cd250016d6625f64de0dc9197de615009c2830cfe2b668926ebc7c9ba1b69db"
+    },
+    "G04-git-repository.json": {
+      "cases": 10,
+      "sha256": "139b6f9552ac13a9898b6862ec330b2d07065de24f2aaad7950dc72ff5fa5fa0"
+    },
+    "G05-git-location.json": {
+      "cases": 161,
+      "sha256": "21eddfedcf40d2bb567d6328efc456593ea3ff44eea27a29ca3b562aeb0ef57e"
+    },
+    "G06-git-identities.json": {
+      "cases": 18,
+      "sha256": "25a71436dfae3e5e29f23377a49b37b6b76f9045c7c3d56e26ab753f66633eba"
+    },
+    "G07-git-plain-text.json": {
+      "cases": 295,
+      "sha256": "77a1dac8ab134ab235ef1d9ed19f34a265bc95260a9206f49ab47820074ac53c"
+    },
+    "L01-library-json.json": {
+      "cases": 55,
+      "sha256": "295bf68939d115d2bdf49a8034c5815a46c9bf9c8e6a0ebb541610a259262ee6"
+    },
+    "L02-hlc.json": {
+      "cases": 193,
+      "sha256": "a39f2f70aae9dcf51d9ecf960f92b74fbadb7f778f66cfddbb9d68835acc9739"
+    },
+    "L03-keyword-and-tags.json": {
+      "cases": 201,
+      "sha256": "33fc6d0d5c6b64d6b2a85290820754aeac86e090d5b3851d7f314811fe73cfec"
+    },
+    "L03b-filterkey-table.json": {
+      "cases": 2,
+      "sha256": "e84db3b5e90dcc7e2ffa6fe7048101620a84d699d505d81d936906fddbb81101"
+    },
+    "L04-search.json": {
+      "cases": 134,
+      "sha256": "1ad0d29cc634ad02565f699be8aa583f53be20cce78f029fd0cb5d9241849cd2"
+    },
+    "L05-placeholders-en_US-Europe-Paris.json": {
+      "cases": 349,
+      "sha256": "34b88115eb002ffb2a6eabf918e2e9dbf7f25683435ccc2296f0f60d4aa091dd"
+    },
+    "L05-placeholders-en_US-UTC.json": {
+      "cases": 349,
+      "sha256": "ddea3e188a726da1b686983f38c639d983978b8b3cbdaa52d9a65e773ddb6982"
+    },
+    "L05-placeholders-fr_FR-Europe-Paris.json": {
+      "cases": 349,
+      "sha256": "842aeaff14b24ebb332419c2392060b54caa101afa8a83e0d6a79c753a71bde2"
+    },
+    "L05-placeholders-fr_FR-UTC.json": {
+      "cases": 349,
+      "sha256": "c1f18077eecc59a41f1b5c8d7e85d3d827a9c2d0cfce6f34da525fba2488a384"
+    },
+    "L05-placeholders-th_TH-Europe-Paris.json": {
+      "cases": 349,
+      "sha256": "a2ade011e56bfdbacd60faf7ea0491c05ecd323acfc1875459789001be745db9"
+    },
+    "L05-placeholders-th_TH-UTC.json": {
+      "cases": 349,
+      "sha256": "ed7ce762a361420dc03ffe025e2030a2b75d36ea7d7dd4c4264c000357836008"
+    },
+    "L06-keywords-import-links.json": {
+      "cases": 127,
+      "sha256": "2f0e202c16164a5a1195b0de0837ba06042fa8266dd63615fa5e56e3a7bb82d5"
+    },
+    "L07-merge.json": {
+      "cases": 147,
+      "sha256": "4fb6ab7535d57ede94fddbad677a0eed217d92effbaa733443b2823b4f7e3781"
+    },
+    "V01-record-aad.json": {
+      "cases": 12,
+      "sha256": "1cdf4a4bbfc98c3aebc66ebd4e7d41cac10776e5b8f2a5f25d0e73d797640ed9"
+    },
+    "V02-record-keys.json": {
+      "cases": 20,
+      "sha256": "970a731b25f866f329cec039c61eecd5ab327b68375547db1a216f8483c4d383"
+    },
+    "V03-record-seal.json": {
+      "cases": 29,
+      "sha256": "4c1f832aff011a7c44a59d9665d3589da8ed37cec9ddd114c8443f7bf96d17a9"
+    },
+    "V04-padding.json": {
+      "cases": 26,
+      "sha256": "180c9758b496f5bc00e93d915c29174a22b5c9bcb6d34c163940fa642886007f"
+    },
+    "V05-content-hash.json": {
+      "cases": 12,
+      "sha256": "7113f52eb433bf6d77aced0b25559a22f9f4f0c56b517e2387a63fc01fc10ca1"
+    },
+    "V06-pbkdf2.json": {
+      "cases": 35,
+      "sha256": "03062dccdb7d90035801e79d20de89ff3047f52f9a15158c918a0d580a5fcc82"
+    },
+    "V07-passphrase-wrap.json": {
+      "cases": 16,
+      "sha256": "5b8d3d15c1e13073b03623d1167151c240c7bb0c6722a696cb3261e7e83fb57d"
+    },
+    "V08-key-wrap.json": {
+      "cases": 16,
+      "sha256": "cef9bbaa99f1d4736d9cac6e40cf81928f9a749f3eaea72f6e8b3c613c22336e"
+    },
+    "V09-recovery-key.json": {
+      "cases": 47,
+      "sha256": "960348916897a09e2558462a01d633f666b04d620b65048cae3f7777a25ba59b"
+    },
+    "V10-canonical-json.json": {
+      "cases": 149,
+      "sha256": "dbccce8a5f4b8d447148eea40b2586f58254c4f7492e60399a6003acf4d7acf8"
+    },
+    "V11-sync-envelope.json": {
+      "cases": 65,
+      "sha256": "1910dc574ea816231bafa2936176d1c6a119067157e0722f0db1b7792d527807"
+    },
+    "V12-wire-record.json": {
+      "cases": 19,
+      "sha256": "77ed79a63e7a84f78bb72792685dcaf5a4935a08f0e912de5f6229a6003d2b2f"
+    },
+    "V13-secure-conflict.json": {
+      "cases": 7,
+      "sha256": "137bc718cab2cd26a1ea2318169958f808a637847588086f11d4c3f8b24cf59e"
+    },
+    "V14-vault-document.json": {
+      "cases": 86,
+      "sha256": "bb665a2283f18d785dbb5ac6926204d87d9b808ac856c50b14a360e941910fa8"
+    },
+    "V15-encrypted-backup.json": {
+      "cases": 18,
+      "sha256": "f33bf33e6c91e340b6e208c393f95994f13b63a4a4bbd7f4f0e8cd08c8a6b558"
+    },
+    "V16-git-recovery.json": {
+      "cases": 30,
+      "sha256": "d7af31fdcfd40d11572c961ceb8899ff3610711cb55214dc0c2b4e8ac8b0edf6"
+    },
+    "V17-git-key-account.json": {
+      "cases": 8,
+      "sha256": "28574084e84f38f2e8cd00a2116a2fb857c7665f33f3c8445771231c18990eb6"
+    },
+    "V18-sync-key-split.json": {
+      "cases": 7,
+      "sha256": "a5bb2f15f4aa6ce99ca4559e2cc8281b7189d0d356de50fd733a293064d6baca"
+    },
+    "V19-portable-key-bundle.json": {
+      "cases": 20,
+      "sha256": "224d2baa91a40fd2683d2c4778a6a3ac0b981e18aefd9305affb139ac6d888b4"
+    }
+  }
+}

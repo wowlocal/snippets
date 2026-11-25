@@ -1,0 +1,273 @@
+{
+  "format": "snippets-swift-interop/V07-passphrase-wrap/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "PassphraseKDF.wrap full WrappedKey with a fixed nonce, its AAD, and unwrap outcomes (brief 02 §2.6)",
+  "notes": ["`ok` in unwrap cases is the recovered 32-byte key (public fixture 0x88×32)."],
+  "cases": [
+    {
+      "name": "low-iterations",
+      "keyHex": "8888888888888888888888888888888888888888888888888888888888888888",
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "saltHex": "55555555555555555555555555555555",
+      "kid": "k-7f3a91c0-1b2",
+      "iterations": 2,
+      "nonceHex": "313131313131313131313131",
+      "wrappingKeyHex": "cc89dcf25ee2fd69e540ef06f6c0105ab4eb09bc06ebc9eaa15765314bab90dd",
+      "aadHex": "0000000b736e69702e6b64662e76310000001270626b6466322d686d61632d73686135313200000008000000000000000200000010555555555555555555555555555555550000000e6b2d37663361393163302d316232",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      }
+    },
+    {
+      "name": "nfd-passphrase-low-iterations",
+      "keyHex": "8888888888888888888888888888888888888888888888888888888888888888",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "43616665cc81207075626c69632066697874757265"
+      },
+      "saltHex": "55555555555555555555555555555555",
+      "kid": "k-7f3a91c0-1b2",
+      "iterations": 2,
+      "nonceHex": "323232323232323232323232",
+      "wrappingKeyHex": "a374f885e2d86bf3bfa5a9d55d69bd5dc9c966d94b616ff0baa51df5748b983f",
+      "aadHex": "0000000b736e69702e6b64662e76310000001270626b6466322d686d61632d73686135313200000008000000000000000200000010555555555555555555555555555555550000000e6b2d37663361393163302d316232",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MjIyMjIyMjIyMjIy.HB1sHGQzkGfI_XzMhAtAGJqxWL1-AXUZEAHaRwg0iMXW29rHXcqiaW2-xofQekQLqKzC5O494ycsOJvfPssJeXsaUahuasu8tvUTycKt4d_-l0ZidikN3hKKu6WzjQEAQMmR5DfheFrdwzqyplVZtPlURbtzJFTN7eNmbCjaA7IIrTaxWzp-NlFV4A2cWmMG0vwPRA76OKkYtcjf56N9h85ooBR5TSTP7Y-KtDt_JtfUU13k-6MYuT9FLxpvuGn54X28IKgWsIshfc2jWGhU3MRWj_busfC6OEFKoE26lCHvwhIxL4qa8f9aXPA6HqCX8x0tOA-044z6YvOK8KUJTpV-3C2O__5sULFwRuZ77xM"
+      }
+    },
+    {
+      "name": "backup-kid-low-iterations",
+      "keyHex": "8888888888888888888888888888888888888888888888888888888888888888",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "436166c3a9207075626c69632066697874757265"
+      },
+      "saltHex": "55555555555555555555555555555555",
+      "kid": "b-617a0001-0000-4000-8000-0000000000aa",
+      "iterations": 2,
+      "nonceHex": "333333333333333333333333",
+      "wrappingKeyHex": "a374f885e2d86bf3bfa5a9d55d69bd5dc9c966d94b616ff0baa51df5748b983f",
+      "aadHex": "0000000b736e69702e6b64662e76310000001270626b6466322d686d61632d736861353132000000080000000000000002000000105555555555555555555555555555555500000026622d36313761303030312d303030302d343030302d383030302d303030303030303030306161",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MzMzMzMzMzMzMzMz.q5ZKBcGXifzdKE9LtzB1pNl8rTCB5JOdRGrJN-AGVWtlxNkukJoh-FZvqUEe7LShGUEduvdWVtK2_L0TGdAN0ruQiuQ78L-J7u-o9RbqxpIlj3Wnm-h6aFXYEPtqV9crCdNdRbdbNzc64xxWz9icUkoeBzvx4CnXApp16AJnUBA6RnoXswmg1Wb1n8B2qjikZiOdtHouK28DPFTZX6_Yf1-Cj1YdWek8l5k9mFLJ6gqrvao2L9gsgWWFLUerjA31odXRRWbjfH6xeib4ArqWb3wSG5J1PTGPN5uMOIm5DPyIsS90IxcQstLpYshhff5UZmQ4Eav_cJLtJG87eSG7V-6vcTaxl9wy5JhqHwvdGAo"
+      }
+    },
+    {
+      "name": "pinned-600000",
+      "keyHex": "8888888888888888888888888888888888888888888888888888888888888888",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "436166c3a9207075626c69632066697874757265"
+      },
+      "saltHex": "55555555555555555555555555555555",
+      "kid": "k-7f3a91c0-1b2",
+      "iterations": 600000,
+      "nonceHex": "343434343434343434343434",
+      "wrappingKeyHex": "c4eb8e8ad8775483e8384667a784b678abb08ac98a356243ff4ef589b0c1aa82",
+      "aadHex": "0000000b736e69702e6b64662e76310000001270626b6466322d686d61632d7368613531320000000800000000000927c000000010555555555555555555555555555555550000000e6b2d37663361393163302d316232",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 600000,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.NDQ0NDQ0NDQ0NDQ0.RdSkDkuuIeCmwd4vxLcFnPoeF9Jyly7aTE4ELgziPM368urPlWEePuK4DFCqKt0Ymry0FH_kxR9f3Xu2OFr4fJlxCXXsJpN6Z9PHpWTbsdnrmQD9uX6_WXj3UA00t03KP83e-YFTjPYC6RfcYejC5v8uP29jQJkHJ9fd00V7yirclm1FXaMQmpaM0evxFnkPVYhzGZGskG62wJhGOV5t795cxnsfwSy5xOQGXn5bNRpR2YXpA51entLkaMDLU4Gx_U3AvNfkwnsLnAzeKDUBrOZYaTb9aj-9P5i8H99WJprVTWhiFKhfobnSUSuIl0jfdzxrtDNjJo6Df9FwoVXZVxXpaP5v03v7gecqZjTbGL4"
+      }
+    },
+    {
+      "name": "unwrap-ok",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      },
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "ok": "8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    {
+      "name": "unwrap-wrong-passphrase",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      },
+      "passphrase": {
+        "text": "correct horse battery stapl",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c"
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "error": "PassphraseKDF.Failure.wrongPassphrase"
+    },
+    {
+      "name": "unwrap-wrong-kid",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      },
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "kid": "k-other",
+      "error": "PassphraseKDF.Failure.wrongPassphrase"
+    },
+    {
+      "name": "unwrap-empty-passphrase",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      },
+      "passphrase": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "error": "PassphraseKDF.Failure.emptyPassphrase"
+    },
+    {
+      "name": "unwrap-unknown-alg",
+      "wrappedKey": {
+        "alg": "argon2id",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      },
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "error": "PassphraseKDF.Failure.unsupportedAlgorithm"
+    },
+    {
+      "name": "unwrap-salt-not-base64url",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "not base64url!",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      },
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "error": "PassphraseKDF.Failure.invalidParameters"
+    },
+    {
+      "name": "unwrap-empty-salt",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      },
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "error": "PassphraseKDF.Failure.invalidParameters"
+    },
+    {
+      "name": "unwrap-salt-with-padding",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ==",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      },
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "error": "PassphraseKDF.Failure.invalidParameters"
+    },
+    {
+      "name": "unwrap-zero-iterations",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 0,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      },
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "error": "PassphraseKDF.Failure.invalidParameters"
+    },
+    {
+      "name": "unwrap-changed-iterations",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 3,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3kThV1_h90l8eYo0CqRhG5-aMQYVBTqo"
+      },
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "error": "PassphraseKDF.Failure.wrongPassphrase"
+    },
+    {
+      "name": "unwrap-truncated-envelope",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.MTExMTExMTExMTEx.g_6M9xgN5dmifeQha6S8xZGQER3S5297-M7RUC__IhJuktYSEPB-CKqSUyDswKS2MXYpiDLGYpbnBR8oCh0DWn2g54NPuXOPVlcvZ6CmszYRtzLuTIRv_gIP3KGQKMFM3dl5VtjYEsjzG8NCt04DCx3YEvvFowRt6IdEeSeGzvm--T2R00K0yxz1MyXcOONEhiA6bmGKtTeONMtJKu18EL55fVg2CLtgXDG9nsRUJTmY3ujGbMHkio7qg3u89rEwWasesVceT34Gi0_sA0ZEoNOGvgoTqd3uSh_h-sib53KLnPp0WYlMWPJ0mBgMJTNRsf6PdkGz3eE3k"
+      },
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "error": "SnippetCrypto.Failure.malformedEnvelope"
+    },
+    {
+      "name": "unwrap-malformed-envelope",
+      "wrappedKey": {
+        "alg": "pbkdf2-hmac-sha512",
+        "iterations": 2,
+        "salt": "VVVVVVVVVVVVVVVVVVVVVQ",
+        "envelope": "v1.AAAA"
+      },
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "kid": "k-7f3a91c0-1b2",
+      "error": "SnippetCrypto.Failure.malformedEnvelope"
+    }
+  ]
+}

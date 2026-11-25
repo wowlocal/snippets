@@ -1,0 +1,2383 @@
+{
+  "format": "snippets-swift-interop/L06-keywords-import-links/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "KeywordSuggestions (candidates, existingMatches, tabCompletion), KeywordRelation, SnippetImportParser (native and Raycast dialects), SnippetDeepLink encode and parse (brief 01 §6)",
+  "notes": ["KeywordRelation.between compares its inputs as given; callers pass folded keywords (relationOfFolded). relationOfRaw shows the unfolded call.", "Raycast imports and link parses create a fresh UUID and use the current time for both dates; those fields are not recorded.", "SnippetDeepLink has no size limit: link-encode-long-content is a 100 000-character body (URL recorded by length and SHA-256 only).", "A parsed link yields an enabled, unpinned snippet; the iOS coordinator disables it on import."],
+  "cases": [
+    {
+      "name": "candidates-0",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "Signature Block",
+        "utf8Hex": "5369676e617475726520426c6f636b"
+      },
+      "contentFirstLine": {
+        "text": "Best regards",
+        "utf8Hex": "426573742072656761726473"
+      },
+      "candidates": ["sign", "sig", "sb", "best"]
+    },
+    {
+      "name": "candidates-1",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "Café Order",
+        "utf8Hex": "436166c3a9204f72646572"
+      },
+      "contentFirstLine": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "candidates": ["cafe", "co"]
+    },
+    {
+      "name": "candidates-2",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "contentFirstLine": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "candidates": []
+    },
+    {
+      "name": "candidates-3",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "contentFirstLine": {
+        "text": "https://example.com/path",
+        "utf8Hex": "68747470733a2f2f6578616d706c652e636f6d2f70617468"
+      },
+      "candidates": ["exam", "exa"]
+    },
+    {
+      "name": "candidates-4",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "contentFirstLine": {
+        "text": "www.example.com",
+        "utf8Hex": "7777772e6578616d706c652e636f6d"
+      },
+      "candidates": ["exam", "exa"]
+    },
+    {
+      "name": "candidates-5",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "Email",
+        "utf8Hex": "456d61696c"
+      },
+      "contentFirstLine": {
+        "text": "Hello there",
+        "utf8Hex": "48656c6c6f207468657265"
+      },
+      "candidates": ["email", "hello"]
+    },
+    {
+      "name": "candidates-6",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "A",
+        "utf8Hex": "41"
+      },
+      "contentFirstLine": {
+        "text": "B",
+        "utf8Hex": "42"
+      },
+      "candidates": []
+    },
+    {
+      "name": "candidates-7",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "Temporary Password",
+        "utf8Hex": "54656d706f726172792050617373776f7264"
+      },
+      "contentFirstLine": {
+        "text": "TP-{date:yyyyMMdd}",
+        "utf8Hex": "54502d7b646174653a797979794d4d64647d"
+      },
+      "candidates": ["temp", "tem", "tp"]
+    },
+    {
+      "name": "candidates-8",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "one two three four five six seven",
+        "utf8Hex": "6f6e652074776f20746872656520666f757220666976652073697820736576656e"
+      },
+      "contentFirstLine": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "candidates": ["one", "ottff"]
+    },
+    {
+      "name": "candidates-9",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "Wi-Fi password (home)",
+        "utf8Hex": "57692d46692070617373776f72642028686f6d6529"
+      },
+      "contentFirstLine": {
+        "text": "hunter2",
+        "utf8Hex": "68756e74657232"
+      },
+      "candidates": ["wi", "wfph", "hunt", "hun"]
+    },
+    {
+      "name": "candidates-10",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "日本語メモ",
+        "utf8Hex": "e697a5e69cace8aa9ee383a1e383a2"
+      },
+      "contentFirstLine": {
+        "text": "これは",
+        "utf8Hex": "e38193e3828ce381af"
+      },
+      "candidates": []
+    },
+    {
+      "name": "candidates-11",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "Straße",
+        "utf8Hex": "53747261c39f65"
+      },
+      "contentFirstLine": {
+        "text": "Größe",
+        "utf8Hex": "4772c3b6c39f65"
+      },
+      "candidates": ["stra", "str", "grosse"]
+    },
+    {
+      "name": "candidates-12",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "x",
+        "utf8Hex": "78"
+      },
+      "contentFirstLine": {
+        "text": "y",
+        "utf8Hex": "79"
+      },
+      "candidates": []
+    },
+    {
+      "name": "candidates-13",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "ab",
+        "utf8Hex": "6162"
+      },
+      "contentFirstLine": {
+        "text": "cd",
+        "utf8Hex": "6364"
+      },
+      "candidates": ["ab", "cd"]
+    },
+    {
+      "name": "candidates-14",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "abcdef",
+        "utf8Hex": "616263646566"
+      },
+      "contentFirstLine": {
+        "text": "abcdefg",
+        "utf8Hex": "61626364656667"
+      },
+      "candidates": ["abcdef", "abcd", "abc"]
+    },
+    {
+      "name": "candidates-15",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "ABCDEFG",
+        "utf8Hex": "41424344454647"
+      },
+      "contentFirstLine": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "candidates": ["abcd", "abc"]
+    },
+    {
+      "name": "candidates-16",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "  spaced   name  ",
+        "utf8Hex": "20207370616365642020206e616d652020"
+      },
+      "contentFirstLine": {
+        "text": "  line  ",
+        "utf8Hex": "20206c696e652020"
+      },
+      "candidates": ["spaced", "sn", "line"]
+    },
+    {
+      "name": "candidates-17",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "C++ & C#",
+        "utf8Hex": "432b2b2026204323"
+      },
+      "contentFirstLine": {
+        "text": "int main()",
+        "utf8Hex": "696e74206d61696e2829"
+      },
+      "candidates": ["cc", "int"]
+    },
+    {
+      "name": "candidates-18",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "2024 report",
+        "utf8Hex": "32303234207265706f7274"
+      },
+      "contentFirstLine": {
+        "text": "Q4",
+        "utf8Hex": "5134"
+      },
+      "candidates": ["2024", "2r", "q4"]
+    },
+    {
+      "name": "candidates-19",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "ﬁle ﬁnder",
+        "utf8Hex": "efac816c6520efac816e646572"
+      },
+      "contentFirstLine": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "candidates": ["file", "ff"]
+    },
+    {
+      "name": "candidates-20",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "İstanbul Notes",
+        "utf8Hex": "c4b07374616e62756c204e6f746573"
+      },
+      "contentFirstLine": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "candidates": ["ista", "ist", "in"]
+    },
+    {
+      "name": "candidates-21",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "naïve résumé",
+        "utf8Hex": "6e61c3af76652072c3a973756dc3a9"
+      },
+      "contentFirstLine": {
+        "text": "naïve",
+        "utf8Hex": "6e61c3af7665"
+      },
+      "candidates": ["naive", "nr"]
+    },
+    {
+      "name": "candidates-22",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "http",
+        "utf8Hex": "68747470"
+      },
+      "contentFirstLine": {
+        "text": "http server",
+        "utf8Hex": "6874747020736572766572"
+      },
+      "candidates": ["http", "server"]
+    },
+    {
+      "name": "candidates-23",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "https www",
+        "utf8Hex": "687474707320777777"
+      },
+      "contentFirstLine": {
+        "text": "https://x",
+        "utf8Hex": "68747470733a2f2f78"
+      },
+      "candidates": ["https", "hw"]
+    },
+    {
+      "name": "candidates-24",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "Sign",
+        "utf8Hex": "5369676e"
+      },
+      "contentFirstLine": {
+        "text": "Signature",
+        "utf8Hex": "5369676e6174757265"
+      },
+      "candidates": ["sign", "sig"]
+    },
+    {
+      "name": "candidates-25",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "e-mail",
+        "utf8Hex": "652d6d61696c"
+      },
+      "contentFirstLine": {
+        "text": "re: e-mail",
+        "utf8Hex": "72653a20652d6d61696c"
+      },
+      "candidates": ["em", "re"]
+    },
+    {
+      "name": "candidates-26",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "snake_case name",
+        "utf8Hex": "736e616b655f63617365206e616d65"
+      },
+      "contentFirstLine": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "candidates": ["snake", "scn"]
+    },
+    {
+      "name": "candidates-27",
+      "kind": "candidates",
+      "snippetName": {
+        "text": "🔑 Keys",
+        "utf8Hex": "f09f9491204b657973"
+      },
+      "contentFirstLine": {
+        "text": "🔑",
+        "utf8Hex": "f09f9491"
+      },
+      "candidates": ["keys"]
+    },
+    {
+      "name": "relation-0",
+      "kind": "relation",
+      "keyword": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "other": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "foldedKeyword": "sig",
+      "foldedOther": "sig",
+      "relationOfFolded": "duplicate",
+      "relationOfRaw": "duplicate"
+    },
+    {
+      "name": "relation-1",
+      "kind": "relation",
+      "keyword": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "other": {
+        "text": "SIG",
+        "utf8Hex": "534947"
+      },
+      "foldedKeyword": "sig",
+      "foldedOther": "sig",
+      "relationOfFolded": "duplicate",
+      "relationOfRaw": "unrelated"
+    },
+    {
+      "name": "relation-2",
+      "kind": "relation",
+      "keyword": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "other": {
+        "text": "sign",
+        "utf8Hex": "7369676e"
+      },
+      "foldedKeyword": "sig",
+      "foldedOther": "sign",
+      "relationOfFolded": "blockedByLonger",
+      "relationOfRaw": "blockedByLonger"
+    },
+    {
+      "name": "relation-3",
+      "kind": "relation",
+      "keyword": {
+        "text": "sign",
+        "utf8Hex": "7369676e"
+      },
+      "other": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "foldedKeyword": "sign",
+      "foldedOther": "sig",
+      "relationOfFolded": "blocksShorter",
+      "relationOfRaw": "blocksShorter"
+    },
+    {
+      "name": "relation-4",
+      "kind": "relation",
+      "keyword": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "other": {
+        "text": "xsig",
+        "utf8Hex": "78736967"
+      },
+      "foldedKeyword": "sig",
+      "foldedOther": "xsig",
+      "relationOfFolded": "unrelated",
+      "relationOfRaw": "unrelated"
+    },
+    {
+      "name": "relation-5",
+      "kind": "relation",
+      "keyword": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "other": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "foldedKeyword": "",
+      "foldedOther": "",
+      "relationOfFolded": "duplicate",
+      "relationOfRaw": "duplicate"
+    },
+    {
+      "name": "relation-6",
+      "kind": "relation",
+      "keyword": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "other": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "foldedKeyword": "",
+      "foldedOther": "sig",
+      "relationOfFolded": "blockedByLonger",
+      "relationOfRaw": "blockedByLonger"
+    },
+    {
+      "name": "relation-7",
+      "kind": "relation",
+      "keyword": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "other": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "foldedKeyword": "sig",
+      "foldedOther": "",
+      "relationOfFolded": "blocksShorter",
+      "relationOfRaw": "blocksShorter"
+    },
+    {
+      "name": "relation-8",
+      "kind": "relation",
+      "keyword": {
+        "text": "café",
+        "utf8Hex": "636166c3a9"
+      },
+      "other": {
+        "text": "cafe",
+        "utf8Hex": "63616665"
+      },
+      "foldedKeyword": "cafe",
+      "foldedOther": "cafe",
+      "relationOfFolded": "duplicate",
+      "relationOfRaw": "unrelated"
+    },
+    {
+      "name": "relation-9",
+      "kind": "relation",
+      "keyword": {
+        "text": "cafe",
+        "utf8Hex": "63616665"
+      },
+      "other": {
+        "text": "CAFÉ-au",
+        "utf8Hex": "434146c3892d6175"
+      },
+      "foldedKeyword": "cafe",
+      "foldedOther": "cafe-au",
+      "relationOfFolded": "blockedByLonger",
+      "relationOfRaw": "unrelated"
+    },
+    {
+      "name": "relation-10",
+      "kind": "relation",
+      "keyword": {
+        "text": "\\sig",
+        "utf8Hex": "5c736967"
+      },
+      "other": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "foldedKeyword": "sig",
+      "foldedOther": "sig",
+      "relationOfFolded": "duplicate",
+      "relationOfRaw": "unrelated"
+    },
+    {
+      "name": "relation-11",
+      "kind": "relation",
+      "keyword": {
+        "text": " sig ",
+        "utf8Hex": "2073696720"
+      },
+      "other": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "foldedKeyword": "sig",
+      "foldedOther": "sig",
+      "relationOfFolded": "duplicate",
+      "relationOfRaw": "unrelated"
+    },
+    {
+      "name": "relation-12",
+      "kind": "relation",
+      "keyword": {
+        "text": "my key",
+        "utf8Hex": "6d79206b6579"
+      },
+      "other": {
+        "text": "my-key",
+        "utf8Hex": "6d792d6b6579"
+      },
+      "foldedKeyword": "my-key",
+      "foldedOther": "my-key",
+      "relationOfFolded": "duplicate",
+      "relationOfRaw": "unrelated"
+    },
+    {
+      "name": "relation-13",
+      "kind": "relation",
+      "keyword": {
+        "text": "a",
+        "utf8Hex": "61"
+      },
+      "other": {
+        "text": "b",
+        "utf8Hex": "62"
+      },
+      "foldedKeyword": "a",
+      "foldedOther": "b",
+      "relationOfFolded": "unrelated",
+      "relationOfRaw": "unrelated"
+    },
+    {
+      "name": "relation-14",
+      "kind": "relation",
+      "keyword": {
+        "text": "straße",
+        "utf8Hex": "73747261c39f65"
+      },
+      "other": {
+        "text": "STRASSE",
+        "utf8Hex": "53545241535345"
+      },
+      "foldedKeyword": "strasse",
+      "foldedOther": "strasse",
+      "relationOfFolded": "duplicate",
+      "relationOfRaw": "unrelated"
+    },
+    {
+      "name": "relation-15",
+      "kind": "relation",
+      "keyword": {
+        "text": "ss",
+        "utf8Hex": "7373"
+      },
+      "other": {
+        "text": "ß",
+        "utf8Hex": "c39f"
+      },
+      "foldedKeyword": "ss",
+      "foldedOther": "ss",
+      "relationOfFolded": "duplicate",
+      "relationOfRaw": "unrelated"
+    },
+    {
+      "name": "keywords-0",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "do",
+        "utf8Hex": "646f"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["doc.backend", "doc.frontend", "docs", "api.doc.v2", "café.docs", "front.doc", "x-doc"],
+      "tabCompletion": "doc"
+    },
+    {
+      "name": "keywords-1",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "doc",
+        "utf8Hex": "646f63"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["doc.backend", "doc.frontend", "docs", "api.doc.v2", "front.doc", "café.docs", "x-doc"],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-2",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "doc.",
+        "utf8Hex": "646f632e"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["doc.backend", "doc.frontend", "api.doc.v2"],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-3",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "doc.f",
+        "utf8Hex": "646f632e66"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["doc.frontend", "café.docs", "front.doc"],
+      "tabCompletion": "doc.frontend"
+    },
+    {
+      "name": "keywords-4",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "DOC",
+        "utf8Hex": "444f43"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["doc.backend", "doc.frontend", "docs", "api.doc.v2", "front.doc", "café.docs", "x-doc"],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-5",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "front",
+        "utf8Hex": "66726f6e74"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["front.doc", "doc.frontend"],
+      "tabCompletion": "front."
+    },
+    {
+      "name": "keywords-6",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "doc.front",
+        "utf8Hex": "646f632e66726f6e74"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["doc.frontend", "front.doc"],
+      "tabCompletion": "doc.frontend"
+    },
+    {
+      "name": "keywords-7",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "front.doc",
+        "utf8Hex": "66726f6e742e646f63"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["front.doc", "doc.frontend"],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-8",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "b.a",
+        "utf8Hex": "622e61"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["b.a", "a.b.c"],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-9",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "a.c",
+        "utf8Hex": "612e63"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["a.b.c", "api.doc.v2", "café.docs", "doc.backend"],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-10",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "c.a",
+        "utf8Hex": "632e61"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["a.b.c", "api.doc.v2", "doc.backend"],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-11",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "caf",
+        "utf8Hex": "636166"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["café.docs"],
+      "tabCompletion": "café."
+    },
+    {
+      "name": "keywords-12",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "CAF",
+        "utf8Hex": "434146"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["café.docs"],
+      "tabCompletion": "CAFé."
+    },
+    {
+      "name": "keywords-13",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "café",
+        "utf8Hex": "636166c3a9"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["café.docs"],
+      "tabCompletion": "café."
+    },
+    {
+      "name": "keywords-14",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["sig", "sign", "signature"],
+      "tabCompletion": "sign"
+    },
+    {
+      "name": "keywords-15",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "s",
+        "utf8Hex": "73"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["sig", "sign", "signature", "café.docs", "docs"],
+      "tabCompletion": "sig"
+    },
+    {
+      "name": "keywords-16",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": [],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-17",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "zzz",
+        "utf8Hex": "7a7a7a"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": [],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-18",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "my",
+        "utf8Hex": "6d79"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["my-key"],
+      "tabCompletion": "my-"
+    },
+    {
+      "name": "keywords-19",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "my-",
+        "utf8Hex": "6d792d"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["my-key"],
+      "tabCompletion": "my-key"
+    },
+    {
+      "name": "keywords-20",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "v2.api",
+        "utf8Hex": "76322e617069"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["api.doc.v2"],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-21",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "d.f",
+        "utf8Hex": "642e66"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["café.docs", "doc.frontend", "front.doc"],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-22",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "tp",
+        "utf8Hex": "7470"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["tp"],
+      "tabCompletion": null
+    },
+    {
+      "name": "keywords-23",
+      "kind": "existing-keywords",
+      "query": {
+        "text": "x",
+        "utf8Hex": "78"
+      },
+      "among": [
+        "doc.frontend",
+        "doc.backend",
+        "docs",
+        "Doc.Frontend",
+        "café.docs",
+        "sig",
+        "sign",
+        "signature",
+        "my-key",
+        "a.b.c",
+        "b.a",
+        "front.doc",
+        "api.doc.v2",
+        "",
+        "  ",
+        "\\tp",
+        "x doc"
+      ],
+      "existingMatches": ["x-doc"],
+      "tabCompletion": "x-"
+    },
+    {
+      "name": "import-native-array",
+      "kind": "import",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":[\"T\",\"t\"],\"isEnabled\":false,\"isPinned\":true,\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "dialect": "native",
+      "hasRaycastExclamationKeywords": false,
+      "snippets": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["T"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ],
+      "snippetsPreservingExclamationPrefix": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["T"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "import-native-collection",
+      "kind": "import",
+      "fileText": "{\"snippets\":[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":[\"T\",\"t\"],\"isEnabled\":false,\"isPinned\":true,\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]}",
+      "dialect": "native",
+      "hasRaycastExclamationKeywords": false,
+      "snippets": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["T"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ],
+      "snippetsPreservingExclamationPrefix": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["T"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "import-native-empty-array",
+      "kind": "import",
+      "fileText": "[]",
+      "dialect": "raycast",
+      "hasRaycastExclamationKeywords": false,
+      "snippets": [],
+      "snippetsPreservingExclamationPrefix": []
+    },
+    {
+      "name": "import-native-empty-collection",
+      "kind": "import",
+      "fileText": "{\"snippets\":[]}",
+      "dialect": "raycast",
+      "hasRaycastExclamationKeywords": false,
+      "snippets": [],
+      "snippetsPreservingExclamationPrefix": []
+    },
+    {
+      "name": "import-raycast-basic",
+      "kind": "import",
+      "fileText": "[{\"name\":\"Greeting\",\"text\":\"Hello {clipboard}\",\"keyword\":\"hi\"}]",
+      "dialect": "raycast",
+      "hasRaycastExclamationKeywords": false,
+      "snippets": [
+        {
+          "name": "Greeting",
+          "keyword": "hi",
+          "content": "Hello {clipboard}",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ],
+      "snippetsPreservingExclamationPrefix": [
+        {
+          "name": "Greeting",
+          "keyword": "hi",
+          "content": "Hello {clipboard}",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ]
+    },
+    {
+      "name": "import-raycast-no-keyword",
+      "kind": "import",
+      "fileText": "[{\"name\":\"Note\",\"text\":\"body\"}]",
+      "dialect": "raycast",
+      "hasRaycastExclamationKeywords": false,
+      "snippets": [
+        {
+          "name": "Note",
+          "keyword": "",
+          "content": "body",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ],
+      "snippetsPreservingExclamationPrefix": [
+        {
+          "name": "Note",
+          "keyword": "",
+          "content": "body",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ]
+    },
+    {
+      "name": "import-raycast-exclamation-keywords",
+      "kind": "import",
+      "fileText": "[{\"name\":\"A\",\"text\":\"a\",\"keyword\":\"!addr\"},{\"name\":\"B\",\"text\":\"b\",\"keyword\":\"!!two\"},{\"name\":\"C\",\"text\":\"c\",\"keyword\":\" ! spaced key \"},{\"name\":\"D\",\"text\":\"d\",\"keyword\":\"!\"},{\"name\":\"E\",\"text\":\"e\",\"keyword\":\"\\\\!bs\"}]",
+      "dialect": "raycast",
+      "hasRaycastExclamationKeywords": true,
+      "snippets": [
+        {
+          "name": "A",
+          "keyword": "addr",
+          "content": "a",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        },
+        {
+          "name": "B",
+          "keyword": "!two",
+          "content": "b",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        },
+        {
+          "name": "C",
+          "keyword": "-spaced-key",
+          "content": "c",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        },
+        {
+          "name": "D",
+          "keyword": "",
+          "content": "d",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        },
+        {
+          "name": "E",
+          "keyword": "bs",
+          "content": "e",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ],
+      "snippetsPreservingExclamationPrefix": [
+        {
+          "name": "A",
+          "keyword": "!addr",
+          "content": "a",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        },
+        {
+          "name": "B",
+          "keyword": "!!two",
+          "content": "b",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        },
+        {
+          "name": "C",
+          "keyword": "!-spaced-key",
+          "content": "c",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        },
+        {
+          "name": "D",
+          "keyword": "!",
+          "content": "d",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        },
+        {
+          "name": "E",
+          "keyword": "!bs",
+          "content": "e",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ]
+    },
+    {
+      "name": "import-raycast-legacy-placeholders",
+      "kind": "import",
+      "fileText": "[{\"name\":\"Dated\",\"text\":\"On {date \\\"yyyy-MM-dd\\\"} at {time \\\"HH:mm\\\"} {cursor} {date \\\"it's\\\"}\",\"keyword\":\"dt\"}]",
+      "dialect": "raycast",
+      "hasRaycastExclamationKeywords": false,
+      "snippets": [
+        {
+          "name": "Dated",
+          "keyword": "dt",
+          "content": "On {date format=\"yyyy-MM-dd\"} at {time format=\"HH:mm\"} {cursor} {date \"it's\"}",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ],
+      "snippetsPreservingExclamationPrefix": [
+        {
+          "name": "Dated",
+          "keyword": "dt",
+          "content": "On {date format=\"yyyy-MM-dd\"} at {time format=\"HH:mm\"} {cursor} {date \"it's\"}",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ]
+    },
+    {
+      "name": "import-raycast-extra-keys",
+      "kind": "import",
+      "fileText": "[{\"name\":\"X\",\"text\":\"x\",\"keyword\":\"x\",\"id\":\"ignored\",\"other\":1}]",
+      "dialect": "raycast",
+      "hasRaycastExclamationKeywords": false,
+      "snippets": [
+        {
+          "name": "X",
+          "keyword": "x",
+          "content": "x",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ],
+      "snippetsPreservingExclamationPrefix": [
+        {
+          "name": "X",
+          "keyword": "x",
+          "content": "x",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ]
+    },
+    {
+      "name": "import-raycast-keyword-null",
+      "kind": "import",
+      "fileText": "[{\"name\":\"X\",\"text\":\"x\",\"keyword\":null}]",
+      "dialect": "raycast",
+      "hasRaycastExclamationKeywords": false,
+      "snippets": [
+        {
+          "name": "X",
+          "keyword": "",
+          "content": "x",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ],
+      "snippetsPreservingExclamationPrefix": [
+        {
+          "name": "X",
+          "keyword": "",
+          "content": "x",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false
+        }
+      ]
+    },
+    {
+      "name": "import-raycast-missing-text",
+      "kind": "import",
+      "fileText": "[{\"name\":\"X\",\"keyword\":\"x\"}]",
+      "error": "SnippetImportParser.Failure.invalidFormat"
+    },
+    {
+      "name": "import-raycast-one-bad-element",
+      "kind": "import",
+      "fileText": "[{\"name\":\"X\",\"text\":\"x\"},{\"name\":\"Y\"}]",
+      "error": "SnippetImportParser.Failure.invalidFormat"
+    },
+    {
+      "name": "import-mixed-native-and-raycast",
+      "kind": "import",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":[\"T\",\"t\"],\"isEnabled\":false,\"isPinned\":true,\"createdAt\":700000000.25,\"updatedAt\":700000123.5},{\"name\":\"X\",\"text\":\"x\"}]",
+      "error": "SnippetImportParser.Failure.invalidFormat"
+    },
+    {
+      "name": "import-native-with-text-key-is-native",
+      "kind": "import",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"text\":\"t\",\"createdAt\":1,\"updatedAt\":2}]",
+      "dialect": "native",
+      "hasRaycastExclamationKeywords": false,
+      "snippets": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "3ff0000000000000",
+            "swift": "1.0"
+          },
+          "updatedAt": {
+            "bits": "4000000000000000",
+            "swift": "2.0"
+          }
+        }
+      ],
+      "snippetsPreservingExclamationPrefix": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "3ff0000000000000",
+            "swift": "1.0"
+          },
+          "updatedAt": {
+            "bits": "4000000000000000",
+            "swift": "2.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "import-object-without-snippets",
+      "kind": "import",
+      "fileText": "{\"items\":[]}",
+      "error": "SnippetImportParser.Failure.invalidFormat"
+    },
+    {
+      "name": "import-not-json",
+      "kind": "import",
+      "fileText": "hello",
+      "error": "SnippetImportParser.Failure.invalidFormat"
+    },
+    {
+      "name": "import-empty",
+      "kind": "import",
+      "fileText": "",
+      "error": "SnippetImportParser.Failure.invalidFormat"
+    },
+    {
+      "name": "import-top-level-number",
+      "kind": "import",
+      "fileText": "42",
+      "error": "SnippetImportParser.Failure.invalidFormat"
+    },
+    {
+      "name": "link-encode-basic",
+      "kind": "link-encode",
+      "snippet": {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "name": "Email signature",
+        "keyword": "sig",
+        "content": "Best regards,\nMichael",
+        "contentUtf8Hex": "4265737420726567617264732c0a4d69636861656c",
+        "tags": ["Work", "mail"],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "41c80cf540400000",
+          "swift": "807004800.5"
+        },
+        "updatedAt": {
+          "bits": "41c8377bf80fcd68",
+          "swift": "812578800.123456"
+        }
+      },
+      "url": "snippets://share?data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ",
+      "urlCharacterCount": 172,
+      "urlSHA256": "7a5ec6177d7a23f917884024bac1a49b497216e11f3f2e7c1f12958161ce59df",
+      "payloadJSON": "{\"content\":\"Best regards,\\nMichael\",\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"version\":1}",
+      "decoded": {
+        "name": "Email signature",
+        "keyword": "sig",
+        "content": "Best regards,\nMichael",
+        "contentEqualsOriginal": true,
+        "tags": ["Work", "mail"],
+        "isEnabled": true,
+        "isPinned": false,
+        "idEqualsOriginal": false
+      }
+    },
+    {
+      "name": "link-encode-no-tags",
+      "kind": "link-encode",
+      "snippet": {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "name": "Plain",
+        "keyword": "",
+        "content": "body",
+        "contentUtf8Hex": "626f6479",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "41c80cf540400000",
+          "swift": "807004800.5"
+        },
+        "updatedAt": {
+          "bits": "41c8377bf80fcd68",
+          "swift": "812578800.123456"
+        }
+      },
+      "url": "snippets://share?data=eyJjb250ZW50IjoiYm9keSIsImtleXdvcmQiOiIiLCJuYW1lIjoiUGxhaW4iLCJ2ZXJzaW9uIjoxfQ",
+      "urlCharacterCount": 100,
+      "urlSHA256": "dcb607f36ac432c657e7283fd41acaff005bdf791a88a38cc5a97fb6b833d58c",
+      "payloadJSON": "{\"content\":\"body\",\"keyword\":\"\",\"name\":\"Plain\",\"version\":1}",
+      "decoded": {
+        "name": "Plain",
+        "keyword": "",
+        "content": "body",
+        "contentEqualsOriginal": true,
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "idEqualsOriginal": false
+      }
+    },
+    {
+      "name": "link-encode-unsanitised-keyword",
+      "kind": "link-encode",
+      "snippet": {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "name": "KW",
+        "keyword": " \\my key ",
+        "content": "body",
+        "contentUtf8Hex": "626f6479",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "41c80cf540400000",
+          "swift": "807004800.5"
+        },
+        "updatedAt": {
+          "bits": "41c8377bf80fcd68",
+          "swift": "812578800.123456"
+        }
+      },
+      "url": "snippets://share?data=eyJjb250ZW50IjoiYm9keSIsImtleXdvcmQiOiJteS1rZXkiLCJuYW1lIjoiS1ciLCJ2ZXJzaW9uIjoxfQ",
+      "urlCharacterCount": 104,
+      "urlSHA256": "62f1aa368b18c66dc984e330f836648445bebe9174935146a433608958226690",
+      "payloadJSON": "{\"content\":\"body\",\"keyword\":\"my-key\",\"name\":\"KW\",\"version\":1}",
+      "decoded": {
+        "name": "KW",
+        "keyword": "my-key",
+        "content": "body",
+        "contentEqualsOriginal": true,
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "idEqualsOriginal": false
+      }
+    },
+    {
+      "name": "link-encode-unicode",
+      "kind": "link-encode",
+      "snippet": {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "name": "Café ☕ \"q\"",
+        "keyword": "café",
+        "content": "emoji 🔑 / slash ? & = # + % \u2028",
+        "contentUtf8Hex": "656d6f6a6920f09f9491202f20736c617368203f2026203d2023202b202520e280a8",
+        "tags": ["Ünï", "日本語"],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "41c80cf540400000",
+          "swift": "807004800.5"
+        },
+        "updatedAt": {
+          "bits": "41c8377bf80fcd68",
+          "swift": "812578800.123456"
+        }
+      },
+      "url": "snippets://share?data=eyJjb250ZW50IjoiZW1vamkg8J-UkSBcLyBzbGFzaCA_ICYgPSAjICsgJSDigKgiLCJrZXl3b3JkIjoiY2Fmw6kiLCJuYW1lIjoiQ2Fmw6kg4piVIFwicVwiIiwidGFncyI6WyLDnG7DryIsIuaXpeacrOiqniJdLCJ2ZXJzaW9uIjoxfQ",
+      "urlCharacterCount": 200,
+      "urlSHA256": "2f2e85f404dad243b20277284155a54a4aa0a5c1c1624b93a12cf3bdb0245c16",
+      "payloadJSON": "{\"content\":\"emoji 🔑 \\/ slash ? & = # + % \u2028\",\"keyword\":\"café\",\"name\":\"Café ☕ \\\"q\\\"\",\"tags\":[\"Ünï\",\"日本語\"],\"version\":1}",
+      "decoded": {
+        "name": "Café ☕ \"q\"",
+        "keyword": "café",
+        "content": "emoji 🔑 / slash ? & = # + % \u2028",
+        "contentEqualsOriginal": true,
+        "tags": ["Ünï", "日本語"],
+        "isEnabled": true,
+        "isPinned": false,
+        "idEqualsOriginal": false
+      }
+    },
+    {
+      "name": "link-encode-empty",
+      "kind": "link-encode",
+      "snippet": {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "name": "",
+        "keyword": "",
+        "content": "",
+        "contentUtf8Hex": "",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "41c80cf540400000",
+          "swift": "807004800.5"
+        },
+        "updatedAt": {
+          "bits": "41c8377bf80fcd68",
+          "swift": "812578800.123456"
+        }
+      },
+      "url": "snippets://share?data=eyJjb250ZW50IjoiIiwia2V5d29yZCI6IiIsIm5hbWUiOiIiLCJ2ZXJzaW9uIjoxfQ",
+      "urlCharacterCount": 88,
+      "urlSHA256": "ffd99c7e89930ef91b16c1252940c5b6edf36990d93338bb776b0a0e71224d8a",
+      "payloadJSON": "{\"content\":\"\",\"keyword\":\"\",\"name\":\"\",\"version\":1}",
+      "decoded": {
+        "name": "",
+        "keyword": "",
+        "content": "",
+        "contentEqualsOriginal": true,
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "idEqualsOriginal": false
+      }
+    },
+    {
+      "name": "link-encode-payload-with-url-unsafe-base64",
+      "kind": "link-encode",
+      "snippet": {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "name": "???>>>",
+        "keyword": "",
+        "content": "~~~???>>>~~~",
+        "contentUtf8Hex": "7e7e7e3f3f3f3e3e3e7e7e7e",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "createdAt": {
+          "bits": "41c80cf540400000",
+          "swift": "807004800.5"
+        },
+        "updatedAt": {
+          "bits": "41c8377bf80fcd68",
+          "swift": "812578800.123456"
+        }
+      },
+      "url": "snippets://share?data=eyJjb250ZW50Ijoifn5-Pz8_Pj4-fn5-Iiwia2V5d29yZCI6IiIsIm5hbWUiOiI_Pz8-Pj4iLCJ2ZXJzaW9uIjoxfQ",
+      "urlCharacterCount": 112,
+      "urlSHA256": "e8ba4e486a09ac5ec78d9b23098c8aa8dd53ea766d6821ddbfaaecbe7e409dcf",
+      "payloadJSON": "{\"content\":\"~~~???>>>~~~\",\"keyword\":\"\",\"name\":\"???>>>\",\"version\":1}",
+      "decoded": {
+        "name": "???>>>",
+        "keyword": "",
+        "content": "~~~???>>>~~~",
+        "contentEqualsOriginal": true,
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "idEqualsOriginal": false
+      }
+    },
+    {
+      "name": "link-encode-long-content",
+      "kind": "link-encode",
+      "snippet": {
+        "name": "Long",
+        "keyword": "long",
+        "contentCharacterCount": 100000
+      },
+      "url": null,
+      "urlCharacterCount": 133432,
+      "urlSHA256": "71867ba5f1b0f04a18ddaffa3f99632119645e2dc32d6727746b804d671a0cc6",
+      "payloadJSON": null,
+      "decoded": {
+        "name": "Long",
+        "keyword": "long",
+        "content": null,
+        "contentEqualsOriginal": true,
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false,
+        "idEqualsOriginal": false
+      }
+    },
+    {
+      "name": "link-encode-secure-refused",
+      "kind": "link-encode",
+      "error": "SnippetDeepLinkError.secureSnippetNotShareable"
+    },
+    {
+      "name": "link-parse-share-ok",
+      "kind": "link-parse",
+      "url": "snippets://share?data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ",
+      "canHandle": true,
+      "isCreationLink": false,
+      "ok": {
+        "name": "Email signature",
+        "keyword": "sig",
+        "content": "Best regards,\nMichael",
+        "tags": ["Work", "mail"],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-share-uppercase-scheme-and-host",
+      "kind": "link-parse",
+      "url": "SNIPPETS://SHARE?data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ",
+      "canHandle": true,
+      "isCreationLink": false,
+      "ok": {
+        "name": "Email signature",
+        "keyword": "sig",
+        "content": "Best regards,\nMichael",
+        "tags": ["Work", "mail"],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-share-with-path-and-fragment",
+      "kind": "link-parse",
+      "url": "snippets://share/ignored/path?data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ#frag",
+      "canHandle": true,
+      "isCreationLink": false,
+      "ok": {
+        "name": "Email signature",
+        "keyword": "sig",
+        "content": "Best regards,\nMichael",
+        "tags": ["Work", "mail"],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-share-padded-base64",
+      "kind": "link-parse",
+      "url": "snippets://share?data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ==",
+      "canHandle": true,
+      "isCreationLink": false,
+      "ok": {
+        "name": "Email signature",
+        "keyword": "sig",
+        "content": "Best regards,\nMichael",
+        "tags": ["Work", "mail"],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-share-standard-base64-alphabet",
+      "kind": "link-parse",
+      "url": "snippets://share?data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ",
+      "canHandle": true,
+      "isCreationLink": false,
+      "ok": {
+        "name": "Email signature",
+        "keyword": "sig",
+        "content": "Best regards,\nMichael",
+        "tags": ["Work", "mail"],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-share-extra-query-items",
+      "kind": "link-parse",
+      "url": "snippets://share?x=1&data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ&data=ignored",
+      "canHandle": true,
+      "isCreationLink": false,
+      "ok": {
+        "name": "Email signature",
+        "keyword": "sig",
+        "content": "Best regards,\nMichael",
+        "tags": ["Work", "mail"],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-share-data-uppercase-name",
+      "kind": "link-parse",
+      "url": "snippets://share?DATA=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ",
+      "canHandle": true,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.missingPayload"
+    },
+    {
+      "name": "link-parse-share-missing-data",
+      "kind": "link-parse",
+      "url": "snippets://share",
+      "canHandle": true,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.missingPayload"
+    },
+    {
+      "name": "link-parse-share-empty-data",
+      "kind": "link-parse",
+      "url": "snippets://share?data=",
+      "canHandle": true,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.invalidPayload"
+    },
+    {
+      "name": "link-parse-share-data-not-base64",
+      "kind": "link-parse",
+      "url": "snippets://share?data=***",
+      "canHandle": true,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.invalidPayload"
+    },
+    {
+      "name": "link-parse-share-data-not-json",
+      "kind": "link-parse",
+      "url": "snippets://share?data=aGVsbG8",
+      "canHandle": true,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.invalidPayload"
+    },
+    {
+      "name": "link-parse-share-version-2",
+      "kind": "link-parse",
+      "url": "snippets://share?data=eyJjb250ZW50IjoiYyIsImtleXdvcmQiOiJrIiwibmFtZSI6Im4iLCJ2ZXJzaW9uIjoyfQ",
+      "canHandle": true,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.unsupportedVersion"
+    },
+    {
+      "name": "link-parse-share-version-missing",
+      "kind": "link-parse",
+      "url": "snippets://share?data=eyJjb250ZW50IjoiYyIsImtleXdvcmQiOiJrIiwibmFtZSI6Im4ifQ",
+      "canHandle": true,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.invalidPayload"
+    },
+    {
+      "name": "link-parse-share-version-string",
+      "kind": "link-parse",
+      "url": "snippets://share?data=eyJjb250ZW50IjoiYyIsImtleXdvcmQiOiJrIiwibmFtZSI6Im4iLCJ2ZXJzaW9uIjoiMSJ9",
+      "canHandle": true,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.invalidPayload"
+    },
+    {
+      "name": "link-parse-share-missing-keyword",
+      "kind": "link-parse",
+      "url": "snippets://share?data=eyJjb250ZW50IjoiYyIsIm5hbWUiOiJuIiwidmVyc2lvbiI6MX0",
+      "canHandle": true,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.invalidPayload"
+    },
+    {
+      "name": "link-parse-share-extra-keys-and-flags",
+      "kind": "link-parse",
+      "url": "snippets://share?data=eyJjb250ZW50IjoiYyIsImtleXdvcmQiOiIgXFxrIHcgIiwibmFtZSI6Im4iLCJ0YWdzIjpbIiBBICIsImEiLCIiXSwidmVyc2lvbiI6MSwiaXNFbmFibGVkIjpmYWxzZSwiaXNQaW5uZWQiOnRydWUsImlkIjoieCJ9",
+      "canHandle": true,
+      "isCreationLink": false,
+      "ok": {
+        "name": "n",
+        "keyword": "k-w",
+        "content": "c",
+        "tags": ["A"],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-share-tags-null",
+      "kind": "link-parse",
+      "url": "snippets://share?data=eyJjb250ZW50IjoiYyIsImtleXdvcmQiOiJrIiwibmFtZSI6Im4iLCJ0YWdzIjpudWxsLCJ2ZXJzaW9uIjoxfQ",
+      "canHandle": true,
+      "isCreationLink": false,
+      "ok": {
+        "name": "n",
+        "keyword": "k",
+        "content": "c",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-share-all-empty",
+      "kind": "link-parse",
+      "url": "snippets://share?data=eyJjb250ZW50IjoiIiwia2V5d29yZCI6IiIsIm5hbWUiOiIiLCJ2ZXJzaW9uIjoxfQ",
+      "canHandle": true,
+      "isCreationLink": false,
+      "ok": {
+        "name": "",
+        "keyword": "",
+        "content": "",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-new-all-fields",
+      "kind": "link-parse",
+      "url": "snippets://new?name=My%20Name&keyword=my%20key&content=line1%0Aline2&tags=a,b,%20A%20,,c%20d",
+      "canHandle": true,
+      "isCreationLink": true,
+      "ok": {
+        "name": "My Name",
+        "keyword": "my-key",
+        "content": "line1\nline2",
+        "tags": ["a", "b", "c d"],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-new-uppercase-names",
+      "kind": "link-parse",
+      "url": "snippets://NEW?NAME=N&Keyword=K&CONTENT=C&TAGS=x",
+      "canHandle": true,
+      "isCreationLink": true,
+      "ok": {
+        "name": "N",
+        "keyword": "K",
+        "content": "C",
+        "tags": ["x"],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-new-plus-stays-plus",
+      "kind": "link-parse",
+      "url": "snippets://new?name=a+b&content=1%2B1",
+      "canHandle": true,
+      "isCreationLink": true,
+      "ok": {
+        "name": "a+b",
+        "keyword": "",
+        "content": "1+1",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-new-only-name",
+      "kind": "link-parse",
+      "url": "snippets://new?name=Only",
+      "canHandle": true,
+      "isCreationLink": true,
+      "ok": {
+        "name": "Only",
+        "keyword": "",
+        "content": "",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-new-only-keyword",
+      "kind": "link-parse",
+      "url": "snippets://new?keyword=%5Ckw",
+      "canHandle": true,
+      "isCreationLink": true,
+      "ok": {
+        "name": "",
+        "keyword": "kw",
+        "content": "",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-new-only-tags",
+      "kind": "link-parse",
+      "url": "snippets://new?tags=a,b",
+      "canHandle": true,
+      "isCreationLink": true,
+      "error": "SnippetDeepLinkError.missingPayload"
+    },
+    {
+      "name": "link-parse-new-empty",
+      "kind": "link-parse",
+      "url": "snippets://new",
+      "canHandle": true,
+      "isCreationLink": true,
+      "error": "SnippetDeepLinkError.missingPayload"
+    },
+    {
+      "name": "link-parse-new-empty-values",
+      "kind": "link-parse",
+      "url": "snippets://new?name=&keyword=&content=",
+      "canHandle": true,
+      "isCreationLink": true,
+      "error": "SnippetDeepLinkError.missingPayload"
+    },
+    {
+      "name": "link-parse-new-duplicate-items-first-wins",
+      "kind": "link-parse",
+      "url": "snippets://new?name=first&name=second&content=c",
+      "canHandle": true,
+      "isCreationLink": true,
+      "ok": {
+        "name": "first",
+        "keyword": "",
+        "content": "c",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-new-unicode",
+      "kind": "link-parse",
+      "url": "snippets://new?name=Caf%C3%A9%20%E2%98%95&content=%F0%9F%94%91",
+      "canHandle": true,
+      "isCreationLink": true,
+      "ok": {
+        "name": "Café ☕",
+        "keyword": "",
+        "content": "🔑",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-new-encoded-ampersand-and-equals",
+      "kind": "link-parse",
+      "url": "snippets://new?name=a%26b%3Dc&content=x",
+      "canHandle": true,
+      "isCreationLink": true,
+      "ok": {
+        "name": "a&b=c",
+        "keyword": "",
+        "content": "x",
+        "tags": [],
+        "isEnabled": true,
+        "isPinned": false
+      }
+    },
+    {
+      "name": "link-parse-other-host",
+      "kind": "link-parse",
+      "url": "snippets://open?data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ",
+      "canHandle": false,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.unsupportedURL"
+    },
+    {
+      "name": "link-parse-other-scheme",
+      "kind": "link-parse",
+      "url": "https://share?data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ",
+      "canHandle": false,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.unsupportedURL"
+    },
+    {
+      "name": "link-parse-no-host",
+      "kind": "link-parse",
+      "url": "snippets:share?data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ",
+      "canHandle": false,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.unsupportedURL"
+    },
+    {
+      "name": "link-parse-snippets-cli-scheme",
+      "kind": "link-parse",
+      "url": "snippet://share?data=eyJjb250ZW50IjoiQmVzdCByZWdhcmRzLFxuTWljaGFlbCIsImtleXdvcmQiOiJzaWciLCJuYW1lIjoiRW1haWwgc2lnbmF0dXJlIiwidGFncyI6WyJXb3JrIiwibWFpbCJdLCJ2ZXJzaW9uIjoxfQ",
+      "canHandle": false,
+      "isCreationLink": false,
+      "error": "SnippetDeepLinkError.unsupportedURL"
+    }
+  ]
+}

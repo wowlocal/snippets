@@ -1,0 +1,285 @@
+{
+  "format": "snippets-swift-interop/V16-git-recovery/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "keys/recovery.json: GitSyncRecovery.seal file bytes, HKDF key, AAD, plaintext bundle; GitSyncRecovery.open outcomes (brief 02 §2.12, brief 03 §2.7)",
+  "notes": ["GitSyncRecovery.seal has no nonce parameter (brief 02 Q13). The seal cases are assembled by this tool from the same CryptoKit calls with a fixed nonce; before writing, the tool proves that assembly equal, byte for byte, to the real GitSyncRecovery.seal output at that run's random nonce, and opens the fixed file with GitSyncRecovery.open.", "ciphertext = base64(nonce(12) ‖ ct ‖ tag(16)); the plaintext is not padded.", "`ok` in open cases is the recovered 64-byte material."],
+  "cases": [
+    {
+      "name": "material-0-63",
+      "kind": "seal",
+      "materialHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "recoveryCode": "M2GT-58X4-MPKA-FA59-NANT-SBDE-NWJ",
+      "aadHex": "736e6970706574732d6769742d7265636f766572792d76310036313761303030312d303030302d343030302d383030302d303030303030303030306161",
+      "hkdfSaltText": "snippets-git-recovery-salt-v1",
+      "keyHex": "d0c26f0a460bac5d7a0bbba80c61090022705ff057b87324486bdbf8fdca7af5",
+      "plaintextText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "plaintextHex": "7b226b6579223a2241414543417751464267634943516f4c4441304f4478415245684d554652595847426b61477877644868383d222c2273616c74223a22494345694979516c4a69636f4b536f724c4330754c7a41784d6a4d304e5459334f446b364f7a7739506a383d222c22736368656d6156657273696f6e223a312c2273636f70654944223a2273796e632d7631227d",
+      "nonceHex": "303132333435363738393a3b",
+      "fileText": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}\n",
+      "fileHex": "7b0a202022616c676f726974686d22203a2022736e6970706574732d6769742d7265636f766572792d686b64662d7368613235362d61657332353667636d2d7631222c0a2020226369706865727465787422203a20224d4445794d7a51314e6a63344f546f37326e53476a5253475264457a6d3653446e794643667058506a704e636854657554724a7a4a543270706c705a3956765344776d2f633358764864665a642b552f567239614545314e33335638526b2b50382f626752392b392f624c4575345558313167626c566d395452477678646c4a6a41702f34586837653030554174706d77384d41766a674333787732367753706d55584e5556556139743545434458506d344a645a5971583274336376775a626b6f50676a772b73574a6c586b37376f5939746e4b594a547845475275544a425a4f3062626b6e68222c0a20202264617461736574494422203a202236313761303030312d303030302d343030302d383030302d303030303030303030306161222c0a202022736368656d6156657273696f6e22203a20310a7d0a"
+    },
+    {
+      "name": "material-99-aa",
+      "kind": "seal",
+      "materialHex": "9999999999999999999999999999999999999999999999999999999999999999aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "datasetID": "11111111-2222-4333-8444-555555555555",
+      "recoverySecretHex": "66666666666666666666666666666666",
+      "recoveryCode": "CSK6-CSK6-CSK6-CSK6-CSK6-CSK6-CR4",
+      "aadHex": "736e6970706574732d6769742d7265636f766572792d76310031313131313131312d323232322d343333332d383434342d353535353535353535353535",
+      "hkdfSaltText": "snippets-git-recovery-salt-v1",
+      "keyHex": "52ce45bc3a4c12c62b15213508eb2d2da7e685c21227cd1c083889864568e039",
+      "plaintextText": "{\"key\":\"mZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZk=\",\"salt\":\"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "plaintextHex": "7b226b6579223a226d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6b3d222c2273616c74223a227171717171717171717171717171717171717171717171717171717171717171717171717171717171716f3d222c22736368656d6156657273696f6e223a312c2273636f70654944223a2273796e632d7631227d",
+      "nonceHex": "313131313131313131313131",
+      "fileText": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"MTExMTExMTExMTEx5Max7c6xKDrozxZEX/tRv+5kPv2iYySJJYhJty08kZ/9NDOc5wxRGiCBr6kqHRkDqBl5YW9unrNtBdhQoftzzrSzmcDrekeJ7rMCAH6ShgL70HT8vJ+jSCeFgW16ATsLyMB0el9mU7cDnGZH1Sk2osN9HAQrfOofhkiLwWe4qPvUVDEsvK7RgXPb4z8zM8diey21rt7BUYlmY6f+z5GYva3/\",\n  \"datasetID\" : \"11111111-2222-4333-8444-555555555555\",\n  \"schemaVersion\" : 1\n}\n",
+      "fileHex": "7b0a202022616c676f726974686d22203a2022736e6970706574732d6769742d7265636f766572792d686b64662d7368613235362d61657332353667636d2d7631222c0a2020226369706865727465787422203a20224d5445784d5445784d5445784d544578354d6178376336784b44726f7a785a45582f7452762b356b507632695979534a4a59684a747930386b5a2f394e444f63357778524769434272366b7148526b4471426c35595739756e724e74426468516f66747a7a72537a6d634472656b654a37724d434148365368674c3730485438764a2b6a53436546675731364154734c794d4230656c396d553763446e475a4831536b326f734e3948415172664f6f66686b694c775765347150765556444573764b375267585062347a387a4d386469657932317274374255596c6d5936662b7a3547597661332f222c0a20202264617461736574494422203a202231313131313131312d323232322d343333332d383434342d353535353535353535353535222c0a202022736368656d6156657273696f6e22203a20310a7d0a"
+    },
+    {
+      "name": "open-ok",
+      "kind": "open",
+      "fileText": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}\n",
+      "fileByteCount": 401,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "ok": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    },
+    {
+      "name": "open-ok-compact-framing",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 379,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "ok": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    },
+    {
+      "name": "open-ok-without-final-newline",
+      "kind": "open",
+      "fileText": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}",
+      "fileByteCount": 400,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "ok": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    },
+    {
+      "name": "open-wrong-code",
+      "kind": "open",
+      "fileText": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}\n",
+      "fileByteCount": 401,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "66666666666666666666666666666666",
+      "error": "GitSyncRecovery.Failure.incorrectCode"
+    },
+    {
+      "name": "open-kit-for-another-dataset",
+      "kind": "open",
+      "fileText": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}\n",
+      "fileByteCount": 401,
+      "datasetID": "11111111-2222-4333-8444-555555555555",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-file-names-another-dataset",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\"datasetID\":\"11111111-2222-4333-8444-555555555555\",\"schemaVersion\":1}",
+      "fileByteCount": 379,
+      "datasetID": "11111111-2222-4333-8444-555555555555",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.incorrectCode"
+    },
+    {
+      "name": "open-dataset-id-uppercase",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\"datasetID\":\"617A0001-0000-4000-8000-0000000000AA\",\"schemaVersion\":1}",
+      "fileByteCount": 379,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-unknown-algorithm",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"other\",\"ciphertext\":\"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 338,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-schema-2",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":2}",
+      "fileByteCount": 379,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-schema-as-string",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":\"1\"}",
+      "fileByteCount": 381,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-extra-key",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"note\":\"x\",\"schemaVersion\":1}",
+      "fileByteCount": 390,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-tampered-ciphertext",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MDEyMzQ1Njc4OTo72nSGjRSGRdEym6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 379,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.incorrectCode"
+    },
+    {
+      "name": "open-ciphertext-unpadded-base64",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknhA\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 380,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-ciphertext-base64url",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm_c3XvHdfZd-U_Vr9aEE1N33V8Rk-P8_bgR9-9_bLEu4UX11gblVm9TRGvxdlJjAp_4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw-sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 379,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-ciphertext-27-bytes",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 183,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-ciphertext-28-bytes",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ==\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 187,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.incorrectCode"
+    },
+    {
+      "name": "open-ciphertext-empty",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 147,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-not-json",
+      "kind": "open",
+      "fileText": "recovery",
+      "fileByteCount": 8,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-json-array",
+      "kind": "open",
+      "fileText": "[]",
+      "fileByteCount": 2,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-over-8192-bytes",
+      "kind": "open",
+      "fileText": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"MDEyMzQ1Njc4OTo72nSGjRSGRdEzm6SDnyFCfpXPjpNchTeuTrJzJT2pplpZ9VvSDwm/c3XvHdfZd+U/Vr9aEE1N33V8Rk+P8/bgR9+9/bLEu4UX11gblVm9TRGvxdlJjAp/4Xh7e00UAtpmw8MAvjgC3xw26wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tnKYJTxEGRuTJBZO0bbknh\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}\n                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ",
+      "fileByteCount": 8593,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-bundle-with-extra-key",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MjIyMjIyMjIyMjIysGAKcQ0WSEUjnBzWvIGkpt9dK52nzEhok7TQjCQJ/KqcKVfmPZU+QrkM+W5pOEpwlhCRg0IuqfnoWsWDwqakmdk9TNrUSpEvFSBsqTcFiE/ovoSIzU6P1SEN1T2wF7DXgiMv94TLsSEhkIBh1n2jFdL2U1HJp79ZXzjGNIaCz3w6m+lmF6ZGA8ap1EkqeKQA4BZkly5I29JkPGZJWgoTtdK0p8TtVmTOf1hrNw==\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 395,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-bundle-scope-other",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MjIyMjIyMjIyMjIysGAEbABGE0VY7HW3lpOMwqcYCZWh3mZThrOipAM4/qm2DV7yS4gjYr8c12djFXtGhyDu/AtjzPL+UvnJwLnP9r4nZM/xBOFkPwxikxEOlWCSoqudx2WtzSB+qxylXr7rpH8tvb2muHhW6cl7u3S3ROfxCjqO+e5DUz6BY9b4iH0qnfZtfNhVFcapzkg5MJt24FHU9yH+gvIE58x8r+aK0MOc\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 379,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-bundle-not-json",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MjIyMjIyMjIyMjIyoycDZRaojsKR3ALdjEtujHZ1NZFU\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 191,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "error": "GitSyncRecovery.Failure.invalidEnvelope"
+    },
+    {
+      "name": "open-bundle-pretty-printed",
+      "kind": "open",
+      "fileText": "{\"algorithm\":\"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\"ciphertext\":\"MjIyMjIyMjIyMjIysGAEbABGE0VY7HW3lpOMwqcYCZWh3mZThrOipAM4/qm2DV7yS4gjYr8c12djFXtGhyDu/AtjzqPsX+Gf2KGk/LgLRP/ZOcdHNQBGiy0Tq2/h55Kr/FyY6gcD1QaoNMLgiyJUiLDo0UIE7NZ1tSf2X+H0DgGK3fhYTznMN8XumyJp0PVrWuwSZqD4jQQpZIMn71p3xirQEZcIc8fyW8XuI9/GftGP\",\"datasetID\":\"617a0001-0000-4000-8000-0000000000aa\",\"schemaVersion\":1}",
+      "fileByteCount": 383,
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "recoverySecretHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "ok": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    },
+    {
+      "name": "kit-from-display-code",
+      "kind": "kit",
+      "code": "M2GT-58X4-MPKA-FA59-NANT-SBDE-NWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "kit-from-lowercase-code",
+      "kind": "kit",
+      "code": "m2gt-58x4-mpka-fa59-nant-sbde-nwj",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "kit-from-typo",
+      "kind": "kit",
+      "code": "X2GT-58X4-MPKA-FA59-NANT-SBDE-NWJ",
+      "error": "GitSyncRecovery.Failure.invalidCode"
+    },
+    {
+      "name": "kit-from-empty",
+      "kind": "kit",
+      "code": "",
+      "error": "GitSyncRecovery.Failure.invalidCode"
+    }
+  ]
+}

@@ -1,0 +1,982 @@
+{
+  "format": "snippets-swift-interop/V11-sync-envelope/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "SyncEnvelope canonical ten-key bytes, the nine-key hash preimage, envelope hash, rev and contentHash; constructor normalisation; SyncEnvelope.parse outcomes (brief 02 §2.10)",
+  "notes": ["envelope.canonicalHex is the plaintext of the wire blob. envelopeHash = hex(SHA-256(hashPreimage)); rev = first 32 hex characters.", "Dates are doubles (seconds since 2001-01-01T00:00:00Z) given as IEEE-754 bits.", "parse cases: `ok` is the envelope hash recomputed by Swift. `…-rehashed` means the `hash` member was recomputed over the edited object, so the outcome shows what the parser itself checks."],
+  "cases": [
+    {
+      "name": "plain",
+      "kind": "envelope",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "11111111-2222-4333-8444-555555555555",
+        "hlc": "019face339f4-0003-aabbccdd",
+        "origin": "aabbccdd",
+        "secure": false,
+        "deleted": false,
+        "fields": {
+          "name": "Email signature",
+          "keyword": "sig",
+          "contentHex": "4265737420726567617264732c0a4d69636861656c0a",
+          "contentText": "Best regards,\nMichael\n",
+          "tags": ["Work", "mail"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c80cf540400000",
+            "swift": "807004800.5"
+          },
+          "updatedAt": {
+            "bits": "41c8377bf80fcd68",
+            "swift": "812578800.123456"
+          }
+        },
+        "x": {
+          "t": "object",
+          "v": []
+        },
+        "xCanonical": "{}",
+        "contentHash": "8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f",
+        "hashPreimageText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+        "envelopeHash": "711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51",
+        "rev": "711b0565f95acbd63b02ec6570677891",
+        "canonicalText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2237313162303536356639356163626436336230326563363537303637373839313032613538666562386134363434333661613064643862356138316538633531222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d"
+      }
+    },
+    {
+      "name": "plain-unicode-and-escapes",
+      "kind": "envelope",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "00000000-0000-4000-8000-000000000001",
+        "hlc": "019face34000-0000-0badcafe",
+        "origin": "0badcafe",
+        "secure": false,
+        "deleted": false,
+        "fields": {
+          "name": "Café \"quoted\" \\ name ☕",
+          "keyword": "café",
+          "contentHex": "54616209686572650d0a43524c462c204e554c2d6672656520636f6e74726f6c20012c20736c617368202f2c20656d6f6a6920f09f94912c2065cc812c20e280a86c696e6520736570",
+          "contentText": "Tab\there\r\nCRLF, NUL-free control \u0001, slash /, emoji 🔑, é, \u2028line sep",
+          "tags": ["Ünïcode", "日本語", "two words"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "8000000000000000",
+            "swift": "-0.0"
+          },
+          "updatedAt": {
+            "bits": "41c8377bf8000000",
+            "swift": "812578800.0"
+          }
+        },
+        "x": {
+          "t": "object",
+          "v": []
+        },
+        "xCanonical": "{}",
+        "contentHash": "bf512503de6404e7f995fad50d34fd712518d0848bd444e30bb418eed007d923",
+        "hashPreimageText": "{\"contentHash\":\"bf512503de6404e7f995fad50d34fd712518d0848bd444e30bb418eed007d923\",\"deleted\":false,\"fields\":{\"content\":\"Tab\\there\\r\\nCRLF, NUL-free control \\u0001, slash /, emoji 🔑, é, \u2028line sep\",\"createdAt\":-0.0,\"isEnabled\":false,\"isPinned\":true,\"keyword\":\"café\",\"name\":\"Café \\\"quoted\\\" \\\\ name ☕\",\"tags\":[\"Ünïcode\",\"日本語\",\"two words\"],\"updatedAt\":812578800.0},\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"00000000-0000-4000-8000-000000000001\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a2262663531323530336465363430346537663939356661643530643334666437313235313864303834386264343434653330626234313865656430303764393233222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a225461625c74686572655c725c6e43524c462c204e554c2d6672656520636f6e74726f6c205c75303030312c20736c617368202f2c20656d6f6a6920f09f94912c2065cc812c20e280a86c696e6520736570222c22637265617465644174223a2d302e302c226973456e61626c6564223a66616c73652c22697350696e6e6564223a747275652c226b6579776f7264223a22636166c3a9222c226e616d65223a22436166c3a9205c2271756f7465645c22205c5c206e616d6520e29895222c2274616773223a5b22c39c6ec3af636f6465222c22e697a5e69cace8aa9e222c2274776f20776f726473225d2c22757064617465644174223a3831323537383830302e307d2c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303031222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+        "envelopeHash": "3f3a289c891f21d8c9b73d2bbfbebac5be6d77899f553ebcd7dd0a8abced9947",
+        "rev": "3f3a289c891f21d8c9b73d2bbfbebac5",
+        "canonicalText": "{\"contentHash\":\"bf512503de6404e7f995fad50d34fd712518d0848bd444e30bb418eed007d923\",\"deleted\":false,\"fields\":{\"content\":\"Tab\\there\\r\\nCRLF, NUL-free control \\u0001, slash /, emoji 🔑, é, \u2028line sep\",\"createdAt\":-0.0,\"isEnabled\":false,\"isPinned\":true,\"keyword\":\"café\",\"name\":\"Café \\\"quoted\\\" \\\\ name ☕\",\"tags\":[\"Ünïcode\",\"日本語\",\"two words\"],\"updatedAt\":812578800.0},\"hash\":\"3f3a289c891f21d8c9b73d2bbfbebac5be6d77899f553ebcd7dd0a8abced9947\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"00000000-0000-4000-8000-000000000001\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a2262663531323530336465363430346537663939356661643530643334666437313235313864303834386264343434653330626234313865656430303764393233222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a225461625c74686572655c725c6e43524c462c204e554c2d6672656520636f6e74726f6c205c75303030312c20736c617368202f2c20656d6f6a6920f09f94912c2065cc812c20e280a86c696e6520736570222c22637265617465644174223a2d302e302c226973456e61626c6564223a66616c73652c22697350696e6e6564223a747275652c226b6579776f7264223a22636166c3a9222c226e616d65223a22436166c3a9205c2271756f7465645c22205c5c206e616d6520e29895222c2274616773223a5b22c39c6ec3af636f6465222c22e697a5e69cace8aa9e222c2274776f20776f726473225d2c22757064617465644174223a3831323537383830302e307d2c2268617368223a2233663361323839633839316632316438633962373364326262666265626163356265366437373839396635353365626364376464306138616263656439393437222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303031222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d"
+      }
+    },
+    {
+      "name": "plain-empty-fields",
+      "kind": "envelope",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "hlc": "000000000000-0000-00000000",
+        "origin": "00000000",
+        "secure": false,
+        "deleted": false,
+        "fields": {
+          "name": "",
+          "keyword": "",
+          "contentHex": "",
+          "contentText": "",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "c17e285004000000",
+            "swift": "-31622400.25"
+          },
+          "updatedAt": {
+            "bits": "3e7ad7f29abcaf48",
+            "swift": "1e-07"
+          }
+        },
+        "x": {
+          "t": "object",
+          "v": []
+        },
+        "xCanonical": "{}",
+        "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "hashPreimageText": "{\"contentHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"deleted\":false,\"fields\":{\"content\":\"\",\"createdAt\":-31622400.25,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"\",\"name\":\"\",\"tags\":[],\"updatedAt\":1e-07},\"hlc\":\"000000000000-0000-00000000\",\"id\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"origin\":\"00000000\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a2265336230633434323938666331633134396166626634633839393666623932343237616534316534363439623933346361343935393931623738353262383535222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a22222c22637265617465644174223a2d33313632323430302e32352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22222c226e616d65223a22222c2274616773223a5b5d2c22757064617465644174223a31652d30377d2c22686c63223a223030303030303030303030302d303030302d3030303030303030222c226964223a2266666666666666662d666666662d346666662d626666662d666666666666666666666666222c226f726967696e223a223030303030303030222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+        "envelopeHash": "06e1f89ff6c6e11b83f9d105bb45d49fcba4ca6a94f1e5bb2c014722d84d8b66",
+        "rev": "06e1f89ff6c6e11b83f9d105bb45d49f",
+        "canonicalText": "{\"contentHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"deleted\":false,\"fields\":{\"content\":\"\",\"createdAt\":-31622400.25,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"\",\"name\":\"\",\"tags\":[],\"updatedAt\":1e-07},\"hash\":\"06e1f89ff6c6e11b83f9d105bb45d49fcba4ca6a94f1e5bb2c014722d84d8b66\",\"hlc\":\"000000000000-0000-00000000\",\"id\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"origin\":\"00000000\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a2265336230633434323938666331633134396166626634633839393666623932343237616534316534363439623933346361343935393931623738353262383535222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a22222c22637265617465644174223a2d33313632323430302e32352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22222c226e616d65223a22222c2274616773223a5b5d2c22757064617465644174223a31652d30377d2c2268617368223a2230366531663839666636633665313162383366396431303562623435643439666362613463613661393466316535626232633031343732326438346438623636222c22686c63223a223030303030303030303030302d303030302d3030303030303030222c226964223a2266666666666666662d666666662d346666662d626666662d666666666666666666666666222c226f726967696e223a223030303030303030222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d"
+      }
+    },
+    {
+      "name": "secure",
+      "kind": "envelope",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+        "hlc": "019face339f4-0003-aabbccdd",
+        "origin": "aabbccdd",
+        "secure": true,
+        "deleted": false,
+        "fields": {
+          "name": "Wi-Fi password",
+          "keyword": "wifi",
+          "contentHex": "76312e524552455245524552455245524552452e5a74626d5a676e445679516d496e2d6b71313231614e323178444359394e67704e316b366f6c644b464f4d426a654f6472496364545235516367454a70554b476631507148657448384a35474f596c356b556e3878386737435848615a58316843786c42397638386a336e41723555696c76394f364c686b386c3652744f73625231706950595f742d47576e72575979726456514a39686a55594f7879725541766a645f35484e763055555a46746f56614f32487a535f424f43306f4b4e6b33644a537341554177416a504479737a4e435868352d49644c34417847345439586862574261535373447738474c6335744659365649516e615233305649754d7a754c4931504d34694c676f466f43547635374335425f55726f755a664a6936527842443630713465314e6372595f5a524739323962347844767537626168575f3659324274624f724954575939757578613341724a4959554d384351645842697949594337444f6b363751",
+          "contentText": "v1.RERERERERERERERE.ZtbmZgnDVyQmIn-kq121aN21xDCY9NgpN1k6oldKFOMBjeOdrIcdTR5QcgEJpUKGf1PqHetH8J5GOYl5kUn8x8g7CXHaZX1hCxlB9v88j3nAr5Uilv9O6Lhk8l6RtOsbR1piPY_t-GWnrWYyrdVQJ9hjUYOxyrUAvjd_5HNv0UUZFtoVaO2HzS_BOC0oKNk3dJSsAUAwAjPDyszNCXh5-IdL4AxG4T9XhbWBaSSsDw8GLc5tFY6VIQnaR30VIuMzuLI1PM4iLgoFoCTv57C5B_UrouZfJi6RxBD60q4e1NcrY_ZRG929b4xDvu7bahW_6Y2BtbOrITWY9uuxa3ArJIYUM8CQdXBiyIYC7DOk67Q",
+          "tags": ["home"],
+          "isEnabled": true,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c80cf540400000",
+            "swift": "807004800.5"
+          },
+          "updatedAt": {
+            "bits": "41c8377bf80fcd68",
+            "swift": "812578800.123456"
+          }
+        },
+        "x": {
+          "t": "object",
+          "v": [
+            {
+              "k": "vaultContentHash",
+              "kHex": "7661756c74436f6e74656e7448617368",
+              "v": {
+                "t": "string",
+                "v": "681386449739cff132c5ba8511a9f1bb",
+                "utf8Hex": "3638313338363434393733396366663133326335626138353131613966316262"
+              }
+            },
+            {
+              "k": "vaultKID",
+              "kHex": "7661756c744b4944",
+              "v": {
+                "t": "string",
+                "v": "k-7f3a91c0-1b2",
+                "utf8Hex": "6b2d37663361393163302d316232"
+              }
+            }
+          ]
+        },
+        "xCanonical": "{\"vaultContentHash\":\"681386449739cff132c5ba8511a9f1bb\",\"vaultKID\":\"k-7f3a91c0-1b2\"}",
+        "contentHash": "fe74687ba3603359097cdd084ed0d53b84a240fdd6802ee06eaa7ba51886781d",
+        "hashPreimageText": "{\"contentHash\":\"fe74687ba3603359097cdd084ed0d53b84a240fdd6802ee06eaa7ba51886781d\",\"deleted\":false,\"fields\":{\"content\":\"v1.RERERERERERERERE.ZtbmZgnDVyQmIn-kq121aN21xDCY9NgpN1k6oldKFOMBjeOdrIcdTR5QcgEJpUKGf1PqHetH8J5GOYl5kUn8x8g7CXHaZX1hCxlB9v88j3nAr5Uilv9O6Lhk8l6RtOsbR1piPY_t-GWnrWYyrdVQJ9hjUYOxyrUAvjd_5HNv0UUZFtoVaO2HzS_BOC0oKNk3dJSsAUAwAjPDyszNCXh5-IdL4AxG4T9XhbWBaSSsDw8GLc5tFY6VIQnaR30VIuMzuLI1PM4iLgoFoCTv57C5B_UrouZfJi6RxBD60q4e1NcrY_ZRG929b4xDvu7bahW_6Y2BtbOrITWY9uuxa3ArJIYUM8CQdXBiyIYC7DOk67Q\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Wi-Fi password\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"681386449739cff132c5ba8511a9f1bb\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a2266653734363837626133363033333539303937636464303834656430643533623834613234306664643638303265653036656161376261353138383637383164222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a2276312e524552455245524552455245524552452e5a74626d5a676e445679516d496e2d6b71313231614e323178444359394e67704e316b366f6c644b464f4d426a654f6472496364545235516367454a70554b476631507148657448384a35474f596c356b556e3878386737435848615a58316843786c42397638386a336e41723555696c76394f364c686b386c3652744f73625231706950595f742d47576e72575979726456514a39686a55594f7879725541766a645f35484e763055555a46746f56614f32487a535f424f43306f4b4e6b33644a537341554177416a504479737a4e435868352d49644c34417847345439586862574261535373447738474c6335744659365649516e615233305649754d7a754c4931504d34694c676f466f43547635374335425f55726f755a664a6936527842443630713465314e6372595f5a524739323962347844767537626168575f3659324274624f724954575939757578613341724a4959554d384351645842697949594337444f6b363751222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a747275652c226b6579776f7264223a2277696669222c226e616d65223a2257692d46692070617373776f7264222c2274616773223a5b22686f6d65225d2c22757064617465644174223a3831323537383830302e3132333435367d2c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227661756c74436f6e74656e7448617368223a223638313338363434393733396366663133326335626138353131613966316262222c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+        "envelopeHash": "cacd70ca9afe1f7503b1e1bc85146988e11327a95ed0f9e9bcf8d36cb7dfa0b5",
+        "rev": "cacd70ca9afe1f7503b1e1bc85146988",
+        "canonicalText": "{\"contentHash\":\"fe74687ba3603359097cdd084ed0d53b84a240fdd6802ee06eaa7ba51886781d\",\"deleted\":false,\"fields\":{\"content\":\"v1.RERERERERERERERE.ZtbmZgnDVyQmIn-kq121aN21xDCY9NgpN1k6oldKFOMBjeOdrIcdTR5QcgEJpUKGf1PqHetH8J5GOYl5kUn8x8g7CXHaZX1hCxlB9v88j3nAr5Uilv9O6Lhk8l6RtOsbR1piPY_t-GWnrWYyrdVQJ9hjUYOxyrUAvjd_5HNv0UUZFtoVaO2HzS_BOC0oKNk3dJSsAUAwAjPDyszNCXh5-IdL4AxG4T9XhbWBaSSsDw8GLc5tFY6VIQnaR30VIuMzuLI1PM4iLgoFoCTv57C5B_UrouZfJi6RxBD60q4e1NcrY_ZRG929b4xDvu7bahW_6Y2BtbOrITWY9uuxa3ArJIYUM8CQdXBiyIYC7DOk67Q\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Wi-Fi password\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"cacd70ca9afe1f7503b1e1bc85146988e11327a95ed0f9e9bcf8d36cb7dfa0b5\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"681386449739cff132c5ba8511a9f1bb\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a2266653734363837626133363033333539303937636464303834656430643533623834613234306664643638303265653036656161376261353138383637383164222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a2276312e524552455245524552455245524552452e5a74626d5a676e445679516d496e2d6b71313231614e323178444359394e67704e316b366f6c644b464f4d426a654f6472496364545235516367454a70554b476631507148657448384a35474f596c356b556e3878386737435848615a58316843786c42397638386a336e41723555696c76394f364c686b386c3652744f73625231706950595f742d47576e72575979726456514a39686a55594f7879725541766a645f35484e763055555a46746f56614f32487a535f424f43306f4b4e6b33644a537341554177416a504479737a4e435868352d49644c34417847345439586862574261535373447738474c6335744659365649516e615233305649754d7a754c4931504d34694c676f466f43547635374335425f55726f755a664a6936527842443630713465314e6372595f5a524739323962347844767537626168575f3659324274624f724954575939757578613341724a4959554d384351645842697949594337444f6b363751222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a747275652c226b6579776f7264223a2277696669222c226e616d65223a2257692d46692070617373776f7264222c2274616773223a5b22686f6d65225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2263616364373063613961666531663735303362316531626338353134363938386531313332376139356564306639653962636638643336636237646661306235222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227661756c74436f6e74656e7448617368223a223638313338363434393733396366663133326335626138353131613966316262222c227661756c744b4944223a226b2d37663361393163302d316232227d7d"
+      }
+    },
+    {
+      "name": "tombstone-plain",
+      "kind": "envelope",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "11111111-2222-4333-8444-555555555555",
+        "hlc": "019face34000-0000-0badcafe",
+        "origin": "0badcafe",
+        "secure": false,
+        "deleted": true,
+        "fields": null,
+        "x": {
+          "t": "object",
+          "v": []
+        },
+        "xCanonical": "{}",
+        "contentHash": null,
+        "hashPreimageText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+        "envelopeHash": "b41ae3add258b4bbf62c554a19d7589524964d997dd4f0fa803d0c5524f84a3e",
+        "rev": "b41ae3add258b4bbf62c554a19d75895",
+        "canonicalText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"b41ae3add258b4bbf62c554a19d7589524964d997dd4f0fa803d0c5524f84a3e\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2262343161653361646432353862346262663632633535346131396437353839353234393634643939376464346630666138303364306335353234663834613365222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d"
+      }
+    },
+    {
+      "name": "tombstone-secure-keeps-vaultKID",
+      "kind": "envelope",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+        "hlc": "019face34000-0000-0badcafe",
+        "origin": "0badcafe",
+        "secure": true,
+        "deleted": true,
+        "fields": null,
+        "x": {
+          "t": "object",
+          "v": [
+            {
+              "k": "vaultKID",
+              "kHex": "7661756c744b4944",
+              "v": {
+                "t": "string",
+                "v": "k-7f3a91c0-1b2",
+                "utf8Hex": "6b2d37663361393163302d316232"
+              }
+            }
+          ]
+        },
+        "xCanonical": "{\"vaultKID\":\"k-7f3a91c0-1b2\"}",
+        "contentHash": null,
+        "hashPreimageText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+        "envelopeHash": "529e962e72fa4cb3e3004484b3c1896ab45943ed0c37d2ce797b062143e43479",
+        "rev": "529e962e72fa4cb3e3004484b3c1896a",
+        "canonicalText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"529e962e72fa4cb3e3004484b3c1896ab45943ed0c37d2ce797b062143e43479\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2235323965393632653732666134636233653330303434383462336331383936616234353934336564306333376432636537393762303632313433653433343739222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227661756c744b4944223a226b2d37663361393163302d316232227d7d"
+      }
+    },
+    {
+      "name": "tombstone-secure-user-deletion",
+      "kind": "envelope",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+        "hlc": "019face34000-0000-0badcafe",
+        "origin": "0badcafe",
+        "secure": true,
+        "deleted": true,
+        "fields": null,
+        "x": {
+          "t": "object",
+          "v": [
+            {
+              "k": "userDeletion.v1",
+              "kHex": "7573657244656c6574696f6e2e7631",
+              "v": {
+                "t": "array",
+                "v": [
+                  {
+                    "t": "string",
+                    "v": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+                    "utf8Hex": "30613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061"
+                  },
+                  {
+                    "t": "string",
+                    "v": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+                    "utf8Hex": "66316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631"
+                  }
+                ]
+              }
+            },
+            {
+              "k": "vaultKID",
+              "kHex": "7661756c744b4944",
+              "v": {
+                "t": "string",
+                "v": "k-7f3a91c0-1b2",
+                "utf8Hex": "6b2d37663361393163302d316232"
+              }
+            }
+          ]
+        },
+        "xCanonical": "{\"userDeletion.v1\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1\"],\"vaultKID\":\"k-7f3a91c0-1b2\"}",
+        "contentHash": null,
+        "hashPreimageText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1\"],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b2230613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061222c2266316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631225d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+        "envelopeHash": "16b81621536f82a3c702c81229e423f2bce9359b788135444c98c27407dab52e",
+        "rev": "16b81621536f82a3c702c81229e423f2",
+        "canonicalText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"16b81621536f82a3c702c81229e423f2bce9359b788135444c98c27407dab52e\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1\"],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2231366238313632313533366638326133633730326338313232396534323366326263653933353962373838313335343434633938633237343037646162353265222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b2230613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061222c2266316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631225d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d"
+      }
+    },
+    {
+      "name": "plain-unknown-x-members",
+      "kind": "envelope",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "11111111-2222-4333-8444-555555555555",
+        "hlc": "019face339f4-0003-aabbccdd",
+        "origin": "aabbccdd",
+        "secure": false,
+        "deleted": false,
+        "fields": {
+          "name": "Email signature",
+          "keyword": "sig",
+          "contentHex": "4265737420726567617264732c0a4d69636861656c0a",
+          "contentText": "Best regards,\nMichael\n",
+          "tags": ["Work", "mail"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c80cf540400000",
+            "swift": "807004800.5"
+          },
+          "updatedAt": {
+            "bits": "41c8377bf80fcd68",
+            "swift": "812578800.123456"
+          }
+        },
+        "x": {
+          "t": "object",
+          "v": [
+            {
+              "k": "future.count",
+              "kHex": "6675747572652e636f756e74",
+              "v": {
+                "t": "int",
+                "v": "42"
+              }
+            },
+            {
+              "k": "future.flag",
+              "kHex": "6675747572652e666c6167",
+              "v": {
+                "t": "bool",
+                "v": true
+              }
+            },
+            {
+              "k": "future.list",
+              "kHex": "6675747572652e6c697374",
+              "v": {
+                "t": "array",
+                "v": [
+                  {
+                    "t": "int",
+                    "v": "1"
+                  },
+                  {
+                    "t": "string",
+                    "v": "two",
+                    "utf8Hex": "74776f"
+                  },
+                  {
+                    "t": "array",
+                    "v": [
+                      {
+                        "t": "double",
+                        "bits": "400c000000000000",
+                        "swift": "3.5"
+                      }
+                    ]
+                  },
+                  {
+                    "t": "object",
+                    "v": [
+                      {
+                        "k": "k",
+                        "kHex": "6b",
+                        "v": {
+                          "t": "null"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "k": "future.nested",
+              "kHex": "6675747572652e6e6573746564",
+              "v": {
+                "t": "object",
+                "v": [
+                  {
+                    "k": "a",
+                    "kHex": "61",
+                    "v": {
+                      "t": "string",
+                      "v": "A",
+                      "utf8Hex": "41"
+                    }
+                  },
+                  {
+                    "k": "b",
+                    "kHex": "62",
+                    "v": {
+                      "t": "object",
+                      "v": [
+                        {
+                          "k": "c",
+                          "kHex": "63",
+                          "v": {
+                            "t": "object",
+                            "v": []
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "k": "future.null",
+              "kHex": "6675747572652e6e756c6c",
+              "v": {
+                "t": "null"
+              }
+            },
+            {
+              "k": "future.ratio",
+              "kHex": "6675747572652e726174696f",
+              "v": {
+                "t": "double",
+                "bits": "3fd0000000000000",
+                "swift": "0.25"
+              }
+            },
+            {
+              "k": "future.whole",
+              "kHex": "6675747572652e77686f6c65",
+              "v": {
+                "t": "double",
+                "bits": "4008000000000000",
+                "swift": "3.0"
+              }
+            },
+            {
+              "k": "ünïcode-key",
+              "kHex": "c3bc6ec3af636f64652d6b6579",
+              "v": {
+                "t": "string",
+                "v": "é",
+                "utf8Hex": "c3a9"
+              }
+            },
+            {
+              "k": "\ufffd",
+              "kHex": "efbfbd",
+              "v": {
+                "t": "int",
+                "v": "1"
+              }
+            },
+            {
+              "k": "𐀀",
+              "kHex": "f0908080",
+              "v": {
+                "t": "int",
+                "v": "2"
+              }
+            }
+          ]
+        },
+        "xCanonical": "{\"future.count\":42,\"future.flag\":true,\"future.list\":[1,\"two\",[3.5],{\"k\":null}],\"future.nested\":{\"a\":\"A\",\"b\":{\"c\":{}}},\"future.null\":null,\"future.ratio\":0.25,\"future.whole\":3.0,\"ünïcode-key\":\"é\",\"\ufffd\":1,\"𐀀\":2}",
+        "contentHash": "8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f",
+        "hashPreimageText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"future.count\":42,\"future.flag\":true,\"future.list\":[1,\"two\",[3.5],{\"k\":null}],\"future.nested\":{\"a\":\"A\",\"b\":{\"c\":{}}},\"future.null\":null,\"future.ratio\":0.25,\"future.whole\":3.0,\"ünïcode-key\":\"é\",\"\ufffd\":1,\"𐀀\":2}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b226675747572652e636f756e74223a34322c226675747572652e666c6167223a747275652c226675747572652e6c697374223a5b312c2274776f222c5b332e355d2c7b226b223a6e756c6c7d5d2c226675747572652e6e6573746564223a7b2261223a2241222c2262223a7b2263223a7b7d7d7d2c226675747572652e6e756c6c223a6e756c6c2c226675747572652e726174696f223a302e32352c226675747572652e77686f6c65223a332e302c22c3bc6ec3af636f64652d6b6579223a22c3a9222c22efbfbd223a312c22f0908080223a327d7d",
+        "envelopeHash": "a4e24a908a6bf8c1f2d240c0e0716dd5761ff2a702337be357f2cae7bbf7d69c",
+        "rev": "a4e24a908a6bf8c1f2d240c0e0716dd5",
+        "canonicalText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"a4e24a908a6bf8c1f2d240c0e0716dd5761ff2a702337be357f2cae7bbf7d69c\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"future.count\":42,\"future.flag\":true,\"future.list\":[1,\"two\",[3.5],{\"k\":null}],\"future.nested\":{\"a\":\"A\",\"b\":{\"c\":{}}},\"future.null\":null,\"future.ratio\":0.25,\"future.whole\":3.0,\"ünïcode-key\":\"é\",\"\ufffd\":1,\"𐀀\":2}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2261346532346139303861366266386331663264323430633065303731366464353736316666326137303233333762653335376632636165376262663764363963222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b226675747572652e636f756e74223a34322c226675747572652e666c6167223a747275652c226675747572652e6c697374223a5b312c2274776f222c5b332e355d2c7b226b223a6e756c6c7d5d2c226675747572652e6e6573746564223a7b2261223a2241222c2262223a7b2263223a7b7d7d7d2c226675747572652e6e756c6c223a6e756c6c2c226675747572652e726174696f223a302e32352c226675747572652e77686f6c65223a332e302c22c3bc6ec3af636f64652d6b6579223a22c3a9222c22efbfbd223a312c22f0908080223a327d7d"
+      }
+    },
+    {
+      "name": "max-hlc",
+      "kind": "envelope",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "11111111-2222-4333-8444-555555555555",
+        "hlc": "ffffffffffff-ffff-ffffffff",
+        "origin": "ffffffff",
+        "secure": false,
+        "deleted": false,
+        "fields": {
+          "name": "Email signature",
+          "keyword": "sig",
+          "contentHex": "4265737420726567617264732c0a4d69636861656c0a",
+          "contentText": "Best regards,\nMichael\n",
+          "tags": ["Work", "mail"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c80cf540400000",
+            "swift": "807004800.5"
+          },
+          "updatedAt": {
+            "bits": "41c8377bf80fcd68",
+            "swift": "812578800.123456"
+          }
+        },
+        "x": {
+          "t": "object",
+          "v": []
+        },
+        "xCanonical": "{}",
+        "contentHash": "8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f",
+        "hashPreimageText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hlc\":\"ffffffffffff-ffff-ffffffff\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"ffffffff\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c22686c63223a226666666666666666666666662d666666662d6666666666666666222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226666666666666666222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+        "envelopeHash": "e687d6428684f73ae8c787635fdc594d3e0c83ef8d854dd5a6dfd02a3ff51522",
+        "rev": "e687d6428684f73ae8c787635fdc594d",
+        "canonicalText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"e687d6428684f73ae8c787635fdc594d3e0c83ef8d854dd5a6dfd02a3ff51522\",\"hlc\":\"ffffffffffff-ffff-ffffffff\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"ffffffff\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2265363837643634323836383466373361653863373837363335666463353934643365306338336566386438353464643561366466643032613366663531353232222c22686c63223a226666666666666666666666662d666666662d6666666666666666222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226666666666666666222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d"
+      }
+    },
+    {
+      "name": "constructor-normalises-origin-tags-and-strips-userDeletion",
+      "kind": "construct",
+      "inputOrigin": "AB-CD-EF-01-99",
+      "inputTags": ["  Work ", "work", "WÖRK", "two   words", "", "Two Words", "wörk"],
+      "inputX": "{\"userDeletion.v1\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\"]}",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "11111111-2222-4333-8444-555555555555",
+        "hlc": "019face339f4-0003-aabbccdd",
+        "origin": "abcdef01",
+        "secure": false,
+        "deleted": false,
+        "fields": {
+          "name": "  spaced  ",
+          "keyword": "\\kw",
+          "contentHex": "78",
+          "contentText": "x",
+          "tags": ["Work", "two words"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c80cf540400000",
+            "swift": "807004800.5"
+          },
+          "updatedAt": {
+            "bits": "41c8377bf80fcd68",
+            "swift": "812578800.123456"
+          }
+        },
+        "x": {
+          "t": "object",
+          "v": []
+        },
+        "xCanonical": "{}",
+        "contentHash": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+        "hashPreimageText": "{\"contentHash\":\"2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\",\"deleted\":false,\"fields\":{\"content\":\"x\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"\\\\kw\",\"name\":\"  spaced  \",\"tags\":[\"Work\",\"two words\"],\"updatedAt\":812578800.123456},\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"abcdef01\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a2232643731313634326237323662303434303136323763613966626163333266356338353330666231393033636334646230323235383731373932316134383831222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a2278222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a225c5c6b77222c226e616d65223a2220207370616365642020222c2274616773223a5b22576f726b222c2274776f20776f726473225d2c22757064617465644174223a3831323537383830302e3132333435367d2c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226162636465663031222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+        "envelopeHash": "2e752d7aa6a7c21a031bbc913d9de401f17b4fd3015c3f9ed3e62f0f8ebd3f7c",
+        "rev": "2e752d7aa6a7c21a031bbc913d9de401",
+        "canonicalText": "{\"contentHash\":\"2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\",\"deleted\":false,\"fields\":{\"content\":\"x\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"\\\\kw\",\"name\":\"  spaced  \",\"tags\":[\"Work\",\"two words\"],\"updatedAt\":812578800.123456},\"hash\":\"2e752d7aa6a7c21a031bbc913d9de401f17b4fd3015c3f9ed3e62f0f8ebd3f7c\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"abcdef01\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a2232643731313634326237323662303434303136323763613966626163333266356338353330666231393033636334646230323235383731373932316134383831222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a2278222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a225c5c6b77222c226e616d65223a2220207370616365642020222c2274616773223a5b22576f726b222c2274776f20776f726473225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2232653735326437616136613763323161303331626263393133643964653430316631376234666433303135633366396564336536326630663865626433663763222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226162636465663031222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d"
+      }
+    },
+    {
+      "name": "constructor-drops-fields-of-a-tombstone-and-pads-origin",
+      "kind": "construct",
+      "inputOrigin": "7",
+      "envelope": {
+        "schemaVersion": 1,
+        "id": "11111111-2222-4333-8444-555555555555",
+        "hlc": "019face339f4-0003-aabbccdd",
+        "origin": "00000007",
+        "secure": false,
+        "deleted": true,
+        "fields": null,
+        "x": {
+          "t": "object",
+          "v": []
+        },
+        "xCanonical": "{}",
+        "contentHash": null,
+        "hashPreimageText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"00000007\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "hashPreimageHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a223030303030303037222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+        "envelopeHash": "f67f23d7afe5d22b3d8864fa9365ab72cdb7ed035d2aeaa9dc4c4bfd4ed2e762",
+        "rev": "f67f23d7afe5d22b3d8864fa9365ab72",
+        "canonicalText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"f67f23d7afe5d22b3d8864fa9365ab72cdb7ed035d2aeaa9dc4c4bfd4ed2e762\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"00000007\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+        "canonicalHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2266363766323364376166653564323262336438383634666139333635616237326364623765643033356432616561613964633463346266643465643265373632222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a223030303030303037222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d"
+      }
+    },
+    {
+      "name": "parse-ok-canonical",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2237313162303536356639356163626436336230326563363537303637373839313032613538666562386134363434333661613064643862356138316538633531222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "ok": "711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51"
+    },
+    {
+      "name": "parse-ok-surrounding-whitespace",
+      "kind": "parse",
+      "inputText": " \n{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}\t\r\n",
+      "inputHex": "200a7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2237313162303536356639356163626436336230326563363537303637373839313032613538666562386134363434333661613064643862356138316538633531222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d090d0a",
+      "ok": "711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51"
+    },
+    {
+      "name": "parse-ok-tombstone",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"16b81621536f82a3c702c81229e423f2bce9359b788135444c98c27407dab52e\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1\"],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2231366238313632313533366638326133633730326338313232396534323366326263653933353962373838313335343434633938633237343037646162353265222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b2230613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061222c2266316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631225d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "ok": "16b81621536f82a3c702c81229e423f2bce9359b788135444c98c27407dab52e"
+    },
+    {
+      "name": "parse-ok-tombstone-keys-reordered",
+      "kind": "parse",
+      "inputText": "{\"x\":{\"userDeletion.v1\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1\"],\"vaultKID\":\"k-7f3a91c0-1b2\"},\"schemaVersion\":1,\"secure\":true,\"origin\":\"0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"hlc\":\"019face34000-0000-0badcafe\",\"hash\":\"16b81621536f82a3c702c81229e423f2bce9359b788135444c98c27407dab52e\",\"fields\":null,\"deleted\":true,\"contentHash\":null}",
+      "inputHex": "7b2278223a7b227573657244656c6574696f6e2e7631223a5b2230613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061222c2266316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631225d2c227661756c744b4944223a226b2d37663361393163302d316232227d2c22736368656d6156657273696f6e223a312c22736563757265223a747275652c226f726967696e223a223062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c2268617368223a2231366238313632313533366638326133633730326338313232396534323366326263653933353962373838313335343434633938633237343037646162353265222c226669656c6473223a6e756c6c2c2264656c65746564223a747275652c22636f6e74656e7448617368223a6e756c6c7d",
+      "ok": "16b81621536f82a3c702c81229e423f2bce9359b788135444c98c27407dab52e"
+    },
+    {
+      "name": "parse-not-json",
+      "kind": "parse",
+      "inputText": "not json",
+      "inputHex": "6e6f74206a736f6e",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-not-an-object",
+      "kind": "parse",
+      "inputText": "[]",
+      "inputHex": "5b5d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-trailing-bytes",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}{}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2237313162303536356639356163626436336230326563363537303637373839313032613538666562386134363434333661613064643862356138316538633531222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d7b7d",
+      "error": "CanonicalJSON.Failure.trailingBytes"
+    },
+    {
+      "name": "parse-too-new-schema-2",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"09c3d34a63fe9fc71c36c3e11b65fdb3ee99e07f80474add3c50bda77db32c39\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":2,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2230396333643334613633666539666337316333366333653131623635666462336565393965303766383034373461646433633530626461373764623332633339222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a322c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.tooNew"
+    },
+    {
+      "name": "parse-too-new-wins-over-unknown-key",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"future\":1,\"hash\":\"711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":99,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c22667574757265223a312c2268617368223a2237313162303536356639356163626436336230326563363537303637373839313032613538666562386134363434333661613064643862356138316538633531222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a39392c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.tooNew"
+    },
+    {
+      "name": "parse-schema-0-rehashed",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"2b717876b2e384e216799185a3c913f34a8b447fa9884d7cabdea3a0236a6c5e\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":0,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2232623731373837366232653338346532313637393931383561336339313366333461386234343766613938383464376361626465613361303233366136633565222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a302c22736563757265223a66616c73652c2278223a7b7d7d",
+      "ok": "2b717876b2e384e216799185a3c913f34a8b447fa9884d7cabdea3a0236a6c5e"
+    },
+    {
+      "name": "parse-schema-negative-rehashed",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"adcc70b64d88e3557f694c1f6ebdb5151597677434f724a64c5cc5dd68e8fdea\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":-1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2261646363373062363464383865333535376636393463316636656264623531353135393736373734333466373234613634633563633564643638653866646561222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a2d312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "ok": "adcc70b64d88e3557f694c1f6ebdb5151597677434f724a64c5cc5dd68e8fdea"
+    },
+    {
+      "name": "parse-schema-as-double",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"7496164015d7dacd83a3eccfac295c87f39138b69937648b8788c3ed8f834174\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1.0,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2237343936313634303135643764616364383361336563636661633239356338376633393133386236393933373634386238373838633365643866383334313734222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312e302c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-schema-as-string",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"6ea75a1deb13a23b811cf3bede38de37cfce006dec5c32045a7e15cdd804c575\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":\"1\",\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2236656137356131646562313361323362383131636633626564653338646533376366636530303664656335633332303435613765313563646438303463353735222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a2231222c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-schema-missing",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"0508bff22020f5edc055c94e247d26ad713204df0b90574e8df1366af35dca06\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2230353038626666323230323066356564633035356339346532343764323661643731333230346466306239303537346538646631333636616633356463613036222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-unknown-top-level-key",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"future\":1,\"hash\":\"756c176cb3e3e68a4fd9dee9cc774f922476b3758e98864befebc65ca9bed821\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c22667574757265223a312c2268617368223a2237353663313736636233653365363861346664396465653963633737346639323234373662333735386539383836346265666562633635636139626564383231222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-missing-x",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"35d604ff16b8ac9bb5f39b5a93eb83f34330363110032a6323307da19f8dd40e\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2233356436303466663136623861633962623566333962356139336562383366333433333033363331313030333261363332333330376461313966386464343065222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73657d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-x-not-object",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"4976d88506e92dc6d57b33cb170d2cc0fb60b924e749557248b641de6314dbd5\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":[]}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2234393736643838353036653932646336643537623333636231373064326363306662363062393234653734393535373234386236343164653633313464626435222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a5b5d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-id-uppercase-rehashed",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"fe74687ba3603359097cdd084ed0d53b84a240fdd6802ee06eaa7ba51886781d\",\"deleted\":false,\"fields\":{\"content\":\"v1.RERERERERERERERE.ZtbmZgnDVyQmIn-kq121aN21xDCY9NgpN1k6oldKFOMBjeOdrIcdTR5QcgEJpUKGf1PqHetH8J5GOYl5kUn8x8g7CXHaZX1hCxlB9v88j3nAr5Uilv9O6Lhk8l6RtOsbR1piPY_t-GWnrWYyrdVQJ9hjUYOxyrUAvjd_5HNv0UUZFtoVaO2HzS_BOC0oKNk3dJSsAUAwAjPDyszNCXh5-IdL4AxG4T9XhbWBaSSsDw8GLc5tFY6VIQnaR30VIuMzuLI1PM4iLgoFoCTv57C5B_UrouZfJi6RxBD60q4e1NcrY_ZRG929b4xDvu7bahW_6Y2BtbOrITWY9uuxa3ArJIYUM8CQdXBiyIYC7DOk67Q\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":true,\"keyword\":\"wifi\",\"name\":\"Wi-Fi password\",\"tags\":[\"home\"],\"updatedAt\":812578800.123456},\"hash\":\"7b5da2087b373cdc3becf77b96e8ac7da1c77eb98405008f039a05532341863b\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"A0B1C2D3-E4F5-4607-8899-AABBCCDDEEFF\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"vaultContentHash\":\"681386449739cff132c5ba8511a9f1bb\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2266653734363837626133363033333539303937636464303834656430643533623834613234306664643638303265653036656161376261353138383637383164222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a2276312e524552455245524552455245524552452e5a74626d5a676e445679516d496e2d6b71313231614e323178444359394e67704e316b366f6c644b464f4d426a654f6472496364545235516367454a70554b476631507148657448384a35474f596c356b556e3878386737435848615a58316843786c42397638386a336e41723555696c76394f364c686b386c3652744f73625231706950595f742d47576e72575979726456514a39686a55594f7879725541766a645f35484e763055555a46746f56614f32487a535f424f43306f4b4e6b33644a537341554177416a504479737a4e435868352d49644c34417847345439586862574261535373447738474c6335744659365649516e615233305649754d7a754c4931504d34694c676f466f43547635374335425f55726f755a664a6936527842443630713465314e6372595f5a524739323962347844767537626168575f3659324274624f724954575939757578613341724a4959554d384351645842697949594337444f6b363751222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a747275652c226b6579776f7264223a2277696669222c226e616d65223a2257692d46692070617373776f7264222c2274616773223a5b22686f6d65225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2237623564613230383762333733636463336265636637376239366538616337646131633737656239383430353030386630333961303535333233343138363362222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2241304231433244332d453446352d343630372d383839392d414142424343444445454646222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227661756c74436f6e74656e7448617368223a223638313338363434393733396366663133326335626138353131613966316262222c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "error": "SyncEnvelope.Failure.hashMismatch"
+    },
+    {
+      "name": "parse-id-not-uuid",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"f34aca1103519490f6b89e53ffb3d3ef82070d9d76d093f4d3c49b0cf8e3d3b8\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"not-a-uuid\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2266333461636131313033353139343930663662383965353366666233643365663832303730643964373664303933663464336334396230636638653364336238222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a226e6f742d612d75756964222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-id-without-hyphens",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"9c4c1b819830ffd99dc432dc0f5a475e8c6e4c4b60b402cfd0e6dc802949c31a\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111222243338444555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2239633463316238313938333066666439396463343332646330663561343735653863366534633462363062343032636664306536646338303239343963333161222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a223131313131313131323232323433333338343434353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-hlc-uppercase",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"e6ae39adaa9979eff24be5ebf8587051d803183e95fcee64982af198a0f8c6fb\",\"hlc\":\"019FACE339F4-0003-AABBCCDD\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2265366165333961646161393937396566663234626535656266383538373035316438303331383365393566636565363439383261663139386130663863366662222c22686c63223a223031394641434533333946342d303030332d4141424243434444222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-hlc-short",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"53027b009d32560d7db1e4e9e19015c660521f350f0595d93bd4830a1bf9abf1\",\"hlc\":\"19face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2235333032376230303964333235363064376462316534653965313930313563363630353231663335306630353935643933626434383330613162663961626631222c22686c63223a2231396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-origin-uppercase",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"1d5dbb652b7fbb5ac17f8983ee945c3e0d2e71853287b8650bdceb7695804d20\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"AABBCCDD\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2231643564626236353262376662623561633137663839383365653934356333653064326537313835333238376238363530626463656237363935383034643230222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a224141424243434444222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-origin-seven-characters",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"fcc1480ad2fd80af4e06c2a068b5d10c4048518744fb40a899a57afafd468372\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"abbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2266636331343830616432666438306166346530366332613036386235643130633430343835313837343466623430613839396135376166616664343638333732222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a2261626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-origin-differs-from-hlc-device",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"e2a9278bb9aabc912ee5e8f1e4e91eed77e0980bd340947ddc7bd7a8e80f64f0\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"12345678\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2265326139323738626239616162633931326565356538663165346539316565643737653039383062643334303934376464633762643761386538306636346630222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a223132333435363738222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "ok": "e2a9278bb9aabc912ee5e8f1e4e91eed77e0980bd340947ddc7bd7a8e80f64f0"
+    },
+    {
+      "name": "parse-secure-not-bool",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"3613d180d935b7620d7673ec5fe5ede07c23464fe60cd036658d5baa3fc6d8d7\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":0,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2233363133643138306439333562373632306437363733656335666535656465303763323334363466653630636430333636353864356261613366633664386437222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a302c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-hash-wrong",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.hashMismatch"
+    },
+    {
+      "name": "parse-hash-uppercase",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"711B0565F95ACBD63B02EC657067789102A58FEB8A464436AA0DD8B5A81E8C51\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2237313142303536354639354143424436334230324543363537303637373839313032413538464542384134363434333641413044443842354138314538433531222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.hashMismatch"
+    },
+    {
+      "name": "parse-hash-not-string",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":1,\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a312c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-content-hash-wrong-rehashed",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"ab521723045da3a57c0599beb3ac0d29257bf31c2fb8fdaf1669eafcfb28a34f\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2261623532313732333034356461336135376330353939626562336163306432393235376266333163326662386664616631363639656166636662323861333466222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.hashMismatch"
+    },
+    {
+      "name": "parse-content-hash-null-on-live-rehashed",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"184a52bdc3920a07802af29f65f4bc2f5992eb2b8e3d0c46c1cdc338ad83346c\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2231383461353262646333393230613037383032616632396636356634626332663539393265623262386533643063343663316364633333386164383333343663222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.hashMismatch"
+    },
+    {
+      "name": "parse-content-hash-missing",
+      "kind": "parse",
+      "inputText": "{\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"f23fc4d19aacdc0f73fd92e6adbcd5b14c92f08d16ee35fa328efde411ba4220\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2266323366633464313961616364633066373366643932653661646263643562313463393266303864313665653335666133323865666465343131626134323230222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-live-without-fields",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":false,\"fields\":null,\"hash\":\"28a82b3f6ea0dd16a04970c28493e1325c9055ca8118aa1f72797f0a77abf957\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a66616c73652c226669656c6473223a6e756c6c2c2268617368223a2232386138326233663665613064643136613034393730633238343933653133323563393035356361383131386161316637323739376630613737616266393537222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-tombstone-with-fields",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":true,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"727df2e22fa1e4011045964e4e76b6e3b25b2a44781f00554a6e363bceaa1fc3\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a747275652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2237323764663265323266613165343031313034353936346534653736623665336232356232613434373831663030353534613665333633626365616131666333222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-tombstone-with-content-hash",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"deleted\":true,\"fields\":null,\"hash\":\"5b045ee526a3df3fecd312150c022f3aaa56c9c6859f7203f41439992e7300b0\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\",\"f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1\"],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030222c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2235623034356565353236613364663366656364333132313530633032326633616161353663396336383539663732303366343134333939393265373330306230222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b2230613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061306130613061222c2266316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631663166316631225d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-fields-unknown-key",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"color\":\"red\",\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"92de86da862cc1388868af1a4e7e1b8cfe3c9203b83e97e8f86b79d12585db58\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6c6f72223a22726564222c22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2239326465383664613836326363313338383836386166316134653765316238636665336339323033623833653937653866383662373964313235383564623538222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-fields-missing-key",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"25a37775ec423ddc0c1a710bbe1c21418ff1fcecf1ba126a49804c3d2e4e8bb1\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2232356133373737356563343233646463306331613731306262653163323134313866663166636563663162613132366134393830346333643265346538626231222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-fields-name-not-string",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":1,\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"c47bd236bca77bf910b03d6b69e8c602ffd520559fceef93ad37d3821a81be55\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a312c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2263343762643233366263613737626639313062303364366236396538633630326666643532303535396663656566393361643337643338323161383162653535222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-fields-tags-not-strings",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[1],\"updatedAt\":812578800.123456},\"hash\":\"5419d3f0bf0f836e366690d484d3efc7800aa69327e15cd2b1369ce1f4a585f0\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b315d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2235343139643366306266306638333665333636363930643438346433656663373830306161363933323765313563643262313336396365316634613538356630222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-fields-flag-as-int",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":1,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"6b9173d80fcc6ac2ea2cfafb0156da9fdbbc38b6589dd7c18f3a60d29e29836a\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a312c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2236623931373364383066636336616332656132636661666230313536646139666462626333386236353839646437633138663361363064323965323938333661222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-fields-date-as-string",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":\"2026-07-29T08:00:00Z\",\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"907b14056910e4e75ffc3ae124a2a3365718fc003f76a1968232458bab32c701\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a22323032362d30372d32395430383a30303a30305a222c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2239303762313430353639313065346537356666633361653132346132613333363537313866633030336637366131393638323332343538626162333263373031222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-fields-date-int-token-hash-over-int-form",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"231f7bd28e84414e39d1de08d012ce414a779ad6919c6953f7edd4fff240ee61\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2232333166376264323865383434313465333964316465303864303132636534313461373739616436393139633639353366376564643466666632343065653631222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.hashMismatch"
+    },
+    {
+      "name": "parse-fields-tags-not-normalised-rehashed",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"  Work \",\"work\",\"\"],\"updatedAt\":812578800.123456},\"hash\":\"677f4b9b5ad633a15df9f4eb35c7a32f0bf08a136c3f90e3700fb1b365f708b0\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b222020576f726b20222c22776f726b222c22225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2236373766346239623561643633336131356466396634656233356337613332663062663038613133366333663930653337303066623162333635663730386230222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "ok": "677f4b9b5ad633a15df9f4eb35c7a32f0bf08a136c3f90e3700fb1b365f708b0"
+    },
+    {
+      "name": "parse-fields-content-changed-content-hash-stale",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"other\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"bc390156d9d03d3f0b1a66195062e2a2771c90c33075131f2707e9538ffa20a3\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a226f74686572222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2262633339303135366439643033643366306231613636313935303632653261323737316339306333333037353133316632373037653935333866666132306133222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "error": "SyncEnvelope.Failure.hashMismatch"
+    },
+    {
+      "name": "parse-user-deletion-on-live-record",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"5171156f00a0444e1ad855b77fbc36680500ebab4ffe61775f5bf8814ea21b90\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{\"userDeletion.v1\":[\"0000000000000000000000000000000000000000000000000000000000000001\"]}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a3830373030343830302e352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2235313731313536663030613034343465316164383535623737666263333636383035303065626162346666653631373735663562663838313465613231623930222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b227573657244656c6574696f6e2e7631223a5b2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303031225d7d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-fields-date-int-token-hash-over-double-form",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"f9cf7348ff91c7c5df7d09704f64be0a8c7bb8ee187d7bfbaeffb8d9b5398341\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "inputHex": "7b22636f6e74656e7448617368223a2238613137316432303166633232336631396265643239336163333961663338313339623639663134363939633736643562366232356632623131653065343466222c2264656c65746564223a66616c73652c226669656c6473223a7b22636f6e74656e74223a224265737420726567617264732c5c6e4d69636861656c5c6e222c22637265617465644174223a352c226973456e61626c6564223a747275652c22697350696e6e6564223a66616c73652c226b6579776f7264223a22736967222c226e616d65223a22456d61696c207369676e6174757265222c2274616773223a5b22576f726b222c226d61696c225d2c22757064617465644174223a3831323537383830302e3132333435367d2c2268617368223a2266396366373334386666393163376335646637643039373034663634626530613863376262386565313837643762666261656666623864396235333938333431222c22686c63223a223031396661636533333966342d303030332d6161626263636464222c226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226f726967696e223a226161626263636464222c22736368656d6156657273696f6e223a312c22736563757265223a66616c73652c2278223a7b7d7d",
+      "ok": "f9cf7348ff91c7c5df7d09704f64be0a8c7bb8ee187d7bfbaeffb8d9b5398341"
+    },
+    {
+      "name": "parse-user-deletion-eight-hashes",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"d35fd9d5b157cc2ac2fc3d1e3292576915fa6c4e9b74602d395f37dc8e897a14\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[\"0000000000000000000000000000000000000000000000000000000000000001\",\"0000000000000000000000000000000000000000000000000000000000000002\",\"0000000000000000000000000000000000000000000000000000000000000003\",\"0000000000000000000000000000000000000000000000000000000000000004\",\"0000000000000000000000000000000000000000000000000000000000000005\",\"0000000000000000000000000000000000000000000000000000000000000006\",\"0000000000000000000000000000000000000000000000000000000000000007\",\"0000000000000000000000000000000000000000000000000000000000000008\"],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2264333566643964356231353763633261633266633364316533323932353736393135666136633465396237343630326433393566333764633865383937613134222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303031222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303032222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303033222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303034222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303035222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303036222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303037222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303038225d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "ok": "d35fd9d5b157cc2ac2fc3d1e3292576915fa6c4e9b74602d395f37dc8e897a14"
+    },
+    {
+      "name": "parse-user-deletion-nine-hashes",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"e6131565d805a95bf7f210aadabc1417a8b79bddbc15b4dfcfdaf05394391a26\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[\"0000000000000000000000000000000000000000000000000000000000000001\",\"0000000000000000000000000000000000000000000000000000000000000002\",\"0000000000000000000000000000000000000000000000000000000000000003\",\"0000000000000000000000000000000000000000000000000000000000000004\",\"0000000000000000000000000000000000000000000000000000000000000005\",\"0000000000000000000000000000000000000000000000000000000000000006\",\"0000000000000000000000000000000000000000000000000000000000000007\",\"0000000000000000000000000000000000000000000000000000000000000008\",\"0000000000000000000000000000000000000000000000000000000000000009\"],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2265363133313536356438303561393562663766323130616164616263313431376138623739626464626331356234646663666461663035333934333931613236222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303031222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303032222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303033222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303034222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303035222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303036222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303037222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303038222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303039225d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-user-deletion-empty",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"f74cf5cf4b3b3adf73926621ef95e2aa4405563c3c56856eac615ab6252aa326\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2266373463663563663462336233616466373339323636323165663935653261613434303535363363336335363835366561633631356162363235326161333236222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b5d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-user-deletion-duplicate",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"5a116ee04dbf3b30267bfbdc5d203481fcd74e99167edd6ca1c0bfaceeea7678\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[\"0000000000000000000000000000000000000000000000000000000000000001\",\"0000000000000000000000000000000000000000000000000000000000000001\"],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2235613131366565303464626633623330323637626662646335643230333438316663643734653939313637656464366361316330626661636565656137363738222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303031222c2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303031225d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-user-deletion-uppercase-hash",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"2326478fe0996f9a4f0bbfc69b104ab9d5b4b543a4873d78a412f5a99a019c7a\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[\"ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB\"],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2232333236343738666530393936663961346630626266633639623130346162396435623462353433613438373364373861343132663561393961303139633761222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b2241424142414241424142414241424142414241424142414241424142414241424142414241424142414241424142414241424142414241424142414241424142225d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-user-deletion-short-hash",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"a19674b21f1ad9a2c532d188aa3dbfd95d4b2969a450e1833d60c7b1758a0d03\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[\"abcd\"],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2261313936373462323166316164396132633533326431383861613364626664393564346232393639613435306531383333643630633762313735386130643033222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b2261626364225d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-user-deletion-not-array",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"d0c3067cac79442c208a91125ea1ba973f060603282a9dc2711190686843b0a1\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":\"0000000000000000000000000000000000000000000000000000000000000001\",\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2264306333303637636163373934343263323038613931313235656131626139373366303630363033323832613964633237313131393036383638343362306131222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303031222c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    },
+    {
+      "name": "parse-user-deletion-non-string-member",
+      "kind": "parse",
+      "inputText": "{\"contentHash\":null,\"deleted\":true,\"fields\":null,\"hash\":\"4f58ec1416d95d03922d5b9a96d7d5dafa922477ad3253bb31802797c34243c6\",\"hlc\":\"019face34000-0000-0badcafe\",\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"origin\":\"0badcafe\",\"schemaVersion\":1,\"secure\":true,\"x\":{\"userDeletion.v1\":[\"0000000000000000000000000000000000000000000000000000000000000001\",1],\"vaultKID\":\"k-7f3a91c0-1b2\"}}",
+      "inputHex": "7b22636f6e74656e7448617368223a6e756c6c2c2264656c65746564223a747275652c226669656c6473223a6e756c6c2c2268617368223a2234663538656331343136643935643033393232643562396139366437643564616661393232343737616433323533626233313830323739376333343234336336222c22686c63223a223031396661636533343030302d303030302d3062616463616665222c226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226f726967696e223a223062616463616665222c22736368656d6156657273696f6e223a312c22736563757265223a747275652c2278223a7b227573657244656c6574696f6e2e7631223a5b2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303031222c315d2c227661756c744b4944223a226b2d37663361393163302d316232227d7d",
+      "error": "SyncEnvelope.Failure.malformed"
+    }
+  ]
+}

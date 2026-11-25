@@ -1,0 +1,2402 @@
+{
+  "format": "snippets-swift-interop/V10-canonical-json/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "CanonicalJSON.data (emitter, including Double.description) and CanonicalJSON.value (parser) (brief 02 §2.9, hazards H1, H4, H5)",
+  "notes": ["`value` is a typed tree: t = null|bool|int|double|string|utf8|array|object. Object members are listed in canonical (UTF-8 byte) order; `int` is a decimal string; `double` carries the IEEE-754 bits.", "The parser returns every string as bytes (t = utf8).", "Failure payloads (byte offsets, the duplicated key) are not recorded."],
+  "cases": [
+    {
+      "name": "emit-null",
+      "kind": "emit",
+      "value": {
+        "t": "null"
+      },
+      "canonicalText": "null",
+      "canonicalHex": "6e756c6c"
+    },
+    {
+      "name": "emit-true",
+      "kind": "emit",
+      "value": {
+        "t": "bool",
+        "v": true
+      },
+      "canonicalText": "true",
+      "canonicalHex": "74727565"
+    },
+    {
+      "name": "emit-false",
+      "kind": "emit",
+      "value": {
+        "t": "bool",
+        "v": false
+      },
+      "canonicalText": "false",
+      "canonicalHex": "66616c7365"
+    },
+    {
+      "name": "emit-empty-object",
+      "kind": "emit",
+      "value": {
+        "t": "object",
+        "v": []
+      },
+      "canonicalText": "{}",
+      "canonicalHex": "7b7d"
+    },
+    {
+      "name": "emit-empty-array",
+      "kind": "emit",
+      "value": {
+        "t": "array",
+        "v": []
+      },
+      "canonicalText": "[]",
+      "canonicalHex": "5b5d"
+    },
+    {
+      "name": "emit-empty-string",
+      "kind": "emit",
+      "value": {
+        "t": "string",
+        "v": "",
+        "utf8Hex": ""
+      },
+      "canonicalText": "\"\"",
+      "canonicalHex": "2222"
+    },
+    {
+      "name": "emit-swift-test-literal",
+      "kind": "emit",
+      "value": {
+        "t": "object",
+        "v": [
+          {
+            "k": "A",
+            "kHex": "41",
+            "v": {
+              "t": "null"
+            }
+          },
+          {
+            "k": "a",
+            "kHex": "61",
+            "v": {
+              "t": "string",
+              "v": "x",
+              "utf8Hex": "78"
+            }
+          },
+          {
+            "k": "b",
+            "kHex": "62",
+            "v": {
+              "t": "int",
+              "v": "2"
+            }
+          },
+          {
+            "k": "ä",
+            "kHex": "c3a4",
+            "v": {
+              "t": "bool",
+              "v": true
+            }
+          }
+        ]
+      },
+      "canonicalText": "{\"A\":null,\"a\":\"x\",\"b\":2,\"ä\":true}",
+      "canonicalHex": "7b2241223a6e756c6c2c2261223a2278222c2262223a322c22c3a4223a747275657d"
+    },
+    {
+      "name": "emit-key-order-utf8-not-utf16",
+      "kind": "emit",
+      "value": {
+        "t": "object",
+        "v": [
+          {
+            "k": "",
+            "kHex": "",
+            "v": {
+              "t": "int",
+              "v": "6"
+            }
+          },
+          {
+            "k": "A",
+            "kHex": "41",
+            "v": {
+              "t": "int",
+              "v": "9"
+            }
+          },
+          {
+            "k": "a",
+            "kHex": "61",
+            "v": {
+              "t": "int",
+              "v": "7"
+            }
+          },
+          {
+            "k": "a\u0000",
+            "kHex": "6100",
+            "v": {
+              "t": "int",
+              "v": "12"
+            }
+          },
+          {
+            "k": "aa",
+            "kHex": "6161",
+            "v": {
+              "t": "int",
+              "v": "8"
+            }
+          },
+          {
+            "k": "z",
+            "kHex": "7a",
+            "v": {
+              "t": "int",
+              "v": "5"
+            }
+          },
+          {
+            "k": "\u007f",
+            "kHex": "7f",
+            "v": {
+              "t": "int",
+              "v": "11"
+            }
+          },
+          {
+            "k": "é",
+            "kHex": "c3a9",
+            "v": {
+              "t": "int",
+              "v": "10"
+            }
+          },
+          {
+            "k": "",
+            "kHex": "ee8080",
+            "v": {
+              "t": "int",
+              "v": "3"
+            }
+          },
+          {
+            "k": "\ufffd",
+            "kHex": "efbfbd",
+            "v": {
+              "t": "int",
+              "v": "1"
+            }
+          },
+          {
+            "k": "𐀀",
+            "kHex": "f0908080",
+            "v": {
+              "t": "int",
+              "v": "2"
+            }
+          },
+          {
+            "k": "🔑",
+            "kHex": "f09f9491",
+            "v": {
+              "t": "int",
+              "v": "4"
+            }
+          }
+        ]
+      },
+      "canonicalText": "{\"\":6,\"A\":9,\"a\":7,\"a\\u0000\":12,\"aa\":8,\"z\":5,\"\u007f\":11,\"é\":10,\"\":3,\"\ufffd\":1,\"𐀀\":2,\"🔑\":4}",
+      "canonicalHex": "7b22223a362c2241223a392c2261223a372c22615c7530303030223a31322c226161223a382c227a223a352c227f223a31312c22c3a9223a31302c22ee8080223a332c22efbfbd223a312c22f0908080223a322c22f09f9491223a347d"
+    },
+    {
+      "name": "emit-every-c0-control",
+      "kind": "emit",
+      "value": {
+        "t": "string",
+        "v": "\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f",
+        "utf8Hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      },
+      "canonicalText": "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\"",
+      "canonicalHex": "225c75303030305c75303030315c75303030325c75303030335c75303030345c75303030355c75303030365c75303030375c625c745c6e5c75303030625c665c725c75303030655c75303030665c75303031305c75303031315c75303031325c75303031335c75303031345c75303031355c75303031365c75303031375c75303031385c75303031395c75303031615c75303031625c75303031635c75303031645c75303031655c753030316622"
+    },
+    {
+      "name": "emit-quote-backslash-slash",
+      "kind": "emit",
+      "value": {
+        "t": "string",
+        "v": "\"\\/",
+        "utf8Hex": "225c2f"
+      },
+      "canonicalText": "\"\\\"\\\\/\"",
+      "canonicalHex": "225c225c5c2f22"
+    },
+    {
+      "name": "emit-del-and-line-separators",
+      "kind": "emit",
+      "value": {
+        "t": "string",
+        "v": "\u007f\u0080\u2028\u2029\ufeff",
+        "utf8Hex": "7fc280e280a8e280a9efbbbf"
+      },
+      "canonicalText": "\"\u007f\u0080\u2028\u2029\ufeff\"",
+      "canonicalHex": "227fc280e280a8e280a9efbbbf22"
+    },
+    {
+      "name": "emit-non-ascii-raw",
+      "kind": "emit",
+      "value": {
+        "t": "string",
+        "v": "Café ☕ 日本語 🔑 é",
+        "utf8Hex": "436166c3a920e2989520e697a5e69cace8aa9e20f09f94912065cc81"
+      },
+      "canonicalText": "\"Café ☕ 日本語 🔑 é\"",
+      "canonicalHex": "22436166c3a920e2989520e697a5e69cace8aa9e20f09f94912065cc8122"
+    },
+    {
+      "name": "emit-utf8-bytes-value",
+      "kind": "emit",
+      "value": {
+        "t": "utf8",
+        "hex": "627974657320e29c930a"
+      },
+      "canonicalText": "\"bytes ✓\\n\"",
+      "canonicalHex": "22627974657320e29c935c6e22"
+    },
+    {
+      "name": "emit-escapes-in-keys",
+      "kind": "emit",
+      "value": {
+        "t": "object",
+        "v": [
+          {
+            "k": "a\u0001b",
+            "kHex": "610162",
+            "v": {
+              "t": "int",
+              "v": "4"
+            }
+          },
+          {
+            "k": "a\nb",
+            "kHex": "610a62",
+            "v": {
+              "t": "int",
+              "v": "3"
+            }
+          },
+          {
+            "k": "a\"b",
+            "kHex": "612262",
+            "v": {
+              "t": "int",
+              "v": "1"
+            }
+          },
+          {
+            "k": "a\\b",
+            "kHex": "615c62",
+            "v": {
+              "t": "int",
+              "v": "2"
+            }
+          }
+        ]
+      },
+      "canonicalText": "{\"a\\u0001b\":4,\"a\\nb\":3,\"a\\\"b\":1,\"a\\\\b\":2}",
+      "canonicalHex": "7b22615c753030303162223a342c22615c6e62223a332c22615c2262223a312c22615c5c62223a327d"
+    },
+    {
+      "name": "emit-int-zero",
+      "kind": "emit",
+      "value": {
+        "t": "int",
+        "v": "0"
+      },
+      "canonicalText": "0",
+      "canonicalHex": "30"
+    },
+    {
+      "name": "emit-int-minus-one",
+      "kind": "emit",
+      "value": {
+        "t": "int",
+        "v": "-1"
+      },
+      "canonicalText": "-1",
+      "canonicalHex": "2d31"
+    },
+    {
+      "name": "emit-int-max",
+      "kind": "emit",
+      "value": {
+        "t": "int",
+        "v": "9223372036854775807"
+      },
+      "canonicalText": "9223372036854775807",
+      "canonicalHex": "39323233333732303336383534373735383037"
+    },
+    {
+      "name": "emit-int-min",
+      "kind": "emit",
+      "value": {
+        "t": "int",
+        "v": "-9223372036854775808"
+      },
+      "canonicalText": "-9223372036854775808",
+      "canonicalHex": "2d39323233333732303336383534373735383038"
+    },
+    {
+      "name": "emit-int-vs-double-one",
+      "kind": "emit",
+      "value": {
+        "t": "array",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "double",
+            "bits": "3ff0000000000000",
+            "swift": "1.0"
+          }
+        ]
+      },
+      "canonicalText": "[1,1.0]",
+      "canonicalHex": "5b312c312e305d"
+    },
+    {
+      "name": "emit-nested",
+      "kind": "emit",
+      "value": {
+        "t": "object",
+        "v": [
+          {
+            "k": "list",
+            "kHex": "6c697374",
+            "v": {
+              "t": "array",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "3"
+                },
+                {
+                  "t": "string",
+                  "v": "2",
+                  "utf8Hex": "32"
+                },
+                {
+                  "t": "double",
+                  "bits": "3ff8000000000000",
+                  "swift": "1.5"
+                },
+                {
+                  "t": "array",
+                  "v": [
+                    {
+                      "t": "array",
+                      "v": []
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "k": "x",
+            "kHex": "78",
+            "v": {
+              "t": "object",
+              "v": [
+                {
+                  "k": "y",
+                  "kHex": "79",
+                  "v": {
+                    "t": "array",
+                    "v": [
+                      {
+                        "t": "object",
+                        "v": [
+                          {
+                            "k": "z",
+                            "kHex": "7a",
+                            "v": {
+                              "t": "array",
+                              "v": []
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "t": "null"
+                      },
+                      {
+                        "t": "bool",
+                        "v": false
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "canonicalText": "{\"list\":[3,\"2\",1.5,[[]]],\"x\":{\"y\":[{\"z\":[]},null,false]}}",
+      "canonicalHex": "7b226c697374223a5b332c2232222c312e352c5b5b5d5d5d2c2278223a7b2279223a5b7b227a223a5b5d7d2c6e756c6c2c66616c73655d7d7d"
+    },
+    {
+      "name": "emit-array-keeps-order",
+      "kind": "emit",
+      "value": {
+        "t": "array",
+        "v": [
+          {
+            "t": "string",
+            "v": "b",
+            "utf8Hex": "62"
+          },
+          {
+            "t": "string",
+            "v": "a",
+            "utf8Hex": "61"
+          },
+          {
+            "t": "string",
+            "v": "c",
+            "utf8Hex": "63"
+          }
+        ]
+      },
+      "canonicalText": "[\"b\",\"a\",\"c\"]",
+      "canonicalHex": "5b2262222c2261222c2263225d"
+    },
+    {
+      "name": "double-0000000000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "0000000000000000",
+        "swift": "0.0"
+      },
+      "canonicalText": "0.0"
+    },
+    {
+      "name": "double-8000000000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "8000000000000000",
+        "swift": "-0.0"
+      },
+      "canonicalText": "-0.0"
+    },
+    {
+      "name": "double-3ff0000000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3ff0000000000000",
+        "swift": "1.0"
+      },
+      "canonicalText": "1.0"
+    },
+    {
+      "name": "double-bff0000000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "bff0000000000000",
+        "swift": "-1.0"
+      },
+      "canonicalText": "-1.0"
+    },
+    {
+      "name": "double-3fb999999999999a",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3fb999999999999a",
+        "swift": "0.1"
+      },
+      "canonicalText": "0.1"
+    },
+    {
+      "name": "double-3fe0000000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3fe0000000000000",
+        "swift": "0.5"
+      },
+      "canonicalText": "0.5"
+    },
+    {
+      "name": "double-3ff8000000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3ff8000000000000",
+        "swift": "1.5"
+      },
+      "canonicalText": "1.5"
+    },
+    {
+      "name": "double-405ed00000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "405ed00000000000",
+        "swift": "123.25"
+      },
+      "canonicalText": "123.25"
+    },
+    {
+      "name": "double-3f1a36e2eb1c432d",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3f1a36e2eb1c432d",
+        "swift": "0.0001"
+      },
+      "canonicalText": "0.0001"
+    },
+    {
+      "name": "double-3ee4f8b588e368f1",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3ee4f8b588e368f1",
+        "swift": "1e-05"
+      },
+      "canonicalText": "1e-05"
+    },
+    {
+      "name": "double-3de49da7e361ce4c",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3de49da7e361ce4c",
+        "swift": "1.5e-10"
+      },
+      "canonicalText": "1.5e-10"
+    },
+    {
+      "name": "double-bde49da7e361ce4c",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "bde49da7e361ce4c",
+        "swift": "-1.5e-10"
+      },
+      "canonicalText": "-1.5e-10"
+    },
+    {
+      "name": "double-4059000000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "4059000000000000",
+        "swift": "100.0"
+      },
+      "canonicalText": "100.0"
+    },
+    {
+      "name": "double-430c6bf526340000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "430c6bf526340000",
+        "swift": "1000000000000000.0"
+      },
+      "canonicalText": "1000000000000000.0"
+    },
+    {
+      "name": "double-4341c37937e08000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "4341c37937e08000",
+        "swift": "1e+16"
+      },
+      "canonicalText": "1e+16"
+    },
+    {
+      "name": "double-4376345785d8a000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "4376345785d8a000",
+        "swift": "1e+17"
+      },
+      "canonicalText": "1e+17"
+    },
+    {
+      "name": "double-444b1ae4d6e2ef50",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "444b1ae4d6e2ef50",
+        "swift": "1e+21"
+      },
+      "canonicalText": "1e+21"
+    },
+    {
+      "name": "double-4480f0cf064dd592",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "4480f0cf064dd592",
+        "swift": "1e+22"
+      },
+      "canonicalText": "1e+22"
+    },
+    {
+      "name": "double-44b52d02c7e14af6",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "44b52d02c7e14af6",
+        "swift": "1e+23"
+      },
+      "canonicalText": "1e+23"
+    },
+    {
+      "name": "double-433fffffffffffff",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "433fffffffffffff",
+        "swift": "9007199254740991.0"
+      },
+      "canonicalText": "9007199254740991.0"
+    },
+    {
+      "name": "double-4340000000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "4340000000000000",
+        "swift": "9007199254740992.0"
+      },
+      "canonicalText": "9007199254740992.0"
+    },
+    {
+      "name": "double-4340000000000001",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "4340000000000001",
+        "swift": "9.007199254740994e+15"
+      },
+      "canonicalText": "9.007199254740994e+15"
+    },
+    {
+      "name": "double-4330000000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "4330000000000000",
+        "swift": "4503599627370496.0"
+      },
+      "canonicalText": "4503599627370496.0"
+    },
+    {
+      "name": "double-3fd3333333333334",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3fd3333333333334",
+        "swift": "0.30000000000000004"
+      },
+      "canonicalText": "0.30000000000000004"
+    },
+    {
+      "name": "double-3fd5555555555555",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3fd5555555555555",
+        "swift": "0.3333333333333333"
+      },
+      "canonicalText": "0.3333333333333333"
+    },
+    {
+      "name": "double-41c8377bf80fcd68",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "41c8377bf80fcd68",
+        "swift": "812578800.123456"
+      },
+      "canonicalText": "812578800.123456"
+    },
+    {
+      "name": "double-41c80cf540400000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "41c80cf540400000",
+        "swift": "807004800.5"
+      },
+      "canonicalText": "807004800.5"
+    },
+    {
+      "name": "double-41c8377bf8000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "41c8377bf8000000",
+        "swift": "812578800.0"
+      },
+      "canonicalText": "812578800.0"
+    },
+    {
+      "name": "double-c22d63c8c5000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "c22d63c8c5000000",
+        "swift": "-63114076800.0"
+      },
+      "canonicalText": "-63114076800.0"
+    },
+    {
+      "name": "double-422dd86310000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "422dd86310000000",
+        "swift": "64092211200.0"
+      },
+      "canonicalText": "64092211200.0"
+    },
+    {
+      "name": "double-0000000000000001",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "0000000000000001",
+        "swift": "5e-324"
+      },
+      "canonicalText": "5e-324"
+    },
+    {
+      "name": "double-0010000000000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "0010000000000000",
+        "swift": "2.2250738585072014e-308"
+      },
+      "canonicalText": "2.2250738585072014e-308"
+    },
+    {
+      "name": "double-000fffffffffffff",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "000fffffffffffff",
+        "swift": "2.225073858507201e-308"
+      },
+      "canonicalText": "2.225073858507201e-308"
+    },
+    {
+      "name": "double-7fefffffffffffff",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "7fefffffffffffff",
+        "swift": "1.7976931348623157e+308"
+      },
+      "canonicalText": "1.7976931348623157e+308"
+    },
+    {
+      "name": "double-437b69b4ba630f35",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "437b69b4ba630f35",
+        "swift": "1.2345678901234568e+17"
+      },
+      "canonicalText": "1.2345678901234568e+17"
+    },
+    {
+      "name": "double-3f202e85be111841",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3f202e85be111841",
+        "swift": "0.000123456789"
+      },
+      "canonicalText": "0.000123456789"
+    },
+    {
+      "name": "double-4132d68700000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "4132d68700000000",
+        "swift": "1234567.0"
+      },
+      "canonicalText": "1234567.0"
+    },
+    {
+      "name": "double-41678c29dccccccd",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "41678c29dccccccd",
+        "swift": "12345678.9"
+      },
+      "canonicalText": "12345678.9"
+    },
+    {
+      "name": "double-4011666666666666",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "4011666666666666",
+        "swift": "4.35"
+      },
+      "canonicalText": "4.35"
+    },
+    {
+      "name": "double-4005666666666666",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "4005666666666666",
+        "swift": "2.675"
+      },
+      "canonicalText": "2.675"
+    },
+    {
+      "name": "double-41b1de784a000000",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "41b1de784a000000",
+        "swift": "299792458.0"
+      },
+      "canonicalText": "299792458.0"
+    },
+    {
+      "name": "double-44dfe185ca57c517",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "44dfe185ca57c517",
+        "swift": "6.02214076e+23"
+      },
+      "canonicalText": "6.02214076e+23"
+    },
+    {
+      "name": "double-3e7ad7f29abcaf48",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "3e7ad7f29abcaf48",
+        "swift": "1e-07"
+      },
+      "canonicalText": "1e-07"
+    },
+    {
+      "name": "emit-nan",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "7ff8000000000000"
+      },
+      "error": "CanonicalJSON.Failure.nonFiniteNumber"
+    },
+    {
+      "name": "emit-infinity",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "7ff0000000000000"
+      },
+      "error": "CanonicalJSON.Failure.nonFiniteNumber"
+    },
+    {
+      "name": "emit-negative-infinity",
+      "kind": "emit",
+      "value": {
+        "t": "double",
+        "bits": "fff0000000000000"
+      },
+      "error": "CanonicalJSON.Failure.nonFiniteNumber"
+    },
+    {
+      "name": "emit-utf8-lone-0xff",
+      "kind": "emit",
+      "value": {
+        "t": "utf8",
+        "hex": "ff"
+      },
+      "error": "CanonicalJSON.Failure.invalidUTF8"
+    },
+    {
+      "name": "emit-utf8-overlong-nul",
+      "kind": "emit",
+      "value": {
+        "t": "utf8",
+        "hex": "c080"
+      },
+      "error": "CanonicalJSON.Failure.invalidUTF8"
+    },
+    {
+      "name": "emit-utf8-overlong-slash",
+      "kind": "emit",
+      "value": {
+        "t": "utf8",
+        "hex": "e080af"
+      },
+      "error": "CanonicalJSON.Failure.invalidUTF8"
+    },
+    {
+      "name": "emit-utf8-surrogate-d800",
+      "kind": "emit",
+      "value": {
+        "t": "utf8",
+        "hex": "eda080"
+      },
+      "error": "CanonicalJSON.Failure.invalidUTF8"
+    },
+    {
+      "name": "emit-utf8-above-10ffff",
+      "kind": "emit",
+      "value": {
+        "t": "utf8",
+        "hex": "f4908080"
+      },
+      "error": "CanonicalJSON.Failure.invalidUTF8"
+    },
+    {
+      "name": "emit-utf8-truncated",
+      "kind": "emit",
+      "value": {
+        "t": "utf8",
+        "hex": "e282"
+      },
+      "error": "CanonicalJSON.Failure.invalidUTF8"
+    },
+    {
+      "name": "emit-utf8-stray-continuation",
+      "kind": "emit",
+      "value": {
+        "t": "utf8",
+        "hex": "4180"
+      },
+      "error": "CanonicalJSON.Failure.invalidUTF8"
+    },
+    {
+      "name": "emit-utf8-max-scalar-ok",
+      "kind": "emit",
+      "value": {
+        "t": "utf8",
+        "hex": "f48fbfbf"
+      },
+      "ok": "22f48fbfbf22"
+    },
+    {
+      "name": "emit-utf8-ed-9f-bf-ok",
+      "kind": "emit",
+      "value": {
+        "t": "utf8",
+        "hex": "ed9fbf"
+      },
+      "ok": "22ed9fbf22"
+    },
+    {
+      "name": "emit-nested-nan",
+      "kind": "emit",
+      "value": {
+        "t": "object",
+        "v": [
+          {
+            "k": "a",
+            "kHex": "61",
+            "v": {
+              "t": "array",
+              "v": [
+                {
+                  "t": "double",
+                  "bits": "7ff8000000000000",
+                  "swift": "nan"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "error": "CanonicalJSON.Failure.nonFiniteNumber"
+    },
+    {
+      "name": "parse-canonical-object",
+      "kind": "parse",
+      "inputHex": "7b2241223a6e756c6c2c2261223a2278222c2262223a322c22c3a4223a747275657d",
+      "inputText": "{\"A\":null,\"a\":\"x\",\"b\":2,\"ä\":true}",
+      "parsed": {
+        "t": "object",
+        "v": [
+          {
+            "k": "A",
+            "kHex": "41",
+            "v": {
+              "t": "null"
+            }
+          },
+          {
+            "k": "a",
+            "kHex": "61",
+            "v": {
+              "t": "utf8",
+              "hex": "78"
+            }
+          },
+          {
+            "k": "b",
+            "kHex": "62",
+            "v": {
+              "t": "int",
+              "v": "2"
+            }
+          },
+          {
+            "k": "ä",
+            "kHex": "c3a4",
+            "v": {
+              "t": "bool",
+              "v": true
+            }
+          }
+        ]
+      },
+      "reemittedText": "{\"A\":null,\"a\":\"x\",\"b\":2,\"ä\":true}",
+      "reemittedHex": "7b2241223a6e756c6c2c2261223a2278222c2262223a322c22c3a4223a747275657d"
+    },
+    {
+      "name": "parse-whitespace-everywhere",
+      "kind": "parse",
+      "inputHex": "20090d0a7b20226122203a095b2031202c2032205d0a2c0d226222203a207b207d207d200a",
+      "inputText": " \t\r\n{ \"a\" :\t[ 1 , 2 ]\n,\r\"b\" : { } } \n",
+      "parsed": {
+        "t": "object",
+        "v": [
+          {
+            "k": "a",
+            "kHex": "61",
+            "v": {
+              "t": "array",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ]
+            }
+          },
+          {
+            "k": "b",
+            "kHex": "62",
+            "v": {
+              "t": "object",
+              "v": []
+            }
+          }
+        ]
+      },
+      "reemittedText": "{\"a\":[1,2],\"b\":{}}",
+      "reemittedHex": "7b2261223a5b312c325d2c2262223a7b7d7d"
+    },
+    {
+      "name": "parse-unsorted-keys",
+      "kind": "parse",
+      "inputHex": "7b2262223a312c2261223a327d",
+      "inputText": "{\"b\":1,\"a\":2}",
+      "parsed": {
+        "t": "object",
+        "v": [
+          {
+            "k": "a",
+            "kHex": "61",
+            "v": {
+              "t": "int",
+              "v": "2"
+            }
+          },
+          {
+            "k": "b",
+            "kHex": "62",
+            "v": {
+              "t": "int",
+              "v": "1"
+            }
+          }
+        ]
+      },
+      "reemittedText": "{\"a\":2,\"b\":1}",
+      "reemittedHex": "7b2261223a322c2262223a317d"
+    },
+    {
+      "name": "parse-escape-solidus",
+      "kind": "parse",
+      "inputHex": "22615c2f6222",
+      "inputText": "\"a\\/b\"",
+      "parsed": {
+        "t": "utf8",
+        "hex": "612f62"
+      },
+      "reemittedText": "\"a/b\"",
+      "reemittedHex": "22612f6222"
+    },
+    {
+      "name": "parse-escape-all-short",
+      "kind": "parse",
+      "inputHex": "225c225c5c5c2f5c625c665c6e5c725c7422",
+      "inputText": "\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"",
+      "parsed": {
+        "t": "utf8",
+        "hex": "225c2f080c0a0d09"
+      },
+      "reemittedText": "\"\\\"\\\\/\\b\\f\\n\\r\\t\"",
+      "reemittedHex": "225c225c5c2f5c625c665c6e5c725c7422"
+    },
+    {
+      "name": "parse-escape-u-lowercase",
+      "kind": "parse",
+      "inputHex": "225c753030653922",
+      "inputText": "\"\\u00e9\"",
+      "parsed": {
+        "t": "utf8",
+        "hex": "c3a9"
+      },
+      "reemittedText": "\"é\"",
+      "reemittedHex": "22c3a922"
+    },
+    {
+      "name": "parse-escape-u-uppercase",
+      "kind": "parse",
+      "inputHex": "225c753030453922",
+      "inputText": "\"\\u00E9\"",
+      "parsed": {
+        "t": "utf8",
+        "hex": "c3a9"
+      },
+      "reemittedText": "\"é\"",
+      "reemittedHex": "22c3a922"
+    },
+    {
+      "name": "parse-escape-u-nul",
+      "kind": "parse",
+      "inputHex": "225c753030303022",
+      "inputText": "\"\\u0000\"",
+      "parsed": {
+        "t": "utf8",
+        "hex": "00"
+      },
+      "reemittedText": "\"\\u0000\"",
+      "reemittedHex": "225c753030303022"
+    },
+    {
+      "name": "parse-escape-u-ascii-letter",
+      "kind": "parse",
+      "inputHex": "225c753030343122",
+      "inputText": "\"\\u0041\"",
+      "parsed": {
+        "t": "utf8",
+        "hex": "41"
+      },
+      "reemittedText": "\"A\"",
+      "reemittedHex": "224122"
+    },
+    {
+      "name": "parse-escape-surrogate-pair",
+      "kind": "parse",
+      "inputHex": "225c75443833445c754444313122",
+      "inputText": "\"\\uD83D\\uDD11\"",
+      "parsed": {
+        "t": "utf8",
+        "hex": "f09f9491"
+      },
+      "reemittedText": "\"🔑\"",
+      "reemittedHex": "22f09f949122"
+    },
+    {
+      "name": "parse-escape-lone-high-surrogate",
+      "kind": "parse",
+      "inputHex": "225c754438334422",
+      "inputText": "\"\\uD83D\"",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-escape-lone-low-surrogate",
+      "kind": "parse",
+      "inputHex": "225c754444313122",
+      "inputText": "\"\\uDD11\"",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-escape-high-then-non-low",
+      "kind": "parse",
+      "inputHex": "225c75443833445c753030343122",
+      "inputText": "\"\\uD83D\\u0041\"",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-escape-high-then-text",
+      "kind": "parse",
+      "inputHex": "225c7544383344616222",
+      "inputText": "\"\\uD83Dab\"",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-escape-unknown-x",
+      "kind": "parse",
+      "inputHex": "225c78343122",
+      "inputText": "\"\\x41\"",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-escape-short-hex",
+      "kind": "parse",
+      "inputHex": "225c75313222",
+      "inputText": "\"\\u12\"",
+      "error": "CanonicalJSON.Failure.unexpectedEnd"
+    },
+    {
+      "name": "parse-escape-non-hex",
+      "kind": "parse",
+      "inputHex": "225c753132473422",
+      "inputText": "\"\\u12G4\"",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-raw-control-0x01",
+      "kind": "parse",
+      "inputHex": "220122",
+      "inputText": "\"\u0001\"",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-raw-tab-in-string",
+      "kind": "parse",
+      "inputHex": "220922",
+      "inputText": "\"\t\"",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-raw-newline-in-string",
+      "kind": "parse",
+      "inputHex": "220a22",
+      "inputText": "\"\n\"",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-raw-del-in-string",
+      "kind": "parse",
+      "inputHex": "227f22",
+      "inputText": "\"\u007f\"",
+      "parsed": {
+        "t": "utf8",
+        "hex": "7f"
+      },
+      "reemittedText": "\"\u007f\"",
+      "reemittedHex": "227f22"
+    },
+    {
+      "name": "parse-invalid-utf8-in-string",
+      "kind": "parse",
+      "inputHex": "22ff22",
+      "inputText": null,
+      "error": "CanonicalJSON.Failure.invalidUTF8"
+    },
+    {
+      "name": "parse-overlong-utf8-in-string",
+      "kind": "parse",
+      "inputHex": "22c08022",
+      "inputText": null,
+      "error": "CanonicalJSON.Failure.invalidUTF8"
+    },
+    {
+      "name": "parse-unterminated-string",
+      "kind": "parse",
+      "inputHex": "22616263",
+      "inputText": "\"abc",
+      "error": "CanonicalJSON.Failure.unexpectedEnd"
+    },
+    {
+      "name": "parse-duplicate-key",
+      "kind": "parse",
+      "inputHex": "7b2261223a312c2261223a327d",
+      "inputText": "{\"a\":1,\"a\":2}",
+      "error": "CanonicalJSON.Failure.duplicateKey"
+    },
+    {
+      "name": "parse-duplicate-key-nfc-vs-nfd",
+      "kind": "parse",
+      "inputHex": "7b22c3a9223a312c2265cc81223a327d",
+      "inputText": "{\"é\":1,\"é\":2}",
+      "error": "CanonicalJSON.Failure.duplicateKey"
+    },
+    {
+      "name": "parse-duplicate-key-escaped-vs-raw",
+      "kind": "parse",
+      "inputHex": "7b2261223a312c225c7530303631223a327d",
+      "inputText": "{\"a\":1,\"\\u0061\":2}",
+      "error": "CanonicalJSON.Failure.duplicateKey"
+    },
+    {
+      "name": "parse-distinct-keys-case",
+      "kind": "parse",
+      "inputHex": "7b2261223a312c2241223a327d",
+      "inputText": "{\"a\":1,\"A\":2}",
+      "parsed": {
+        "t": "object",
+        "v": [
+          {
+            "k": "A",
+            "kHex": "41",
+            "v": {
+              "t": "int",
+              "v": "2"
+            }
+          },
+          {
+            "k": "a",
+            "kHex": "61",
+            "v": {
+              "t": "int",
+              "v": "1"
+            }
+          }
+        ]
+      },
+      "reemittedText": "{\"A\":2,\"a\":1}",
+      "reemittedHex": "7b2241223a322c2261223a317d"
+    },
+    {
+      "name": "parse-number-zero",
+      "kind": "parse",
+      "inputHex": "30",
+      "inputText": "0",
+      "parsed": {
+        "t": "int",
+        "v": "0"
+      },
+      "reemittedText": "0",
+      "reemittedHex": "30"
+    },
+    {
+      "name": "parse-number-negative-zero-int",
+      "kind": "parse",
+      "inputHex": "2d30",
+      "inputText": "-0",
+      "parsed": {
+        "t": "int",
+        "v": "0"
+      },
+      "reemittedText": "0",
+      "reemittedHex": "30"
+    },
+    {
+      "name": "parse-number-negative-zero-double",
+      "kind": "parse",
+      "inputHex": "2d302e30",
+      "inputText": "-0.0",
+      "parsed": {
+        "t": "double",
+        "bits": "8000000000000000",
+        "swift": "-0.0"
+      },
+      "reemittedText": "-0.0",
+      "reemittedHex": "2d302e30"
+    },
+    {
+      "name": "parse-number-leading-zero",
+      "kind": "parse",
+      "inputHex": "3031",
+      "inputText": "01",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-number-negative-leading-zero",
+      "kind": "parse",
+      "inputHex": "2d3031",
+      "inputText": "-01",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-number-lone-minus",
+      "kind": "parse",
+      "inputHex": "2d",
+      "inputText": "-",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-number-plus",
+      "kind": "parse",
+      "inputHex": "2b31",
+      "inputText": "+1",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-number-trailing-dot",
+      "kind": "parse",
+      "inputHex": "312e",
+      "inputText": "1.",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-number-leading-dot",
+      "kind": "parse",
+      "inputHex": "2e35",
+      "inputText": ".5",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-number-bare-exponent",
+      "kind": "parse",
+      "inputHex": "3165",
+      "inputText": "1e",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-number-exponent-sign-only",
+      "kind": "parse",
+      "inputHex": "31652b",
+      "inputText": "1e+",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-number-exponent-uppercase",
+      "kind": "parse",
+      "inputHex": "314535",
+      "inputText": "1E5",
+      "parsed": {
+        "t": "double",
+        "bits": "40f86a0000000000",
+        "swift": "100000.0"
+      },
+      "reemittedText": "100000.0",
+      "reemittedHex": "3130303030302e30"
+    },
+    {
+      "name": "parse-number-exponent-negative",
+      "kind": "parse",
+      "inputHex": "3235652d31",
+      "inputText": "25e-1",
+      "parsed": {
+        "t": "double",
+        "bits": "4004000000000000",
+        "swift": "2.5"
+      },
+      "reemittedText": "2.5",
+      "reemittedHex": "322e35"
+    },
+    {
+      "name": "parse-number-one-point-zero",
+      "kind": "parse",
+      "inputHex": "312e30",
+      "inputText": "1.0",
+      "parsed": {
+        "t": "double",
+        "bits": "3ff0000000000000",
+        "swift": "1.0"
+      },
+      "reemittedText": "1.0",
+      "reemittedHex": "312e30"
+    },
+    {
+      "name": "parse-number-int64-max",
+      "kind": "parse",
+      "inputHex": "39323233333732303336383534373735383037",
+      "inputText": "9223372036854775807",
+      "parsed": {
+        "t": "int",
+        "v": "9223372036854775807"
+      },
+      "reemittedText": "9223372036854775807",
+      "reemittedHex": "39323233333732303336383534373735383037"
+    },
+    {
+      "name": "parse-number-int64-max-plus-one",
+      "kind": "parse",
+      "inputHex": "39323233333732303336383534373735383038",
+      "inputText": "9223372036854775808",
+      "parsed": {
+        "t": "double",
+        "bits": "43e0000000000000",
+        "swift": "9.223372036854776e+18"
+      },
+      "reemittedText": "9.223372036854776e+18",
+      "reemittedHex": "392e323233333732303336383534373736652b3138"
+    },
+    {
+      "name": "parse-number-int64-min",
+      "kind": "parse",
+      "inputHex": "2d39323233333732303336383534373735383038",
+      "inputText": "-9223372036854775808",
+      "parsed": {
+        "t": "int",
+        "v": "-9223372036854775808"
+      },
+      "reemittedText": "-9223372036854775808",
+      "reemittedHex": "2d39323233333732303336383534373735383038"
+    },
+    {
+      "name": "parse-number-int64-min-minus-one",
+      "kind": "parse",
+      "inputHex": "2d39323233333732303336383534373735383039",
+      "inputText": "-9223372036854775809",
+      "parsed": {
+        "t": "double",
+        "bits": "c3e0000000000000",
+        "swift": "-9.223372036854776e+18"
+      },
+      "reemittedText": "-9.223372036854776e+18",
+      "reemittedHex": "2d392e323233333732303336383534373736652b3138"
+    },
+    {
+      "name": "parse-number-huge-integer",
+      "kind": "parse",
+      "inputHex": "313233343536373839303132333435363738393031323334353637383930",
+      "inputText": "123456789012345678901234567890",
+      "parsed": {
+        "t": "double",
+        "bits": "45f8ee90ff6c373e",
+        "swift": "1.2345678901234568e+29"
+      },
+      "reemittedText": "1.2345678901234568e+29",
+      "reemittedHex": "312e32333435363738393031323334353638652b3239"
+    },
+    {
+      "name": "parse-number-overflow-to-infinity",
+      "kind": "parse",
+      "inputHex": "3165343030",
+      "inputText": "1e400",
+      "parsed": {
+        "t": "double",
+        "bits": "7ff0000000000000",
+        "swift": "inf"
+      },
+      "reemitError": "CanonicalJSON.Failure.nonFiniteNumber"
+    },
+    {
+      "name": "parse-number-underflow-to-zero",
+      "kind": "parse",
+      "inputHex": "31652d343030",
+      "inputText": "1e-400",
+      "parsed": {
+        "t": "double",
+        "bits": "0000000000000000",
+        "swift": "0.0"
+      },
+      "reemittedText": "0.0",
+      "reemittedHex": "302e30"
+    },
+    {
+      "name": "parse-number-long-fraction",
+      "kind": "parse",
+      "inputHex": "302e31303030303030303030303030303030303535353131313531323331323537383237",
+      "inputText": "0.1000000000000000055511151231257827",
+      "parsed": {
+        "t": "double",
+        "bits": "3fb999999999999a",
+        "swift": "0.1"
+      },
+      "reemittedText": "0.1",
+      "reemittedHex": "302e31"
+    },
+    {
+      "name": "parse-number-hex",
+      "kind": "parse",
+      "inputHex": "30783130",
+      "inputText": "0x10",
+      "error": "CanonicalJSON.Failure.trailingBytes"
+    },
+    {
+      "name": "parse-number-nan-literal",
+      "kind": "parse",
+      "inputHex": "4e614e",
+      "inputText": "NaN",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-literal-truncated",
+      "kind": "parse",
+      "inputHex": "6e756c",
+      "inputText": "nul",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-literal-capitalised",
+      "kind": "parse",
+      "inputHex": "54727565",
+      "inputText": "True",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-empty-input",
+      "kind": "parse",
+      "inputHex": "",
+      "inputText": "",
+      "error": "CanonicalJSON.Failure.unexpectedEnd"
+    },
+    {
+      "name": "parse-only-whitespace",
+      "kind": "parse",
+      "inputHex": "200a",
+      "inputText": " \n",
+      "error": "CanonicalJSON.Failure.unexpectedEnd"
+    },
+    {
+      "name": "parse-bom-prefix",
+      "kind": "parse",
+      "inputHex": "efbbbf7b7d",
+      "inputText": "{}",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-form-feed-is-not-whitespace",
+      "kind": "parse",
+      "inputHex": "0c7b7d",
+      "inputText": "\f{}",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-trailing-value",
+      "kind": "parse",
+      "inputHex": "7b7d207b7d",
+      "inputText": "{} {}",
+      "error": "CanonicalJSON.Failure.trailingBytes"
+    },
+    {
+      "name": "parse-trailing-garbage",
+      "kind": "parse",
+      "inputHex": "312078",
+      "inputText": "1 x",
+      "error": "CanonicalJSON.Failure.trailingBytes"
+    },
+    {
+      "name": "parse-trailing-comma-array",
+      "kind": "parse",
+      "inputHex": "5b312c5d",
+      "inputText": "[1,]",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-trailing-comma-object",
+      "kind": "parse",
+      "inputHex": "7b2261223a312c7d",
+      "inputText": "{\"a\":1,}",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-missing-colon",
+      "kind": "parse",
+      "inputHex": "7b22612220317d",
+      "inputText": "{\"a\" 1}",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-non-string-key",
+      "kind": "parse",
+      "inputHex": "7b313a327d",
+      "inputText": "{1:2}",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-single-quotes",
+      "kind": "parse",
+      "inputHex": "7b2761273a317d",
+      "inputText": "{'a':1}",
+      "error": "CanonicalJSON.Failure.unexpectedByte"
+    },
+    {
+      "name": "parse-unclosed-array",
+      "kind": "parse",
+      "inputHex": "5b312c32",
+      "inputText": "[1,2",
+      "error": "CanonicalJSON.Failure.unexpectedEnd"
+    },
+    {
+      "name": "parse-unclosed-object",
+      "kind": "parse",
+      "inputHex": "7b2261223a31",
+      "inputText": "{\"a\":1",
+      "error": "CanonicalJSON.Failure.unexpectedEnd"
+    },
+    {
+      "name": "parse-depth-32-arrays",
+      "kind": "parse",
+      "inputHex": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+      "inputText": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "parsed": {
+        "t": "array",
+        "v": [
+          {
+            "t": "array",
+            "v": [
+              {
+                "t": "array",
+                "v": [
+                  {
+                    "t": "array",
+                    "v": [
+                      {
+                        "t": "array",
+                        "v": [
+                          {
+                            "t": "array",
+                            "v": [
+                              {
+                                "t": "array",
+                                "v": [
+                                  {
+                                    "t": "array",
+                                    "v": [
+                                      {
+                                        "t": "array",
+                                        "v": [
+                                          {
+                                            "t": "array",
+                                            "v": [
+                                              {
+                                                "t": "array",
+                                                "v": [
+                                                  {
+                                                    "t": "array",
+                                                    "v": [
+                                                      {
+                                                        "t": "array",
+                                                        "v": [
+                                                          {
+                                                            "t": "array",
+                                                            "v": [
+                                                              {
+                                                                "t": "array",
+                                                                "v": [
+                                                                  {
+                                                                    "t": "array",
+                                                                    "v": [
+                                                                      {
+                                                                        "t": "array",
+                                                                        "v": [
+                                                                          {
+                                                                            "t": "array",
+                                                                            "v": [
+                                                                              {
+                                                                                "t": "array",
+                                                                                "v": [
+                                                                                  {
+                                                                                    "t": "array",
+                                                                                    "v": [
+                                                                                      {
+                                                                                        "t": "array",
+                                                                                        "v": [
+                                                                                          {
+                                                                                            "t": "array",
+                                                                                            "v": [
+                                                                                              {
+                                                                                                "t": "array",
+                                                                                                "v": [
+                                                                                                  {
+                                                                                                    "t": "array",
+                                                                                                    "v": [
+                                                                                                      {
+                                                                                                        "t": "array",
+                                                                                                        "v": [
+                                                                                                          {
+                                                                                                            "t": "array",
+                                                                                                            "v": [
+                                                                                                              {
+                                                                                                                "t": "array",
+                                                                                                                "v": [
+                                                                                                                  {
+                                                                                                                    "t": "array",
+                                                                                                                    "v": [
+                                                                                                                      {
+                                                                                                                        "t": "array",
+                                                                                                                        "v": [
+                                                                                                                          {
+                                                                                                                            "t": "array",
+                                                                                                                            "v": [
+                                                                                                                              {
+                                                                                                                                "t": "array",
+                                                                                                                                "v": [
+                                                                                                                                  {
+                                                                                                                                    "t": "array",
+                                                                                                                                    "v": []
+                                                                                                                                  }
+                                                                                                                                ]
+                                                                                                                              }
+                                                                                                                            ]
+                                                                                                                          }
+                                                                                                                        ]
+                                                                                                                      }
+                                                                                                                    ]
+                                                                                                                  }
+                                                                                                                ]
+                                                                                                              }
+                                                                                                            ]
+                                                                                                          }
+                                                                                                        ]
+                                                                                                      }
+                                                                                                    ]
+                                                                                                  }
+                                                                                                ]
+                                                                                              }
+                                                                                            ]
+                                                                                          }
+                                                                                        ]
+                                                                                      }
+                                                                                    ]
+                                                                                  }
+                                                                                ]
+                                                                              }
+                                                                            ]
+                                                                          }
+                                                                        ]
+                                                                      }
+                                                                    ]
+                                                                  }
+                                                                ]
+                                                              }
+                                                            ]
+                                                          }
+                                                        ]
+                                                      }
+                                                    ]
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "reemittedText": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "reemittedHex": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d"
+    },
+    {
+      "name": "parse-depth-33-arrays",
+      "kind": "parse",
+      "inputHex": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+      "inputText": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "parsed": {
+        "t": "array",
+        "v": [
+          {
+            "t": "array",
+            "v": [
+              {
+                "t": "array",
+                "v": [
+                  {
+                    "t": "array",
+                    "v": [
+                      {
+                        "t": "array",
+                        "v": [
+                          {
+                            "t": "array",
+                            "v": [
+                              {
+                                "t": "array",
+                                "v": [
+                                  {
+                                    "t": "array",
+                                    "v": [
+                                      {
+                                        "t": "array",
+                                        "v": [
+                                          {
+                                            "t": "array",
+                                            "v": [
+                                              {
+                                                "t": "array",
+                                                "v": [
+                                                  {
+                                                    "t": "array",
+                                                    "v": [
+                                                      {
+                                                        "t": "array",
+                                                        "v": [
+                                                          {
+                                                            "t": "array",
+                                                            "v": [
+                                                              {
+                                                                "t": "array",
+                                                                "v": [
+                                                                  {
+                                                                    "t": "array",
+                                                                    "v": [
+                                                                      {
+                                                                        "t": "array",
+                                                                        "v": [
+                                                                          {
+                                                                            "t": "array",
+                                                                            "v": [
+                                                                              {
+                                                                                "t": "array",
+                                                                                "v": [
+                                                                                  {
+                                                                                    "t": "array",
+                                                                                    "v": [
+                                                                                      {
+                                                                                        "t": "array",
+                                                                                        "v": [
+                                                                                          {
+                                                                                            "t": "array",
+                                                                                            "v": [
+                                                                                              {
+                                                                                                "t": "array",
+                                                                                                "v": [
+                                                                                                  {
+                                                                                                    "t": "array",
+                                                                                                    "v": [
+                                                                                                      {
+                                                                                                        "t": "array",
+                                                                                                        "v": [
+                                                                                                          {
+                                                                                                            "t": "array",
+                                                                                                            "v": [
+                                                                                                              {
+                                                                                                                "t": "array",
+                                                                                                                "v": [
+                                                                                                                  {
+                                                                                                                    "t": "array",
+                                                                                                                    "v": [
+                                                                                                                      {
+                                                                                                                        "t": "array",
+                                                                                                                        "v": [
+                                                                                                                          {
+                                                                                                                            "t": "array",
+                                                                                                                            "v": [
+                                                                                                                              {
+                                                                                                                                "t": "array",
+                                                                                                                                "v": [
+                                                                                                                                  {
+                                                                                                                                    "t": "array",
+                                                                                                                                    "v": [
+                                                                                                                                      {
+                                                                                                                                        "t": "array",
+                                                                                                                                        "v": []
+                                                                                                                                      }
+                                                                                                                                    ]
+                                                                                                                                  }
+                                                                                                                                ]
+                                                                                                                              }
+                                                                                                                            ]
+                                                                                                                          }
+                                                                                                                        ]
+                                                                                                                      }
+                                                                                                                    ]
+                                                                                                                  }
+                                                                                                                ]
+                                                                                                              }
+                                                                                                            ]
+                                                                                                          }
+                                                                                                        ]
+                                                                                                      }
+                                                                                                    ]
+                                                                                                  }
+                                                                                                ]
+                                                                                              }
+                                                                                            ]
+                                                                                          }
+                                                                                        ]
+                                                                                      }
+                                                                                    ]
+                                                                                  }
+                                                                                ]
+                                                                              }
+                                                                            ]
+                                                                          }
+                                                                        ]
+                                                                      }
+                                                                    ]
+                                                                  }
+                                                                ]
+                                                              }
+                                                            ]
+                                                          }
+                                                        ]
+                                                      }
+                                                    ]
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "reemittedText": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "reemittedHex": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d"
+    },
+    {
+      "name": "parse-depth-34-arrays",
+      "kind": "parse",
+      "inputHex": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+      "inputText": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "error": "CanonicalJSON.Failure.tooDeep"
+    },
+    {
+      "name": "parse-depth-32-objects",
+      "kind": "parse",
+      "inputHex": "7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a317d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d",
+      "inputText": "{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
+      "parsed": {
+        "t": "object",
+        "v": [
+          {
+            "k": "a",
+            "kHex": "61",
+            "v": {
+              "t": "object",
+              "v": [
+                {
+                  "k": "a",
+                  "kHex": "61",
+                  "v": {
+                    "t": "object",
+                    "v": [
+                      {
+                        "k": "a",
+                        "kHex": "61",
+                        "v": {
+                          "t": "object",
+                          "v": [
+                            {
+                              "k": "a",
+                              "kHex": "61",
+                              "v": {
+                                "t": "object",
+                                "v": [
+                                  {
+                                    "k": "a",
+                                    "kHex": "61",
+                                    "v": {
+                                      "t": "object",
+                                      "v": [
+                                        {
+                                          "k": "a",
+                                          "kHex": "61",
+                                          "v": {
+                                            "t": "object",
+                                            "v": [
+                                              {
+                                                "k": "a",
+                                                "kHex": "61",
+                                                "v": {
+                                                  "t": "object",
+                                                  "v": [
+                                                    {
+                                                      "k": "a",
+                                                      "kHex": "61",
+                                                      "v": {
+                                                        "t": "object",
+                                                        "v": [
+                                                          {
+                                                            "k": "a",
+                                                            "kHex": "61",
+                                                            "v": {
+                                                              "t": "object",
+                                                              "v": [
+                                                                {
+                                                                  "k": "a",
+                                                                  "kHex": "61",
+                                                                  "v": {
+                                                                    "t": "object",
+                                                                    "v": [
+                                                                      {
+                                                                        "k": "a",
+                                                                        "kHex": "61",
+                                                                        "v": {
+                                                                          "t": "object",
+                                                                          "v": [
+                                                                            {
+                                                                              "k": "a",
+                                                                              "kHex": "61",
+                                                                              "v": {
+                                                                                "t": "object",
+                                                                                "v": [
+                                                                                  {
+                                                                                    "k": "a",
+                                                                                    "kHex": "61",
+                                                                                    "v": {
+                                                                                      "t": "object",
+                                                                                      "v": [
+                                                                                        {
+                                                                                          "k": "a",
+                                                                                          "kHex": "61",
+                                                                                          "v": {
+                                                                                            "t": "object",
+                                                                                            "v": [
+                                                                                              {
+                                                                                                "k": "a",
+                                                                                                "kHex": "61",
+                                                                                                "v": {
+                                                                                                  "t": "object",
+                                                                                                  "v": [
+                                                                                                    {
+                                                                                                      "k": "a",
+                                                                                                      "kHex": "61",
+                                                                                                      "v": {
+                                                                                                        "t": "object",
+                                                                                                        "v": [
+                                                                                                          {
+                                                                                                            "k": "a",
+                                                                                                            "kHex": "61",
+                                                                                                            "v": {
+                                                                                                              "t": "object",
+                                                                                                              "v": [
+                                                                                                                {
+                                                                                                                  "k": "a",
+                                                                                                                  "kHex": "61",
+                                                                                                                  "v": {
+                                                                                                                    "t": "object",
+                                                                                                                    "v": [
+                                                                                                                      {
+                                                                                                                        "k": "a",
+                                                                                                                        "kHex": "61",
+                                                                                                                        "v": {
+                                                                                                                          "t": "object",
+                                                                                                                          "v": [
+                                                                                                                            {
+                                                                                                                              "k": "a",
+                                                                                                                              "kHex": "61",
+                                                                                                                              "v": {
+                                                                                                                                "t": "object",
+                                                                                                                                "v": [
+                                                                                                                                  {
+                                                                                                                                    "k": "a",
+                                                                                                                                    "kHex": "61",
+                                                                                                                                    "v": {
+                                                                                                                                      "t": "object",
+                                                                                                                                      "v": [
+                                                                                                                                        {
+                                                                                                                                          "k": "a",
+                                                                                                                                          "kHex": "61",
+                                                                                                                                          "v": {
+                                                                                                                                            "t": "object",
+                                                                                                                                            "v": [
+                                                                                                                                              {
+                                                                                                                                                "k": "a",
+                                                                                                                                                "kHex": "61",
+                                                                                                                                                "v": {
+                                                                                                                                                  "t": "object",
+                                                                                                                                                  "v": [
+                                                                                                                                                    {
+                                                                                                                                                      "k": "a",
+                                                                                                                                                      "kHex": "61",
+                                                                                                                                                      "v": {
+                                                                                                                                                        "t": "object",
+                                                                                                                                                        "v": [
+                                                                                                                                                          {
+                                                                                                                                                            "k": "a",
+                                                                                                                                                            "kHex": "61",
+                                                                                                                                                            "v": {
+                                                                                                                                                              "t": "object",
+                                                                                                                                                              "v": [
+                                                                                                                                                                {
+                                                                                                                                                                  "k": "a",
+                                                                                                                                                                  "kHex": "61",
+                                                                                                                                                                  "v": {
+                                                                                                                                                                    "t": "object",
+                                                                                                                                                                    "v": [
+                                                                                                                                                                      {
+                                                                                                                                                                        "k": "a",
+                                                                                                                                                                        "kHex": "61",
+                                                                                                                                                                        "v": {
+                                                                                                                                                                          "t": "object",
+                                                                                                                                                                          "v": [
+                                                                                                                                                                            {
+                                                                                                                                                                              "k": "a",
+                                                                                                                                                                              "kHex": "61",
+                                                                                                                                                                              "v": {
+                                                                                                                                                                                "t": "object",
+                                                                                                                                                                                "v": [
+                                                                                                                                                                                  {
+                                                                                                                                                                                    "k": "a",
+                                                                                                                                                                                    "kHex": "61",
+                                                                                                                                                                                    "v": {
+                                                                                                                                                                                      "t": "object",
+                                                                                                                                                                                      "v": [
+                                                                                                                                                                                        {
+                                                                                                                                                                                          "k": "a",
+                                                                                                                                                                                          "kHex": "61",
+                                                                                                                                                                                          "v": {
+                                                                                                                                                                                            "t": "object",
+                                                                                                                                                                                            "v": [
+                                                                                                                                                                                              {
+                                                                                                                                                                                                "k": "a",
+                                                                                                                                                                                                "kHex": "61",
+                                                                                                                                                                                                "v": {
+                                                                                                                                                                                                  "t": "object",
+                                                                                                                                                                                                  "v": [
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                      "k": "a",
+                                                                                                                                                                                                      "kHex": "61",
+                                                                                                                                                                                                      "v": {
+                                                                                                                                                                                                        "t": "int",
+                                                                                                                                                                                                        "v": "1"
+                                                                                                                                                                                                      }
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                  ]
+                                                                                                                                                                                                }
+                                                                                                                                                                                              }
+                                                                                                                                                                                            ]
+                                                                                                                                                                                          }
+                                                                                                                                                                                        }
+                                                                                                                                                                                      ]
+                                                                                                                                                                                    }
+                                                                                                                                                                                  }
+                                                                                                                                                                                ]
+                                                                                                                                                                              }
+                                                                                                                                                                            }
+                                                                                                                                                                          ]
+                                                                                                                                                                        }
+                                                                                                                                                                      }
+                                                                                                                                                                    ]
+                                                                                                                                                                  }
+                                                                                                                                                                }
+                                                                                                                                                              ]
+                                                                                                                                                            }
+                                                                                                                                                          }
+                                                                                                                                                        ]
+                                                                                                                                                      }
+                                                                                                                                                    }
+                                                                                                                                                  ]
+                                                                                                                                                }
+                                                                                                                                              }
+                                                                                                                                            ]
+                                                                                                                                          }
+                                                                                                                                        }
+                                                                                                                                      ]
+                                                                                                                                    }
+                                                                                                                                  }
+                                                                                                                                ]
+                                                                                                                              }
+                                                                                                                            }
+                                                                                                                          ]
+                                                                                                                        }
+                                                                                                                      }
+                                                                                                                    ]
+                                                                                                                  }
+                                                                                                                }
+                                                                                                              ]
+                                                                                                            }
+                                                                                                          }
+                                                                                                        ]
+                                                                                                      }
+                                                                                                    }
+                                                                                                  ]
+                                                                                                }
+                                                                                              }
+                                                                                            ]
+                                                                                          }
+                                                                                        }
+                                                                                      ]
+                                                                                    }
+                                                                                  }
+                                                                                ]
+                                                                              }
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      }
+                                                                    ]
+                                                                  }
+                                                                }
+                                                              ]
+                                                            }
+                                                          }
+                                                        ]
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "reemittedText": "{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
+      "reemittedHex": "7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a317d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d"
+    },
+    {
+      "name": "parse-depth-33-objects",
+      "kind": "parse",
+      "inputHex": "7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a7b2261223a317d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d",
+      "inputText": "{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
+      "error": "CanonicalJSON.Failure.tooDeep"
+    }
+  ]
+}

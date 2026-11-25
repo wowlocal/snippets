@@ -1,0 +1,112 @@
+{
+  "format": "snippets-swift-interop/V01-record-aad/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "SnippetCrypto.additionalData(for:) and SnippetCrypto.domainSeparated (brief 02 §2.1, §2.3)",
+  "cases": [
+    {
+      "name": "vault-live",
+      "scopeID": {
+        "text": "k-7f3a91c0-1b2",
+        "utf8Hex": "6b2d37663361393163302d316232"
+      },
+      "recordID": "11111111-2222-4333-8444-555555555555",
+      "isDeleted": false,
+      "aadHex": "0000000b736e69702e6161642e76310000000276310000000e6b2d37663361393163302d31623200000010111111112222433384445555555555550000000100"
+    },
+    {
+      "name": "vault-deleted",
+      "scopeID": {
+        "text": "k-7f3a91c0-1b2",
+        "utf8Hex": "6b2d37663361393163302d316232"
+      },
+      "recordID": "11111111-2222-4333-8444-555555555555",
+      "isDeleted": true,
+      "aadHex": "0000000b736e69702e6161642e76310000000276310000000e6b2d37663361393163302d31623200000010111111112222433384445555555555550000000101"
+    },
+    {
+      "name": "wire-live",
+      "scopeID": {
+        "text": "sync-v1",
+        "utf8Hex": "73796e632d7631"
+      },
+      "recordID": "11111111-2222-4333-8444-555555555555",
+      "isDeleted": false,
+      "aadHex": "0000000b736e69702e6161642e76310000000276310000000773796e632d763100000010111111112222433384445555555555550000000100"
+    },
+    {
+      "name": "wire-deleted",
+      "scopeID": {
+        "text": "sync-v1",
+        "utf8Hex": "73796e632d7631"
+      },
+      "recordID": "11111111-2222-4333-8444-555555555555",
+      "isDeleted": true,
+      "aadHex": "0000000b736e69702e6161642e76310000000276310000000773796e632d763100000010111111112222433384445555555555550000000101"
+    },
+    {
+      "name": "wire-live-other-id",
+      "scopeID": {
+        "text": "sync-v1",
+        "utf8Hex": "73796e632d7631"
+      },
+      "recordID": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+      "isDeleted": false,
+      "aadHex": "0000000b736e69702e6161642e76310000000276310000000773796e632d763100000010a0b1c2d3e4f546078899aabbccddeeff0000000100"
+    },
+    {
+      "name": "empty-scope",
+      "scopeID": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "recordID": "00000000-0000-4000-8000-000000000001",
+      "isDeleted": false,
+      "aadHex": "0000000b736e69702e6161642e76310000000276310000000000000010000000000000400080000000000000010000000100"
+    },
+    {
+      "name": "non-ascii-scope",
+      "scopeID": {
+        "text": "k-café-🔑",
+        "utf8Hex": "6b2d636166c3a92df09f9491"
+      },
+      "recordID": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+      "isDeleted": true,
+      "aadHex": "0000000b736e69702e6161642e76310000000276310000000c6b2d636166c3a92df09f949100000010ffffffffffff4fffbfffffffffffffff0000000101"
+    },
+    {
+      "name": "domainSeparated-no-fields",
+      "domain": "d",
+      "fieldsHex": [],
+      "outputHex": "0000000164"
+    },
+    {
+      "name": "domainSeparated-empty-field",
+      "domain": "snip.test",
+      "fieldsHex": [""],
+      "outputHex": "00000009736e69702e7465737400000000"
+    },
+    {
+      "name": "domainSeparated-ab-vs-a-b-1",
+      "domain": "snip.test",
+      "fieldsHex": ["6162", "63"],
+      "outputHex": "00000009736e69702e746573740000000261620000000163"
+    },
+    {
+      "name": "domainSeparated-ab-vs-a-b-2",
+      "domain": "snip.test",
+      "fieldsHex": ["61", "6263"],
+      "outputHex": "00000009736e69702e746573740000000161000000026263"
+    },
+    {
+      "name": "domainSeparated-300-byte-field",
+      "domain": "snip.test",
+      "fieldsHex": ["000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b"],
+      "outputHex": "00000009736e69702e746573740000012c000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b"
+    }
+  ]
+}

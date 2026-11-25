@@ -1,0 +1,169 @@
+{
+  "format": "snippets-swift-interop/V08-key-wrap/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "KeyWrap.wrap for purposes `recovery` and `cli` with fixed nonces, the wrapping key and AAD, and unwrap outcomes (brief 02 §2.5)",
+  "notes": ["recovery-16-byte-material repeats the literal of Tests/Core/GitSyncVaultTests.knownAnswerMatchesTheLinuxMirror (key 0x80…0x9f, salt 0x40…0x5f, kid k-0f1e2d3c-4b5, nonce 0x10…0x1b).", "KeyWrap.Failure.wrongKey carries the purpose as payload; only the case name is recorded."],
+  "cases": [
+    {
+      "name": "recovery-16-byte-material",
+      "libraryKeyHex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "nonceHex": "101112131415161718191a1b",
+      "wrappingKeyHex": "40005c951e9fbe36d1308bab5b990720644eb7e718a765f195e27632928265e5",
+      "aadHex": "0000000c736e69702e777261702e7631000000027631000000087265636f766572790000000e6b2d30663165326433632d346235",
+      "wrapped": "v1.EBESExQVFhcYGRob.qUF4uXZngBvzSRgme_SKaRQDkG-x67b2_sbB8MU6aK6jjnoZqp7TQGXxuoj-7Mf_Vz_Yw697Ajxzygx1rVrF-Qy0RkQqGDiLVfEUNhedNvQr4o0l6Q_9hWxHiaxMkenw9HpreSqCE93FTxFr8siez0bnIPGvOCsVY8L7R_C2o7fEWIPVMRV1cDmXepTFGsf4lp_Wi8yAe4z0o7SwO_sLbuVXooNbn_3VVHyYWsgr6wtdsJC5ZJu5o3BJlNInXj08zidXd8pPj6sJoF8XHX9Y9BDxZ_XgUIkmK2DB_jyi7cIXTNJsEo0ApPvCQOrZTLYLgfRs7tia7CFlrLJrUHHluOjnQOHfRlRfZYN8y6MBqUU"
+    },
+    {
+      "name": "cli-16-byte-material",
+      "libraryKeyHex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "cli",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "nonceHex": "101112131415161718191a1b",
+      "wrappingKeyHex": "2d35733af809c257bdd2cd5104bfc150a5af619084de5c75f26f5050e4eccd78",
+      "aadHex": "0000000c736e69702e777261702e763100000002763100000003636c690000000e6b2d30663165326433632d346235",
+      "wrapped": "v1.EBESExQVFhcYGRob.ywWitBCBjHQpkhrtvA-2rDLU5rYiLuc7KxwlZ8CVjgRq7rCR--d5r_R-7S2tHmle5IKbpqo3EPVi9UnUKqoXWTwP0_ZVaf1rUTNqv2LTOPngSq2E_6dsx63t0HufzzgQcXeOAoeAbVD5x8hDqAZYDuqe1aHg-QtKMGaOSjvSRdWyXmlrzRECBWt02BVaqD9xCJTDO8nrIYiHS3S0nRMlBQpp_XYpp6dYXRCRbylvGxHKF8A3vCUXoohpAo48Fh-ywI-n-J8qjoseohSLGcaZ8S6IYP2eQhBWss45IY8wYXpR9Q_uVBo-dQLb5fFEb2OTaL6RfNZJTsrPPEQCEQa8QCTG5jy8b-H0x1qXJ_NsihA"
+    },
+    {
+      "name": "cli-32-byte-material",
+      "libraryKeyHex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "materialHex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+      "purpose": "cli",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "nonceHex": "1112131415161718191a1b1c",
+      "wrappingKeyHex": "0a566ed03c9733e1fb2169d66f7579d61c54bc15079a820f739cb0cecbec3ee3",
+      "aadHex": "0000000c736e69702e777261702e763100000002763100000003636c690000000e6b2d30663165326433632d346235",
+      "wrapped": "v1.ERITFBUWFxgZGhsc.famnSuYpDJMTcQpY2D0SeoJCzRPYPcwQt2SRD1ilaCvAAxbWQCHbdgokyIwRZLxP8VIyl_3sKBgF_Qh8au4pCOlel3WRAt0jFX0jrcSL6KzHLeqLoRo26ASgvQKnopaParrdXNVXBNwyhVxQqjHE1X4yCSqL2yrUD-D-RFhL2-Z721gxT7nM2CMy71a6Uth_OfLGUS8phfapIK-WFXaIzRMr8Z4murIkU0oGC0o4Bpq_azBsqIRYRKV5_mgC-B_4GeoIWg07APhutSJpcCxyxLzc16Xi-R18qmaIPzwx1CwAMdS1_gobc5rkaj0bt0V0W6ed4psQDeebV11hPQV5MRi3tpgEd2iS8JVN-e5rLzw"
+    },
+    {
+      "name": "recovery-16-byte-salt",
+      "libraryKeyHex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "22222222222222222222222222222222",
+      "nonceHex": "12131415161718191a1b1c1d",
+      "wrappingKeyHex": "4f0fcec7a33c71a6723dbdeb9cc18b3483eb9a608033009197746759fc956111",
+      "aadHex": "0000000c736e69702e777261702e7631000000027631000000087265636f766572790000000e6b2d30663165326433632d346235",
+      "wrapped": "v1.EhMUFRYXGBkaGxwd.ACrqkxaggFoYh5Nm08Ko8LNq22df0yniQ5-DJqSmeEZADU8VF1e3Iu9ITHXMdJ0oM5YwvGFgV9Na_RFFW9hEjPu7ChiS-W3WM0jggohFM6ojRVuZZjNeySzgNuwdY4B5OmVdlTgGlHPr6_Qr7rUoyKnUHBIqQ3bLmdpV1_EZG4_QMyilk_CFVBVtqgw_rZqDg0za4HK49DQlTa7Pv43QgAD3HqTSgLYvlAk_Ci3KLNEcSH_1pryIPtwqvbA1cRQN8JCZujQaXcCBTtizG0yodbQEgzoZkZ5laDCg5CG8AtXkIph0lYS-oCHmAgFomgkofZpuyPZmxsmwNhBHZSf6fXSbbd5TwM-YjIG4drwUpX8"
+    },
+    {
+      "name": "unwrap-recovery-ok",
+      "wrapped": "v1.EBESExQVFhcYGRob.qUF4uXZngBvzSRgme_SKaRQDkG-x67b2_sbB8MU6aK6jjnoZqp7TQGXxuoj-7Mf_Vz_Yw697Ajxzygx1rVrF-Qy0RkQqGDiLVfEUNhedNvQr4o0l6Q_9hWxHiaxMkenw9HpreSqCE93FTxFr8siez0bnIPGvOCsVY8L7R_C2o7fEWIPVMRV1cDmXepTFGsf4lp_Wi8yAe4z0o7SwO_sLbuVXooNbn_3VVHyYWsgr6wtdsJC5ZJu5o3BJlNInXj08zidXd8pPj6sJoF8XHX9Y9BDxZ_XgUIkmK2DB_jyi7cIXTNJsEo0ApPvCQOrZTLYLgfRs7tia7CFlrLJrUHHluOjnQOHfRlRfZYN8y6MBqUU",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "ok": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"
+    },
+    {
+      "name": "unwrap-cli-ok",
+      "wrapped": "v1.EBESExQVFhcYGRob.ywWitBCBjHQpkhrtvA-2rDLU5rYiLuc7KxwlZ8CVjgRq7rCR--d5r_R-7S2tHmle5IKbpqo3EPVi9UnUKqoXWTwP0_ZVaf1rUTNqv2LTOPngSq2E_6dsx63t0HufzzgQcXeOAoeAbVD5x8hDqAZYDuqe1aHg-QtKMGaOSjvSRdWyXmlrzRECBWt02BVaqD9xCJTDO8nrIYiHS3S0nRMlBQpp_XYpp6dYXRCRbylvGxHKF8A3vCUXoohpAo48Fh-ywI-n-J8qjoseohSLGcaZ8S6IYP2eQhBWss45IY8wYXpR9Q_uVBo-dQLb5fFEb2OTaL6RfNZJTsrPPEQCEQa8QCTG5jy8b-H0x1qXJ_NsihA",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "cli",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "ok": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"
+    },
+    {
+      "name": "unwrap-recovery-envelope-as-cli",
+      "wrapped": "v1.EBESExQVFhcYGRob.qUF4uXZngBvzSRgme_SKaRQDkG-x67b2_sbB8MU6aK6jjnoZqp7TQGXxuoj-7Mf_Vz_Yw697Ajxzygx1rVrF-Qy0RkQqGDiLVfEUNhedNvQr4o0l6Q_9hWxHiaxMkenw9HpreSqCE93FTxFr8siez0bnIPGvOCsVY8L7R_C2o7fEWIPVMRV1cDmXepTFGsf4lp_Wi8yAe4z0o7SwO_sLbuVXooNbn_3VVHyYWsgr6wtdsJC5ZJu5o3BJlNInXj08zidXd8pPj6sJoF8XHX9Y9BDxZ_XgUIkmK2DB_jyi7cIXTNJsEo0ApPvCQOrZTLYLgfRs7tia7CFlrLJrUHHluOjnQOHfRlRfZYN8y6MBqUU",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "cli",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "error": "KeyWrap.Failure.wrongKey"
+    },
+    {
+      "name": "unwrap-cli-envelope-as-recovery",
+      "wrapped": "v1.EBESExQVFhcYGRob.ywWitBCBjHQpkhrtvA-2rDLU5rYiLuc7KxwlZ8CVjgRq7rCR--d5r_R-7S2tHmle5IKbpqo3EPVi9UnUKqoXWTwP0_ZVaf1rUTNqv2LTOPngSq2E_6dsx63t0HufzzgQcXeOAoeAbVD5x8hDqAZYDuqe1aHg-QtKMGaOSjvSRdWyXmlrzRECBWt02BVaqD9xCJTDO8nrIYiHS3S0nRMlBQpp_XYpp6dYXRCRbylvGxHKF8A3vCUXoohpAo48Fh-ywI-n-J8qjoseohSLGcaZ8S6IYP2eQhBWss45IY8wYXpR9Q_uVBo-dQLb5fFEb2OTaL6RfNZJTsrPPEQCEQa8QCTG5jy8b-H0x1qXJ_NsihA",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "error": "KeyWrap.Failure.wrongKey"
+    },
+    {
+      "name": "unwrap-wrong-material",
+      "wrapped": "v1.EBESExQVFhcYGRob.qUF4uXZngBvzSRgme_SKaRQDkG-x67b2_sbB8MU6aK6jjnoZqp7TQGXxuoj-7Mf_Vz_Yw697Ajxzygx1rVrF-Qy0RkQqGDiLVfEUNhedNvQr4o0l6Q_9hWxHiaxMkenw9HpreSqCE93FTxFr8siez0bnIPGvOCsVY8L7R_C2o7fEWIPVMRV1cDmXepTFGsf4lp_Wi8yAe4z0o7SwO_sLbuVXooNbn_3VVHyYWsgr6wtdsJC5ZJu5o3BJlNInXj08zidXd8pPj6sJoF8XHX9Y9BDxZ_XgUIkmK2DB_jyi7cIXTNJsEo0ApPvCQOrZTLYLgfRs7tia7CFlrLJrUHHluOjnQOHfRlRfZYN8y6MBqUU",
+      "materialHex": "a1a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "error": "KeyWrap.Failure.wrongKey"
+    },
+    {
+      "name": "unwrap-wrong-kid",
+      "wrapped": "v1.EBESExQVFhcYGRob.qUF4uXZngBvzSRgme_SKaRQDkG-x67b2_sbB8MU6aK6jjnoZqp7TQGXxuoj-7Mf_Vz_Yw697Ajxzygx1rVrF-Qy0RkQqGDiLVfEUNhedNvQr4o0l6Q_9hWxHiaxMkenw9HpreSqCE93FTxFr8siez0bnIPGvOCsVY8L7R_C2o7fEWIPVMRV1cDmXepTFGsf4lp_Wi8yAe4z0o7SwO_sLbuVXooNbn_3VVHyYWsgr6wtdsJC5ZJu5o3BJlNInXj08zidXd8pPj6sJoF8XHX9Y9BDxZ_XgUIkmK2DB_jyi7cIXTNJsEo0ApPvCQOrZTLYLgfRs7tia7CFlrLJrUHHluOjnQOHfRlRfZYN8y6MBqUU",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-other",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "error": "KeyWrap.Failure.wrongKey"
+    },
+    {
+      "name": "unwrap-wrong-salt",
+      "wrapped": "v1.EBESExQVFhcYGRob.qUF4uXZngBvzSRgme_SKaRQDkG-x67b2_sbB8MU6aK6jjnoZqp7TQGXxuoj-7Mf_Vz_Yw697Ajxzygx1rVrF-Qy0RkQqGDiLVfEUNhedNvQr4o0l6Q_9hWxHiaxMkenw9HpreSqCE93FTxFr8siez0bnIPGvOCsVY8L7R_C2o7fEWIPVMRV1cDmXepTFGsf4lp_Wi8yAe4z0o7SwO_sLbuVXooNbn_3VVHyYWsgr6wtdsJC5ZJu5o3BJlNInXj08zidXd8pPj6sJoF8XHX9Y9BDxZ_XgUIkmK2DB_jyi7cIXTNJsEo0ApPvCQOrZTLYLgfRs7tia7CFlrLJrUHHluOjnQOHfRlRfZYN8y6MBqUU",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "4141414141414141414141414141414141414141414141414141414141414141",
+      "error": "KeyWrap.Failure.wrongKey"
+    },
+    {
+      "name": "unwrap-material-15-bytes",
+      "wrapped": "v1.EBESExQVFhcYGRob.qUF4uXZngBvzSRgme_SKaRQDkG-x67b2_sbB8MU6aK6jjnoZqp7TQGXxuoj-7Mf_Vz_Yw697Ajxzygx1rVrF-Qy0RkQqGDiLVfEUNhedNvQr4o0l6Q_9hWxHiaxMkenw9HpreSqCE93FTxFr8siez0bnIPGvOCsVY8L7R_C2o7fEWIPVMRV1cDmXepTFGsf4lp_Wi8yAe4z0o7SwO_sLbuVXooNbn_3VVHyYWsgr6wtdsJC5ZJu5o3BJlNInXj08zidXd8pPj6sJoF8XHX9Y9BDxZ_XgUIkmK2DB_jyi7cIXTNJsEo0ApPvCQOrZTLYLgfRs7tia7CFlrLJrUHHluOjnQOHfRlRfZYN8y6MBqUU",
+      "materialHex": "010101010101010101010101010101",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "error": "KeyWrap.Failure.materialTooShort"
+    },
+    {
+      "name": "unwrap-empty-salt",
+      "wrapped": "v1.EBESExQVFhcYGRob.qUF4uXZngBvzSRgme_SKaRQDkG-x67b2_sbB8MU6aK6jjnoZqp7TQGXxuoj-7Mf_Vz_Yw697Ajxzygx1rVrF-Qy0RkQqGDiLVfEUNhedNvQr4o0l6Q_9hWxHiaxMkenw9HpreSqCE93FTxFr8siez0bnIPGvOCsVY8L7R_C2o7fEWIPVMRV1cDmXepTFGsf4lp_Wi8yAe4z0o7SwO_sLbuVXooNbn_3VVHyYWsgr6wtdsJC5ZJu5o3BJlNInXj08zidXd8pPj6sJoF8XHX9Y9BDxZ_XgUIkmK2DB_jyi7cIXTNJsEo0ApPvCQOrZTLYLgfRs7tia7CFlrLJrUHHluOjnQOHfRlRfZYN8y6MBqUU",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "",
+      "error": "KeyWrap.Failure.invalidParameters"
+    },
+    {
+      "name": "unwrap-malformed-envelope",
+      "wrapped": "v1.AAAA",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "error": "SnippetCrypto.Failure.malformedEnvelope"
+    },
+    {
+      "name": "unwrap-version-v2",
+      "wrapped": "v2.EBESExQVFhcYGRob.qUF4uXZngBvzSRgme_SKaRQDkG-x67b2_sbB8MU6aK6jjnoZqp7TQGXxuoj-7Mf_Vz_Yw697Ajxzygx1rVrF-Qy0RkQqGDiLVfEUNhedNvQr4o0l6Q_9hWxHiaxMkenw9HpreSqCE93FTxFr8siez0bnIPGvOCsVY8L7R_C2o7fEWIPVMRV1cDmXepTFGsf4lp_Wi8yAe4z0o7SwO_sLbuVXooNbn_3VVHyYWsgr6wtdsJC5ZJu5o3BJlNInXj08zidXd8pPj6sJoF8XHX9Y9BDxZ_XgUIkmK2DB_jyi7cIXTNJsEo0ApPvCQOrZTLYLgfRs7tia7CFlrLJrUHHluOjnQOHfRlRfZYN8y6MBqUU",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "error": "SnippetCrypto.Failure.unsupportedWireVersion"
+    },
+    {
+      "name": "unwrap-31-byte-plaintext",
+      "wrapped": "v1.ExMTExMTExMTExMT.y5ktzmPhKOG3c-GfdUC9KKT804JyLVUaNKZABUWJAkWszX8CB5AmMJ-DdAzfA5Fo6hZ-PJeH6IG4ovz7svl3XwPwnMA-bzmTq9qZcx3qBDzIiTdJKk3K2VQ_HiLHxRlMmiFLWecsImGBZRxZyw_SolrrUucMidnYpfAphlseq-Mqi4bNt9IKN91tRqV1RrwnLQ4SWA-3_DfKReKZoQNsaTnBSJwYw8e7WJfK9eChP4ohn6h8kaZgCGQ518PYcywmBCTbFFnq7WheBADeTuW3U-BGjy3yM0E0IkvBH0bZpgp3ZQw8i9Mf_Am7hfBhtgozLxLbVpTffjtfxCCl_2heAkHh8HD3zzRCu98BMKqYzrY",
+      "materialHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "purpose": "recovery",
+      "kid": "k-0f1e2d3c-4b5",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "error": "KeyWrap.Failure.invalidParameters"
+    }
+  ]
+}

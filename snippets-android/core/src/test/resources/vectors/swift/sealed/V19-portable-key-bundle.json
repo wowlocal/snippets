@@ -1,0 +1,150 @@
+{
+  "format": "snippets-swift-interop/V19-portable-key-bundle/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "LibraryKeyBootstrap.PortableKeyBundle.jsonData (compact, sorted keys, slashes unescaped) and its strict reader (brief 02 §2.7)",
+  "notes": ["`ok` in parse cases is the 64-byte material."],
+  "cases": [
+    {
+      "name": "material-0-63",
+      "kind": "encode",
+      "materialHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonHex": "7b226b6579223a2241414543417751464267634943516f4c4441304f4478415245684d554652595847426b61477877644868383d222c2273616c74223a22494345694979516c4a69636f4b536f724c4330754c7a41784d6a4d304e5459334f446b364f7a7739506a383d222c22736368656d6156657273696f6e223a312c2273636f70654944223a2273796e632d7631227d"
+    },
+    {
+      "name": "material-99-aa",
+      "kind": "encode",
+      "materialHex": "9999999999999999999999999999999999999999999999999999999999999999aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "jsonText": "{\"key\":\"mZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZk=\",\"salt\":\"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonHex": "7b226b6579223a226d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6d5a6b3d222c2273616c74223a227171717171717171717171717171717171717171717171717171717171717171717171717171717171716f3d222c22736368656d6156657273696f6e223a312c2273636f70654944223a2273796e632d7631227d"
+    },
+    {
+      "name": "material-ff",
+      "kind": "encode",
+      "materialHex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "jsonText": "{\"key\":\"//////////////////////////////////////////8=\",\"salt\":\"//////////////////////////////////////////8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonHex": "7b226b6579223a222f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f383d222c2273616c74223a222f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f383d222c22736368656d6156657273696f6e223a312c2273636f70654944223a2273796e632d7631227d"
+    },
+    {
+      "name": "material-with-slash-and-plus",
+      "kind": "encode",
+      "materialHex": "fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "jsonText": "{\"key\":\"+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/s=\",\"salt\":\"//////////////////////////////////////////8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonHex": "7b226b6579223a222b2f76372b2f76372b2f76372b2f76372b2f76372b2f76372b2f76372b2f76372b2f76372b2f76372b2f733d222c2273616c74223a222f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f383d222c22736368656d6156657273696f6e223a312c2273636f70654944223a2273796e632d7631227d"
+    },
+    {
+      "name": "parse-ok",
+      "kind": "parse",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonByteCount": 146,
+      "ok": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    },
+    {
+      "name": "parse-ok-pretty-and-reordered",
+      "kind": "parse",
+      "jsonText": "{\n  \"scopeID\": \"sync-v1\",\n  \"schemaVersion\": 1,\n  \"salt\": \"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\n  \"key\": \"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\"\n}",
+      "jsonByteCount": 163,
+      "ok": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    },
+    {
+      "name": "parse-extra-key",
+      "kind": "parse",
+      "jsonText": "{\"extra\":1,\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonByteCount": 156,
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "parse-missing-salt",
+      "kind": "parse",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonByteCount": 92,
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "parse-schema-2",
+      "kind": "parse",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":2,\"scopeID\":\"sync-v1\"}",
+      "jsonByteCount": 146,
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "parse-schema-as-double",
+      "kind": "parse",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1.0,\"scopeID\":\"sync-v1\"}",
+      "jsonByteCount": 148,
+      "ok": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+    },
+    {
+      "name": "parse-scope-other",
+      "kind": "parse",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v2\"}",
+      "jsonByteCount": 146,
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "parse-key-31-bytes",
+      "kind": "parse",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHg==\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonByteCount": 146,
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "parse-key-unpadded",
+      "kind": "parse",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonByteCount": 145,
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "parse-key-base64url",
+      "kind": "parse",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonByteCount": 145,
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "parse-key-non-canonical-trailing-bits",
+      "kind": "parse",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh9=\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}",
+      "jsonByteCount": 146,
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "parse-not-json",
+      "kind": "parse",
+      "jsonText": "bundle",
+      "jsonByteCount": 6,
+      "error": "NSError"
+    },
+    {
+      "name": "parse-over-2048-bytes",
+      "kind": "parse",
+      "jsonText": "{\"key\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"salt\":\"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=\",\"schemaVersion\":1,\"scopeID\":\"sync-v1\"}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ",
+      "jsonByteCount": 2194,
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "encode-0-bytes",
+      "kind": "encode",
+      "materialHex": "",
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "encode-63-bytes",
+      "kind": "encode",
+      "materialHex": "010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    },
+    {
+      "name": "encode-65-bytes",
+      "kind": "encode",
+      "materialHex": "0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+      "error": "LibraryKeyBootstrap.Failure.invalidFormat"
+    }
+  ]
+}

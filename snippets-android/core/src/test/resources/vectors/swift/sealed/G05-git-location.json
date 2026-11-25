@@ -1,0 +1,2983 @@
+{
+  "format": "snippets-swift-interop/G05-git-location/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "GitRepositoryLocation.parse, spec, canonicalIdentity, GitSSHClient.remoteCommand, GitRemote.isValidBranch / isValidUsername / isValidToken (brief 03 §2.1, §6.2)",
+  "notes": ["Each parse case is run twice: as the app does (`ok` / `error`) and with allowsInsecureLoopback (the DEBUG loopback test seam).", "canonicalIdentity = lowercase host + \"/\" + path without leading slashes, one trailing \".git\" and trailing slashes; no scheme, user or port. It keys every Git identity in G06 and V17.", "URL parsing is Foundation's (URLComponents / URL(string:)); percent-encoding, IDN and IPv6 cases record what it does on the OS that ran the emitter."],
+  "cases": [
+    {
+      "name": "parse-0",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/Example/Snippets-Library.git",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f4578616d706c652f536e6970706574732d4c6962726172792e676974"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com/Example/Snippets-Library.git",
+        "canonicalIdentity": "github.com/Example/Snippets-Library",
+        "url": "https://github.com/Example/Snippets-Library.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com/Example/Snippets-Library.git",
+          "canonicalIdentity": "github.com/Example/Snippets-Library",
+          "url": "https://github.com/Example/Snippets-Library.git"
+        }
+      }
+    },
+    {
+      "name": "parse-1",
+      "kind": "parse",
+      "input": {
+        "text": "https://GitHub.com/Example/Snippets-Library",
+        "utf8Hex": "68747470733a2f2f4769744875622e636f6d2f4578616d706c652f536e6970706574732d4c696272617279"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com/Example/Snippets-Library",
+        "canonicalIdentity": "github.com/Example/Snippets-Library",
+        "url": "https://github.com/Example/Snippets-Library"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com/Example/Snippets-Library",
+          "canonicalIdentity": "github.com/Example/Snippets-Library",
+          "url": "https://github.com/Example/Snippets-Library"
+        }
+      }
+    },
+    {
+      "name": "parse-2",
+      "kind": "parse",
+      "input": {
+        "text": "HTTPS://GITHUB.COM/Example/Repo.git/",
+        "utf8Hex": "48545450533a2f2f4749544855422e434f4d2f4578616d706c652f5265706f2e6769742f"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com/Example/Repo.git",
+        "canonicalIdentity": "github.com/Example/Repo",
+        "url": "https://github.com/Example/Repo.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com/Example/Repo.git",
+          "canonicalIdentity": "github.com/Example/Repo",
+          "url": "https://github.com/Example/Repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-3",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/example/repo.git///",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f6578616d706c652f7265706f2e6769742f2f2f"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com/example/repo.git",
+        "canonicalIdentity": "github.com/example/repo",
+        "url": "https://github.com/example/repo.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com/example/repo.git",
+          "canonicalIdentity": "github.com/example/repo",
+          "url": "https://github.com/example/repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-4",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/example/repo.git/.git",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f6578616d706c652f7265706f2e6769742f2e676974"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com/example/repo.git/.git",
+        "canonicalIdentity": "github.com/example/repo.git",
+        "url": "https://github.com/example/repo.git/.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com/example/repo.git/.git",
+          "canonicalIdentity": "github.com/example/repo.git",
+          "url": "https://github.com/example/repo.git/.git"
+        }
+      }
+    },
+    {
+      "name": "parse-5",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/example/repo.GIT",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f6578616d706c652f7265706f2e474954"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com/example/repo.GIT",
+        "canonicalIdentity": "github.com/example/repo.GIT",
+        "url": "https://github.com/example/repo.GIT"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com/example/repo.GIT",
+          "canonicalIdentity": "github.com/example/repo.GIT",
+          "url": "https://github.com/example/repo.GIT"
+        }
+      }
+    },
+    {
+      "name": "parse-6",
+      "kind": "parse",
+      "input": {
+        "text": "github.com/example/repo",
+        "utf8Hex": "6769746875622e636f6d2f6578616d706c652f7265706f"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com/example/repo",
+        "canonicalIdentity": "github.com/example/repo",
+        "url": "https://github.com/example/repo"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com/example/repo",
+          "canonicalIdentity": "github.com/example/repo",
+          "url": "https://github.com/example/repo"
+        }
+      }
+    },
+    {
+      "name": "parse-7",
+      "kind": "parse",
+      "input": {
+        "text": "github.com/example/repo.git",
+        "utf8Hex": "6769746875622e636f6d2f6578616d706c652f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com/example/repo.git",
+        "canonicalIdentity": "github.com/example/repo",
+        "url": "https://github.com/example/repo.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com/example/repo.git",
+          "canonicalIdentity": "github.com/example/repo",
+          "url": "https://github.com/example/repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-8",
+      "kind": "parse",
+      "input": {
+        "text": "  https://github.com/example/repo  ",
+        "utf8Hex": "202068747470733a2f2f6769746875622e636f6d2f6578616d706c652f7265706f2020"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com/example/repo",
+        "canonicalIdentity": "github.com/example/repo",
+        "url": "https://github.com/example/repo"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com/example/repo",
+          "canonicalIdentity": "github.com/example/repo",
+          "url": "https://github.com/example/repo"
+        }
+      }
+    },
+    {
+      "name": "parse-9",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com:8443/example/repo.git",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d3a383434332f6578616d706c652f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com:8443/example/repo.git",
+        "canonicalIdentity": "github.com/example/repo",
+        "url": "https://github.com:8443/example/repo.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com:8443/example/repo.git",
+          "canonicalIdentity": "github.com/example/repo",
+          "url": "https://github.com:8443/example/repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-10",
+      "kind": "parse",
+      "input": {
+        "text": "https://example.com/a%20b/c.git",
+        "utf8Hex": "68747470733a2f2f6578616d706c652e636f6d2f61253230622f632e676974"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://example.com/a%20b/c.git",
+        "canonicalIdentity": "example.com/a b/c",
+        "url": "https://example.com/a%20b/c.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://example.com/a%20b/c.git",
+          "canonicalIdentity": "example.com/a b/c",
+          "url": "https://example.com/a%20b/c.git"
+        }
+      }
+    },
+    {
+      "name": "parse-11",
+      "kind": "parse",
+      "input": {
+        "text": "https://example.com/caf%C3%A9/r",
+        "utf8Hex": "68747470733a2f2f6578616d706c652e636f6d2f6361662543332541392f72"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://example.com/caf%C3%A9/r",
+        "canonicalIdentity": "example.com/café/r",
+        "url": "https://example.com/caf%C3%A9/r"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://example.com/caf%C3%A9/r",
+          "canonicalIdentity": "example.com/café/r",
+          "url": "https://example.com/caf%C3%A9/r"
+        }
+      }
+    },
+    {
+      "name": "parse-12",
+      "kind": "parse",
+      "input": {
+        "text": "https://example.com/café/r",
+        "utf8Hex": "68747470733a2f2f6578616d706c652e636f6d2f636166c3a92f72"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://example.com/caf%C3%A9/r",
+        "canonicalIdentity": "example.com/café/r",
+        "url": "https://example.com/caf%C3%A9/r"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://example.com/caf%C3%A9/r",
+          "canonicalIdentity": "example.com/café/r",
+          "url": "https://example.com/caf%C3%A9/r"
+        }
+      }
+    },
+    {
+      "name": "parse-13",
+      "kind": "parse",
+      "input": {
+        "text": "https://bücher.example/a/b",
+        "utf8Hex": "68747470733a2f2f62c3bc636865722e6578616d706c652f612f62"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://xn--bcher-kva.example/a/b",
+        "canonicalIdentity": "xn--bcher-kva.example/a/b",
+        "url": "https://xn--bcher-kva.example/a/b"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://xn--bcher-kva.example/a/b",
+          "canonicalIdentity": "xn--bcher-kva.example/a/b",
+          "url": "https://xn--bcher-kva.example/a/b"
+        }
+      }
+    },
+    {
+      "name": "parse-14",
+      "kind": "parse",
+      "input": {
+        "text": "https://xn--bcher-kva.example/a/b",
+        "utf8Hex": "68747470733a2f2f786e2d2d62636865722d6b76612e6578616d706c652f612f62"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://xn--bcher-kva.example/a/b",
+        "canonicalIdentity": "xn--bcher-kva.example/a/b",
+        "url": "https://xn--bcher-kva.example/a/b"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://xn--bcher-kva.example/a/b",
+          "canonicalIdentity": "xn--bcher-kva.example/a/b",
+          "url": "https://xn--bcher-kva.example/a/b"
+        }
+      }
+    },
+    {
+      "name": "parse-15",
+      "kind": "parse",
+      "input": {
+        "text": "https://192.0.2.1/git/repo.git",
+        "utf8Hex": "68747470733a2f2f3139322e302e322e312f6769742f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://192.0.2.1/git/repo.git",
+        "canonicalIdentity": "192.0.2.1/git/repo",
+        "url": "https://192.0.2.1/git/repo.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://192.0.2.1/git/repo.git",
+          "canonicalIdentity": "192.0.2.1/git/repo",
+          "url": "https://192.0.2.1/git/repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-16",
+      "kind": "parse",
+      "input": {
+        "text": "https://[2001:db8::1]/repo.git",
+        "utf8Hex": "68747470733a2f2f5b323030313a6462383a3a315d2f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://[2001:db8::1]/repo.git",
+        "canonicalIdentity": "2001:db8::1/repo",
+        "url": "https://[2001:db8::1]/repo.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://[2001:db8::1]/repo.git",
+          "canonicalIdentity": "2001:db8::1/repo",
+          "url": "https://[2001:db8::1]/repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-17",
+      "kind": "parse",
+      "input": {
+        "text": "https://gitlab.com/group/sub/group/repo.git",
+        "utf8Hex": "68747470733a2f2f6769746c61622e636f6d2f67726f75702f7375622f67726f75702f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://gitlab.com/group/sub/group/repo.git",
+        "canonicalIdentity": "gitlab.com/group/sub/group/repo",
+        "url": "https://gitlab.com/group/sub/group/repo.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://gitlab.com/group/sub/group/repo.git",
+          "canonicalIdentity": "gitlab.com/group/sub/group/repo",
+          "url": "https://gitlab.com/group/sub/group/repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-18",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/a",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f61"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://github.com/a",
+        "canonicalIdentity": "github.com/a",
+        "url": "https://github.com/a"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://github.com/a",
+          "canonicalIdentity": "github.com/a",
+          "url": "https://github.com/a"
+        }
+      }
+    },
+    {
+      "name": "parse-19",
+      "kind": "parse",
+      "input": {
+        "text": "https://user@github.com/a/b",
+        "utf8Hex": "68747470733a2f2f75736572406769746875622e636f6d2f612f62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-20",
+      "kind": "parse",
+      "input": {
+        "text": "https://user:secret@github.com/a/b",
+        "utf8Hex": "68747470733a2f2f757365723a736563726574406769746875622e636f6d2f612f62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-21",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/a/b?x=1",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f612f623f783d31"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-22",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/a/b#frag",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f612f622366726167"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-23",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-24",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-25",
+      "kind": "parse",
+      "input": {
+        "text": "https:///a/b",
+        "utf8Hex": "68747470733a2f2f2f612f62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-26",
+      "kind": "parse",
+      "input": {
+        "text": "http://github.com/a/b",
+        "utf8Hex": "687474703a2f2f6769746875622e636f6d2f612f62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-27",
+      "kind": "parse",
+      "input": {
+        "text": "http://localhost/repo.git",
+        "utf8Hex": "687474703a2f2f6c6f63616c686f73742f7265706f2e676974"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "http://localhost/repo.git",
+          "canonicalIdentity": "localhost/repo",
+          "url": "http://localhost/repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-28",
+      "kind": "parse",
+      "input": {
+        "text": "http://127.0.0.1:8080/repo.git",
+        "utf8Hex": "687474703a2f2f3132372e302e302e313a383038302f7265706f2e676974"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "http://127.0.0.1:8080/repo.git",
+          "canonicalIdentity": "127.0.0.1/repo",
+          "url": "http://127.0.0.1:8080/repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-29",
+      "kind": "parse",
+      "input": {
+        "text": "http://[::1]/repo.git",
+        "utf8Hex": "687474703a2f2f5b3a3a315d2f7265706f2e676974"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-30",
+      "kind": "parse",
+      "input": {
+        "text": "http://dev.localhost/repo.git",
+        "utf8Hex": "687474703a2f2f6465762e6c6f63616c686f73742f7265706f2e676974"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "http://dev.localhost/repo.git",
+          "canonicalIdentity": "dev.localhost/repo",
+          "url": "http://dev.localhost/repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-31",
+      "kind": "parse",
+      "input": {
+        "text": "http://localhost.example.com/repo.git",
+        "utf8Hex": "687474703a2f2f6c6f63616c686f73742e6578616d706c652e636f6d2f7265706f2e676974"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-32",
+      "kind": "parse",
+      "input": {
+        "text": "ftp://example.com/a/b",
+        "utf8Hex": "6674703a2f2f6578616d706c652e636f6d2f612f62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-33",
+      "kind": "parse",
+      "input": {
+        "text": "file:///tmp/repo.git",
+        "utf8Hex": "66696c653a2f2f2f746d702f7265706f2e676974"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-34",
+      "kind": "parse",
+      "input": {
+        "text": "git://github.com/a/b",
+        "utf8Hex": "6769743a2f2f6769746875622e636f6d2f612f62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-35",
+      "kind": "parse",
+      "input": {
+        "text": "/tmp/repo.git",
+        "utf8Hex": "2f746d702f7265706f2e676974"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-36",
+      "kind": "parse",
+      "input": {
+        "text": "./repo.git",
+        "utf8Hex": "2e2f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://./repo.git",
+        "canonicalIdentity": "./repo",
+        "url": "https://./repo.git"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://./repo.git",
+          "canonicalIdentity": "./repo",
+          "url": "https://./repo.git"
+        }
+      }
+    },
+    {
+      "name": "parse-37",
+      "kind": "parse",
+      "input": {
+        "text": "repo",
+        "utf8Hex": "7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-38",
+      "kind": "parse",
+      "input": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-39",
+      "kind": "parse",
+      "input": {
+        "text": "   ",
+        "utf8Hex": "202020"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-40",
+      "kind": "parse",
+      "input": {
+        "text": "https://git hub.com/a/b",
+        "utf8Hex": "68747470733a2f2f676974206875622e636f6d2f612f62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-41",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/a b",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f612062"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-42",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/a\tb",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f610962"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-43",
+      "kind": "parse",
+      "input": {
+        "text": "https://github.com/a\u007fb",
+        "utf8Hex": "68747470733a2f2f6769746875622e636f6d2f617f62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-44",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:Example/Repo.git",
+        "utf8Hex": "676974406769746875622e636f6d3a4578616d706c652f5265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@github.com:Example/Repo.git",
+        "canonicalIdentity": "github.com/Example/Repo",
+        "user": "git",
+        "host": "github.com",
+        "port": null,
+        "path": "Example/Repo.git",
+        "scpStyle": true,
+        "destination": "git@github.com",
+        "uploadPackCommand": "git-upload-pack 'Example/Repo.git'",
+        "receivePackCommand": "git-receive-pack 'Example/Repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@github.com:Example/Repo.git",
+          "canonicalIdentity": "github.com/Example/Repo",
+          "user": "git",
+          "host": "github.com",
+          "port": null,
+          "path": "Example/Repo.git",
+          "scpStyle": true,
+          "destination": "git@github.com",
+          "uploadPackCommand": "git-upload-pack 'Example/Repo.git'",
+          "receivePackCommand": "git-receive-pack 'Example/Repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-45",
+      "kind": "parse",
+      "input": {
+        "text": "github.com:example/repo",
+        "utf8Hex": "6769746875622e636f6d3a6578616d706c652f7265706f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "github.com:example/repo",
+        "canonicalIdentity": "github.com/example/repo",
+        "user": null,
+        "host": "github.com",
+        "port": null,
+        "path": "example/repo",
+        "scpStyle": true,
+        "destination": "github.com",
+        "uploadPackCommand": "git-upload-pack 'example/repo'",
+        "receivePackCommand": "git-receive-pack 'example/repo'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "github.com:example/repo",
+          "canonicalIdentity": "github.com/example/repo",
+          "user": null,
+          "host": "github.com",
+          "port": null,
+          "path": "example/repo",
+          "scpStyle": true,
+          "destination": "github.com",
+          "uploadPackCommand": "git-upload-pack 'example/repo'",
+          "receivePackCommand": "git-receive-pack 'example/repo'"
+        }
+      }
+    },
+    {
+      "name": "parse-46",
+      "kind": "parse",
+      "input": {
+        "text": "git@GitHub.com:Example/Repo.git/",
+        "utf8Hex": "676974404769744875622e636f6d3a4578616d706c652f5265706f2e6769742f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@GitHub.com:Example/Repo.git/",
+        "canonicalIdentity": "github.com/Example/Repo.git",
+        "user": "git",
+        "host": "GitHub.com",
+        "port": null,
+        "path": "Example/Repo.git/",
+        "scpStyle": true,
+        "destination": "git@GitHub.com",
+        "uploadPackCommand": "git-upload-pack 'Example/Repo.git/'",
+        "receivePackCommand": "git-receive-pack 'Example/Repo.git/'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@GitHub.com:Example/Repo.git/",
+          "canonicalIdentity": "github.com/Example/Repo.git",
+          "user": "git",
+          "host": "GitHub.com",
+          "port": null,
+          "path": "Example/Repo.git/",
+          "scpStyle": true,
+          "destination": "git@GitHub.com",
+          "uploadPackCommand": "git-upload-pack 'Example/Repo.git/'",
+          "receivePackCommand": "git-receive-pack 'Example/Repo.git/'"
+        }
+      }
+    },
+    {
+      "name": "parse-47",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:/abs/repo.git",
+        "utf8Hex": "676974406769746875622e636f6d3a2f6162732f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@github.com:/abs/repo.git",
+        "canonicalIdentity": "github.com/abs/repo",
+        "user": "git",
+        "host": "github.com",
+        "port": null,
+        "path": "/abs/repo.git",
+        "scpStyle": true,
+        "destination": "git@github.com",
+        "uploadPackCommand": "git-upload-pack '/abs/repo.git'",
+        "receivePackCommand": "git-receive-pack '/abs/repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@github.com:/abs/repo.git",
+          "canonicalIdentity": "github.com/abs/repo",
+          "user": "git",
+          "host": "github.com",
+          "port": null,
+          "path": "/abs/repo.git",
+          "scpStyle": true,
+          "destination": "git@github.com",
+          "uploadPackCommand": "git-upload-pack '/abs/repo.git'",
+          "receivePackCommand": "git-receive-pack '/abs/repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-48",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:~/repo.git",
+        "utf8Hex": "676974406769746875622e636f6d3a7e2f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@github.com:~/repo.git",
+        "canonicalIdentity": "github.com/~/repo",
+        "user": "git",
+        "host": "github.com",
+        "port": null,
+        "path": "~/repo.git",
+        "scpStyle": true,
+        "destination": "git@github.com",
+        "uploadPackCommand": "git-upload-pack '~/repo.git'",
+        "receivePackCommand": "git-receive-pack '~/repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@github.com:~/repo.git",
+          "canonicalIdentity": "github.com/~/repo",
+          "user": "git",
+          "host": "github.com",
+          "port": null,
+          "path": "~/repo.git",
+          "scpStyle": true,
+          "destination": "git@github.com",
+          "uploadPackCommand": "git-upload-pack '~/repo.git'",
+          "receivePackCommand": "git-receive-pack '~/repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-49",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:~user/repo.git",
+        "utf8Hex": "676974406769746875622e636f6d3a7e757365722f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@github.com:~user/repo.git",
+        "canonicalIdentity": "github.com/~user/repo",
+        "user": "git",
+        "host": "github.com",
+        "port": null,
+        "path": "~user/repo.git",
+        "scpStyle": true,
+        "destination": "git@github.com",
+        "uploadPackCommand": "git-upload-pack '~user/repo.git'",
+        "receivePackCommand": "git-receive-pack '~user/repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@github.com:~user/repo.git",
+          "canonicalIdentity": "github.com/~user/repo",
+          "user": "git",
+          "host": "github.com",
+          "port": null,
+          "path": "~user/repo.git",
+          "scpStyle": true,
+          "destination": "git@github.com",
+          "uploadPackCommand": "git-upload-pack '~user/repo.git'",
+          "receivePackCommand": "git-receive-pack '~user/repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-50",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:repo",
+        "utf8Hex": "676974406769746875622e636f6d3a7265706f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@github.com:repo",
+        "canonicalIdentity": "github.com/repo",
+        "user": "git",
+        "host": "github.com",
+        "port": null,
+        "path": "repo",
+        "scpStyle": true,
+        "destination": "git@github.com",
+        "uploadPackCommand": "git-upload-pack 'repo'",
+        "receivePackCommand": "git-receive-pack 'repo'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@github.com:repo",
+          "canonicalIdentity": "github.com/repo",
+          "user": "git",
+          "host": "github.com",
+          "port": null,
+          "path": "repo",
+          "scpStyle": true,
+          "destination": "git@github.com",
+          "uploadPackCommand": "git-upload-pack 'repo'",
+          "receivePackCommand": "git-receive-pack 'repo'"
+        }
+      }
+    },
+    {
+      "name": "parse-51",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:",
+        "utf8Hex": "676974406769746875622e636f6d3a"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-52",
+      "kind": "parse",
+      "input": {
+        "text": "user.name_x-y@host.example:path/to/repo",
+        "utf8Hex": "757365722e6e616d655f782d7940686f73742e6578616d706c653a706174682f746f2f7265706f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "user.name_x-y@host.example:path/to/repo",
+        "canonicalIdentity": "host.example/path/to/repo",
+        "user": "user.name_x-y",
+        "host": "host.example",
+        "port": null,
+        "path": "path/to/repo",
+        "scpStyle": true,
+        "destination": "user.name_x-y@host.example",
+        "uploadPackCommand": "git-upload-pack 'path/to/repo'",
+        "receivePackCommand": "git-receive-pack 'path/to/repo'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "user.name_x-y@host.example:path/to/repo",
+          "canonicalIdentity": "host.example/path/to/repo",
+          "user": "user.name_x-y",
+          "host": "host.example",
+          "port": null,
+          "path": "path/to/repo",
+          "scpStyle": true,
+          "destination": "user.name_x-y@host.example",
+          "uploadPackCommand": "git-upload-pack 'path/to/repo'",
+          "receivePackCommand": "git-receive-pack 'path/to/repo'"
+        }
+      }
+    },
+    {
+      "name": "parse-53",
+      "kind": "parse",
+      "input": {
+        "text": "a@b@host:repo",
+        "utf8Hex": "61406240686f73743a7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-54",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://git@github.com/example/repo.git",
+        "utf8Hex": "7373683a2f2f676974406769746875622e636f6d2f6578616d706c652f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://git@github.com/example/repo.git",
+        "canonicalIdentity": "github.com/example/repo",
+        "user": "git",
+        "host": "github.com",
+        "port": null,
+        "path": "/example/repo.git",
+        "scpStyle": false,
+        "destination": "git@github.com",
+        "uploadPackCommand": "git-upload-pack '/example/repo.git'",
+        "receivePackCommand": "git-receive-pack '/example/repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://git@github.com/example/repo.git",
+          "canonicalIdentity": "github.com/example/repo",
+          "user": "git",
+          "host": "github.com",
+          "port": null,
+          "path": "/example/repo.git",
+          "scpStyle": false,
+          "destination": "git@github.com",
+          "uploadPackCommand": "git-upload-pack '/example/repo.git'",
+          "receivePackCommand": "git-receive-pack '/example/repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-55",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://git@github.com:2222/example/repo.git",
+        "utf8Hex": "7373683a2f2f676974406769746875622e636f6d3a323232322f6578616d706c652f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://git@github.com:2222/example/repo.git",
+        "canonicalIdentity": "github.com/example/repo",
+        "user": "git",
+        "host": "github.com",
+        "port": 2222,
+        "path": "/example/repo.git",
+        "scpStyle": false,
+        "destination": "git@github.com",
+        "uploadPackCommand": "git-upload-pack '/example/repo.git'",
+        "receivePackCommand": "git-receive-pack '/example/repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://git@github.com:2222/example/repo.git",
+          "canonicalIdentity": "github.com/example/repo",
+          "user": "git",
+          "host": "github.com",
+          "port": 2222,
+          "path": "/example/repo.git",
+          "scpStyle": false,
+          "destination": "git@github.com",
+          "uploadPackCommand": "git-upload-pack '/example/repo.git'",
+          "receivePackCommand": "git-receive-pack '/example/repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-56",
+      "kind": "parse",
+      "input": {
+        "text": "SSH://git@GitHub.com/Example/Repo.git/",
+        "utf8Hex": "5353483a2f2f676974404769744875622e636f6d2f4578616d706c652f5265706f2e6769742f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://git@GitHub.com/Example/Repo.git/",
+        "canonicalIdentity": "github.com/Example/Repo.git",
+        "user": "git",
+        "host": "GitHub.com",
+        "port": null,
+        "path": "/Example/Repo.git/",
+        "scpStyle": false,
+        "destination": "git@GitHub.com",
+        "uploadPackCommand": "git-upload-pack '/Example/Repo.git/'",
+        "receivePackCommand": "git-receive-pack '/Example/Repo.git/'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://git@GitHub.com/Example/Repo.git/",
+          "canonicalIdentity": "github.com/Example/Repo.git",
+          "user": "git",
+          "host": "GitHub.com",
+          "port": null,
+          "path": "/Example/Repo.git/",
+          "scpStyle": false,
+          "destination": "git@GitHub.com",
+          "uploadPackCommand": "git-upload-pack '/Example/Repo.git/'",
+          "receivePackCommand": "git-receive-pack '/Example/Repo.git/'"
+        }
+      }
+    },
+    {
+      "name": "parse-57",
+      "kind": "parse",
+      "input": {
+        "text": "git+ssh://git@host.example/path/repo",
+        "utf8Hex": "6769742b7373683a2f2f67697440686f73742e6578616d706c652f706174682f7265706f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://git@host.example/path/repo",
+        "canonicalIdentity": "host.example/path/repo",
+        "user": "git",
+        "host": "host.example",
+        "port": null,
+        "path": "/path/repo",
+        "scpStyle": false,
+        "destination": "git@host.example",
+        "uploadPackCommand": "git-upload-pack '/path/repo'",
+        "receivePackCommand": "git-receive-pack '/path/repo'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://git@host.example/path/repo",
+          "canonicalIdentity": "host.example/path/repo",
+          "user": "git",
+          "host": "host.example",
+          "port": null,
+          "path": "/path/repo",
+          "scpStyle": false,
+          "destination": "git@host.example",
+          "uploadPackCommand": "git-upload-pack '/path/repo'",
+          "receivePackCommand": "git-receive-pack '/path/repo'"
+        }
+      }
+    },
+    {
+      "name": "parse-58",
+      "kind": "parse",
+      "input": {
+        "text": "GIT+SSH://git@host.example/path/repo",
+        "utf8Hex": "4749542b5353483a2f2f67697440686f73742e6578616d706c652f706174682f7265706f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://git@host.example/path/repo",
+        "canonicalIdentity": "host.example/path/repo",
+        "user": "git",
+        "host": "host.example",
+        "port": null,
+        "path": "/path/repo",
+        "scpStyle": false,
+        "destination": "git@host.example",
+        "uploadPackCommand": "git-upload-pack '/path/repo'",
+        "receivePackCommand": "git-receive-pack '/path/repo'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://git@host.example/path/repo",
+          "canonicalIdentity": "host.example/path/repo",
+          "user": "git",
+          "host": "host.example",
+          "port": null,
+          "path": "/path/repo",
+          "scpStyle": false,
+          "destination": "git@host.example",
+          "uploadPackCommand": "git-upload-pack '/path/repo'",
+          "receivePackCommand": "git-receive-pack '/path/repo'"
+        }
+      }
+    },
+    {
+      "name": "parse-59",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://host.example/~user/repo.git",
+        "utf8Hex": "7373683a2f2f686f73742e6578616d706c652f7e757365722f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://host.example/~user/repo.git",
+        "canonicalIdentity": "host.example/~user/repo",
+        "user": null,
+        "host": "host.example",
+        "port": null,
+        "path": "/~user/repo.git",
+        "scpStyle": false,
+        "destination": "host.example",
+        "uploadPackCommand": "git-upload-pack '~user/repo.git'",
+        "receivePackCommand": "git-receive-pack '~user/repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://host.example/~user/repo.git",
+          "canonicalIdentity": "host.example/~user/repo",
+          "user": null,
+          "host": "host.example",
+          "port": null,
+          "path": "/~user/repo.git",
+          "scpStyle": false,
+          "destination": "host.example",
+          "uploadPackCommand": "git-upload-pack '~user/repo.git'",
+          "receivePackCommand": "git-receive-pack '~user/repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-60",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://host.example/~/repo.git",
+        "utf8Hex": "7373683a2f2f686f73742e6578616d706c652f7e2f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://host.example/~/repo.git",
+        "canonicalIdentity": "host.example/~/repo",
+        "user": null,
+        "host": "host.example",
+        "port": null,
+        "path": "/~/repo.git",
+        "scpStyle": false,
+        "destination": "host.example",
+        "uploadPackCommand": "git-upload-pack '~/repo.git'",
+        "receivePackCommand": "git-receive-pack '~/repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://host.example/~/repo.git",
+          "canonicalIdentity": "host.example/~/repo",
+          "user": null,
+          "host": "host.example",
+          "port": null,
+          "path": "/~/repo.git",
+          "scpStyle": false,
+          "destination": "host.example",
+          "uploadPackCommand": "git-upload-pack '~/repo.git'",
+          "receivePackCommand": "git-receive-pack '~/repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-61",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://[::1]:22/repo.git",
+        "utf8Hex": "7373683a2f2f5b3a3a315d3a32322f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://[::1]:22/repo.git",
+        "canonicalIdentity": "::1/repo",
+        "user": null,
+        "host": "::1",
+        "port": 22,
+        "path": "/repo.git",
+        "scpStyle": false,
+        "destination": "::1",
+        "uploadPackCommand": "git-upload-pack '/repo.git'",
+        "receivePackCommand": "git-receive-pack '/repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://[::1]:22/repo.git",
+          "canonicalIdentity": "::1/repo",
+          "user": null,
+          "host": "::1",
+          "port": 22,
+          "path": "/repo.git",
+          "scpStyle": false,
+          "destination": "::1",
+          "uploadPackCommand": "git-upload-pack '/repo.git'",
+          "receivePackCommand": "git-receive-pack '/repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-62",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://git@[2001:db8::1]/repo.git",
+        "utf8Hex": "7373683a2f2f676974405b323030313a6462383a3a315d2f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://git@[2001:db8::1]/repo.git",
+        "canonicalIdentity": "2001:db8::1/repo",
+        "user": "git",
+        "host": "2001:db8::1",
+        "port": null,
+        "path": "/repo.git",
+        "scpStyle": false,
+        "destination": "git@2001:db8::1",
+        "uploadPackCommand": "git-upload-pack '/repo.git'",
+        "receivePackCommand": "git-receive-pack '/repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://git@[2001:db8::1]/repo.git",
+          "canonicalIdentity": "2001:db8::1/repo",
+          "user": "git",
+          "host": "2001:db8::1",
+          "port": null,
+          "path": "/repo.git",
+          "scpStyle": false,
+          "destination": "git@2001:db8::1",
+          "uploadPackCommand": "git-upload-pack '/repo.git'",
+          "receivePackCommand": "git-receive-pack '/repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-63",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://git@host.example:0/repo",
+        "utf8Hex": "7373683a2f2f67697440686f73742e6578616d706c653a302f7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-64",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://git@host.example:65535/repo",
+        "utf8Hex": "7373683a2f2f67697440686f73742e6578616d706c653a36353533352f7265706f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://git@host.example:65535/repo",
+        "canonicalIdentity": "host.example/repo",
+        "user": "git",
+        "host": "host.example",
+        "port": 65535,
+        "path": "/repo",
+        "scpStyle": false,
+        "destination": "git@host.example",
+        "uploadPackCommand": "git-upload-pack '/repo'",
+        "receivePackCommand": "git-receive-pack '/repo'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://git@host.example:65535/repo",
+          "canonicalIdentity": "host.example/repo",
+          "user": "git",
+          "host": "host.example",
+          "port": 65535,
+          "path": "/repo",
+          "scpStyle": false,
+          "destination": "git@host.example",
+          "uploadPackCommand": "git-upload-pack '/repo'",
+          "receivePackCommand": "git-receive-pack '/repo'"
+        }
+      }
+    },
+    {
+      "name": "parse-65",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://git@host.example:65536/repo",
+        "utf8Hex": "7373683a2f2f67697440686f73742e6578616d706c653a36353533362f7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-66",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://user:secret@host.example/repo",
+        "utf8Hex": "7373683a2f2f757365723a73656372657440686f73742e6578616d706c652f7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-67",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://host.example",
+        "utf8Hex": "7373683a2f2f686f73742e6578616d706c65"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-68",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://host.example/",
+        "utf8Hex": "7373683a2f2f686f73742e6578616d706c652f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://host.example/",
+        "canonicalIdentity": "host.example/",
+        "user": null,
+        "host": "host.example",
+        "port": null,
+        "path": "/",
+        "scpStyle": false,
+        "destination": "host.example",
+        "uploadPackCommand": "git-upload-pack '/'",
+        "receivePackCommand": "git-receive-pack '/'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://host.example/",
+          "canonicalIdentity": "host.example/",
+          "user": null,
+          "host": "host.example",
+          "port": null,
+          "path": "/",
+          "scpStyle": false,
+          "destination": "host.example",
+          "uploadPackCommand": "git-upload-pack '/'",
+          "receivePackCommand": "git-receive-pack '/'"
+        }
+      }
+    },
+    {
+      "name": "parse-69",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://host.example/a/../b",
+        "utf8Hex": "7373683a2f2f686f73742e6578616d706c652f612f2e2e2f62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-70",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://host.example/a/./b",
+        "utf8Hex": "7373683a2f2f686f73742e6578616d706c652f612f2e2f62"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://host.example/a/./b",
+        "canonicalIdentity": "host.example/a/./b",
+        "user": null,
+        "host": "host.example",
+        "port": null,
+        "path": "/a/./b",
+        "scpStyle": false,
+        "destination": "host.example",
+        "uploadPackCommand": "git-upload-pack '/a/./b'",
+        "receivePackCommand": "git-receive-pack '/a/./b'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://host.example/a/./b",
+          "canonicalIdentity": "host.example/a/./b",
+          "user": null,
+          "host": "host.example",
+          "port": null,
+          "path": "/a/./b",
+          "scpStyle": false,
+          "destination": "host.example",
+          "uploadPackCommand": "git-upload-pack '/a/./b'",
+          "receivePackCommand": "git-receive-pack '/a/./b'"
+        }
+      }
+    },
+    {
+      "name": "parse-71",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://host.example/a%20b/repo",
+        "utf8Hex": "7373683a2f2f686f73742e6578616d706c652f61253230622f7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-72",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://host.example/a%2Fb/repo",
+        "utf8Hex": "7373683a2f2f686f73742e6578616d706c652f61253246622f7265706f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "ssh://host.example/a/b/repo",
+        "canonicalIdentity": "host.example/a/b/repo",
+        "user": null,
+        "host": "host.example",
+        "port": null,
+        "path": "/a/b/repo",
+        "scpStyle": false,
+        "destination": "host.example",
+        "uploadPackCommand": "git-upload-pack '/a/b/repo'",
+        "receivePackCommand": "git-receive-pack '/a/b/repo'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "ssh://host.example/a/b/repo",
+          "canonicalIdentity": "host.example/a/b/repo",
+          "user": null,
+          "host": "host.example",
+          "port": null,
+          "path": "/a/b/repo",
+          "scpStyle": false,
+          "destination": "host.example",
+          "uploadPackCommand": "git-upload-pack '/a/b/repo'",
+          "receivePackCommand": "git-receive-pack '/a/b/repo'"
+        }
+      }
+    },
+    {
+      "name": "parse-73",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://git@host.example/repo.git?x=1",
+        "utf8Hex": "7373683a2f2f67697440686f73742e6578616d706c652f7265706f2e6769743f783d31"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-74",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://git@host.example/repo.git#f",
+        "utf8Hex": "7373683a2f2f67697440686f73742e6578616d706c652f7265706f2e6769742366"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-75",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://git@host.example/re'po",
+        "utf8Hex": "7373683a2f2f67697440686f73742e6578616d706c652f726527706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-76",
+      "kind": "parse",
+      "input": {
+        "text": "ssh://-oProxyCommand=x@host.example/repo",
+        "utf8Hex": "7373683a2f2f2d6f50726f7879436f6d6d616e643d7840686f73742e6578616d706c652f7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-77",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:repo with space",
+        "utf8Hex": "67697440686f73743a7265706f2077697468207370616365"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-78",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:repo;rm",
+        "utf8Hex": "67697440686f73743a7265706f3b726d"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-79",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:re$po",
+        "utf8Hex": "67697440686f73743a726524706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-80",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:re`po",
+        "utf8Hex": "67697440686f73743a726560706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-81",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:re'po",
+        "utf8Hex": "67697440686f73743a726527706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-82",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:re\"po",
+        "utf8Hex": "67697440686f73743a726522706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-83",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:re\\po",
+        "utf8Hex": "67697440686f73743a72655c706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-84",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:a/../b",
+        "utf8Hex": "67697440686f73743a612f2e2e2f62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-85",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:..",
+        "utf8Hex": "67697440686f73743a2e2e"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-86",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:a..b",
+        "utf8Hex": "67697440686f73743a612e2e62"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@host:a..b",
+        "canonicalIdentity": "host/a..b",
+        "user": "git",
+        "host": "host",
+        "port": null,
+        "path": "a..b",
+        "scpStyle": true,
+        "destination": "git@host",
+        "uploadPackCommand": "git-upload-pack 'a..b'",
+        "receivePackCommand": "git-receive-pack 'a..b'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@host:a..b",
+          "canonicalIdentity": "host/a..b",
+          "user": "git",
+          "host": "host",
+          "port": null,
+          "path": "a..b",
+          "scpStyle": true,
+          "destination": "git@host",
+          "uploadPackCommand": "git-upload-pack 'a..b'",
+          "receivePackCommand": "git-receive-pack 'a..b'"
+        }
+      }
+    },
+    {
+      "name": "parse-87",
+      "kind": "parse",
+      "input": {
+        "text": "git@host:-repo",
+        "utf8Hex": "67697440686f73743a2d7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-88",
+      "kind": "parse",
+      "input": {
+        "text": "-oProxyCommand=x@host:repo",
+        "utf8Hex": "2d6f50726f7879436f6d6d616e643d7840686f73743a7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-89",
+      "kind": "parse",
+      "input": {
+        "text": "git@-host:repo",
+        "utf8Hex": "676974402d686f73743a7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-90",
+      "kind": "parse",
+      "input": {
+        "text": "git@.host:repo",
+        "utf8Hex": "676974402e686f73743a7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-91",
+      "kind": "parse",
+      "input": {
+        "text": "git@host_name:repo",
+        "utf8Hex": "67697440686f73745f6e616d653a7265706f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@host_name:repo",
+        "canonicalIdentity": "host_name/repo",
+        "user": "git",
+        "host": "host_name",
+        "port": null,
+        "path": "repo",
+        "scpStyle": true,
+        "destination": "git@host_name",
+        "uploadPackCommand": "git-upload-pack 'repo'",
+        "receivePackCommand": "git-receive-pack 'repo'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@host_name:repo",
+          "canonicalIdentity": "host_name/repo",
+          "user": "git",
+          "host": "host_name",
+          "port": null,
+          "path": "repo",
+          "scpStyle": true,
+          "destination": "git@host_name",
+          "uploadPackCommand": "git-upload-pack 'repo'",
+          "receivePackCommand": "git-receive-pack 'repo'"
+        }
+      }
+    },
+    {
+      "name": "parse-92",
+      "kind": "parse",
+      "input": {
+        "text": "git@gïthub.com:repo",
+        "utf8Hex": "6769744067c3af746875622e636f6d3a7265706f"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-93",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:Ünï/repo",
+        "utf8Hex": "676974406769746875622e636f6d3ac39c6ec3af2f7265706f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@github.com:Ünï/repo",
+        "canonicalIdentity": "github.com/Ünï/repo",
+        "user": "git",
+        "host": "github.com",
+        "port": null,
+        "path": "Ünï/repo",
+        "scpStyle": true,
+        "destination": "git@github.com",
+        "uploadPackCommand": "git-upload-pack 'Ünï/repo'",
+        "receivePackCommand": "git-receive-pack 'Ünï/repo'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@github.com:Ünï/repo",
+          "canonicalIdentity": "github.com/Ünï/repo",
+          "user": "git",
+          "host": "github.com",
+          "port": null,
+          "path": "Ünï/repo",
+          "scpStyle": true,
+          "destination": "git@github.com",
+          "uploadPackCommand": "git-upload-pack 'Ünï/repo'",
+          "receivePackCommand": "git-receive-pack 'Ünï/repo'"
+        }
+      }
+    },
+    {
+      "name": "parse-94",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:a/b.git?x",
+        "utf8Hex": "676974406769746875622e636f6d3a612f622e6769743f78"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-95",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:aaaaaaaaaaaaaaaaaaaaaaaaa…(1039 bytes, see inputUtf8Hex)",
+        "utf8Hex": "676974406769746875622e636f6d3a61616161616161616161616161616161616161616161616161e280a628313033392062797465732c2073656520696e7075745574663848657829"
+      },
+      "inputUtf8Hex": "676974406769746875622e636f6d3a6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612f616263",
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@github.com:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/abc",
+        "canonicalIdentity": "github.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/abc",
+        "user": "git",
+        "host": "github.com",
+        "port": null,
+        "path": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/abc",
+        "scpStyle": true,
+        "destination": "git@github.com",
+        "uploadPackCommand": "git-upload-pack 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/abc'",
+        "receivePackCommand": "git-receive-pack 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/abc'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@github.com:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/abc",
+          "canonicalIdentity": "github.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/abc",
+          "user": "git",
+          "host": "github.com",
+          "port": null,
+          "path": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/abc",
+          "scpStyle": true,
+          "destination": "git@github.com",
+          "uploadPackCommand": "git-upload-pack 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/abc'",
+          "receivePackCommand": "git-receive-pack 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/abc'"
+        }
+      }
+    },
+    {
+      "name": "parse-96",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:aaaaaaaaaaaaaaaaaaaaaaaaa…(1040 bytes, see inputUtf8Hex)",
+        "utf8Hex": "676974406769746875622e636f6d3a61616161616161616161616161616161616161616161616161e280a628313034302062797465732c2073656520696e7075745574663848657829"
+      },
+      "inputUtf8Hex": "676974406769746875622e636f6d3a6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612f61626364",
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "parse-97",
+      "kind": "parse",
+      "input": {
+        "text": "C:/Users/me/repo.git",
+        "utf8Hex": "433a2f55736572732f6d652f7265706f2e676974"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "C:/Users/me/repo.git",
+        "canonicalIdentity": "c/Users/me/repo",
+        "user": null,
+        "host": "C",
+        "port": null,
+        "path": "/Users/me/repo.git",
+        "scpStyle": true,
+        "destination": "C",
+        "uploadPackCommand": "git-upload-pack '/Users/me/repo.git'",
+        "receivePackCommand": "git-receive-pack '/Users/me/repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "C:/Users/me/repo.git",
+          "canonicalIdentity": "c/Users/me/repo",
+          "user": null,
+          "host": "C",
+          "port": null,
+          "path": "/Users/me/repo.git",
+          "scpStyle": true,
+          "destination": "C",
+          "uploadPackCommand": "git-upload-pack '/Users/me/repo.git'",
+          "receivePackCommand": "git-receive-pack '/Users/me/repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-98",
+      "kind": "parse",
+      "input": {
+        "text": "localhost:3000/repo",
+        "utf8Hex": "6c6f63616c686f73743a333030302f7265706f"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "localhost:3000/repo",
+        "canonicalIdentity": "localhost/3000/repo",
+        "user": null,
+        "host": "localhost",
+        "port": null,
+        "path": "3000/repo",
+        "scpStyle": true,
+        "destination": "localhost",
+        "uploadPackCommand": "git-upload-pack '3000/repo'",
+        "receivePackCommand": "git-receive-pack '3000/repo'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "localhost:3000/repo",
+          "canonicalIdentity": "localhost/3000/repo",
+          "user": null,
+          "host": "localhost",
+          "port": null,
+          "path": "3000/repo",
+          "scpStyle": true,
+          "destination": "localhost",
+          "uploadPackCommand": "git-upload-pack '3000/repo'",
+          "receivePackCommand": "git-receive-pack '3000/repo'"
+        }
+      }
+    },
+    {
+      "name": "parse-99",
+      "kind": "parse",
+      "input": {
+        "text": "host:path:with:colons",
+        "utf8Hex": "686f73743a706174683a776974683a636f6c6f6e73"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "host:path:with:colons",
+        "canonicalIdentity": "host/path:with:colons",
+        "user": null,
+        "host": "host",
+        "port": null,
+        "path": "path:with:colons",
+        "scpStyle": true,
+        "destination": "host",
+        "uploadPackCommand": "git-upload-pack 'path:with:colons'",
+        "receivePackCommand": "git-receive-pack 'path:with:colons'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "host:path:with:colons",
+          "canonicalIdentity": "host/path:with:colons",
+          "user": null,
+          "host": "host",
+          "port": null,
+          "path": "path:with:colons",
+          "scpStyle": true,
+          "destination": "host",
+          "uploadPackCommand": "git-upload-pack 'path:with:colons'",
+          "receivePackCommand": "git-receive-pack 'path:with:colons'"
+        }
+      }
+    },
+    {
+      "name": "parse-100",
+      "kind": "parse",
+      "input": {
+        "text": "host/path:with/colon",
+        "utf8Hex": "686f73742f706174683a776974682f636f6c6f6e"
+      },
+      "ok": {
+        "kind": "https",
+        "isSSH": false,
+        "spec": "https://host/path:with/colon",
+        "canonicalIdentity": "host/path:with/colon",
+        "url": "https://host/path:with/colon"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "https",
+          "isSSH": false,
+          "spec": "https://host/path:with/colon",
+          "canonicalIdentity": "host/path:with/colon",
+          "url": "https://host/path:with/colon"
+        }
+      }
+    },
+    {
+      "name": "parse-101",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:Example/Repo.git\n",
+        "utf8Hex": "676974406769746875622e636f6d3a4578616d706c652f5265706f2e6769740a"
+      },
+      "ok": {
+        "kind": "ssh",
+        "isSSH": true,
+        "spec": "git@github.com:Example/Repo.git",
+        "canonicalIdentity": "github.com/Example/Repo",
+        "user": "git",
+        "host": "github.com",
+        "port": null,
+        "path": "Example/Repo.git",
+        "scpStyle": true,
+        "destination": "git@github.com",
+        "uploadPackCommand": "git-upload-pack 'Example/Repo.git'",
+        "receivePackCommand": "git-receive-pack 'Example/Repo.git'"
+      },
+      "withInsecureLoopbackAllowed": {
+        "ok": {
+          "kind": "ssh",
+          "isSSH": true,
+          "spec": "git@github.com:Example/Repo.git",
+          "canonicalIdentity": "github.com/Example/Repo",
+          "user": "git",
+          "host": "github.com",
+          "port": null,
+          "path": "Example/Repo.git",
+          "scpStyle": true,
+          "destination": "git@github.com",
+          "uploadPackCommand": "git-upload-pack 'Example/Repo.git'",
+          "receivePackCommand": "git-receive-pack 'Example/Repo.git'"
+        }
+      }
+    },
+    {
+      "name": "parse-102",
+      "kind": "parse",
+      "input": {
+        "text": "git@github.com:a\nb",
+        "utf8Hex": "676974406769746875622e636f6d3a610a62"
+      },
+      "error": "GitRemote.Failure.invalidURL",
+      "withInsecureLoopbackAllowed": {
+        "error": "GitRemote.Failure.invalidURL"
+      }
+    },
+    {
+      "name": "branch-0",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "main",
+        "utf8Hex": "6d61696e"
+      },
+      "branchByteCount": 4,
+      "isValid": true,
+      "refName": "refs/heads/main"
+    },
+    {
+      "name": "branch-1",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "snippets",
+        "utf8Hex": "736e697070657473"
+      },
+      "branchByteCount": 8,
+      "isValid": true,
+      "refName": "refs/heads/snippets"
+    },
+    {
+      "name": "branch-2",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "feature/x",
+        "utf8Hex": "666561747572652f78"
+      },
+      "branchByteCount": 9,
+      "isValid": true,
+      "refName": "refs/heads/feature/x"
+    },
+    {
+      "name": "branch-3",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "release/1.0",
+        "utf8Hex": "72656c656173652f312e30"
+      },
+      "branchByteCount": 11,
+      "isValid": true,
+      "refName": "refs/heads/release/1.0"
+    },
+    {
+      "name": "branch-4",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a",
+        "utf8Hex": "61"
+      },
+      "branchByteCount": 1,
+      "isValid": true,
+      "refName": "refs/heads/a"
+    },
+    {
+      "name": "branch-5",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "b×200",
+        "utf8Hex": "62c397323030"
+      },
+      "branchByteCount": 200,
+      "isValid": true,
+      "refName": "refs/heads/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "name": "branch-6",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "b×201",
+        "utf8Hex": "62c397323031"
+      },
+      "branchByteCount": 201,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-7",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "branchByteCount": 0,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-8",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "-main",
+        "utf8Hex": "2d6d61696e"
+      },
+      "branchByteCount": 5,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-9",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "/main",
+        "utf8Hex": "2f6d61696e"
+      },
+      "branchByteCount": 5,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-10",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "main/",
+        "utf8Hex": "6d61696e2f"
+      },
+      "branchByteCount": 5,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-11",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "main.",
+        "utf8Hex": "6d61696e2e"
+      },
+      "branchByteCount": 5,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-12",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "main.lock",
+        "utf8Hex": "6d61696e2e6c6f636b"
+      },
+      "branchByteCount": 9,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-13",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a..b",
+        "utf8Hex": "612e2e62"
+      },
+      "branchByteCount": 4,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-14",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a//b",
+        "utf8Hex": "612f2f62"
+      },
+      "branchByteCount": 4,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-15",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "HEAD",
+        "utf8Hex": "48454144"
+      },
+      "branchByteCount": 4,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-16",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "head",
+        "utf8Hex": "68656164"
+      },
+      "branchByteCount": 4,
+      "isValid": true,
+      "refName": "refs/heads/head"
+    },
+    {
+      "name": "branch-17",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "refs/heads/main",
+        "utf8Hex": "726566732f68656164732f6d61696e"
+      },
+      "branchByteCount": 15,
+      "isValid": true,
+      "refName": "refs/heads/refs/heads/main"
+    },
+    {
+      "name": "branch-18",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": ".hidden",
+        "utf8Hex": "2e68696464656e"
+      },
+      "branchByteCount": 7,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-19",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a/.hidden",
+        "utf8Hex": "612f2e68696464656e"
+      },
+      "branchByteCount": 9,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-20",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a/b.",
+        "utf8Hex": "612f622e"
+      },
+      "branchByteCount": 4,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-21",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a.lock/b",
+        "utf8Hex": "612e6c6f636b2f62"
+      },
+      "branchByteCount": 8,
+      "isValid": true,
+      "refName": "refs/heads/a.lock/b"
+    },
+    {
+      "name": "branch-22",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "has space",
+        "utf8Hex": "686173207370616365"
+      },
+      "branchByteCount": 9,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-23",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "ünï",
+        "utf8Hex": "c3bc6ec3af"
+      },
+      "branchByteCount": 5,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-24",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a~b",
+        "utf8Hex": "617e62"
+      },
+      "branchByteCount": 3,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-25",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a^b",
+        "utf8Hex": "615e62"
+      },
+      "branchByteCount": 3,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-26",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a:b",
+        "utf8Hex": "613a62"
+      },
+      "branchByteCount": 3,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-27",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a?b",
+        "utf8Hex": "613f62"
+      },
+      "branchByteCount": 3,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-28",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a*b",
+        "utf8Hex": "612a62"
+      },
+      "branchByteCount": 3,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-29",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a[b",
+        "utf8Hex": "615b62"
+      },
+      "branchByteCount": 3,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-30",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a\\b",
+        "utf8Hex": "615c62"
+      },
+      "branchByteCount": 3,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-31",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a@{b",
+        "utf8Hex": "61407b62"
+      },
+      "branchByteCount": 4,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-32",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "@",
+        "utf8Hex": "40"
+      },
+      "branchByteCount": 1,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-33",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a_b-c.d",
+        "utf8Hex": "615f622d632e64"
+      },
+      "branchByteCount": 7,
+      "isValid": true,
+      "refName": "refs/heads/a_b-c.d"
+    },
+    {
+      "name": "branch-34",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "A/B",
+        "utf8Hex": "412f42"
+      },
+      "branchByteCount": 3,
+      "isValid": true,
+      "refName": "refs/heads/A/B"
+    },
+    {
+      "name": "branch-35",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "0",
+        "utf8Hex": "30"
+      },
+      "branchByteCount": 1,
+      "isValid": true,
+      "refName": "refs/heads/0"
+    },
+    {
+      "name": "branch-36",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a/b/c/d",
+        "utf8Hex": "612f622f632f64"
+      },
+      "branchByteCount": 7,
+      "isValid": true,
+      "refName": "refs/heads/a/b/c/d"
+    },
+    {
+      "name": "branch-37",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "main\n",
+        "utf8Hex": "6d61696e0a"
+      },
+      "branchByteCount": 5,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-38",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a.b",
+        "utf8Hex": "612e62"
+      },
+      "branchByteCount": 3,
+      "isValid": true,
+      "refName": "refs/heads/a.b"
+    },
+    {
+      "name": "branch-39",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "..",
+        "utf8Hex": "2e2e"
+      },
+      "branchByteCount": 2,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-40",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": ".",
+        "utf8Hex": "2e"
+      },
+      "branchByteCount": 1,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-41",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "a/./b",
+        "utf8Hex": "612f2e2f62"
+      },
+      "branchByteCount": 5,
+      "isValid": false,
+      "refName": null
+    },
+    {
+      "name": "branch-42",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "x.LOCK",
+        "utf8Hex": "782e4c4f434b"
+      },
+      "branchByteCount": 6,
+      "isValid": true,
+      "refName": "refs/heads/x.LOCK"
+    },
+    {
+      "name": "branch-43",
+      "kind": "isValidBranch",
+      "branch": {
+        "text": "lock",
+        "utf8Hex": "6c6f636b"
+      },
+      "branchByteCount": 4,
+      "isValid": true,
+      "refName": "refs/heads/lock"
+    },
+    {
+      "name": "credential-0",
+      "kind": "credential",
+      "usernameByteCount": 6,
+      "tokenByteCount": 5,
+      "username": {
+        "text": "tester",
+        "utf8Hex": "746573746572"
+      },
+      "token": {
+        "text": "token",
+        "utf8Hex": "746f6b656e"
+      },
+      "isValidUsername": true,
+      "isValidToken": true
+    },
+    {
+      "name": "credential-1",
+      "kind": "credential",
+      "usernameByteCount": 0,
+      "tokenByteCount": 5,
+      "username": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "token": {
+        "text": "token",
+        "utf8Hex": "746f6b656e"
+      },
+      "isValidUsername": false,
+      "isValidToken": true
+    },
+    {
+      "name": "credential-2",
+      "kind": "credential",
+      "usernameByteCount": 6,
+      "tokenByteCount": 0,
+      "username": {
+        "text": "tester",
+        "utf8Hex": "746573746572"
+      },
+      "token": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "isValidUsername": true,
+      "isValidToken": false
+    },
+    {
+      "name": "credential-3",
+      "kind": "credential",
+      "usernameByteCount": 9,
+      "tokenByteCount": 5,
+      "username": {
+        "text": "user:name",
+        "utf8Hex": "757365723a6e616d65"
+      },
+      "token": {
+        "text": "token",
+        "utf8Hex": "746f6b656e"
+      },
+      "isValidUsername": false,
+      "isValidToken": true
+    },
+    {
+      "name": "credential-4",
+      "kind": "credential",
+      "usernameByteCount": 6,
+      "tokenByteCount": 6,
+      "username": {
+        "text": "tester",
+        "utf8Hex": "746573746572"
+      },
+      "token": {
+        "text": "to ken",
+        "utf8Hex": "746f206b656e"
+      },
+      "isValidUsername": true,
+      "isValidToken": true
+    },
+    {
+      "name": "credential-5",
+      "kind": "credential",
+      "usernameByteCount": 6,
+      "tokenByteCount": 6,
+      "username": {
+        "text": "tester",
+        "utf8Hex": "746573746572"
+      },
+      "token": {
+        "text": "to\tken",
+        "utf8Hex": "746f096b656e"
+      },
+      "isValidUsername": true,
+      "isValidToken": false
+    },
+    {
+      "name": "credential-6",
+      "kind": "credential",
+      "usernameByteCount": 6,
+      "tokenByteCount": 8,
+      "username": {
+        "text": "tester",
+        "utf8Hex": "746573746572"
+      },
+      "token": {
+        "text": "tök€n",
+        "utf8Hex": "74c3b66be282ac6e"
+      },
+      "isValidUsername": true,
+      "isValidToken": true
+    },
+    {
+      "name": "credential-7",
+      "kind": "credential",
+      "usernameByteCount": 7,
+      "tokenByteCount": 5,
+      "username": {
+        "text": "te\u007fster",
+        "utf8Hex": "74657f73746572"
+      },
+      "token": {
+        "text": "token",
+        "utf8Hex": "746f6b656e"
+      },
+      "isValidUsername": false,
+      "isValidToken": true
+    },
+    {
+      "name": "credential-8",
+      "kind": "credential",
+      "usernameByteCount": 256,
+      "tokenByteCount": 1,
+      "username": {
+        "text": "u×256",
+        "utf8Hex": "75c397323536"
+      },
+      "token": {
+        "text": "t",
+        "utf8Hex": "74"
+      },
+      "isValidUsername": true,
+      "isValidToken": true
+    },
+    {
+      "name": "credential-9",
+      "kind": "credential",
+      "usernameByteCount": 257,
+      "tokenByteCount": 1,
+      "username": {
+        "text": "u×257",
+        "utf8Hex": "75c397323537"
+      },
+      "token": {
+        "text": "t",
+        "utf8Hex": "74"
+      },
+      "isValidUsername": false,
+      "isValidToken": true
+    },
+    {
+      "name": "credential-10",
+      "kind": "credential",
+      "usernameByteCount": 1,
+      "tokenByteCount": 4096,
+      "username": {
+        "text": "u",
+        "utf8Hex": "75"
+      },
+      "token": {
+        "text": "t×4096",
+        "utf8Hex": "74c39734303936"
+      },
+      "isValidUsername": true,
+      "isValidToken": true
+    },
+    {
+      "name": "credential-11",
+      "kind": "credential",
+      "usernameByteCount": 1,
+      "tokenByteCount": 4097,
+      "username": {
+        "text": "u",
+        "utf8Hex": "75"
+      },
+      "token": {
+        "text": "t×4097",
+        "utf8Hex": "74c39734303937"
+      },
+      "isValidUsername": true,
+      "isValidToken": false
+    },
+    {
+      "name": "credential-12",
+      "kind": "credential",
+      "usernameByteCount": 14,
+      "tokenByteCount": 41,
+      "username": {
+        "text": "x-access-token",
+        "utf8Hex": "782d6163636573732d746f6b656e"
+      },
+      "token": {
+        "text": "ghp_fictionalFixtureToken0000000000000000",
+        "utf8Hex": "6768705f66696374696f6e616c46697874757265546f6b656e30303030303030303030303030303030"
+      },
+      "isValidUsername": true,
+      "isValidToken": true
+    },
+    {
+      "name": "credential-13",
+      "kind": "credential",
+      "usernameByteCount": 6,
+      "tokenByteCount": 3,
+      "username": {
+        "text": "tester",
+        "utf8Hex": "746573746572"
+      },
+      "token": {
+        "text": "a:b",
+        "utf8Hex": "613a62"
+      },
+      "isValidUsername": true,
+      "isValidToken": true
+    }
+  ]
+}

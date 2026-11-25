@@ -1,0 +1,705 @@
+{
+  "format": "snippets-swift-interop/V09-recovery-key/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "RecoveryKey.encode / formatted / normalized / decode, every failure case (brief 02 §2.8, hazard H16)",
+  "notes": ["a0-af is the literal shared with Linux: M2GT-58X4-MPKA-FA59-NANT-SBDE-NWJ.", "Swift's String.uppercased() is locale-independent full case mapping: U+0131 becomes I (then 1), ß becomes SS (two characters), U+0130 stays itself.", "normalized() walks Swift Characters (grapheme clusters). CR LF is ONE Character, equal to neither \"\\r\" nor \"\\n\", so a code pasted with a Windows line ending is NOT stripped and fails with wrongLength. Lone CR and lone LF are stripped.", "Failure payloads (the length, the offending character) are not recorded, only the case."],
+  "cases": [
+    {
+      "name": "encode-zeros",
+      "kind": "encode",
+      "bytesHex": "00000000000000000000000000000000",
+      "canonical": "000000000000000000000000000",
+      "display": "0000-0000-0000-0000-0000-0000-000",
+      "symbols": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "checkSymbol": 0
+    },
+    {
+      "name": "encode-ones",
+      "kind": "encode",
+      "bytesHex": "ffffffffffffffffffffffffffffffff",
+      "canonical": "ZZZZZZZZZZZZZZZZZZZZZZZZZW3",
+      "display": "ZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZ-ZW3",
+      "symbols": [
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        28
+      ],
+      "checkSymbol": 3
+    },
+    {
+      "name": "encode-a0-af",
+      "kind": "encode",
+      "bytesHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "canonical": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "display": "M2GT-58X4-MPKA-FA59-NANT-SBDE-NWJ",
+      "symbols": [
+        20,
+        2,
+        16,
+        26,
+        5,
+        8,
+        29,
+        4,
+        20,
+        22,
+        19,
+        10,
+        15,
+        10,
+        5,
+        9,
+        21,
+        10,
+        21,
+        26,
+        25,
+        11,
+        13,
+        14,
+        21,
+        28
+      ],
+      "checkSymbol": 18
+    },
+    {
+      "name": "encode-00-0f",
+      "kind": "encode",
+      "bytesHex": "000102030405060708090a0b0c0d0e0f",
+      "canonical": "000G40R40M30E209185GR38E1W8",
+      "display": "000G-40R4-0M30-E209-185G-R38E-1W8",
+      "symbols": [
+        0,
+        0,
+        0,
+        16,
+        4,
+        0,
+        24,
+        4,
+        0,
+        20,
+        3,
+        0,
+        14,
+        2,
+        0,
+        9,
+        1,
+        8,
+        5,
+        16,
+        24,
+        3,
+        8,
+        14,
+        1,
+        28
+      ],
+      "checkSymbol": 8
+    },
+    {
+      "name": "encode-66x16",
+      "kind": "encode",
+      "bytesHex": "66666666666666666666666666666666",
+      "canonical": "CSK6CSK6CSK6CSK6CSK6CSK6CR4",
+      "display": "CSK6-CSK6-CSK6-CSK6-CSK6-CSK6-CR4",
+      "symbols": [
+        12,
+        25,
+        19,
+        6,
+        12,
+        25,
+        19,
+        6,
+        12,
+        25,
+        19,
+        6,
+        12,
+        25,
+        19,
+        6,
+        12,
+        25,
+        19,
+        6,
+        12,
+        25,
+        19,
+        6,
+        12,
+        24
+      ],
+      "checkSymbol": 4
+    },
+    {
+      "name": "encode-alternating",
+      "kind": "encode",
+      "bytesHex": "aa55aa55aa55aa55aa55aa55aa55aa55",
+      "canonical": "N9ATMNDAAPN5BAJNN9ATMNDAAMR",
+      "display": "N9AT-MNDA-APN5-BAJN-N9AT-MNDA-AMR",
+      "symbols": [
+        21,
+        9,
+        10,
+        26,
+        20,
+        21,
+        13,
+        10,
+        10,
+        22,
+        21,
+        5,
+        11,
+        10,
+        18,
+        21,
+        21,
+        9,
+        10,
+        26,
+        20,
+        21,
+        13,
+        10,
+        10,
+        20
+      ],
+      "checkSymbol": 24
+    },
+    {
+      "name": "encode-last-bits-set",
+      "kind": "encode",
+      "bytesHex": "00000000000000000000000000000007",
+      "canonical": "0000000000000000000000000WM",
+      "display": "0000-0000-0000-0000-0000-0000-0WM",
+      "symbols": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        28
+      ],
+      "checkSymbol": 20
+    },
+    {
+      "name": "encode-first-bit-set",
+      "kind": "encode",
+      "bytesHex": "80000000000000000000000000000000",
+      "canonical": "G0000000000000000000000000G",
+      "display": "G000-0000-0000-0000-0000-0000-00G",
+      "symbols": [
+        16,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "checkSymbol": 16
+    },
+    {
+      "name": "encode-mixed",
+      "kind": "encode",
+      "bytesHex": "0123456789abcdeffedcba9876543210",
+      "canonical": "04HMASW9NF6YZZPWQAC7CN1J20Z",
+      "display": "04HM-ASW9-NF6Y-ZZPW-QAC7-CN1J-20Z",
+      "symbols": [
+        0,
+        4,
+        17,
+        20,
+        10,
+        25,
+        28,
+        9,
+        21,
+        15,
+        6,
+        30,
+        31,
+        31,
+        22,
+        28,
+        23,
+        10,
+        12,
+        7,
+        12,
+        21,
+        1,
+        18,
+        2,
+        0
+      ],
+      "checkSymbol": 31
+    },
+    {
+      "name": "encode-0-bytes",
+      "kind": "encode",
+      "bytesHex": "",
+      "error": "RecoveryKey.Failure.wrongByteCount"
+    },
+    {
+      "name": "encode-15-bytes",
+      "kind": "encode",
+      "bytesHex": "010101010101010101010101010101",
+      "error": "RecoveryKey.Failure.wrongByteCount"
+    },
+    {
+      "name": "encode-17-bytes",
+      "kind": "encode",
+      "bytesHex": "0101010101010101010101010101010101",
+      "error": "RecoveryKey.Failure.wrongByteCount"
+    },
+    {
+      "name": "decode-canonical",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT58X4MPKAFA59NANTSBDENWJ",
+        "utf8Hex": "4d324754353858344d504b41464135394e414e54534244454e574a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-display",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT-58X4-MPKA-FA59-NANT-SBDE-NWJ",
+        "utf8Hex": "4d3247542d353858342d4d504b412d464135392d4e414e542d534244452d4e574a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-lowercase",
+      "kind": "decode",
+      "input": {
+        "text": "m2gt-58x4-mpka-fa59-nant-sbde-nwj",
+        "utf8Hex": "6d3267742d353878342d6d706b612d666135392d6e616e742d736264652d6e776a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-spaces",
+      "kind": "decode",
+      "input": {
+        "text": "M 2 G T 5 8 X 4 M P K A F A 5 9 N A N T S B D E N W J",
+        "utf8Hex": "4d2032204720542035203820582034204d2050204b20412046204120352039204e2041204e20542053204220442045204e2057204a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-tabs-and-line-feeds",
+      "kind": "decode",
+      "input": {
+        "text": "\tM2GT\n58X4\nMPKA\nFA59\nNANT\nSBDE\nNWJ\n",
+        "utf8Hex": "094d3247540a353858340a4d504b410a464135390a4e414e540a534244450a4e574a0a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-carriage-returns",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT\r58X4\rMPKA\rFA59\rNANT\rSBDE\rNWJ\r",
+        "utf8Hex": "4d3247540d353858340d4d504b410d464135390d4e414e540d534244450d4e574a0d"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-trailing-crlf-is-one-character",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT-58X4-MPKA-FA59-NANT-SBDE-NWJ\r\n",
+        "utf8Hex": "4d3247542d353858342d4d504b412d464135392d4e414e542d534244452d4e574a0d0a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ\r\n",
+      "error": "RecoveryKey.Failure.wrongLength"
+    },
+    {
+      "name": "decode-crlf-separators",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT\r\n58X4\r\nMPKA\r\nFA59\r\nNANT\r\nSBDE\r\nNWJ",
+        "utf8Hex": "4d3247540d0a353858340d0a4d504b410d0a464135390d0a4e414e540d0a534244450d0a4e574a"
+      },
+      "normalized": "M2GT\r\n58X4\r\nMPKA\r\nFA59\r\nNANT\r\nSBDE\r\nNWJ",
+      "error": "RecoveryKey.Failure.wrongLength"
+    },
+    {
+      "name": "decode-nbsp",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT 58X4 MPKA FA59 NANT SBDE NWJ",
+        "utf8Hex": "4d324754c2a035385834c2a04d504b41c2a046413539c2a04e414e54c2a053424445c2a04e574a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-unicode-hyphen-2010",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT‐58X4‐MPKA‐FA59‐NANT‐SBDE‐NWJ",
+        "utf8Hex": "4d324754e2809035385834e280904d504b41e2809046413539e280904e414e54e2809053424445e280904e574a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-non-breaking-hyphen-2011",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT‑58X4‑MPKA‑FA59‑NANT‑SBDE‑NWJ",
+        "utf8Hex": "4d324754e2809135385834e280914d504b41e2809146413539e280914e414e54e2809153424445e280914e574a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-figure-dash-2012",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT‒58X4‒MPKA‒FA59‒NANT‒SBDE‒NWJ",
+        "utf8Hex": "4d324754e2809235385834e280924d504b41e2809246413539e280924e414e54e2809253424445e280924e574a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-en-dash-2013",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT–58X4–MPKA–FA59–NANT–SBDE–NWJ",
+        "utf8Hex": "4d324754e2809335385834e280934d504b41e2809346413539e280934e414e54e2809353424445e280934e574a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-em-dash-2014",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT—58X4—MPKA—FA59—NANT—SBDE—NWJ",
+        "utf8Hex": "4d324754e2809435385834e280944d504b41e2809446413539e280944e414e54e2809453424445e280944e574a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-minus-sign-2212",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT−58X4−MPKA−FA59−NANT−SBDE−NWJ",
+        "utf8Hex": "4d324754e2889235385834e288924d504b41e2889246413539e288924e414e54e2889253424445e288924e574a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-underscore",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT_58X4_MPKA_FA59_NANT_SBDE_NWJ",
+        "utf8Hex": "4d3247545f353858345f4d504b415f464135395f4e414e545f534244455f4e574a"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ",
+      "ok": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    },
+    {
+      "name": "decode-horizontal-bar-2015-not-stripped",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT―58X4―MPKA―FA59―NANT―SBDE―NWJ",
+        "utf8Hex": "4d324754e2809535385834e280954d504b41e2809546413539e280954e414e54e2809553424445e280954e574a"
+      },
+      "normalized": "M2GT―58X4―MPKA―FA59―NANT―SBDE―NWJ",
+      "error": "RecoveryKey.Failure.wrongLength"
+    },
+    {
+      "name": "decode-zero-one-canonical",
+      "kind": "decode",
+      "input": {
+        "text": "11111111111111111111111110H",
+        "utf8Hex": "313131313131313131313131313131313131313131313131313048"
+      },
+      "normalized": "11111111111111111111111110H",
+      "ok": "08421084210842108421084210842108"
+    },
+    {
+      "name": "decode-O-for-zero",
+      "kind": "decode",
+      "input": {
+        "text": "1111111111111111111111111OH",
+        "utf8Hex": "313131313131313131313131313131313131313131313131314f48"
+      },
+      "normalized": "11111111111111111111111110H",
+      "ok": "08421084210842108421084210842108"
+    },
+    {
+      "name": "decode-lowercase-o-for-zero",
+      "kind": "decode",
+      "input": {
+        "text": "1111111111111111111111111oH",
+        "utf8Hex": "313131313131313131313131313131313131313131313131316f48"
+      },
+      "normalized": "11111111111111111111111110H",
+      "ok": "08421084210842108421084210842108"
+    },
+    {
+      "name": "decode-I-for-one",
+      "kind": "decode",
+      "input": {
+        "text": "IIIIIIIIIIIIIIIIIIIIIIIII0H",
+        "utf8Hex": "494949494949494949494949494949494949494949494949493048"
+      },
+      "normalized": "11111111111111111111111110H",
+      "ok": "08421084210842108421084210842108"
+    },
+    {
+      "name": "decode-lowercase-l-for-one",
+      "kind": "decode",
+      "input": {
+        "text": "lllllllllllllllllllllllll0H",
+        "utf8Hex": "6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c3048"
+      },
+      "normalized": "11111111111111111111111110H",
+      "ok": "08421084210842108421084210842108"
+    },
+    {
+      "name": "decode-dotless-i-for-one",
+      "kind": "decode",
+      "input": {
+        "text": "ııııııııııııııııııııııııı0H",
+        "utf8Hex": "c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b1c4b13048"
+      },
+      "normalized": "11111111111111111111111110H",
+      "ok": "08421084210842108421084210842108"
+    },
+    {
+      "name": "decode-dotted-capital-I-for-one",
+      "kind": "decode",
+      "input": {
+        "text": "İİİİİİİİİİİİİİİİİİİİİİİİİ0H",
+        "utf8Hex": "c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b0c4b03048"
+      },
+      "normalized": "İİİİİİİİİİİİİİİİİİİİİİİİİ0H",
+      "error": "RecoveryKey.Failure.invalidCharacter"
+    },
+    {
+      "name": "decode-empty",
+      "kind": "decode",
+      "input": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "normalized": "",
+      "error": "RecoveryKey.Failure.wrongLength"
+    },
+    {
+      "name": "decode-only-separators",
+      "kind": "decode",
+      "input": {
+        "text": " - _ \n",
+        "utf8Hex": "202d205f200a"
+      },
+      "normalized": "",
+      "error": "RecoveryKey.Failure.wrongLength"
+    },
+    {
+      "name": "decode-26-characters",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT58X4MPKAFA59NANTSBDENW",
+        "utf8Hex": "4d324754353858344d504b41464135394e414e54534244454e57"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENW",
+      "error": "RecoveryKey.Failure.wrongLength"
+    },
+    {
+      "name": "decode-28-characters",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT58X4MPKAFA59NANTSBDENWJ0",
+        "utf8Hex": "4d324754353858344d504b41464135394e414e54534244454e574a30"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENWJ0",
+      "error": "RecoveryKey.Failure.wrongLength"
+    },
+    {
+      "name": "decode-letter-U",
+      "kind": "decode",
+      "input": {
+        "text": "U2GT58X4MPKAFA59NANTSBDENWJ",
+        "utf8Hex": "55324754353858344d504b41464135394e414e54534244454e574a"
+      },
+      "normalized": "U2GT58X4MPKAFA59NANTSBDENWJ",
+      "error": "RecoveryKey.Failure.invalidCharacter"
+    },
+    {
+      "name": "decode-sharp-s-uppercases-to-two-letters",
+      "kind": "decode",
+      "input": {
+        "text": "ßGT58X4MPKAFA59NANTSBDENWJ",
+        "utf8Hex": "c39f4754353858344d504b41464135394e414e54534244454e574a"
+      },
+      "normalized": "SSGT58X4MPKAFA59NANTSBDENWJ",
+      "error": "RecoveryKey.Failure.checksumMismatch"
+    },
+    {
+      "name": "decode-fullwidth-digit",
+      "kind": "decode",
+      "input": {
+        "text": "０2GT58X4MPKAFA59NANTSBDENWJ",
+        "utf8Hex": "efbc90324754353858344d504b41464135394e414e54534244454e574a"
+      },
+      "normalized": "０2GT58X4MPKAFA59NANTSBDENWJ",
+      "error": "RecoveryKey.Failure.invalidCharacter"
+    },
+    {
+      "name": "decode-wrong-check-symbol",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT58X4MPKAFA59NANTSBDENW0",
+        "utf8Hex": "4d324754353858344d504b41464135394e414e54534244454e5730"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENW0",
+      "error": "RecoveryKey.Failure.checksumMismatch"
+    },
+    {
+      "name": "decode-swapped-first-two",
+      "kind": "decode",
+      "input": {
+        "text": "2MGT58X4MPKAFA59NANTSBDENWJ",
+        "utf8Hex": "324d4754353858344d504b41464135394e414e54534244454e574a"
+      },
+      "normalized": "2MGT58X4MPKAFA59NANTSBDENWJ",
+      "error": "RecoveryKey.Failure.checksumMismatch"
+    },
+    {
+      "name": "decode-one-typo",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT5AX4MPKAFA59NANTSBDENWJ",
+        "utf8Hex": "4d324754354158344d504b41464135394e414e54534244454e574a"
+      },
+      "normalized": "M2GT5AX4MPKAFA59NANTSBDENWJ",
+      "error": "RecoveryKey.Failure.checksumMismatch"
+    },
+    {
+      "name": "decode-non-canonical-spare-bits",
+      "kind": "decode",
+      "input": {
+        "text": "M2GT58X4MPKAFA59NANTSBDENX5",
+        "utf8Hex": "4d324754353858344d504b41464135394e414e54534244454e5835"
+      },
+      "normalized": "M2GT58X4MPKAFA59NANTSBDENX5",
+      "error": "RecoveryKey.Failure.nonCanonical"
+    }
+  ]
+}

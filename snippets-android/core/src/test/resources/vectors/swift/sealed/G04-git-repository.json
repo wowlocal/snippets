@@ -1,0 +1,1866 @@
+{
+  "format": "snippets-swift-interop/G04-git-repository/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "Tree and commit object bytes and ids as GitSyncTransport builds them: two whole repositories (encrypted and plain-text) written through git http-backend, plus GitTree.serialize / GitCommit.serialize primitives (brief 03 §2.9–§2.11)",
+  "notes": ["The repositories are produced by the unmodified GitSyncTransport (initializeRepository, submit, writeFiles, replaceLibrary) against a real bare repository served by `git http-backend`, with the transport's clock injected. The tool then reads every object back with the git CLI, asserts that GitTree.serialize and GitCommit.serialize reproduce the stored bytes, that every object hashes to its id, and that `git fsck --strict` is clean.", "commits are oldest first. `entries` is the recursive listing (like `git ls-tree -r -t`), `trees` each tree object's raw bytes. Blob contents are in `blobs`, keyed by id; README.md is listed by id only (bytes in G02).", "Record blobs are sealed with the fixed nonces of V12; the key files use fixed nonces too, so all ids are stable across runs.", "transportScope is read from the running transport (preflightScope) and equals G06's `interop-loopback` case.", "replaceLibrary drops records/ and keys/ of the old library and writes the manifest with schemaVersion 2."],
+  "cases": [
+    {
+      "name": "encrypted-library",
+      "kind": "repository",
+      "mode": "encrypted",
+      "remoteURL": "http://snippets-interop.localhost/repo.git",
+      "branch": "main",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "syncKeyHex": "9999999999999999999999999999999999999999999999999999999999999999",
+      "syncSaltHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "transportScope": {
+        "canonicalIdentity": "snippets-interop.localhost/repo",
+        "refName": "refs/heads/main",
+        "accountIdentityHex": "16befdb4538ab28509a17ffe79cbe90beb52bd34ecf99853ffec6d6a24c50da3",
+        "datasetIdentityHex": "2cb5bb55e69844d48d895802d2e3dc89d23d8c624a6340aa47cdbd69f0fa9d89",
+        "cursorAfterCreation": "git1.617a0001-0000-4000-8000-0000000000aa.14a7a369693c7f0ce36faf6565b41d23d98e1597"
+      },
+      "steps": [
+        {
+          "call": "initializeRepository(datasetID:files:mode: .encrypted)",
+          "clockUnixSeconds": 1785312000,
+          "files": ["keys/recovery.json", "keys/vault.json"]
+        },
+        {
+          "call": "submit(4 new records)",
+          "clockUnixSeconds": "1785312060.9",
+          "atCursor": "git1.617a0001-0000-4000-8000-0000000000aa.14a7a369693c7f0ce36faf6565b41d23d98e1597",
+          "results": [
+            {
+              "id": "11111111-2222-4333-8444-555555555555",
+              "outcome": "accepted",
+              "rev": "711b0565f95acbd63b02ec6570677891",
+              "recordVersionText": "git-blob-sha1:cfd114d03fc28968afd569ecb56ca0b621b6b67b"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "outcome": "accepted",
+              "rev": "3f3a289c891f21d8c9b73d2bbfbebac5",
+              "recordVersionText": "git-blob-sha1:960e084902522eb9dcbd513e6551f992b4e41efd"
+            },
+            {
+              "id": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+              "outcome": "accepted",
+              "rev": "06e1f89ff6c6e11b83f9d105bb45d49f",
+              "recordVersionText": "git-blob-sha1:4b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4"
+            },
+            {
+              "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+              "outcome": "accepted",
+              "rev": "cacd70ca9afe1f7503b1e1bc85146988",
+              "recordVersionText": "git-blob-sha1:fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+            }
+          ],
+          "cursor": "git1.617a0001-0000-4000-8000-0000000000aa.11b2eed0144a12b5becb7a9f2d816d369f6af044"
+        },
+        {
+          "call": "submit(1 tombstone replacing a live record)",
+          "clockUnixSeconds": 1785312120,
+          "results": [
+            {
+              "id": "11111111-2222-4333-8444-555555555555",
+              "outcome": "accepted",
+              "rev": "b41ae3add258b4bbf62c554a19d75895",
+              "recordVersionText": "git-blob-sha1:ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf"
+            }
+          ],
+          "cursor": "git1.617a0001-0000-4000-8000-0000000000aa.af712b1eeeda2ed31a5452320d9dfd82ccea6d0a"
+        },
+        {
+          "call": "submit(the identical tombstone again)",
+          "results": [
+            {
+              "id": "11111111-2222-4333-8444-555555555555",
+              "outcome": "accepted",
+              "rev": "b41ae3add258b4bbf62c554a19d75895",
+              "recordVersionText": "git-blob-sha1:ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf"
+            }
+          ],
+          "madeACommit": false
+        },
+        {
+          "call": "writeFiles([keys/recovery.json, keys/vault.json], message: \"Replace recovery envelope\")",
+          "clockUnixSeconds": 1785312180
+        },
+        {
+          "call": "replaceLibrary(current, with: new dataset, files: [keys/recovery.json], mode: .encrypted)",
+          "clockUnixSeconds": 1785312240,
+          "newDatasetID": "11111111-2222-4333-8444-555555555555"
+        }
+      ],
+      "commits": [
+        {
+          "id": "14a7a369693c7f0ce36faf6565b41d23d98e1597",
+          "tree": "6698e684a32ecf69cc1649036060cd606ef65176",
+          "parents": [],
+          "author": "author Snippets Sync <sync@snippets.invalid> 1785312000 +0000",
+          "committer": "committer Snippets Sync <sync@snippets.invalid> 1785312000 +0000",
+          "message": "Create Snippets library",
+          "rawText": "tree 6698e684a32ecf69cc1649036060cd606ef65176\nauthor Snippets Sync <sync@snippets.invalid> 1785312000 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 1785312000 +0000\n\nCreate Snippets library\n",
+          "rawHex": "7472656520363639386536383461333265636636396363313634393033363036306364363036656636353137360a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303030202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303030202b303030300a0a43726561746520536e697070657473206c6962726172790a",
+          "entries": [
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f",
+              "path": "README.md"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "a6a3622891515c7c69a2b7ab99f6b4d6c5c39675",
+              "path": "keys"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee",
+              "path": "keys/recovery.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "c3e97fcf6c028122aa03bef15c89df5ffb1196e5",
+              "path": "keys/vault.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "6ecc220dd10f2eb435e438c369dc59f8218b8473",
+              "path": "snippets-sync.json"
+            }
+          ],
+          "trees": [
+            {
+              "path": "",
+              "id": "6698e684a32ecf69cc1649036060cd606ef65176",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "README.md",
+                  "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f"
+                },
+                {
+                  "mode": "40000",
+                  "name": "keys",
+                  "id": "a6a3622891515c7c69a2b7ab99f6b4d6c5c39675"
+                },
+                {
+                  "mode": "100644",
+                  "name": "snippets-sync.json",
+                  "id": "6ecc220dd10f2eb435e438c369dc59f8218b8473"
+                }
+              ],
+              "hex": "31303036343420524541444d452e6d6400d85f8fdd6c499f6d7feae5a790322d4f36778d8f3430303030206b65797300a6a3622891515c7c69a2b7ab99f6b4d6c5c3967531303036343420736e6970706574732d73796e632e6a736f6e006ecc220dd10f2eb435e438c369dc59f8218b8473"
+            },
+            {
+              "path": "keys",
+              "id": "a6a3622891515c7c69a2b7ab99f6b4d6c5c39675",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "recovery.json",
+                  "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee"
+                },
+                {
+                  "mode": "100644",
+                  "name": "vault.json",
+                  "id": "c3e97fcf6c028122aa03bef15c89df5ffb1196e5"
+                }
+              ],
+              "hex": "313030363434207265636f766572792e6a736f6e0051ea59e6a520fc0be2d39f9cb856b54b004647ee313030363434207661756c742e6a736f6e00c3e97fcf6c028122aa03bef15c89df5ffb1196e5"
+            }
+          ]
+        },
+        {
+          "id": "11b2eed0144a12b5becb7a9f2d816d369f6af044",
+          "tree": "486b8789250c30522698f8465a3a1dd90b667872",
+          "parents": ["14a7a369693c7f0ce36faf6565b41d23d98e1597"],
+          "author": "author Snippets Sync <sync@snippets.invalid> 1785312060 +0000",
+          "committer": "committer Snippets Sync <sync@snippets.invalid> 1785312060 +0000",
+          "message": "Sync 4 records",
+          "rawText": "tree 486b8789250c30522698f8465a3a1dd90b667872\nparent 14a7a369693c7f0ce36faf6565b41d23d98e1597\nauthor Snippets Sync <sync@snippets.invalid> 1785312060 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 1785312060 +0000\n\nSync 4 records\n",
+          "rawHex": "7472656520343836623837383932353063333035323236393866383436356133613164643930623636373837320a706172656e7420313461376133363936393363376630636533366661663635363562343164323364393865313539370a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303630202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303630202b303030300a0a53796e632034207265636f7264730a",
+          "entries": [
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f",
+              "path": "README.md"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "a6a3622891515c7c69a2b7ab99f6b4d6c5c39675",
+              "path": "keys"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee",
+              "path": "keys/recovery.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "c3e97fcf6c028122aa03bef15c89df5ffb1196e5",
+              "path": "keys/vault.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "ce6e7033e4705b2ec156877ac43639a4231f9bda",
+              "path": "records"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "0a145493bbfeb14765e00d2fbea309e6b27e147c",
+              "path": "records/00"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "960e084902522eb9dcbd513e6551f992b4e41efd",
+              "path": "records/00/00000000-0000-4000-8000-000000000001.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "9ee118923370c60e9f1fefbb3cd5533bd674665c",
+              "path": "records/11"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "cfd114d03fc28968afd569ecb56ca0b621b6b67b",
+              "path": "records/11/11111111-2222-4333-8444-555555555555.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "f330b14184456513c0070ea306987f3fec8bc19e",
+              "path": "records/a0"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c",
+              "path": "records/a0/a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "cba8288bded23d796045ae330709470da012a684",
+              "path": "records/ff"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "4b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4",
+              "path": "records/ff/ffffffff-ffff-4fff-bfff-ffffffffffff.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "6ecc220dd10f2eb435e438c369dc59f8218b8473",
+              "path": "snippets-sync.json"
+            }
+          ],
+          "trees": [
+            {
+              "path": "",
+              "id": "486b8789250c30522698f8465a3a1dd90b667872",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "README.md",
+                  "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f"
+                },
+                {
+                  "mode": "40000",
+                  "name": "keys",
+                  "id": "a6a3622891515c7c69a2b7ab99f6b4d6c5c39675"
+                },
+                {
+                  "mode": "40000",
+                  "name": "records",
+                  "id": "ce6e7033e4705b2ec156877ac43639a4231f9bda"
+                },
+                {
+                  "mode": "100644",
+                  "name": "snippets-sync.json",
+                  "id": "6ecc220dd10f2eb435e438c369dc59f8218b8473"
+                }
+              ],
+              "hex": "31303036343420524541444d452e6d6400d85f8fdd6c499f6d7feae5a790322d4f36778d8f3430303030206b65797300a6a3622891515c7c69a2b7ab99f6b4d6c5c396753430303030207265636f72647300ce6e7033e4705b2ec156877ac43639a4231f9bda31303036343420736e6970706574732d73796e632e6a736f6e006ecc220dd10f2eb435e438c369dc59f8218b8473"
+            },
+            {
+              "path": "keys",
+              "id": "a6a3622891515c7c69a2b7ab99f6b4d6c5c39675",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "recovery.json",
+                  "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee"
+                },
+                {
+                  "mode": "100644",
+                  "name": "vault.json",
+                  "id": "c3e97fcf6c028122aa03bef15c89df5ffb1196e5"
+                }
+              ],
+              "hex": "313030363434207265636f766572792e6a736f6e0051ea59e6a520fc0be2d39f9cb856b54b004647ee313030363434207661756c742e6a736f6e00c3e97fcf6c028122aa03bef15c89df5ffb1196e5"
+            },
+            {
+              "path": "records",
+              "id": "ce6e7033e4705b2ec156877ac43639a4231f9bda",
+              "entries": [
+                {
+                  "mode": "40000",
+                  "name": "00",
+                  "id": "0a145493bbfeb14765e00d2fbea309e6b27e147c"
+                },
+                {
+                  "mode": "40000",
+                  "name": "11",
+                  "id": "9ee118923370c60e9f1fefbb3cd5533bd674665c"
+                },
+                {
+                  "mode": "40000",
+                  "name": "a0",
+                  "id": "f330b14184456513c0070ea306987f3fec8bc19e"
+                },
+                {
+                  "mode": "40000",
+                  "name": "ff",
+                  "id": "cba8288bded23d796045ae330709470da012a684"
+                }
+              ],
+              "hex": "3430303030203030000a145493bbfeb14765e00d2fbea309e6b27e147c3430303030203131009ee118923370c60e9f1fefbb3cd5533bd674665c343030303020613000f330b14184456513c0070ea306987f3fec8bc19e343030303020666600cba8288bded23d796045ae330709470da012a684"
+            },
+            {
+              "path": "records/00",
+              "id": "0a145493bbfeb14765e00d2fbea309e6b27e147c",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "00000000-0000-4000-8000-000000000001.json",
+                  "id": "960e084902522eb9dcbd513e6551f992b4e41efd"
+                }
+              ],
+              "hex": "3130303634342030303030303030302d303030302d343030302d383030302d3030303030303030303030312e6a736f6e00960e084902522eb9dcbd513e6551f992b4e41efd"
+            },
+            {
+              "path": "records/11",
+              "id": "9ee118923370c60e9f1fefbb3cd5533bd674665c",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "11111111-2222-4333-8444-555555555555.json",
+                  "id": "cfd114d03fc28968afd569ecb56ca0b621b6b67b"
+                }
+              ],
+              "hex": "3130303634342031313131313131312d323232322d343333332d383434342d3535353535353535353535352e6a736f6e00cfd114d03fc28968afd569ecb56ca0b621b6b67b"
+            },
+            {
+              "path": "records/a0",
+              "id": "f330b14184456513c0070ea306987f3fec8bc19e",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json",
+                  "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+                }
+              ],
+              "hex": "3130303634342061306231633264332d653466352d343630372d383839392d6161626263636464656566662e6a736f6e00fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+            },
+            {
+              "path": "records/ff",
+              "id": "cba8288bded23d796045ae330709470da012a684",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "ffffffff-ffff-4fff-bfff-ffffffffffff.json",
+                  "id": "4b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4"
+                }
+              ],
+              "hex": "3130303634342066666666666666662d666666662d346666662d626666662d6666666666666666666666662e6a736f6e004b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4"
+            }
+          ]
+        },
+        {
+          "id": "af712b1eeeda2ed31a5452320d9dfd82ccea6d0a",
+          "tree": "1457c4cca84fbd94de83f04e9fbd63e081e912f0",
+          "parents": ["11b2eed0144a12b5becb7a9f2d816d369f6af044"],
+          "author": "author Snippets Sync <sync@snippets.invalid> 1785312120 +0000",
+          "committer": "committer Snippets Sync <sync@snippets.invalid> 1785312120 +0000",
+          "message": "Sync 1 record",
+          "rawText": "tree 1457c4cca84fbd94de83f04e9fbd63e081e912f0\nparent 11b2eed0144a12b5becb7a9f2d816d369f6af044\nauthor Snippets Sync <sync@snippets.invalid> 1785312120 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 1785312120 +0000\n\nSync 1 record\n",
+          "rawHex": "7472656520313435376334636361383466626439346465383366303465396662643633653038316539313266300a706172656e7420313162326565643031343461313262356265636237613966326438313664333639663661663034340a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132313230202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132313230202b303030300a0a53796e632031207265636f72640a",
+          "entries": [
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f",
+              "path": "README.md"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "a6a3622891515c7c69a2b7ab99f6b4d6c5c39675",
+              "path": "keys"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee",
+              "path": "keys/recovery.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "c3e97fcf6c028122aa03bef15c89df5ffb1196e5",
+              "path": "keys/vault.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "d3f301a31fb562877ac66e7ee96f25b94a220d0e",
+              "path": "records"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "0a145493bbfeb14765e00d2fbea309e6b27e147c",
+              "path": "records/00"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "960e084902522eb9dcbd513e6551f992b4e41efd",
+              "path": "records/00/00000000-0000-4000-8000-000000000001.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "edcc3c7695a81e43f19c463338d2e8ca9d743fbb",
+              "path": "records/11"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf",
+              "path": "records/11/11111111-2222-4333-8444-555555555555.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "f330b14184456513c0070ea306987f3fec8bc19e",
+              "path": "records/a0"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c",
+              "path": "records/a0/a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "cba8288bded23d796045ae330709470da012a684",
+              "path": "records/ff"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "4b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4",
+              "path": "records/ff/ffffffff-ffff-4fff-bfff-ffffffffffff.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "6ecc220dd10f2eb435e438c369dc59f8218b8473",
+              "path": "snippets-sync.json"
+            }
+          ],
+          "trees": [
+            {
+              "path": "",
+              "id": "1457c4cca84fbd94de83f04e9fbd63e081e912f0",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "README.md",
+                  "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f"
+                },
+                {
+                  "mode": "40000",
+                  "name": "keys",
+                  "id": "a6a3622891515c7c69a2b7ab99f6b4d6c5c39675"
+                },
+                {
+                  "mode": "40000",
+                  "name": "records",
+                  "id": "d3f301a31fb562877ac66e7ee96f25b94a220d0e"
+                },
+                {
+                  "mode": "100644",
+                  "name": "snippets-sync.json",
+                  "id": "6ecc220dd10f2eb435e438c369dc59f8218b8473"
+                }
+              ],
+              "hex": "31303036343420524541444d452e6d6400d85f8fdd6c499f6d7feae5a790322d4f36778d8f3430303030206b65797300a6a3622891515c7c69a2b7ab99f6b4d6c5c396753430303030207265636f72647300d3f301a31fb562877ac66e7ee96f25b94a220d0e31303036343420736e6970706574732d73796e632e6a736f6e006ecc220dd10f2eb435e438c369dc59f8218b8473"
+            },
+            {
+              "path": "keys",
+              "id": "a6a3622891515c7c69a2b7ab99f6b4d6c5c39675",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "recovery.json",
+                  "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee"
+                },
+                {
+                  "mode": "100644",
+                  "name": "vault.json",
+                  "id": "c3e97fcf6c028122aa03bef15c89df5ffb1196e5"
+                }
+              ],
+              "hex": "313030363434207265636f766572792e6a736f6e0051ea59e6a520fc0be2d39f9cb856b54b004647ee313030363434207661756c742e6a736f6e00c3e97fcf6c028122aa03bef15c89df5ffb1196e5"
+            },
+            {
+              "path": "records",
+              "id": "d3f301a31fb562877ac66e7ee96f25b94a220d0e",
+              "entries": [
+                {
+                  "mode": "40000",
+                  "name": "00",
+                  "id": "0a145493bbfeb14765e00d2fbea309e6b27e147c"
+                },
+                {
+                  "mode": "40000",
+                  "name": "11",
+                  "id": "edcc3c7695a81e43f19c463338d2e8ca9d743fbb"
+                },
+                {
+                  "mode": "40000",
+                  "name": "a0",
+                  "id": "f330b14184456513c0070ea306987f3fec8bc19e"
+                },
+                {
+                  "mode": "40000",
+                  "name": "ff",
+                  "id": "cba8288bded23d796045ae330709470da012a684"
+                }
+              ],
+              "hex": "3430303030203030000a145493bbfeb14765e00d2fbea309e6b27e147c343030303020313100edcc3c7695a81e43f19c463338d2e8ca9d743fbb343030303020613000f330b14184456513c0070ea306987f3fec8bc19e343030303020666600cba8288bded23d796045ae330709470da012a684"
+            },
+            {
+              "path": "records/00",
+              "id": "0a145493bbfeb14765e00d2fbea309e6b27e147c",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "00000000-0000-4000-8000-000000000001.json",
+                  "id": "960e084902522eb9dcbd513e6551f992b4e41efd"
+                }
+              ],
+              "hex": "3130303634342030303030303030302d303030302d343030302d383030302d3030303030303030303030312e6a736f6e00960e084902522eb9dcbd513e6551f992b4e41efd"
+            },
+            {
+              "path": "records/11",
+              "id": "edcc3c7695a81e43f19c463338d2e8ca9d743fbb",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "11111111-2222-4333-8444-555555555555.json",
+                  "id": "ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf"
+                }
+              ],
+              "hex": "3130303634342031313131313131312d323232322d343333332d383434342d3535353535353535353535352e6a736f6e00ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf"
+            },
+            {
+              "path": "records/a0",
+              "id": "f330b14184456513c0070ea306987f3fec8bc19e",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json",
+                  "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+                }
+              ],
+              "hex": "3130303634342061306231633264332d653466352d343630372d383839392d6161626263636464656566662e6a736f6e00fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+            },
+            {
+              "path": "records/ff",
+              "id": "cba8288bded23d796045ae330709470da012a684",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "ffffffff-ffff-4fff-bfff-ffffffffffff.json",
+                  "id": "4b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4"
+                }
+              ],
+              "hex": "3130303634342066666666666666662d666666662d346666662d626666662d6666666666666666666666662e6a736f6e004b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4"
+            }
+          ]
+        },
+        {
+          "id": "05116c17d1ad37a9c55797a03304519de985a6b0",
+          "tree": "f7f9689b63c7734b27296efbccee0ab3cac6b5db",
+          "parents": ["af712b1eeeda2ed31a5452320d9dfd82ccea6d0a"],
+          "author": "author Snippets Sync <sync@snippets.invalid> 1785312180 +0000",
+          "committer": "committer Snippets Sync <sync@snippets.invalid> 1785312180 +0000",
+          "message": "Replace recovery envelope",
+          "rawText": "tree f7f9689b63c7734b27296efbccee0ab3cac6b5db\nparent af712b1eeeda2ed31a5452320d9dfd82ccea6d0a\nauthor Snippets Sync <sync@snippets.invalid> 1785312180 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 1785312180 +0000\n\nReplace recovery envelope\n",
+          "rawHex": "7472656520663766393638396236336337373334623237323936656662636365653061623363616336623564620a706172656e7420616637313262316565656461326564333161353435323332306439646664383263636561366430610a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132313830202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132313830202b303030300a0a5265706c616365207265636f7665727920656e76656c6f70650a",
+          "entries": [
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f",
+              "path": "README.md"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "82bbf2917b90c8703a207a46def062a3e0169028",
+              "path": "keys"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "57dd117bf98b5d53868b2da21a56f83a49bd8564",
+              "path": "keys/recovery.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "bfae011cc99d5b3c9aa5ccf5bbb28d2f73f279a2",
+              "path": "keys/vault.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "d3f301a31fb562877ac66e7ee96f25b94a220d0e",
+              "path": "records"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "0a145493bbfeb14765e00d2fbea309e6b27e147c",
+              "path": "records/00"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "960e084902522eb9dcbd513e6551f992b4e41efd",
+              "path": "records/00/00000000-0000-4000-8000-000000000001.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "edcc3c7695a81e43f19c463338d2e8ca9d743fbb",
+              "path": "records/11"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf",
+              "path": "records/11/11111111-2222-4333-8444-555555555555.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "f330b14184456513c0070ea306987f3fec8bc19e",
+              "path": "records/a0"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c",
+              "path": "records/a0/a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "cba8288bded23d796045ae330709470da012a684",
+              "path": "records/ff"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "4b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4",
+              "path": "records/ff/ffffffff-ffff-4fff-bfff-ffffffffffff.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "6ecc220dd10f2eb435e438c369dc59f8218b8473",
+              "path": "snippets-sync.json"
+            }
+          ],
+          "trees": [
+            {
+              "path": "",
+              "id": "f7f9689b63c7734b27296efbccee0ab3cac6b5db",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "README.md",
+                  "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f"
+                },
+                {
+                  "mode": "40000",
+                  "name": "keys",
+                  "id": "82bbf2917b90c8703a207a46def062a3e0169028"
+                },
+                {
+                  "mode": "40000",
+                  "name": "records",
+                  "id": "d3f301a31fb562877ac66e7ee96f25b94a220d0e"
+                },
+                {
+                  "mode": "100644",
+                  "name": "snippets-sync.json",
+                  "id": "6ecc220dd10f2eb435e438c369dc59f8218b8473"
+                }
+              ],
+              "hex": "31303036343420524541444d452e6d6400d85f8fdd6c499f6d7feae5a790322d4f36778d8f3430303030206b6579730082bbf2917b90c8703a207a46def062a3e01690283430303030207265636f72647300d3f301a31fb562877ac66e7ee96f25b94a220d0e31303036343420736e6970706574732d73796e632e6a736f6e006ecc220dd10f2eb435e438c369dc59f8218b8473"
+            },
+            {
+              "path": "keys",
+              "id": "82bbf2917b90c8703a207a46def062a3e0169028",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "recovery.json",
+                  "id": "57dd117bf98b5d53868b2da21a56f83a49bd8564"
+                },
+                {
+                  "mode": "100644",
+                  "name": "vault.json",
+                  "id": "bfae011cc99d5b3c9aa5ccf5bbb28d2f73f279a2"
+                }
+              ],
+              "hex": "313030363434207265636f766572792e6a736f6e0057dd117bf98b5d53868b2da21a56f83a49bd8564313030363434207661756c742e6a736f6e00bfae011cc99d5b3c9aa5ccf5bbb28d2f73f279a2"
+            },
+            {
+              "path": "records",
+              "id": "d3f301a31fb562877ac66e7ee96f25b94a220d0e",
+              "entries": [
+                {
+                  "mode": "40000",
+                  "name": "00",
+                  "id": "0a145493bbfeb14765e00d2fbea309e6b27e147c"
+                },
+                {
+                  "mode": "40000",
+                  "name": "11",
+                  "id": "edcc3c7695a81e43f19c463338d2e8ca9d743fbb"
+                },
+                {
+                  "mode": "40000",
+                  "name": "a0",
+                  "id": "f330b14184456513c0070ea306987f3fec8bc19e"
+                },
+                {
+                  "mode": "40000",
+                  "name": "ff",
+                  "id": "cba8288bded23d796045ae330709470da012a684"
+                }
+              ],
+              "hex": "3430303030203030000a145493bbfeb14765e00d2fbea309e6b27e147c343030303020313100edcc3c7695a81e43f19c463338d2e8ca9d743fbb343030303020613000f330b14184456513c0070ea306987f3fec8bc19e343030303020666600cba8288bded23d796045ae330709470da012a684"
+            },
+            {
+              "path": "records/00",
+              "id": "0a145493bbfeb14765e00d2fbea309e6b27e147c",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "00000000-0000-4000-8000-000000000001.json",
+                  "id": "960e084902522eb9dcbd513e6551f992b4e41efd"
+                }
+              ],
+              "hex": "3130303634342030303030303030302d303030302d343030302d383030302d3030303030303030303030312e6a736f6e00960e084902522eb9dcbd513e6551f992b4e41efd"
+            },
+            {
+              "path": "records/11",
+              "id": "edcc3c7695a81e43f19c463338d2e8ca9d743fbb",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "11111111-2222-4333-8444-555555555555.json",
+                  "id": "ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf"
+                }
+              ],
+              "hex": "3130303634342031313131313131312d323232322d343333332d383434342d3535353535353535353535352e6a736f6e00ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf"
+            },
+            {
+              "path": "records/a0",
+              "id": "f330b14184456513c0070ea306987f3fec8bc19e",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json",
+                  "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+                }
+              ],
+              "hex": "3130303634342061306231633264332d653466352d343630372d383839392d6161626263636464656566662e6a736f6e00fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+            },
+            {
+              "path": "records/ff",
+              "id": "cba8288bded23d796045ae330709470da012a684",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "ffffffff-ffff-4fff-bfff-ffffffffffff.json",
+                  "id": "4b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4"
+                }
+              ],
+              "hex": "3130303634342066666666666666662d666666662d346666662d626666662d6666666666666666666666662e6a736f6e004b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4"
+            }
+          ]
+        },
+        {
+          "id": "fc0e327701c5db44a81e28e57bc10a3a8236b971",
+          "tree": "f3c15e8d30d4d29e38d8d4935ed10e6e975808df",
+          "parents": ["05116c17d1ad37a9c55797a03304519de985a6b0"],
+          "author": "author Snippets Sync <sync@snippets.invalid> 1785312240 +0000",
+          "committer": "committer Snippets Sync <sync@snippets.invalid> 1785312240 +0000",
+          "message": "Replace library keys",
+          "rawText": "tree f3c15e8d30d4d29e38d8d4935ed10e6e975808df\nparent 05116c17d1ad37a9c55797a03304519de985a6b0\nauthor Snippets Sync <sync@snippets.invalid> 1785312240 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 1785312240 +0000\n\nReplace library keys\n",
+          "rawHex": "7472656520663363313565386433306434643239653338643864343933356564313065366539373538303864660a706172656e7420303531313663313764316164333761396335353739376130333330343531396465393835613662300a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132323430202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132323430202b303030300a0a5265706c616365206c696272617279206b6579730a",
+          "entries": [
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f",
+              "path": "README.md"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "8678841b2f5a3cd7edd591da63bf36ccb077445e",
+              "path": "keys"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "ffd15bb4774e921f3e3a65b657f0dac3d9c629ca",
+              "path": "keys/recovery.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "7852b5d61909c9ea2a32bb6ab54ec593bcd579ac",
+              "path": "snippets-sync.json"
+            }
+          ],
+          "trees": [
+            {
+              "path": "",
+              "id": "f3c15e8d30d4d29e38d8d4935ed10e6e975808df",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "README.md",
+                  "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f"
+                },
+                {
+                  "mode": "40000",
+                  "name": "keys",
+                  "id": "8678841b2f5a3cd7edd591da63bf36ccb077445e"
+                },
+                {
+                  "mode": "100644",
+                  "name": "snippets-sync.json",
+                  "id": "7852b5d61909c9ea2a32bb6ab54ec593bcd579ac"
+                }
+              ],
+              "hex": "31303036343420524541444d452e6d6400d85f8fdd6c499f6d7feae5a790322d4f36778d8f3430303030206b657973008678841b2f5a3cd7edd591da63bf36ccb077445e31303036343420736e6970706574732d73796e632e6a736f6e007852b5d61909c9ea2a32bb6ab54ec593bcd579ac"
+            },
+            {
+              "path": "keys",
+              "id": "8678841b2f5a3cd7edd591da63bf36ccb077445e",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "recovery.json",
+                  "id": "ffd15bb4774e921f3e3a65b657f0dac3d9c629ca"
+                }
+              ],
+              "hex": "313030363434207265636f766572792e6a736f6e00ffd15bb4774e921f3e3a65b657f0dac3d9c629ca"
+            }
+          ]
+        }
+      ],
+      "blobs": [
+        {
+          "id": "4b2ef619df6b6088a2c56b9e5ca5244d2f9e97b4",
+          "paths": ["records/ff/ffffffff-ffff-4fff-bfff-ffffffffffff.json"],
+          "byteCount": 1081,
+          "text": "{\"blob\":\"djEuc3JLeXNyS3lzckt5c3JLeS5hRFB5SGJoQ1QzZkxadFJMSGdWSm5kOG0zMzBEeTFMY2dwUFo1bmdWYnJuWnNBZE5VMllISkpjaHE2bk10RkJTTGxDc3NEdXRVeE9qZ245bnNMR09NRU0wXzZnTGxKTWVPMHJPcXYxeU53U3ZCcHE1R3Bhb2Qta2pqNUxxS1ZLd2ROWEl1a3NiYmtqUUxUa3BFMDNxZDdSQWd2empGR3VVd29qblYybHJhVGNaM0tTVmY3UUpEazBNcTM1TXpMZ2tkekhjTWpMVUhNQWRXdkk3UHpoS1p5MzBYSkZYVDYwajlGZlJMSTd2dDRRUlVwTjlKSnU3OE15TDVVaDFSNGVhZkhLNXRYS1duUWg4YjdfdmVmQnlFU3dDWE9KT0tmX3ViX2YzVktQYzZTWk9HbzRNOUpCZ1FYeTB6MjlpQ2w3QWdtZmNvY09LMDl0UFdvNTFxYmtHVmlLRmFVRDFnSElCZ1VGTERMcG9HbDcydUctOGQ3ZkZsQThVdUdFZnljX0pYRG54QjE1ODU5NFlpWHR1QmxYdlpmejAtMDltb1ljMmQxZWl2d1JBUjNLQmNsUlJxNm5BVDdiZWF3Sm9pVFJiZE8yWHZqNkZzQTVCWENvbnhVbUIxM2tZd21YcmZjaDFyc1lwSlZaYlB6bFBwWUR3VzRMdG9Qdm5wa292b1c1WlVPTXlaUk5uX2Nqa3hhU1oxOE9GdThNS1FZZ1hrSVZlV0JUb0FfRzFHNi1pQ282NzV6bXhTQWFQQjZONGpxSTVuZnY0VFFYRUd5S18xaExnRW9zNUtOb2FoWjZqRUJuYW01UkwwanEtRE9kUjJ6dGdKNl9pVTRIbU10LUtRdm9fUm5yakpoa0pQUnpOMkJGSDJ6VmlEV3BpX1EyTkxGbF8xSjBESm9WMDRGVTNnQ1VyOWozT25la3A5LUswNmd2TQ==\",\"deleted\":false,\"id\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"rev\":\"06e1f89ff6c6e11b83f9d105bb45d49f\"}\n",
+          "base64": "eyJibG9iIjoiZGpFdWMzSkxlWE55UzNsemNrdDVjM0pMZVM1aFJGQjVTR0pvUTFRelpreGFkRkpNU0dkV1NtNWtPRzB6TXpCRWVURk1ZMmR3VUZvMWJtZFdZbkp1V25OQlpFNVZNbGxJU2twamFIRTJiazEwUmtKVFRHeERjM05FZFhSVmVFOXFaMjQ1Ym5OTVIwOU5SVTB3WHpablRHeEtUV1ZQTUhKUGNYWXhlVTUzVTNaQ2NIRTFSM0JoYjJRdGEycHFOVXh4UzFaTGQyUk9XRWwxYTNOaVltdHFVVXhVYTNCRk1ETnhaRGRTUVdkMmVtcEdSM1ZWZDI5cWJsWXliSEpoVkdOYU0wdFRWbVkzVVVwRWF6Qk5jVE0xVFhwTVoydGtla2hqVFdwTVZVaE5RV1JYZGtrM1VIcG9TMXA1TXpCWVNrWllWRFl3YWpsR1psSk1TVGQyZERSUlVsVndUamxLU25VM09FMTVURFZWYURGU05HVmhaa2hMTlhSWVMxZHVVV2c0WWpkZmRtVm1RbmxGVTNkRFdFOUtUMHRtWDNWaVgyWXpWa3RRWXpaVFdrOUhielJOT1VwQ1oxRlllVEI2TWpscFEydzNRV2R0Wm1OdlkwOUxNRGwwVUZkdk5URnhZbXRIVm1sTFJtRlZSREZuU0VsQ1oxVkdURVJNY0c5SGJEY3lkVWN0T0dRM1prWnNRVGhWZFVkRlpubGpYMHBZUkc1NFFqRTFPRFU1TkZscFdIUjFRbXhZZGxwbWVqQXRNRGx0YjFsak1tUXhaV2wyZDFKQlVqTkxRbU5zVWxKeE5tNUJWRGRpWldGM1NtOXBWRkppWkU4eVdIWnFOa1p6UVRWQ1dFTnZibmhWYlVJeE0ydFpkMjFZY21aamFERnljMWx3U2xaYVlsQjZiRkJ3V1VSM1Z6Uk1kRzlRZG01d2EyOTJiMWMxV2xWUFRYbGFVazV1WDJOcWEzaGhVMW94T0U5R2RUaE5TMUZaWjFoclNWWmxWMEpVYjBGZlJ6RkhOaTFwUTI4Mk56VjZiWGhUUVdGUVFqWk9OR3B4U1RWdVpuWTBWRkZZUlVkNVMxOHhhRXhuUlc5ek5VdE9iMkZvV2pacVJVSnVZVzAxVWt3d2FuRXRSRTlrVWpKNmRHZEtObDlwVlRSSWJVMTBMVXRSZG05ZlVtNXlha3BvYTBwUVVucE9Na0pHU0RKNlZtbEVWM0JwWDFFeVRreEdiRjh4U2pCRVNtOVdNRFJHVlROblExVnlPV296VDI1bGEzQTVMVXN3Tm1kMlRRPT0iLCJkZWxldGVkIjpmYWxzZSwiaWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJyZXYiOiIwNmUxZjg5ZmY2YzZlMTFiODNmOWQxMDViYjQ1ZDQ5ZiJ9Cg=="
+        },
+        {
+          "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee",
+          "paths": ["keys/recovery.json"],
+          "byteCount": 401,
+          "text": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"MDEyMzQ1Njc4OTo72nSGjRSGRdEfgIyaswx+YrrygIByjjW4Z6kuMBSLilJxx3vdJAGLcV/3G+zzVf8Bc40JEE1N33V8Rk+P8/bYdeulxbrkpr4PxUYht0e+cCPuweRCvAND+kQ6RGg8QORT2YQ+tT5K/gdh6wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tlk+G0Op+Nv0C35fUlrn+m\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}\n",
+          "base64": "ewogICJhbGdvcml0aG0iIDogInNuaXBwZXRzLWdpdC1yZWNvdmVyeS1oa2RmLXNoYTI1Ni1hZXMyNTZnY20tdjEiLAogICJjaXBoZXJ0ZXh0IiA6ICJNREV5TXpRMU5qYzRPVG83Mm5TR2pSU0dSZEVmZ0l5YXN3eCtZcnJ5Z0lCeWpqVzRaNmt1TUJTTGlsSnh4M3ZkSkFHTGNWLzNHK3p6VmY4QmM0MEpFRTFOMzNWOFJrK1A4L2JZZGV1bHhicmtwcjRQeFVZaHQwZStjQ1B1d2VSQ3ZBTkQra1E2UkdnOFFPUlQyWVErdFQ1Sy9nZGg2d1NwbVVYTlVWVWE5dDVFQ0RYUG00SmRaWXFYMnQzY3Z3WmJrb1Bnancrc1dKbFhrNzdvWTl0bGsrRzBPcCtOdjBDMzVmVWxybittIiwKICAiZGF0YXNldElEIiA6ICI2MTdhMDAwMS0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYWEiLAogICJzY2hlbWFWZXJzaW9uIiA6IDEKfQo="
+        },
+        {
+          "id": "57dd117bf98b5d53868b2da21a56f83a49bd8564",
+          "paths": ["keys/recovery.json"],
+          "byteCount": 401,
+          "text": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"QEFCQ0RFRkdISUpLgeqcT82Sl4H55+/yVloTcwfRA0p3PqNyRImh25iSzf9obzGQy/XBT20tq24mVdDxKyFcM/trJeYcWwg5Jdg+cm8nXbl7GBBWEC7TEm4gBJ0Lgh+r/ZTC27lm0y019r83cd5UMkgt7r//k/c8Lh9TFK3GDK/KtwxVDY6v0nkx7m5Nl+zAN5yT1Y0cZPYZSc6Zh68ZhW5TDX67hrWTOz4sPAKE\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}\n",
+          "base64": "ewogICJhbGdvcml0aG0iIDogInNuaXBwZXRzLWdpdC1yZWNvdmVyeS1oa2RmLXNoYTI1Ni1hZXMyNTZnY20tdjEiLAogICJjaXBoZXJ0ZXh0IiA6ICJRRUZDUTBSRlJrZElTVXBMZ2VxY1Q4MlNsNEg1NSsveVZsb1Rjd2ZSQTBwM1BxTnlSSW1oMjVpU3pmOW9iekdReS9YQlQyMHRxMjRtVmREeEt5RmNNL3RySmVZY1d3ZzVKZGcrY204blhibDdHQkJXRUM3VEVtNGdCSjBMZ2grci9aVEMyN2xtMHkwMTlyODNjZDVVTWtndDdyLy9rL2M4TGg5VEZLM0dESy9LdHd4VkRZNnYwbmt4N201TmwrekFONXlUMVkwY1pQWVpTYzZaaDY4WmhXNVREWDY3aHJXVE96NHNQQUtFIiwKICAiZGF0YXNldElEIiA6ICI2MTdhMDAwMS0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYWEiLAogICJzY2hlbWFWZXJzaW9uIiA6IDEKfQo="
+        },
+        {
+          "id": "6ecc220dd10f2eb435e438c369dc59f8218b8473",
+          "paths": ["snippets-sync.json"],
+          "byteCount": 156,
+          "text": "{\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"format\" : \"snippets-git-sync\",\n  \"recordProfile\" : \"snippets-wire-v1\",\n  \"schemaVersion\" : 1\n}\n",
+          "base64": "ewogICJkYXRhc2V0SUQiIDogIjYxN2EwMDAxLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBhYSIsCiAgImZvcm1hdCIgOiAic25pcHBldHMtZ2l0LXN5bmMiLAogICJyZWNvcmRQcm9maWxlIiA6ICJzbmlwcGV0cy13aXJlLXYxIiwKICAic2NoZW1hVmVyc2lvbiIgOiAxCn0K"
+        },
+        {
+          "id": "7852b5d61909c9ea2a32bb6ab54ec593bcd579ac",
+          "paths": ["snippets-sync.json"],
+          "byteCount": 156,
+          "text": "{\n  \"datasetID\" : \"11111111-2222-4333-8444-555555555555\",\n  \"format\" : \"snippets-git-sync\",\n  \"recordProfile\" : \"snippets-wire-v1\",\n  \"schemaVersion\" : 2\n}\n",
+          "base64": "ewogICJkYXRhc2V0SUQiIDogIjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSIsCiAgImZvcm1hdCIgOiAic25pcHBldHMtZ2l0LXN5bmMiLAogICJyZWNvcmRQcm9maWxlIiA6ICJzbmlwcGV0cy13aXJlLXYxIiwKICAic2NoZW1hVmVyc2lvbiIgOiAyCn0K"
+        },
+        {
+          "id": "960e084902522eb9dcbd513e6551f992b4e41efd",
+          "paths": ["records/00/00000000-0000-4000-8000-000000000001.json"],
+          "byteCount": 1537,
+          "text": "{\"blob\":\"djEuc2JHeHNiR3hzYkd4c2JHeC5vdTIzaEpCUlhJWW1nQVhMME5QZ2R6RGFvUTR0TEJaazNocVN0UmFQTW1XTm9yRlBSZ3M4SC13YU5hZXctTF92cWdhWnhWQ205UzdLNVFKRkVFNHVzYWZrcXJwQm9MeGVUZmQtejcxNzg2THhWQ005RzZwR0RCaUNYekZWUk56NHkwZFFrR0NtVkRPUkphN3RuNUNiNXZZVFlvUmtoRlJQU2tIY1NVLUhVaUJnaEc5SkRPcXcwZElxRUJkazMtb05uMzNrNVdGcE44VmRLM2R4dkhobWpONWl3bTJYNXYxaEdLQVN2TS1lNnYyUUFXVmFOMGJudURkTVZmZFFuY3A1ajMxRGxmUklFZ3lLeXRBT0piZWNMZjF1WG5UcjBkSDR2UVF1ZUI5VjU0WHZXcnR0cS1EVUhfdGd0TWpFaDdvdzJpVzU4SUI0dlNldDdpTGV0WFhjQTlQclVtTUFoQUJhR2RfYVR3eklfNUJtd2tPd2xVSFNiaUpfWWw1Q2x2U3B2T3ZxRlJkSzB0WGdDSlg2bHlOOEl5OVYydjJKQzR6NDNEd0RPdlhsNzdlTXRTZzlDeEozdHN6bHBmblBEZ1cxenJld1RpTlI2WjRMd24tdnRtOW1MQldqOFM5MHZwWW1ubGVrZ09OMUZfV0J5dzFjeXp0NTBQVUlDZVl3ZVViZkpjZnNPcUt0ajk5anE1T3NvMHN1VEZETFVCb0NPbUp5b0ZEeXNGdGN0ckxyak91X25Ed1NNQWZrSjNJbmdZTTNOaWhkMnNfQzlOWmdjbm54UnF2ZFEwel9URnd4X0pEZm8zZmtiTllXRkFzS0wxcVZPa29iOXM3U2tMcHIzOUZkQ3lWMm1zZkZfSzREMDBaX3ByX2JxeFNFMXRfUWU0bjc4VWpQMGUyN3ZrQWozOWxYNnFJa0J2XzdBQlJKSVpTSkVySlRHaEtDb0Z3VWlLWklRbWM4bmpUNXBhQWpjSnR4eV83bXRvQXBCM2E0MzFrNnMySm1NY1gtclVmSndQSVp0dHhsZDZnQ294ZDBWcU9faDVTT2pVU2VxUlk0aWE3alNzdzdIMjU2Zkd1OWgtZWZocmhCRWRLNU8yRWt6dXp3dDZSUlk5UFZtbnFPYTFadl9ldWo4dzJickNkcVlzdlJ5cHdxOG1zc00zY2NaMXZWeWhOeWFiRFJOX1ZsY3V4SG1LaHNKZi1McExMNWJkejVNV0lhRW92STR4a1NfOS14d1R6U1BIQjhySTk0TkZqcjJ4d2szMGMyQzJJTlVFVlhuT2ZSWkhVTEZUNlU2anctMXlicjkxU20zb1VBLVNTRURDU2VvaG5NNXEzYVo4eHJnc2xSRF9XLXpleXZuYUhSV1NUcUxjeDFkRXgxdjBxT0U3el9vZw==\",\"deleted\":false,\"id\":\"00000000-0000-4000-8000-000000000001\",\"rev\":\"3f3a289c891f21d8c9b73d2bbfbebac5\"}\n",
+          "base64": "eyJibG9iIjoiZGpFdWMySkhlSE5pUjNoellrZDRjMkpIZUM1dmRUSXphRXBDVWxoSldXMW5RVmhNTUU1UVoyUjZSR0Z2VVRSMFRFSmFhek5vY1ZOMFVtRlFUVzFYVG05eVJsQlNaM000U0MxM1lVNWhaWGN0VEY5MmNXZGhXbmhXUTIwNVV6ZExOVkZLUmtWRk5IVnpZV1pyY1hKd1FtOU1lR1ZVWm1RdGVqY3hOemcyVEhoV1EwMDVSelp3UjBSQ2FVTllla1pXVWs1Nk5Ia3daRkZyUjBOdFZrUlBVa3BoTjNSdU5VTmlOWFpaVkZsdlVtdG9SbEpRVTJ0SVkxTlZMVWhWYVVKbmFFYzVTa1JQY1hjd1pFbHhSVUprYXpNdGIwNXVNek5yTlZkR2NFNDRWbVJMTTJSNGRraG9iV3BPTldsM2JUSllOWFl4YUVkTFFWTjJUUzFsTm5ZeVVVRlhWbUZPTUdKdWRVUmtUVlptWkZGdVkzQTFhak14Ukd4bVVrbEZaM2xMZVhSQlQwcGlaV05NWmpGMVdHNVVjakJrU0RSMlVWRjFaVUk1VmpVMFdIWlhjblIwY1MxRVZVaGZkR2QwVFdwRmFEZHZkekpwVnpVNFNVSTBkbE5sZERkcFRHVjBXRmhqUVRsUWNsVnRUVUZvUVVKaFIyUmZZVlIzZWtsZk5VSnRkMnRQZDJ4VlNGTmlhVXBmV1d3MVEyeDJVM0IyVDNaeFJsSmtTekIwV0dkRFNsZzJiSGxPT0VsNU9WWXlkakpLUXpSNk5ETkVkMFJQZGxoc056ZGxUWFJUWnpsRGVFb3pkSE42YkhCbWJsQkVaMWN4ZW5KbGQxUnBUbEkyV2pSTWQyNHRkblJ0T1cxTVFsZHFPRk01TUhad1dXMXViR1ZyWjA5T01VWmZWMEo1ZHpGamVYcDBOVEJRVlVsRFpWbDNaVlZpWmtwalpuTlBjVXQwYWprNWFuRTFUM052TUhOMVZFWkVURlZDYjBOUGJVcDViMFpFZVhOR2RHTjBja3h5YWs5MVgyNUVkMU5OUVdaclNqTkpibWRaVFROT2FXaGtNbk5mUXpsT1dtZGpibTU0VW5GMlpGRXdlbDlVUm5kNFgwcEVabTh6Wm10aVRsbFhSa0Z6UzB3eGNWWlBhMjlpT1hNM1UydE1jSEl6T1Vaa1EzbFdNbTF6WmtaZlN6UkVNREJhWDNCeVgySnhlRk5GTVhSZlVXVTBiamM0VldwUU1HVXlOM1pyUVdvek9XeFlObkZKYTBKMlh6ZEJRbEpLU1ZwVFNrVnlTbFJIYUV0RGIwWjNWV2xMV2tsUmJXTTRibXBVTlhCaFFXcGpTblI0ZVY4M2JYUnZRWEJDTTJFME16RnJObk15U20xTlkxZ3RjbFZtU25kUVNWcDBkSGhzWkRablEyOTRaREJXY1U5ZmFEVlRUMnBWVTJWeFVsazBhV0UzYWxOemR6ZElNalUyWmtkMU9XZ3RaV1pvY21oQ1JXUkxOVTh5Uld0NmRYcDNkRFpTVWxrNVVGWnRibkZQWVRGYWRsOWxkV280ZHpKaWNrTmtjVmx6ZGxKNWNIZHhPRzF6YzAwelkyTmFNWFpXZVdoT2VXRmlSRkpPWDFac1kzVjRTRzFMYUhOS1ppMU1jRXhNTldKa2VqVk5WMGxoUlc5MlNUUjRhMU5mT1MxNGQxUjZVMUJJUWpoeVNUazBUa1pxY2pKNGQyc3pNR015UXpKSlRsVkZWbGh1VDJaU1draFZURVpVTmxVMmFuY3RNWGxpY2preFUyMHpiMVZCTFZOVFJVUkRVMlZ2YUc1Tk5YRXpZVm80ZUhKbmMyeFNSRjlYTFhwbGVYWnVZVWhTVjFOVWNVeGplREZrUlhneGRqQnhUMFUzZWw5dlp3PT0iLCJkZWxldGVkIjpmYWxzZSwiaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJyZXYiOiIzZjNhMjg5Yzg5MWYyMWQ4YzliNzNkMmJiZmJlYmFjNSJ9Cg=="
+        },
+        {
+          "id": "bfae011cc99d5b3c9aa5ccf5bbb28d2f73f279a2",
+          "paths": ["keys/vault.json"],
+          "byteCount": 990,
+          "text": "{\n  \"algorithm\" : \"snippets-git-vault-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"UFFSU1RVVldYWVpb7l0z7t3rVHVegBj7He9T+2nSdj1r2misjBdjev8rOhfo+G/j0UHB0XJs5QDgKs7KYPwLOU0gPXZhUnuMWnbi89G2712f9cEQ4GweXoexRJPVrZogU7okiTmjcod4BQ1pF98mIpQdobmeyAXshpETe97HLsv8/rWLe6aGY7iG+hF7kvrAr2x7/fPTLNRoHvYwFFJsVbJMVhTAUVHtLA9IJRCCl6lIHEVwp4NlciQP08vacvBLxVlxtHP6lxBVS6B/JDROVyf3SlQeZi9q0nKD57i/wbZR6WJyAGZciIkvcNXVejJoyQkYIgUbqUr4urvR2weCU961EfQUeUAJKiFoeA7rgTUMUoqBNgVwr+iYOqUunZzO87dH859EnWrgHf1zhU4jmC9UpohEuuhL5KmCt630XR07A7XUnF3YTKrA7G38HEOZTnWbdC+nPlgeUibUUA0Nyl3n9MeIdywLeA06P5+7ZVjQn1R8GSmKwu0DpY9/09vYv1PyeZxO6oehW15x93XWu6+V7EHVgVdMx8Upby8lU1W/AN3I6TCna9ft21DiPh9m3Y0cscDg6KLGN3X/iPG0kKUzBRFfYJlndjfdbQQd1p7DoRNSEW4U4Zg/IZtDEuCaSUYSY0MMx7khCwGkJY4vpVegAJqYChaUyqqivfmq0shqWE8ZOQ7AxZHXDWeZVgpDm6cgCLph64QRxSBBmWIcgTh3Jj7hG5Zu4eeLK6wDBdL9PXnC4lsXf06RP1LuAo0hEeRy1FJ6CvqdeYFeFC/D9GUWuh/ppq/raqPXCdfuHo4LvpLTQhXmQcc=\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}\n",
+          "base64": "ewogICJhbGdvcml0aG0iIDogInNuaXBwZXRzLWdpdC12YXVsdC1oa2RmLXNoYTI1Ni1hZXMyNTZnY20tdjEiLAogICJjaXBoZXJ0ZXh0IiA6ICJVRkZTVTFSVlZsZFlXVnBiN2wwejd0M3JWSFZlZ0JqN0hlOVQrMm5TZGoxcjJtaXNqQmRqZXY4ck9oZm8rRy9qMFVIQjBYSnM1UURnS3M3S1lQd0xPVTBnUFhaaFVudU1XbmJpODlHMjcxMmY5Y0VRNEd3ZVhvZXhSSlBWclpvZ1U3b2tpVG1qY29kNEJRMXBGOThtSXBRZG9ibWV5QVhzaHBFVGU5N0hMc3Y4L3JXTGU2YUdZN2lHK2hGN2t2ckFyMng3L2ZQVExOUm9Idll3RkZKc1ZiSk1WaFRBVVZIdExBOUlKUkNDbDZsSUhFVndwNE5sY2lRUDA4dmFjdkJMeFZseHRIUDZseEJWUzZCL0pEUk9WeWYzU2xRZVppOXEwbktENTdpL3diWlI2V0p5QUdaY2lJa3ZjTlhWZWpKb3lRa1lJZ1VicVVyNHVydlIyd2VDVTk2MUVmUVVlVUFKS2lGb2VBN3JnVFVNVW9xQk5nVndyK2lZT3FVdW5aek84N2RIODU5RW5XcmdIZjF6aFU0am1DOVVwb2hFdXVoTDVLbUN0NjMwWFIwN0E3WFVuRjNZVEtyQTdHMzhIRU9aVG5XYmRDK25QbGdlVWliVVVBME55bDNuOU1lSWR5d0xlQTA2UDUrN1pWalFuMVI4R1NtS3d1MERwWTkvMDl2WXYxUHllWnhPNm9laFcxNXg5M1hXdTYrVjdFSFZnVmRNeDhVcGJ5OGxVMVcvQU4zSTZUQ25hOWZ0MjFEaVBoOW0zWTBjc2NEZzZLTEdOM1gvaVBHMGtLVXpCUkZmWUpsbmRqZmRiUVFkMXA3RG9STlNFVzRVNFpnL0ladERFdUNhU1VZU1kwTU14N2toQ3dHa0pZNHZwVmVnQUpxWUNoYVV5cXFpdmZtcTBzaHFXRThaT1E3QXhaSFhEV2VaVmdwRG02Y2dDTHBoNjRRUnhTQkJtV0ljZ1RoM0pqN2hHNVp1NGVlTEs2d0RCZEw5UFhuQzRsc1hmMDZSUDFMdUFvMGhFZVJ5MUZKNkN2cWRlWUZlRkMvRDlHVVd1aC9wcHEvcmFxUFhDZGZ1SG80THZwTFRRaFhtUWNjPSIsCiAgImRhdGFzZXRJRCIgOiAiNjE3YTAwMDEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMGFhIiwKICAic2NoZW1hVmVyc2lvbiIgOiAxCn0K"
+        },
+        {
+          "id": "c3e97fcf6c028122aa03bef15c89df5ffb1196e5",
+          "paths": ["keys/vault.json"],
+          "byteCount": 990,
+          "text": "{\n  \"algorithm\" : \"snippets-git-vault-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"ICEiIyQlJicoKSorndGcsCPfp9iLfsgB7ix+jJfSjQ7dhOIWO8DhrwTl75UaCHODH3OAjzzWQjvjZfrM3GQ3QEpj84BA0Yglh8Ty0lNIAiX/F5JpOZwyidksjTFPi2QJyprDmDjrgapMPLNtE34wLQnlnSNaaTl+48EMvbjqlPBS39OKefzEoA2h8QzhvAx7ZLGBGIEsPO6VerfblYYZDhwvy3Fpzd4o/m7nKd93O/tkIsF13ouhAF9iTwLCG1+aMTcXgCpWa6K7faFeQKPDdzpAesvhlyZYZFVRxsUaLeTEwuC/QAI9mGbCVcu1BViv8ELUH8k5ZFKuD/AHshi375TB1VUHCuf87LGHfi4d2QZKX1UvxYYNO+2nQzYK6CBXtw91vv//QDd/VENf+mjt8RWVbUzSmYxm6xJNINvxSKrVzbklS0uShFeXBWsEQcbk4/rI1EupK2arwylB6/1ntweBIxbXqp/hEkZqVID3sw3hKCX3aPg17xy8b8oK9/LEJzo0CFPP33rBNUT/ML6Pr1PSOeb80H6o874X+WW0pcwOxJuwXMZSQmUwVD4eR6GcdenoDwR3fEFxSPdbvRC1C0IdSLXlmsZey0B0vsHIGJ5D9uc6xTNPIM7+1UH25DQz6ZMzhYQY5C2mMwGFn5lg8WfUWMHG4+QPBrDwGFgZAUy68HT5l7g4KfGGY4LiKizW6luyK+wT2M+oz75Pg6v3NhGLPOZzxr4XRsrLVwfPdsz7zwQZiVc8t/wBN5rU1GSAsrSkhW4xGMljE2z8AcIxP89PtaSl8twRcm5rdvvi56pKr1tmj9Az7xQ=\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}\n",
+          "base64": "ewogICJhbGdvcml0aG0iIDogInNuaXBwZXRzLWdpdC12YXVsdC1oa2RmLXNoYTI1Ni1hZXMyNTZnY20tdjEiLAogICJjaXBoZXJ0ZXh0IiA6ICJJQ0VpSXlRbEppY29LU29ybmRHY3NDUGZwOWlMZnNnQjdpeCtqSmZTalE3ZGhPSVdPOERocndUbDc1VWFDSE9ESDNPQWp6eldRanZqWmZyTTNHUTNRRXBqODRCQTBZZ2xoOFR5MGxOSUFpWC9GNUpwT1p3eWlka3NqVEZQaTJRSnlwckRtRGpyZ2FwTVBMTnRFMzR3TFFubG5TTmFhVGwrNDhFTXZianFsUEJTMzlPS2VmekVvQTJoOFF6aHZBeDdaTEdCR0lFc1BPNlZlcmZibFlZWkRod3Z5M0ZwemQ0by9tN25LZDkzTy90a0lzRjEzb3VoQUY5aVR3TENHMSthTVRjWGdDcFdhNks3ZmFGZVFLUERkenBBZXN2aGx5WllaRlZSeHNVYUxlVEV3dUMvUUFJOW1HYkNWY3UxQlZpdjhFTFVIOGs1WkZLdUQvQUhzaGkzNzVUQjFWVUhDdWY4N0xHSGZpNGQyUVpLWDFVdnhZWU5PKzJuUXpZSzZDQlh0dzkxdnYvL1FEZC9WRU5mK21qdDhSV1ZiVXpTbVl4bTZ4Sk5JTnZ4U0tyVnpia2xTMHVTaEZlWEJXc0VRY2JrNC9ySTFFdXBLMmFyd3lsQjYvMW50d2VCSXhiWHFwL2hFa1pxVklEM3N3M2hLQ1gzYVBnMTd4eThiOG9LOS9MRUp6bzBDRlBQMzNyQk5VVC9NTDZQcjFQU09lYjgwSDZvODc0WCtXVzBwY3dPeEp1d1hNWlNRbVV3VkQ0ZVI2R2NkZW5vRHdSM2ZFRnhTUGRidlJDMUMwSWRTTFhsbXNaZXkwQjB2c0hJR0o1RDl1YzZ4VE5QSU03KzFVSDI1RFF6NlpNemhZUVk1QzJtTXdHRm41bGc4V2ZVV01IRzQrUVBCckR3R0ZnWkFVeTY4SFQ1bDdnNEtmR0dZNExpS2l6VzZsdXlLK3dUMk0rb3o3NVBnNnYzTmhHTFBPWnp4cjRYUnNyTFZ3ZlBkc3o3endRWmlWYzh0L3dCTjVyVTFHU0FzclNraFc0eEdNbGpFMno4QWNJeFA4OVB0YVNsOHR3UmNtNXJkdnZpNTZwS3IxdG1qOUF6N3hRPSIsCiAgImRhdGFzZXRJRCIgOiAiNjE3YTAwMDEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMGFhIiwKICAic2NoZW1hVmVyc2lvbiIgOiAxCn0K"
+        },
+        {
+          "id": "cfd114d03fc28968afd569ecb56ca0b621b6b67b",
+          "paths": ["records/11/11111111-2222-4333-8444-555555555555.json"],
+          "byteCount": 1081,
+          "text": "{\"blob\":\"djEuc0xDd3NMQ3dzTEN3c0xDdy5xWmFuQkhqZHVqdHRXc256cWNTTk1KMVJoa1NYb0M1bVQ4clZHa3pLOVp5a19KQUNWM3pObl9UWlh2TnNRcDZGWURha3JKT2lMWVBGOVpiZEtwTDk0LXJuWjRDWE1IZ2xaRF9OVG5LRVRPX1dNbGx0MWhpUTJYWXNTTHNLaUtvemRVOVFLWmEyT0tocEhrV3FHQVJTT2xEQXhtbk5teC1vODU4N1lXeWlRZ2xqRzA5YlRJdEdZSkU4TXNwOGZjRFNmM0Y0TERuWHl6cDRmOW9pT1Z5U18xci1NT1NjX3ZIQXNSUEg1b082LWZtMmFiNG05R1laQ3FBVUpxYlBjeTBscmljTmktdC1QZDhOdENKV2RmM3ltNW5wRDdnMkdLRkZuNXRhcXpHUEJ5UUt6Q3pJRWNrUEFYZTR2eGx0OFFSeVZSYWE5c1JCMC0zSEZPWWVwN1UyRmRlNkhoX0hXQkREcmEwLXgydi1hU0VXdXNnM0dwUU1SMGNSTzg4Qmt4T1RCQ2dDNzhrZkpncGktWUswSTIwM29nRlhwd09rLWMwb3diOWN0Z0tCMTVEU0RaUVNXQzJHbl9ucHg5YnYzY1NTVDhJa2dsZTR5RDZaQWJZRkN1T1Zwb0lMUmxUTUo4UkhvSXJGN011NWhJVkV6TXR6QnVpZE8yRXdZcmpILWd5eVVzY3p5ZXpfUjNzZFNOejVldUdWVTdrTy10WUNYaTlFSkFGUUJkemJmVDlPQzVKdDhuSXNYbmhQUXdudWRfYjlOeUNhWk5Bam5zSk51dEl2RExFV0MyWURiaEE3OVVPMVd2Wjlmem5mTXhlaEpIX2hfVWMxSFo2amt4Vmw3SUkyYl9rY0xWa0o0TjVGN3J1U2NjM0ZyZnU0dE5mSzFONXRDcE51bkhmTHo4RXE1STJfWmZuMGg4ajVkY0ZCeS1yeA==\",\"deleted\":false,\"id\":\"11111111-2222-4333-8444-555555555555\",\"rev\":\"711b0565f95acbd63b02ec6570677891\"}\n",
+          "base64": "eyJibG9iIjoiZGpFdWMweERkM05NUTNkelRFTjNjMHhEZHk1eFdtRnVRa2hxWkhWcWRIUlhjMjU2Y1dOVFRrMUtNVkpvYTFOWWIwTTFiVlE0Y2xaSGEzcExPVnA1YTE5S1FVTldNM3BPYmw5VVdsaDJUbk5SY0RaR1dVUmhhM0pLVDJsTVdWQkdPVnBpWkV0d1REazBMWEp1V2pSRFdFMUlaMnhhUkY5T1ZHNUxSVlJQWDFkTmJHeDBNV2hwVVRKWVdYTlRUSE5MYVV0dmVtUlZPVkZMV21FeVQwdG9jRWhyVjNGSFFWSlRUMnhFUVhodGJrNXRlQzF2T0RVNE4xbFhlV2xSWjJ4cVJ6QTVZbFJKZEVkWlNrVTRUWE53T0daalJGTm1NMFkwVEVSdVdIbDZjRFJtT1c5cFQxWjVVMTh4Y2kxTlQxTmpYM1pJUVhOU1VFZzFiMDgyTFdadE1tRmlORzA1UjFsYVEzRkJWVXB4WWxCamVUQnNjbWxqVG1rdGRDMVFaRGhPZEVOS1YyUm1NM2x0Tlc1d1JEZG5Na2RMUmtadU5YUmhjWHBIVUVKNVVVdDZRM3BKUldOclVFRllaVFIyZUd4ME9GRlNlVlpTWVdFNWMxSkNNQzB6U0VaUFdXVndOMVV5Um1SbE5raG9YMGhYUWtSRWNtRXdMWGd5ZGkxaFUwVlhkWE5uTTBkd1VVMVNNR05TVHpnNFFtdDRUMVJDUTJkRE56aHJaa3BuY0drdFdVc3dTVEl3TTI5blJsaHdkMDlyTFdNd2IzZGlPV04wWjB0Q01UVkVVMFJhVVZOWFF6SkhibDl1Y0hnNVluWXpZMU5UVkRoSmEyZHNaVFI1UkRaYVFXSlpSa04xVDFad2IwbE1VbXhVVFVvNFVraHZTWEpHTjAxMU5XaEpWa1Y2VFhSNlFuVnBaRTh5UlhkWmNtcElMV2Q1ZVZWelkzcDVaWHBmVWpOelpGTk9lalZsZFVkV1ZUZHJUeTEwV1VOWWFUbEZTa0ZHVVVKa2VtSm1WRGxQUXpWS2REaHVTWE5ZYm1oUVVYZHVkV1JmWWpsT2VVTmhXazVCYW01elNrNTFkRWwyUkV4RlYwTXlXVVJpYUVFM09WVlBNVmQyV2psbWVtNW1UWGhsYUVwSVgyaGZWV014U0ZvMmFtdDRWbXczU1VreVlsOXJZMHhXYTBvMFRqVkdOM0oxVTJOak0wWnlablUwZEU1bVN6Rk9OWFJEY0U1MWJraG1USG80UlhFMVNUSmZXbVp1TUdnNGFqVmtZMFpDZVMxeWVBPT0iLCJkZWxldGVkIjpmYWxzZSwiaWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJyZXYiOiI3MTFiMDU2NWY5NWFjYmQ2M2IwMmVjNjU3MDY3Nzg5MSJ9Cg=="
+        },
+        {
+          "id": "d85f8fdd6c499f6d7feae5a790322d4f36778d8f",
+          "paths": ["README.md"],
+          "byteCount": 625,
+          "text": null,
+          "base64": null
+        },
+        {
+          "id": "ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf",
+          "paths": ["records/11/11111111-2222-4333-8444-555555555555.json"],
+          "byteCount": 1080,
+          "text": "{\"blob\":\"djEudExTMHRMUzB0TFMwdExTMC5qcXYtcHZBZDc3VnhZQjBuR05QQ1FqZ085bjBUQmMxVDNnaU1mUDU0b0RHT1lyeW8tWFlGX083VFdESXVxQXJRVnpTTjdEWkQwLThJQl9jc1RTTjkzQ2JrOUtoTVNObjhXcVhmV3dOVGpsSXczbWhSanAwRkNjbE02c2FGUTFqLVh4SWJ3WTNwbmVOMkpjcEM4bmZQX1l5QnkwT0Z0MnctU01BdU9DanM4ak90TTNSLTlCbnBaMlJVVnlhN2puTFhyWXd4N3NtdGZraVRPbEI3ajl3MjV6OGNlbkQtNXk0elMwdHYxMW0tZ21JTXBHSmEwbEhLQVVpTVVBcHJCQWhacEFKTC0yT0ZlUmI0WFlLMGRHVzVYMzI5aEFhUVZzTEQxLVZSRW5xUVNnd1NHN0xPbVdzMmkyaVh4SmQtQkMwc2ZxXzFIS0w1SVpvUlZtbEF0R2EzZHlKRExEaHZocVNaZm9oWVdWVW9LeWlxRnlTSl9RYzJMLThlZlc4UmlNWVd5S1BRT081UjlzNzAtbGF3eWFhODduVlpKcVJxNEZEdVVLWlRnNUNEaEhVTXZPanpPVlB3MEJNWGJHb3F2OE1hTW10Tngyb3M3SHNfakJNcHVpbEFuTVQ0WUFNRWZwQ2dPR2k3aWRkYTFXTVE3NEZmazcyaWNCSmxLU2xuNFJ1cUhqWFZabVRPdDNGZ0h2bUJMamw2UTR2NUpTUWtHekZFd2RRMzhvSV9nelBOQzQzXzVYNDh2Y2RWUW5IUE84VmdQaWk2clQ1Q2R2ODVPNnUxR1d4WGZzcW9mUHljdlJOejBVbm9ZWlY5UlRmdVF4a05yMERRa0NzVjNfb3M5MHdoTjZOZldYd1RHc0pxdVlUM2tzek80d1gxdlkyc3VWRmNIbnBnUnRwUmtuUE1ILVRjQXlMbDRka1lSWVF2NWxhMg==\",\"deleted\":true,\"id\":\"11111111-2222-4333-8444-555555555555\",\"rev\":\"b41ae3add258b4bbf62c554a19d75895\"}\n",
+          "base64": "eyJibG9iIjoiZGpFdWRFeFRNSFJNVXpCMFRGTXdkRXhUTUM1cWNYWXRjSFpCWkRjM1ZuaFpRakJ1UjA1UVExRnFaMDg1YmpCVVFtTXhWRE5uYVUxbVVEVTBiMFJIVDFseWVXOHRXRmxHWDA4M1ZGZEVTWFZ4UVhKUlZucFRUamRFV2tRd0xUaEpRbDlqYzFSVFRqa3pRMkpyT1V0b1RWTk9iamhYY1ZobVYzZE9WR3BzU1hjemJXaFNhbkF3UmtOamJFMDJjMkZHVVRGcUxWaDRTV0ozV1ROd2JtVk9Na3BqY0VNNGJtWlFYMWw1UW5rd1QwWjBNbmN0VTAxQmRVOURhbk00YWs5MFRUTlNMVGxDYm5CYU1sSlZWbmxoTjJwdVRGaHlXWGQ0TjNOdGRHWnJhVlJQYkVJM2FqbDNNalY2T0dObGJrUXROWGswZWxNd2RIWXhNVzB0WjIxSlRYQkhTbUV3YkVoTFFWVnBUVlZCY0hKQ1FXaGFjRUZLVEMweVQwWmxVbUkwV0ZsTE1HUkhWelZZTXpJNWFFRmhVVlp6VEVReExWWlNSVzV4VVZObmQxTkhOMHhQYlZkek1ta3lhVmg0U21RdFFrTXdjMlp4WHpGSVMwdzFTVnB2VWxadGJFRjBSMkV6WkhsS1JFeEVhSFpvY1ZOYVptOW9XVmRXVlc5TGVXbHhSbmxUU2w5Ull6Sk1MVGhsWmxjNFVtbE5XVmQ1UzFCUlQwODFVamx6TnpBdGJHRjNlV0ZoT0RkdVZscEtjVkp4TkVaRWRWVkxXbFJuTlVORWFFaFZUWFpQYW5wUFZsQjNNRUpOV0dKSGIzRjJPRTFoVFcxMFRuZ3liM00zU0hOZmFrSk5jSFZwYkVGdVRWUTBXVUZOUldad1EyZFBSMmszYVdSa1lURlhUVkUzTkVabWF6Y3lhV05DU214TFUyeHVORkoxY1VocVdGWmFiVlJQZEROR1owaDJiVUpNYW13MlVUUjJOVXBUVVd0SGVrWkZkMlJSTXpodlNWOW5lbEJPUXpRelh6VllORGgyWTJSV1VXNUlVRTg0Vm1kUWFXazJjbFExUTJSMk9EVlBOblV4UjFkNFdHWnpjVzltVUhsamRsSk9lakJWYm05WldsWTVVbFJtZFZGNGEwNXlNRVJSYTBOelZqTmZiM001TUhkb1RqWk9abGRZZDFSSGMwcHhkVmxVTTJ0emVrODBkMWd4ZGxreWMzVldSbU5JYm5CblVuUndVbXR1VUUxSUxWUmpRWGxNYkRSa2ExbFNXVkYyTld4aE1nPT0iLCJkZWxldGVkIjp0cnVlLCJpZCI6IjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSIsInJldiI6ImI0MWFlM2FkZDI1OGI0YmJmNjJjNTU0YTE5ZDc1ODk1In0K"
+        },
+        {
+          "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c",
+          "paths": ["records/a0/a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json"],
+          "byteCount": 1989,
+          "text": "{\"blob\":\"djEuczdPenM3T3pzN096czdPei4wMGQ1U3JjUy1YRjh5UEIyVVkzR1hMY1lRUFFCNlB3bks2MFEtd0czWVJ6MzFwUHVadGs3TC1TMl9BV1hJVWZFcThTcjBVRnoyYURnRG53YXIyODR4b3Vxbks1ZHFXd0RqQnZvMG9mTGJiYUJVb1o5M1ZUWXNicThsNHBtbkRYaW1mQkFOS3NKXzJSNDBROExzRmtWSTFuWW43dmVwOHY2aDlha0trSVdXOVZvZllfVXNESnpJb3dsczhwRWxacGlnamIwRHlMYjVxbklKWDdaZk5iRmhfZnpab2pfczByeVBUNWNXVFJEOEZqejctSUprV3VCYUtiNUJaMmJjVHhLd2dtRGV2WXVQRm1waU5IbDB4Nk9DamRrQVNaYXd1VWh1QkpuSWd5bF9FNlNrZmFLUTlHWE1rMlkzbTJseUpKTFc3UmwycThPb3ROT25XRERsN2t1dEZPeUhCUnVoa1Y5Y05SOWNEcktMYzFCN0o5Rl9zSTdud2J3UEx3VnBZU2UzV1FqQ1NCT3RGU2RhR3Q3NXNnOVNrb0dsVU5qRDByRE5JOFlGRGxQQTY0VWVnRDR4NTM2NE5lQ2E3MHRBTzZwS3FBd0hyQ3JRZUV6NVdiYVh4elpkbDdKOENLUy1EYnlnZDh6clNJWlhlZXpnS2NWWkp6N3lIY2lQblZkUk9qLV9sNFhCN1NHb1d5NnUtYzJoWWZjTW5tYVVxbXNBaVo2NDdGV1VDMkhIampsZEFBOW9wemNZNFMwWldJSVdCVFNaSUludTlZdVRUaTZXcUU4Q0o5ekRlTk9nY29Mc2U1bnAtdWV5aDlhWkdDMHJjM21MXy1KcmxxWTIyU25QYkg0SUFUazZKU3Nna1I0UkEyNlp2UGxnRXFGdVJ5Qmpwei1YcDY2ZWQ5OFBqQng2UDZ6QW9ub1pYcWt4NzNmaGp4bG95QmdXVTV5ZWt5alg2Rkd5RDQ4ZE9iNGZHT3cxYmNmdkFoV25uSVhuM0FSMDlRV2p6S3QtQ3FrNHhNTHV1eGl5MFBzUjEtaTF5M3ZaU0xIS2xkbGRkMlU3QXVwTEc2ak5weFpLd3ZTMVlLYTBqRVVSeVJoMC1LQWZUUUVBaW5DM3hlUHB0UWZON1pwY3JXR3dSRTFWX3VxLXZUSXd2ak5BM2VyRlpoaDZQVkIxTVVjTDJFbU1xLUV5b3J2T0tndmR6RkJWLWRnZUU0c240SFpZVzZVS1g3a1RzYkJRbF9XRnhuX1VuSXNXME9fNWZqUUI4TFdWNXVDM1JyMk4yVDZtb01uWUQ3M2hyQmxrbGR6TlhCVEcyQzdNYXNOTnllcU5HeDEtWHZrQzBOTlVtMWMwVXZtV0tEbEY3NWk1enZQWnRkM19VZ2ZvMTZqZWdFNXFJRlEzV1dRaXNJT05QM2lSSzRKOEdabndmb0N2TXZQNDFTY3VpTm1DNFMyQmlPZFRuaE5jRDB6TnpHYmpQVFY3d2NyS1M3Q0d0OFNsR1lZODA3X3NGM28takI5X0hKQ2kzaDdPLXU5OHQ4ZEFzQUJlS3ZFOTVoa3dRZjdYSEI3cERCU2NIc1pvYkVMX3FXLU9LcFBuazRWU3lKaTJha0hZMzlNdlVmd09nV2x0LWUyaXdoVXZxTk1jOFl3T29GY1VtNUhKUFVDYV9Mam9aRVRKbG5TdXlsRUlUaVpZdjhjWjFqTUVDM01Id2dDaE54TUNLczZFNDJDWGxDRGR6TzRKYTAzdFZfU3hpWmtUSm1zUEhGOVR3NmlRWXdpOTdKU3ctWnEyQ0ZGUm5uc1kyaFhQVEJJV2xFM29jNVhLdWhUdTM5NlFFR1FlVlBWYkp3cDU0LTFjZzdVVjF3\",\"deleted\":false,\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"rev\":\"cacd70ca9afe1f7503b1e1bc85146988\"}\n",
+          "base64": "eyJibG9iIjoiZGpFdWN6ZFBlbk0zVDNwek4wOTZjemRQZWk0d01HUTFVM0pqVXkxWVJqaDVVRUl5VlZrelIxaE1ZMWxSVUZGQ05sQjNia3MyTUZFdGQwY3pXVko2TXpGd1VIVmFkR3MzVEMxVE1sOUJWMWhKVldaRmNUaFRjakJWUm5veVlVUm5SRzUzWVhJeU9EUjRiM1Z4YmtzMVpIRlhkMFJxUW5adk1HOW1UR0ppWVVKVmIxbzVNMVpVV1hOaWNUaHNOSEJ0YmtSWWFXMW1Ra0ZPUzNOS1h6SlNOREJST0V4elJtdFdTVEZ1V1c0M2RtVndPSFkyYURsaGEwdHJTVmRYT1ZadlpsbGZWWE5FU25wSmIzZHNjemh3Uld4YWNHbG5hbUl3UkhsTVlqVnhia2xLV0RkYVprNWlSbWhmWm5wYWIycGZjekJ5ZVZCVU5XTlhWRkpFT0VacWVqY3RTVXByVjNWQ1lVdGlOVUphTW1KalZIaExkMmR0UkdWMldYVlFSbTF3YVU1SWJEQjROazlEYW1SclFWTmFZWGQxVldoMVFrcHVTV2Q1YkY5Rk5sTnJabUZMVVRsSFdFMXJNbGt6YlRKc2VVcEtURmMzVW13eWNUaFBiM1JPVDI1WFJFUnNOMnQxZEVaUGVVaENVblZvYTFZNVkwNVNPV05FY2t0TVl6RkNOMG81Umw5elNUZHVkMkozVUV4M1ZuQlpVMlV6VjFGcVExTkNUM1JHVTJSaFIzUTNOWE5uT1ZOcmIwZHNWVTVxUkRCeVJFNUpPRmxHUkd4UVFUWTBWV1ZuUkRSNE5UTTJORTVsUTJFM01IUkJUelp3UzNGQmQwaHlRM0pSWlVWNk5WZGlZVmg0ZWxwa2JEZEtPRU5MVXkxRVlubG5aRGg2Y2xOSldsaGxaWHBuUzJOV1drcDZOM2xJWTJsUWJsWmtVazlxTFY5c05GaENOMU5IYjFkNU5uVXRZekpvV1daalRXNXRZVlZ4YlhOQmFWbzJORGRHVjFWRE1raElhbXBzWkVGQk9XOXdlbU5aTkZNd1dsZEpTVmRDVkZOYVNVbHVkVGxaZFZSVWFUWlhjVVU0UTBvNWVrUmxUazluWTI5TWMyVTFibkF0ZFdWNWFEbGhXa2RETUhKak0yMU1YeTFLY214eFdUSXlVMjVRWWtnMFNVRlVhelpLVTNObmExSTBVa0V5TmxwMlVHeG5SWEZHZFZKNVFtcHdlaTFZY0RZMlpXUTVPRkJxUW5nMlVEWjZRVzl1YjFwWWNXdDROek5tYUdwNGJHOTVRbWRYVlRWNVpXdDVhbGcyUmtkNVJEUTRaRTlpTkdaSFQzY3hZbU5tZGtGb1YyNXVTVmh1TTBGU01EbFJWMnA2UzNRdFEzRnJOSGhOVEhWMWVHbDVNRkJ6VWpFdGFURjVNM1phVTB4SVMyeGtiR1JrTWxVM1FYVndURWMyYWs1d2VGcExkM1pUTVZsTFlUQnFSVlZTZVZKb01DMUxRV1pVVVVWQmFXNURNM2hsVUhCMFVXWk9OMXB3WTNKWFIzZFNSVEZXWDNWeExYWlVTWGQyYWs1Qk0yVnlSbHBvYURaUVZrSXhUVlZqVERKRmJVMXhMVVY1YjNKMlQwdG5kbVI2UmtKV0xXUm5aVVUwYzI0MFNGcFpWelpWUzFnM2ExUnpZa0pSYkY5WFJuaHVYMVZ1U1hOWE1FOWZOV1pxVVVJNFRGZFdOWFZETTFKeU1rNHlWRFp0YjAxdVdVUTNNMmh5UW14cmJHUjZUbGhDVkVjeVF6ZE5ZWE5PVG5sbGNVNUhlREV0V0haclF6Qk9UbFZ0TVdNd1ZYWnRWMHRFYkVZM05XazFlblpRV25Sa00xOVZaMlp2TVRacVpXZEZOWEZKUmxFelYxZFJhWE5KVDA1UU0ybFNTelJLT0VkYWJuZG1iME4yVFhaUU5ERlRZM1ZwVG0xRE5GTXlRbWxQWkZSdWFFNWpSREI2VG5wSFltcFFWRlkzZDJOeVMxTTNRMGQwT0ZOc1IxbFpPREEzWDNOR00yOHRha0k1WDBoS1Eya3phRGRQTFhVNU9IUTRaRUZ6UVVKbFMzWkZPVFZvYTNkUlpqZFlTRUkzY0VSQ1UyTkljMXB2WWtWTVgzRlhMVTlMY0ZCdWF6UldVM2xLYVRKaGEwaFpNemxOZGxWbWQwOW5WMngwTFdVeWFYZG9WWFp4VGsxak9GbDNUMjlHWTFWdE5VaEtVRlZEWVY5TWFtOWFSVlJLYkc1VGRYbHNSVWxVYVZwWmRqaGpXakZxVFVWRE0wMUlkMmREYUU1NFRVTkxjelpGTkRKRFdHeERSR1I2VHpSS1lUQXpkRlpmVTNocFdtdFVTbTF6VUVoR09WUjNObWxSV1hkcE9UZEtVM2N0V25FeVEwWkdVbTV1YzFreWFGaFFWRUpKVjJ4Rk0yOWpOVmhMZFdoVWRUTTVObEZGUjFGbFZsQldZa3AzY0RVMExURmpaemRWVmpGMyIsImRlbGV0ZWQiOmZhbHNlLCJpZCI6ImEwYjFjMmQzLWU0ZjUtNDYwNy04ODk5LWFhYmJjY2RkZWVmZiIsInJldiI6ImNhY2Q3MGNhOWFmZTFmNzUwM2IxZTFiYzg1MTQ2OTg4In0K"
+        },
+        {
+          "id": "ffd15bb4774e921f3e3a65b657f0dac3d9c629ca",
+          "paths": ["keys/recovery.json"],
+          "byteCount": 401,
+          "text": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"YGFiY2RlZmdoaWpr6QIr/wqGzzTk2RfvtXmjwZJXO7ijLVBPtfmgtqU/6Ijpqh8NtWNDOBznWl5p5RdnbfXGfxKCtf05MUxDmuq2D7yK2rB/tdLnwnX8ZF/AgpZWtnjERXy0N9OXpXQELV8aY9efrHafXLc40WYhRTpamHGxUF8KFX9AwmsQO5zBlDPWQlJaW9+GtgjTUA6Fgb6HnTRSlBWXmmt6+nolNZxG1WnX\",\n  \"datasetID\" : \"11111111-2222-4333-8444-555555555555\",\n  \"schemaVersion\" : 1\n}\n",
+          "base64": "ewogICJhbGdvcml0aG0iIDogInNuaXBwZXRzLWdpdC1yZWNvdmVyeS1oa2RmLXNoYTI1Ni1hZXMyNTZnY20tdjEiLAogICJjaXBoZXJ0ZXh0IiA6ICJZR0ZpWTJSbFptZG9hV3ByNlFJci93cUd6elRrMlJmdnRYbWp3WkpYTzdpakxWQlB0Zm1ndHFVLzZJanBxaDhOdFdORE9Cem5XbDVwNVJkbmJmWEdmeEtDdGYwNU1VeERtdXEyRDd5SzJyQi90ZExud25YOFpGL0FncFpXdG5qRVJYeTBOOU9YcFhRRUxWOGFZOWVmckhhZlhMYzQwV1loUlRwYW1IR3hVRjhLRlg5QXdtc1FPNXpCbERQV1FsSmFXOStHdGdqVFVBNkZnYjZIblRSU2xCV1htbXQ2K25vbE5aeEcxV25YIiwKICAiZGF0YXNldElEIiA6ICIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLAogICJzY2hlbWFWZXJzaW9uIiA6IDEKfQo="
+        }
+      ],
+      "fsck": "git fsck --strict: clean"
+    },
+    {
+      "name": "plain-text-library",
+      "kind": "repository",
+      "mode": "plainText",
+      "remoteURL": "http://snippets-interop-plain.localhost/repo.git",
+      "branch": "main",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "syncKeyHex": "9999999999999999999999999999999999999999999999999999999999999999",
+      "syncSaltHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "steps": [
+        {
+          "call": "initializeRepository(datasetID:files:mode: .plainText)",
+          "clockUnixSeconds": 1785312000
+        },
+        {
+          "call": "submit(new records: three renderable snippets, one secure, one carrying an x member, two that want the same file name)",
+          "clockUnixSeconds": 1785312060,
+          "results": [
+            {
+              "id": "11111111-2222-4333-8444-555555555555",
+              "outcome": "accepted",
+              "rev": "711b0565f95acbd63b02ec6570677891",
+              "recordVersionText": "git-md-blob-sha1:e1d4cfd4abfd0461e5b1b49b119540a0a7f7121c"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "outcome": "accepted",
+              "rev": "3f3a289c891f21d8c9b73d2bbfbebac5",
+              "recordVersionText": "git-md-blob-sha1:e9214ff7632efd25fcf1732058f13eac0cfaaff5"
+            },
+            {
+              "id": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+              "outcome": "accepted",
+              "rev": "06e1f89ff6c6e11b83f9d105bb45d49f",
+              "recordVersionText": "git-md-blob-sha1:46d69710510d8971691cfb955da54ed7ff0c75ed"
+            },
+            {
+              "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+              "outcome": "accepted",
+              "rev": "cacd70ca9afe1f7503b1e1bc85146988",
+              "recordVersionText": "git-blob-sha1:fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+            },
+            {
+              "id": "0a000000-0000-4000-8000-00000000000a",
+              "outcome": "accepted",
+              "rev": "3e0e9ecb8e0f10e83bed54cf3f4452c7",
+              "recordVersionText": "git-blob-sha1:871d0a94b2567202ec6bf2cab307a42f747a96da"
+            },
+            {
+              "id": "c0ffee00-0000-4000-8000-000000000001",
+              "outcome": "accepted",
+              "rev": "5d0cb7c54059a3af12a2cfd282fa40ed",
+              "recordVersionText": "git-md-blob-sha1:ca1b30da47e82d00d62ea002ae9f5c0215862a60"
+            },
+            {
+              "id": "c0ffee00-0000-4000-8000-000000000002",
+              "outcome": "accepted",
+              "rev": "7defd383536c79dfa84dae9b89b9f920",
+              "recordVersionText": "git-md-blob-sha1:678784340ff727c5896396f82532fc4d101636c6"
+            }
+          ],
+          "cursor": "git1.617a0001-0000-4000-8000-0000000000aa.0c1631950d3409e3cc065f481cc74077e64953a3"
+        },
+        {
+          "call": "submit(rename of one snippet, tombstone of another)",
+          "clockUnixSeconds": 1785312120,
+          "results": [
+            {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "outcome": "accepted",
+              "rev": "1f8d2c225cbad43bced7cb18fb92738f",
+              "recordVersionText": "git-md-blob-sha1:e99cb059e9adaba1b3c963dd7b08910434863d3f"
+            },
+            {
+              "id": "11111111-2222-4333-8444-555555555555",
+              "outcome": "accepted",
+              "rev": "b41ae3add258b4bbf62c554a19d75895",
+              "recordVersionText": "git-blob-sha1:ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf"
+            }
+          ],
+          "cursor": "git1.617a0001-0000-4000-8000-0000000000aa.547cfccd54b185430fbbcfa4316e416890125f14"
+        }
+      ],
+      "commits": [
+        {
+          "id": "0bbfe3320882a7ddda7a9ef936a1c8a94371a9aa",
+          "tree": "67e27a5cef4b63e88dcaa02e2757fc73a57883fa",
+          "parents": [],
+          "author": "author Snippets Sync <sync@snippets.invalid> 1785312000 +0000",
+          "committer": "committer Snippets Sync <sync@snippets.invalid> 1785312000 +0000",
+          "message": "Create Snippets library",
+          "rawText": "tree 67e27a5cef4b63e88dcaa02e2757fc73a57883fa\nauthor Snippets Sync <sync@snippets.invalid> 1785312000 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 1785312000 +0000\n\nCreate Snippets library\n",
+          "rawHex": "7472656520363765323761356365663462363365383864636161303265323735376663373361353738383366610a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303030202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303030202b303030300a0a43726561746520536e697070657473206c6962726172790a",
+          "entries": [
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "fd2e9eda53453fb97cc0bbbeb5d1ce50d0b7ce85",
+              "path": "README.md"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "df085afe7e524d40aa9ce3fcf6d0b748e25584e1",
+              "path": "keys"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee",
+              "path": "keys/recovery.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "d82c773fbcf99bdb84c08261ea0ffcae56292b51",
+              "path": "snippets-sync.json"
+            }
+          ],
+          "trees": [
+            {
+              "path": "",
+              "id": "67e27a5cef4b63e88dcaa02e2757fc73a57883fa",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "README.md",
+                  "id": "fd2e9eda53453fb97cc0bbbeb5d1ce50d0b7ce85"
+                },
+                {
+                  "mode": "40000",
+                  "name": "keys",
+                  "id": "df085afe7e524d40aa9ce3fcf6d0b748e25584e1"
+                },
+                {
+                  "mode": "100644",
+                  "name": "snippets-sync.json",
+                  "id": "d82c773fbcf99bdb84c08261ea0ffcae56292b51"
+                }
+              ],
+              "hex": "31303036343420524541444d452e6d6400fd2e9eda53453fb97cc0bbbeb5d1ce50d0b7ce853430303030206b65797300df085afe7e524d40aa9ce3fcf6d0b748e25584e131303036343420736e6970706574732d73796e632e6a736f6e00d82c773fbcf99bdb84c08261ea0ffcae56292b51"
+            },
+            {
+              "path": "keys",
+              "id": "df085afe7e524d40aa9ce3fcf6d0b748e25584e1",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "recovery.json",
+                  "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee"
+                }
+              ],
+              "hex": "313030363434207265636f766572792e6a736f6e0051ea59e6a520fc0be2d39f9cb856b54b004647ee"
+            }
+          ]
+        },
+        {
+          "id": "0c1631950d3409e3cc065f481cc74077e64953a3",
+          "tree": "fd1427f0db35492fc7afe3598fcb7b02c628b8d4",
+          "parents": ["0bbfe3320882a7ddda7a9ef936a1c8a94371a9aa"],
+          "author": "author Snippets Sync <sync@snippets.invalid> 1785312060 +0000",
+          "committer": "committer Snippets Sync <sync@snippets.invalid> 1785312060 +0000",
+          "message": "Sync 7 records",
+          "rawText": "tree fd1427f0db35492fc7afe3598fcb7b02c628b8d4\nparent 0bbfe3320882a7ddda7a9ef936a1c8a94371a9aa\nauthor Snippets Sync <sync@snippets.invalid> 1785312060 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 1785312060 +0000\n\nSync 7 records\n",
+          "rawHex": "7472656520666431343237663064623335343932666337616665333539386663623762303263363238623864340a706172656e7420306262666533333230383832613764646461376139656639333661316338613934333731613961610a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303630202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303630202b303030300a0a53796e632037207265636f7264730a",
+          "entries": [
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "fd2e9eda53453fb97cc0bbbeb5d1ce50d0b7ce85",
+              "path": "README.md"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "df085afe7e524d40aa9ce3fcf6d0b748e25584e1",
+              "path": "keys"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee",
+              "path": "keys/recovery.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "bf467d9390cc7e1854fa76fda65fd2339ba36775",
+              "path": "records"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "a0909b76a55960df05ce36f8c5d01cef6c65a746",
+              "path": "records/0a"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "871d0a94b2567202ec6bf2cab307a42f747a96da",
+              "path": "records/0a/0a000000-0000-4000-8000-00000000000a.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "f330b14184456513c0070ea306987f3fec8bc19e",
+              "path": "records/a0"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c",
+              "path": "records/a0/a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "d82c773fbcf99bdb84c08261ea0ffcae56292b51",
+              "path": "snippets-sync.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "b6e6f76ef3e3ec44608bc1af9bd62f340619f4ea",
+              "path": "snippets"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "678784340ff727c5896396f82532fc4d101636c6",
+              "path": "snippets/cafe-notes-c0ffee00-2.md"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "ca1b30da47e82d00d62ea002ae9f5c0215862a60",
+              "path": "snippets/cafe-notes-c0ffee00.md"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "e9214ff7632efd25fcf1732058f13eac0cfaaff5",
+              "path": "snippets/cafe-quoted-name-00000000.md"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "e1d4cfd4abfd0461e5b1b49b119540a0a7f7121c",
+              "path": "snippets/email-signature-11111111.md"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "46d69710510d8971691cfb955da54ed7ff0c75ed",
+              "path": "snippets/snippet-ffffffff.md"
+            }
+          ],
+          "trees": [
+            {
+              "path": "",
+              "id": "fd1427f0db35492fc7afe3598fcb7b02c628b8d4",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "README.md",
+                  "id": "fd2e9eda53453fb97cc0bbbeb5d1ce50d0b7ce85"
+                },
+                {
+                  "mode": "40000",
+                  "name": "keys",
+                  "id": "df085afe7e524d40aa9ce3fcf6d0b748e25584e1"
+                },
+                {
+                  "mode": "40000",
+                  "name": "records",
+                  "id": "bf467d9390cc7e1854fa76fda65fd2339ba36775"
+                },
+                {
+                  "mode": "100644",
+                  "name": "snippets-sync.json",
+                  "id": "d82c773fbcf99bdb84c08261ea0ffcae56292b51"
+                },
+                {
+                  "mode": "40000",
+                  "name": "snippets",
+                  "id": "b6e6f76ef3e3ec44608bc1af9bd62f340619f4ea"
+                }
+              ],
+              "hex": "31303036343420524541444d452e6d6400fd2e9eda53453fb97cc0bbbeb5d1ce50d0b7ce853430303030206b65797300df085afe7e524d40aa9ce3fcf6d0b748e25584e13430303030207265636f72647300bf467d9390cc7e1854fa76fda65fd2339ba3677531303036343420736e6970706574732d73796e632e6a736f6e00d82c773fbcf99bdb84c08261ea0ffcae56292b51343030303020736e69707065747300b6e6f76ef3e3ec44608bc1af9bd62f340619f4ea"
+            },
+            {
+              "path": "keys",
+              "id": "df085afe7e524d40aa9ce3fcf6d0b748e25584e1",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "recovery.json",
+                  "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee"
+                }
+              ],
+              "hex": "313030363434207265636f766572792e6a736f6e0051ea59e6a520fc0be2d39f9cb856b54b004647ee"
+            },
+            {
+              "path": "records",
+              "id": "bf467d9390cc7e1854fa76fda65fd2339ba36775",
+              "entries": [
+                {
+                  "mode": "40000",
+                  "name": "0a",
+                  "id": "a0909b76a55960df05ce36f8c5d01cef6c65a746"
+                },
+                {
+                  "mode": "40000",
+                  "name": "a0",
+                  "id": "f330b14184456513c0070ea306987f3fec8bc19e"
+                }
+              ],
+              "hex": "343030303020306100a0909b76a55960df05ce36f8c5d01cef6c65a746343030303020613000f330b14184456513c0070ea306987f3fec8bc19e"
+            },
+            {
+              "path": "records/0a",
+              "id": "a0909b76a55960df05ce36f8c5d01cef6c65a746",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "0a000000-0000-4000-8000-00000000000a.json",
+                  "id": "871d0a94b2567202ec6bf2cab307a42f747a96da"
+                }
+              ],
+              "hex": "3130303634342030613030303030302d303030302d343030302d383030302d3030303030303030303030612e6a736f6e00871d0a94b2567202ec6bf2cab307a42f747a96da"
+            },
+            {
+              "path": "records/a0",
+              "id": "f330b14184456513c0070ea306987f3fec8bc19e",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json",
+                  "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+                }
+              ],
+              "hex": "3130303634342061306231633264332d653466352d343630372d383839392d6161626263636464656566662e6a736f6e00fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+            },
+            {
+              "path": "snippets",
+              "id": "b6e6f76ef3e3ec44608bc1af9bd62f340619f4ea",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "cafe-notes-c0ffee00-2.md",
+                  "id": "678784340ff727c5896396f82532fc4d101636c6"
+                },
+                {
+                  "mode": "100644",
+                  "name": "cafe-notes-c0ffee00.md",
+                  "id": "ca1b30da47e82d00d62ea002ae9f5c0215862a60"
+                },
+                {
+                  "mode": "100644",
+                  "name": "cafe-quoted-name-00000000.md",
+                  "id": "e9214ff7632efd25fcf1732058f13eac0cfaaff5"
+                },
+                {
+                  "mode": "100644",
+                  "name": "email-signature-11111111.md",
+                  "id": "e1d4cfd4abfd0461e5b1b49b119540a0a7f7121c"
+                },
+                {
+                  "mode": "100644",
+                  "name": "snippet-ffffffff.md",
+                  "id": "46d69710510d8971691cfb955da54ed7ff0c75ed"
+                }
+              ],
+              "hex": "31303036343420636166652d6e6f7465732d63306666656530302d322e6d6400678784340ff727c5896396f82532fc4d101636c631303036343420636166652d6e6f7465732d63306666656530302e6d6400ca1b30da47e82d00d62ea002ae9f5c0215862a6031303036343420636166652d71756f7465642d6e616d652d30303030303030302e6d6400e9214ff7632efd25fcf1732058f13eac0cfaaff531303036343420656d61696c2d7369676e61747572652d31313131313131312e6d6400e1d4cfd4abfd0461e5b1b49b119540a0a7f7121c31303036343420736e69707065742d66666666666666662e6d640046d69710510d8971691cfb955da54ed7ff0c75ed"
+            }
+          ]
+        },
+        {
+          "id": "547cfccd54b185430fbbcfa4316e416890125f14",
+          "tree": "e7228091290606a839d1aea1e9907389cbe0e6ef",
+          "parents": ["0c1631950d3409e3cc065f481cc74077e64953a3"],
+          "author": "author Snippets Sync <sync@snippets.invalid> 1785312120 +0000",
+          "committer": "committer Snippets Sync <sync@snippets.invalid> 1785312120 +0000",
+          "message": "Sync 2 records",
+          "rawText": "tree e7228091290606a839d1aea1e9907389cbe0e6ef\nparent 0c1631950d3409e3cc065f481cc74077e64953a3\nauthor Snippets Sync <sync@snippets.invalid> 1785312120 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 1785312120 +0000\n\nSync 2 records\n",
+          "rawHex": "7472656520653732323830393132393036303661383339643161656131653939303733383963626530653665660a706172656e7420306331363331393530643334303965336363303635663438316363373430373765363439353361330a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132313230202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132313230202b303030300a0a53796e632032207265636f7264730a",
+          "entries": [
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "fd2e9eda53453fb97cc0bbbeb5d1ce50d0b7ce85",
+              "path": "README.md"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "df085afe7e524d40aa9ce3fcf6d0b748e25584e1",
+              "path": "keys"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee",
+              "path": "keys/recovery.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "b6b9ca34fbdb0012b4e019eaaec38b18b943a868",
+              "path": "records"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "a0909b76a55960df05ce36f8c5d01cef6c65a746",
+              "path": "records/0a"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "871d0a94b2567202ec6bf2cab307a42f747a96da",
+              "path": "records/0a/0a000000-0000-4000-8000-00000000000a.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "edcc3c7695a81e43f19c463338d2e8ca9d743fbb",
+              "path": "records/11"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf",
+              "path": "records/11/11111111-2222-4333-8444-555555555555.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "f330b14184456513c0070ea306987f3fec8bc19e",
+              "path": "records/a0"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c",
+              "path": "records/a0/a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "d82c773fbcf99bdb84c08261ea0ffcae56292b51",
+              "path": "snippets-sync.json"
+            },
+            {
+              "mode": "40000",
+              "type": "tree",
+              "id": "171e83a2af76177daf099135924a60e2b4b9fcde",
+              "path": "snippets"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "678784340ff727c5896396f82532fc4d101636c6",
+              "path": "snippets/cafe-notes-c0ffee00-2.md"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "ca1b30da47e82d00d62ea002ae9f5c0215862a60",
+              "path": "snippets/cafe-notes-c0ffee00.md"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "e99cb059e9adaba1b3c963dd7b08910434863d3f",
+              "path": "snippets/renamed-snippet-00000000.md"
+            },
+            {
+              "mode": "100644",
+              "type": "blob",
+              "id": "46d69710510d8971691cfb955da54ed7ff0c75ed",
+              "path": "snippets/snippet-ffffffff.md"
+            }
+          ],
+          "trees": [
+            {
+              "path": "",
+              "id": "e7228091290606a839d1aea1e9907389cbe0e6ef",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "README.md",
+                  "id": "fd2e9eda53453fb97cc0bbbeb5d1ce50d0b7ce85"
+                },
+                {
+                  "mode": "40000",
+                  "name": "keys",
+                  "id": "df085afe7e524d40aa9ce3fcf6d0b748e25584e1"
+                },
+                {
+                  "mode": "40000",
+                  "name": "records",
+                  "id": "b6b9ca34fbdb0012b4e019eaaec38b18b943a868"
+                },
+                {
+                  "mode": "100644",
+                  "name": "snippets-sync.json",
+                  "id": "d82c773fbcf99bdb84c08261ea0ffcae56292b51"
+                },
+                {
+                  "mode": "40000",
+                  "name": "snippets",
+                  "id": "171e83a2af76177daf099135924a60e2b4b9fcde"
+                }
+              ],
+              "hex": "31303036343420524541444d452e6d6400fd2e9eda53453fb97cc0bbbeb5d1ce50d0b7ce853430303030206b65797300df085afe7e524d40aa9ce3fcf6d0b748e25584e13430303030207265636f72647300b6b9ca34fbdb0012b4e019eaaec38b18b943a86831303036343420736e6970706574732d73796e632e6a736f6e00d82c773fbcf99bdb84c08261ea0ffcae56292b51343030303020736e69707065747300171e83a2af76177daf099135924a60e2b4b9fcde"
+            },
+            {
+              "path": "keys",
+              "id": "df085afe7e524d40aa9ce3fcf6d0b748e25584e1",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "recovery.json",
+                  "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee"
+                }
+              ],
+              "hex": "313030363434207265636f766572792e6a736f6e0051ea59e6a520fc0be2d39f9cb856b54b004647ee"
+            },
+            {
+              "path": "records",
+              "id": "b6b9ca34fbdb0012b4e019eaaec38b18b943a868",
+              "entries": [
+                {
+                  "mode": "40000",
+                  "name": "0a",
+                  "id": "a0909b76a55960df05ce36f8c5d01cef6c65a746"
+                },
+                {
+                  "mode": "40000",
+                  "name": "11",
+                  "id": "edcc3c7695a81e43f19c463338d2e8ca9d743fbb"
+                },
+                {
+                  "mode": "40000",
+                  "name": "a0",
+                  "id": "f330b14184456513c0070ea306987f3fec8bc19e"
+                }
+              ],
+              "hex": "343030303020306100a0909b76a55960df05ce36f8c5d01cef6c65a746343030303020313100edcc3c7695a81e43f19c463338d2e8ca9d743fbb343030303020613000f330b14184456513c0070ea306987f3fec8bc19e"
+            },
+            {
+              "path": "records/0a",
+              "id": "a0909b76a55960df05ce36f8c5d01cef6c65a746",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "0a000000-0000-4000-8000-00000000000a.json",
+                  "id": "871d0a94b2567202ec6bf2cab307a42f747a96da"
+                }
+              ],
+              "hex": "3130303634342030613030303030302d303030302d343030302d383030302d3030303030303030303030612e6a736f6e00871d0a94b2567202ec6bf2cab307a42f747a96da"
+            },
+            {
+              "path": "records/11",
+              "id": "edcc3c7695a81e43f19c463338d2e8ca9d743fbb",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "11111111-2222-4333-8444-555555555555.json",
+                  "id": "ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf"
+                }
+              ],
+              "hex": "3130303634342031313131313131312d323232322d343333332d383434342d3535353535353535353535352e6a736f6e00ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf"
+            },
+            {
+              "path": "records/a0",
+              "id": "f330b14184456513c0070ea306987f3fec8bc19e",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json",
+                  "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+                }
+              ],
+              "hex": "3130303634342061306231633264332d653466352d343630372d383839392d6161626263636464656566662e6a736f6e00fd1259b1e17761577b864a379dbdaa6e65af5b3c"
+            },
+            {
+              "path": "snippets",
+              "id": "171e83a2af76177daf099135924a60e2b4b9fcde",
+              "entries": [
+                {
+                  "mode": "100644",
+                  "name": "cafe-notes-c0ffee00-2.md",
+                  "id": "678784340ff727c5896396f82532fc4d101636c6"
+                },
+                {
+                  "mode": "100644",
+                  "name": "cafe-notes-c0ffee00.md",
+                  "id": "ca1b30da47e82d00d62ea002ae9f5c0215862a60"
+                },
+                {
+                  "mode": "100644",
+                  "name": "renamed-snippet-00000000.md",
+                  "id": "e99cb059e9adaba1b3c963dd7b08910434863d3f"
+                },
+                {
+                  "mode": "100644",
+                  "name": "snippet-ffffffff.md",
+                  "id": "46d69710510d8971691cfb955da54ed7ff0c75ed"
+                }
+              ],
+              "hex": "31303036343420636166652d6e6f7465732d63306666656530302d322e6d6400678784340ff727c5896396f82532fc4d101636c631303036343420636166652d6e6f7465732d63306666656530302e6d6400ca1b30da47e82d00d62ea002ae9f5c0215862a603130303634342072656e616d65642d736e69707065742d30303030303030302e6d6400e99cb059e9adaba1b3c963dd7b08910434863d3f31303036343420736e69707065742d66666666666666662e6d640046d69710510d8971691cfb955da54ed7ff0c75ed"
+            }
+          ]
+        }
+      ],
+      "blobs": [
+        {
+          "id": "46d69710510d8971691cfb955da54ed7ff0c75ed",
+          "paths": ["snippets/snippet-ffffffff.md"],
+          "byteCount": 438,
+          "text": "---\nname: \"\"\nkeyword: \"\"\ntags: []\nenabled: true\npinned: false\nid: ffffffff-ffff-4fff-bfff-ffffffffffff\nsync: eyJjcmVhdGVkQXQiOi0zMTYyMjQwMC4yNSwiaGFzaCI6IjA2ZTFmODlmZjZjNmUxMWI4M2Y5ZDEwNWJiNDVkNDlmY2JhNGNhNmE5NGYxZTViYjJjMDE0NzIyZDg0ZDhiNjYiLCJobGMiOiIwMDAwMDAwMDAwMDAtMDAwMC0wMDAwMDAwMCIsImlkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwib3JpZ2luIjoiMDAwMDAwMDAiLCJzY2hlbWFWZXJzaW9uIjoxLCJ1cGRhdGVkQXQiOjFlLTA3LCJ4Ijp7fX0\n---\n\n",
+          "base64": "LS0tCm5hbWU6ICIiCmtleXdvcmQ6ICIiCnRhZ3M6IFtdCmVuYWJsZWQ6IHRydWUKcGlubmVkOiBmYWxzZQppZDogZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmCnN5bmM6IGV5SmpjbVZoZEdWa1FYUWlPaTB6TVRZeU1qUXdNQzR5TlN3aWFHRnphQ0k2SWpBMlpURm1PRGxtWmpaak5tVXhNV0k0TTJZNVpERXdOV0ppTkRWa05EbG1ZMkpoTkdOaE5tRTVOR1l4WlRWaVlqSmpNREUwTnpJeVpEZzBaRGhpTmpZaUxDSm9iR01pT2lJd01EQXdNREF3TURBd01EQXRNREF3TUMwd01EQXdNREF3TUNJc0ltbGtJam9pWm1abVptWm1abVl0Wm1abVppMDBabVptTFdKbVptWXRabVptWm1abVptWm1abVptSWl3aWIzSnBaMmx1SWpvaU1EQXdNREF3TURBaUxDSnpZMmhsYldGV1pYSnphVzl1SWpveExDSjFjR1JoZEdWa1FYUWlPakZsTFRBM0xDSjRJanA3ZlgwCi0tLQoK"
+        },
+        {
+          "id": "51ea59e6a520fc0be2d39f9cb856b54b004647ee",
+          "paths": ["keys/recovery.json"],
+          "byteCount": 401,
+          "text": "{\n  \"algorithm\" : \"snippets-git-recovery-hkdf-sha256-aes256gcm-v1\",\n  \"ciphertext\" : \"MDEyMzQ1Njc4OTo72nSGjRSGRdEfgIyaswx+YrrygIByjjW4Z6kuMBSLilJxx3vdJAGLcV/3G+zzVf8Bc40JEE1N33V8Rk+P8/bYdeulxbrkpr4PxUYht0e+cCPuweRCvAND+kQ6RGg8QORT2YQ+tT5K/gdh6wSpmUXNUVUa9t5ECDXPm4JdZYqX2t3cvwZbkoPgjw+sWJlXk77oY9tlk+G0Op+Nv0C35fUlrn+m\",\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"schemaVersion\" : 1\n}\n",
+          "base64": "ewogICJhbGdvcml0aG0iIDogInNuaXBwZXRzLWdpdC1yZWNvdmVyeS1oa2RmLXNoYTI1Ni1hZXMyNTZnY20tdjEiLAogICJjaXBoZXJ0ZXh0IiA6ICJNREV5TXpRMU5qYzRPVG83Mm5TR2pSU0dSZEVmZ0l5YXN3eCtZcnJ5Z0lCeWpqVzRaNmt1TUJTTGlsSnh4M3ZkSkFHTGNWLzNHK3p6VmY4QmM0MEpFRTFOMzNWOFJrK1A4L2JZZGV1bHhicmtwcjRQeFVZaHQwZStjQ1B1d2VSQ3ZBTkQra1E2UkdnOFFPUlQyWVErdFQ1Sy9nZGg2d1NwbVVYTlVWVWE5dDVFQ0RYUG00SmRaWXFYMnQzY3Z3WmJrb1Bnancrc1dKbFhrNzdvWTl0bGsrRzBPcCtOdjBDMzVmVWxybittIiwKICAiZGF0YXNldElEIiA6ICI2MTdhMDAwMS0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYWEiLAogICJzY2hlbWFWZXJzaW9uIiA6IDEKfQo="
+        },
+        {
+          "id": "678784340ff727c5896396f82532fc4d101636c6",
+          "paths": ["snippets/cafe-notes-c0ffee00-2.md"],
+          "byteCount": 489,
+          "text": "---\nname: \"Café Notes\"\nkeyword: \"\"\ntags: [\"Ünï\",\"two words\"]\nenabled: true\npinned: false\nid: c0ffee00-0000-4000-8000-000000000002\nsync: eyJjcmVhdGVkQXQiOjgwNzAwNDgwMC41LCJoYXNoIjoiN2RlZmQzODM1MzZjNzlkZmE4NGRhZTliODliOWY5MjA3ZTExZTQyZjU0Mjk0NjVkNDNlZDAwMGQ1Y2YzNWEzZiIsImhsYyI6IjAxOWZhY2UzMzlmNC0wMDAzLWFhYmJjY2RkIiwiaWQiOiJjMGZmZWUwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJvcmlnaW4iOiJhYWJiY2NkZCIsInNjaGVtYVZlcnNpb24iOjEsInVwZGF0ZWRBdCI6ODEyNTc4ODAwLjEyMzQ1NiwieCI6e319\n---\nsecond\r\n\n",
+          "base64": "LS0tCm5hbWU6ICJDYWbDqSBOb3RlcyIKa2V5d29yZDogIiIKdGFnczogWyLDnG7DryIsInR3byB3b3JkcyJdCmVuYWJsZWQ6IHRydWUKcGlubmVkOiBmYWxzZQppZDogYzBmZmVlMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyCnN5bmM6IGV5SmpjbVZoZEdWa1FYUWlPamd3TnpBd05EZ3dNQzQxTENKb1lYTm9Jam9pTjJSbFptUXpPRE0xTXpaak56bGtabUU0TkdSaFpUbGlPRGxpT1dZNU1qQTNaVEV4WlRReVpqVTBNamswTmpWa05ETmxaREF3TUdRMVkyWXpOV0V6WmlJc0ltaHNZeUk2SWpBeE9XWmhZMlV6TXpsbU5DMHdNREF6TFdGaFltSmpZMlJrSWl3aWFXUWlPaUpqTUdabVpXVXdNQzB3TURBd0xUUXdNREF0T0RBd01DMHdNREF3TURBd01EQXdNRElpTENKdmNtbG5hVzRpT2lKaFlXSmlZMk5rWkNJc0luTmphR1Z0WVZabGNuTnBiMjRpT2pFc0luVndaR0YwWldSQmRDSTZPREV5TlRjNE9EQXdMakV5TXpRMU5pd2llQ0k2ZTMxOQotLS0Kc2Vjb25kDQoK"
+        },
+        {
+          "id": "871d0a94b2567202ec6bf2cab307a42f747a96da",
+          "paths": ["records/0a/0a000000-0000-4000-8000-00000000000a.json"],
+          "byteCount": 1081,
+          "text": "{\"blob\":\"djEuNC1QajQtUGo0LVBqNC1Qai51WEdqQUl6NnVpQmRMdmthUFdyV0t1ZWVVQ2F3eld6TWNJNWphbXY0LTVpQzRWNFlFbVF4NWtPT0t0bUVMX3BobVdHVC1WNWoxYVZ4VEp2UE5iZGxpN01kb1lxRmFIYjlVSThCMTBMVFJVSXNqNDlmaVRkWkg0cWdwc2prRllwY3BhM0U1R25La3pLMkdidVpaZ2h4cDdoQ3dMQmlybXp1dVhvRXN0aFNxY3RvUDFROXh0djRQdW5ZT2xuYThWbFdaY3AzNnBQRFlrbk5CMm01OFFEYVdLQjJHY3FpRTVsdXh4VHFmYWd0SkoxdFlwMWh4RzhqeTNXUjYtazhiRWRYaVIzcm4tdHlYMzgxRENraUVhVzJhOWF5U0VzcEJqQjItUTk5dURYeDUxLU9lWm5TcDZjbzhqTWI3N0c5cjBmdzhLcUw2U0xkeG9ONDNFNld4NkI4OV9GQS12ZnBVTnVnOVdNWXNPYW1yODRnM0o3aFdYMDZOWVllV2lwMEV1QTBoMmFsdXVkWUhnSDNiSjBGQnBITU0xeDhuNjBQN0w1UU13cW4zNW55OU5zMk5Pdkl6SDItdXlEaEUtM0dxQk55SjV3dWhkeVR0a21KbUx4X015N0lCUWthVDhtNkhLWWtZelVIbF9JWUZla29CNE1mdXZtLVpRSWdJb2Vyd05MY3d4Um1KMkY0TERta1FkZzFXQ2c1eURxLWtubkRhMjE4bDVqRWVLMm82cTdScXRGTWx3SGtlcE5iMUhXVlliMjM2Yl94VktxeVBXaElYcUk5YldHYV9oT2pRZ0VPc000SzBHYjRDOGtfdl9nMVppNTV5dTJhQ1cyY1RXWFpuVFpFajVhMXlDQmZFVUEtVHZ0aWlVSnQ4N09qcUxFcXIyTFFkUlZQQ0pxZkdSWjdqVHA4T29BdXQwNFZWWENKWnIwYQ==\",\"deleted\":false,\"id\":\"0a000000-0000-4000-8000-00000000000a\",\"rev\":\"3e0e9ecb8e0f10e83bed54cf3f4452c7\"}\n",
+          "base64": "eyJibG9iIjoiZGpFdU5DMVFhalF0VUdvMExWQnFOQzFRYWk1MVdFZHFRVWw2Tm5WcFFtUk1kbXRoVUZkeVYwdDFaV1ZWUTJGM2VsZDZUV05KTldwaGJYWTBMVFZwUXpSV05GbEZiVkY0Tld0UFQwdDBiVVZNWDNCb2JWZEhWQzFXTldveFlWWjRWRXAyVUU1aVpHeHBOMDFrYjFseFJtRklZamxWU1RoQ01UQk1WRkpWU1hOcU5EbG1hVlJrV2tnMGNXZHdjMnByUmxsd1kzQmhNMFUxUjI1TGEzcExNa2RpZFZwYVoyaDRjRGRvUTNkTVFtbHliWHAxZFZodlJYTjBhRk54WTNSdlVERlJPWGgwZGpSUWRXNVpUMnh1WVRoV2JGZGFZM0F6Tm5CUVJGbHJiazVDTW0wMU9GRkVZVmRMUWpKSFkzRnBSVFZzZFhoNFZIRm1ZV2QwU2tveGRGbHdNV2g0UnpocWVUTlhVall0YXpoaVJXUllhVkl6Y200dGRIbFlNemd4UkVOcmFVVmhWekpoT1dGNVUwVnpjRUpxUWpJdFVUazVkVVJZZURVeExVOWxXbTVUY0RaamJ6aHFUV0kzTjBjNWNqQm1kemhMY1V3MlUweGtlRzlPTkRORk5sZDROa0k0T1Y5R1FTMTJabkJWVG5Wbk9WZE5XWE5QWVcxeU9EUm5NMG8zYUZkWU1EWk9XVmxsVjJsd01FVjFRVEJvTW1Gc2RYVmtXVWhuU0ROaVNqQkdRbkJJVFUweGVEaHVOakJRTjB3MVVVMTNjVzR6Tlc1NU9VNXpNazVQZGtsNlNESXRkWGxFYUVVdE0wZHhRazU1U2pWM2RXaGtlVlIwYTIxS2JVeDRYMDE1TjBsQ1VXdGhWRGh0TmtoTFdXdFplbFZJYkY5SldVWmxhMjlDTkUxbWRYWnRMVnBSU1dkSmIyVnlkMDVNWTNkNFVtMUtNa1kwVEVSdGExRmtaekZYUTJjMWVVUnhMV3R1YmtSaE1qRTRiRFZxUldWTE1tODJjVGRTY1hSR1RXeDNTR3RsY0U1aU1VaFhWbGxpTWpNMllsOTRWa3R4ZVZCWGFFbFljVWs1WWxkSFlWOW9UMnBSWjBWUGMwMDBTekJIWWpSRE9HdGZkbDluTVZwcE5UVjVkVEpoUTFjeVkxUlhXRnB1VkZwRmFqVmhNWGxEUW1aRlZVRXRWSFowYVdsVlNuUTROMDlxY1V4RmNYSXlURkZrVWxaUVEwcHhaa2RTV2pkcVZIQTRUMjlCZFhRd05GWldXRU5LV25Jd1lRPT0iLCJkZWxldGVkIjpmYWxzZSwiaWQiOiIwYTAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGEiLCJyZXYiOiIzZTBlOWVjYjhlMGYxMGU4M2JlZDU0Y2YzZjQ0NTJjNyJ9Cg=="
+        },
+        {
+          "id": "ca1b30da47e82d00d62ea002ae9f5c0215862a60",
+          "paths": ["snippets/cafe-notes-c0ffee00.md"],
+          "byteCount": 487,
+          "text": "---\nname: \"Café Notes\"\nkeyword: \"\"\ntags: [\"Ünï\",\"two words\"]\nenabled: true\npinned: false\nid: c0ffee00-0000-4000-8000-000000000001\nsync: eyJjcmVhdGVkQXQiOjgwNzAwNDgwMC41LCJoYXNoIjoiNWQwY2I3YzU0MDU5YTNhZjEyYTJjZmQyODJmYTQwZWQyNWY5YTY1ZTdlMWM4YjJkYWMwMTAyNDc3YTAwOGY3MyIsImhsYyI6IjAxOWZhY2UzMzlmNC0wMDAzLWFhYmJjY2RkIiwiaWQiOiJjMGZmZWUwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJvcmlnaW4iOiJhYWJiY2NkZCIsInNjaGVtYVZlcnNpb24iOjEsInVwZGF0ZWRBdCI6ODEyNTc4ODAwLjEyMzQ1NiwieCI6e319\n---\nfirst\n\n",
+          "base64": "LS0tCm5hbWU6ICJDYWbDqSBOb3RlcyIKa2V5d29yZDogIiIKdGFnczogWyLDnG7DryIsInR3byB3b3JkcyJdCmVuYWJsZWQ6IHRydWUKcGlubmVkOiBmYWxzZQppZDogYzBmZmVlMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxCnN5bmM6IGV5SmpjbVZoZEdWa1FYUWlPamd3TnpBd05EZ3dNQzQxTENKb1lYTm9Jam9pTldRd1kySTNZelUwTURVNVlUTmhaakV5WVRKalptUXlPREptWVRRd1pXUXlOV1k1WVRZMVpUZGxNV000WWpKa1lXTXdNVEF5TkRjM1lUQXdPR1kzTXlJc0ltaHNZeUk2SWpBeE9XWmhZMlV6TXpsbU5DMHdNREF6TFdGaFltSmpZMlJrSWl3aWFXUWlPaUpqTUdabVpXVXdNQzB3TURBd0xUUXdNREF0T0RBd01DMHdNREF3TURBd01EQXdNREVpTENKdmNtbG5hVzRpT2lKaFlXSmlZMk5rWkNJc0luTmphR1Z0WVZabGNuTnBiMjRpT2pFc0luVndaR0YwWldSQmRDSTZPREV5TlRjNE9EQXdMakV5TXpRMU5pd2llQ0k2ZTMxOQotLS0KZmlyc3QKCg=="
+        },
+        {
+          "id": "d82c773fbcf99bdb84c08261ea0ffcae56292b51",
+          "paths": ["snippets-sync.json"],
+          "byteCount": 157,
+          "text": "{\n  \"datasetID\" : \"617a0001-0000-4000-8000-0000000000aa\",\n  \"format\" : \"snippets-git-sync\",\n  \"recordProfile\" : \"snippets-plain-v1\",\n  \"schemaVersion\" : 1\n}\n",
+          "base64": "ewogICJkYXRhc2V0SUQiIDogIjYxN2EwMDAxLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBhYSIsCiAgImZvcm1hdCIgOiAic25pcHBldHMtZ2l0LXN5bmMiLAogICJyZWNvcmRQcm9maWxlIiA6ICJzbmlwcGV0cy1wbGFpbi12MSIsCiAgInNjaGVtYVZlcnNpb24iIDogMQp9Cg=="
+        },
+        {
+          "id": "e1d4cfd4abfd0461e5b1b49b119540a0a7f7121c",
+          "paths": ["snippets/email-signature-11111111.md"],
+          "byteCount": 504,
+          "text": "---\nname: \"Email signature\"\nkeyword: \"sig\"\ntags: [\"Work\",\"mail\"]\nenabled: true\npinned: false\nid: 11111111-2222-4333-8444-555555555555\nsync: eyJjcmVhdGVkQXQiOjgwNzAwNDgwMC41LCJoYXNoIjoiNzExYjA1NjVmOTVhY2JkNjNiMDJlYzY1NzA2Nzc4OTEwMmE1OGZlYjhhNDY0NDM2YWEwZGQ4YjVhODFlOGM1MSIsImhsYyI6IjAxOWZhY2UzMzlmNC0wMDAzLWFhYmJjY2RkIiwiaWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJvcmlnaW4iOiJhYWJiY2NkZCIsInNjaGVtYVZlcnNpb24iOjEsInVwZGF0ZWRBdCI6ODEyNTc4ODAwLjEyMzQ1NiwieCI6e319\n---\nBest regards,\nMichael\n\n",
+          "base64": "LS0tCm5hbWU6ICJFbWFpbCBzaWduYXR1cmUiCmtleXdvcmQ6ICJzaWciCnRhZ3M6IFsiV29yayIsIm1haWwiXQplbmFibGVkOiB0cnVlCnBpbm5lZDogZmFsc2UKaWQ6IDExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NQpzeW5jOiBleUpqY21WaGRHVmtRWFFpT2pnd056QXdORGd3TUM0MUxDSm9ZWE5vSWpvaU56RXhZakExTmpWbU9UVmhZMkprTmpOaU1ESmxZelkxTnpBMk56YzRPVEV3TW1FMU9HWmxZamhoTkRZME5ETTJZV0V3WkdRNFlqVmhPREZsT0dNMU1TSXNJbWhzWXlJNklqQXhPV1poWTJVek16bG1OQzB3TURBekxXRmhZbUpqWTJSa0lpd2lhV1FpT2lJeE1URXhNVEV4TVMweU1qSXlMVFF6TXpNdE9EUTBOQzAxTlRVMU5UVTFOVFUxTlRVaUxDSnZjbWxuYVc0aU9pSmhZV0ppWTJOa1pDSXNJbk5qYUdWdFlWWmxjbk5wYjI0aU9qRXNJblZ3WkdGMFpXUkJkQ0k2T0RFeU5UYzRPREF3TGpFeU16UTFOaXdpZUNJNmUzMTkKLS0tCkJlc3QgcmVnYXJkcywKTWljaGFlbAoK"
+        },
+        {
+          "id": "e9214ff7632efd25fcf1732058f13eac0cfaaff5",
+          "paths": ["snippets/cafe-quoted-name-00000000.md"],
+          "byteCount": 576,
+          "text": "---\nname: \"Café \\\"quoted\\\" \\\\ name ☕\"\nkeyword: \"café\"\ntags: [\"Ünïcode\",\"日本語\",\"two words\"]\nenabled: false\npinned: true\nid: 00000000-0000-4000-8000-000000000001\nsync: eyJjcmVhdGVkQXQiOi0wLjAsImhhc2giOiIzZjNhMjg5Yzg5MWYyMWQ4YzliNzNkMmJiZmJlYmFjNWJlNmQ3Nzg5OWY1NTNlYmNkN2RkMGE4YWJjZWQ5OTQ3IiwiaGxjIjoiMDE5ZmFjZTM0MDAwLTAwMDAtMGJhZGNhZmUiLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsIm9yaWdpbiI6IjBiYWRjYWZlIiwic2NoZW1hVmVyc2lvbiI6MSwidXBkYXRlZEF0Ijo4MTI1Nzg4MDAuMCwieCI6e319\n---\nTab\there\r\nCRLF, NUL-free control \u0001, slash /, emoji 🔑, é, \u2028line sep\n",
+          "base64": "LS0tCm5hbWU6ICJDYWbDqSBcInF1b3RlZFwiIFxcIG5hbWUg4piVIgprZXl3b3JkOiAiY2Fmw6kiCnRhZ3M6IFsiw5xuw69jb2RlIiwi5pel5pys6KqeIiwidHdvIHdvcmRzIl0KZW5hYmxlZDogZmFsc2UKcGlubmVkOiB0cnVlCmlkOiAwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEKc3luYzogZXlKamNtVmhkR1ZrUVhRaU9pMHdMakFzSW1oaGMyZ2lPaUl6WmpOaE1qZzVZemc1TVdZeU1XUTRZemxpTnpOa01tSmlabUpsWW1Gak5XSmxObVEzTnpnNU9XWTFOVE5sWW1Oa04yUmtNR0U0WVdKalpXUTVPVFEzSWl3aWFHeGpJam9pTURFNVptRmpaVE0wTURBd0xUQXdNREF0TUdKaFpHTmhabVVpTENKcFpDSTZJakF3TURBd01EQXdMVEF3TURBdE5EQXdNQzA0TURBd0xUQXdNREF3TURBd01EQXdNU0lzSW05eWFXZHBiaUk2SWpCaVlXUmpZV1psSWl3aWMyTm9aVzFoVm1WeWMybHZiaUk2TVN3aWRYQmtZWFJsWkVGMElqbzRNVEkxTnpnNE1EQXVNQ3dpZUNJNmUzMTkKLS0tClRhYgloZXJlDQpDUkxGLCBOVUwtZnJlZSBjb250cm9sIAEsIHNsYXNoIC8sIGVtb2ppIPCflJEsIGXMgSwg4oCobGluZSBzZXAK"
+        },
+        {
+          "id": "e99cb059e9adaba1b3c963dd7b08910434863d3f",
+          "paths": ["snippets/renamed-snippet-00000000.md"],
+          "byteCount": 563,
+          "text": "---\nname: \"Renamed snippet\"\nkeyword: \"café\"\ntags: [\"Ünïcode\",\"日本語\",\"two words\"]\nenabled: false\npinned: true\nid: 00000000-0000-4000-8000-000000000001\nsync: eyJjcmVhdGVkQXQiOi0wLjAsImhhc2giOiIxZjhkMmMyMjVjYmFkNDNiY2VkN2NiMThmYjkyNzM4ZjhhMDQ4MDRmYzBlNjNhYTA1ZTZiYjE0M2NmOWU2MTI5IiwiaGxjIjoiMDE5ZmFjZTM0MDAwLTAwMDAtMGJhZGNhZmUiLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsIm9yaWdpbiI6IjBiYWRjYWZlIiwic2NoZW1hVmVyc2lvbiI6MSwidXBkYXRlZEF0Ijo4MTI1Nzg4MDAuMCwieCI6e319\n---\nTab\there\r\nCRLF, NUL-free control \u0001, slash /, emoji 🔑, é, \u2028line sep\n",
+          "base64": "LS0tCm5hbWU6ICJSZW5hbWVkIHNuaXBwZXQiCmtleXdvcmQ6ICJjYWbDqSIKdGFnczogWyLDnG7Dr2NvZGUiLCLml6XmnKzoqp4iLCJ0d28gd29yZHMiXQplbmFibGVkOiBmYWxzZQpwaW5uZWQ6IHRydWUKaWQ6IDAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMQpzeW5jOiBleUpqY21WaGRHVmtRWFFpT2kwd0xqQXNJbWhoYzJnaU9pSXhaamhrTW1NeU1qVmpZbUZrTkROaVkyVmtOMk5pTVRobVlqa3lOek00WmpoaE1EUTRNRFJtWXpCbE5qTmhZVEExWlRaaVlqRTBNMk5tT1dVMk1USTVJaXdpYUd4aklqb2lNREU1Wm1GalpUTTBNREF3TFRBd01EQXRNR0poWkdOaFptVWlMQ0pwWkNJNklqQXdNREF3TURBd0xUQXdNREF0TkRBd01DMDRNREF3TFRBd01EQXdNREF3TURBd01TSXNJbTl5YVdkcGJpSTZJakJpWVdSallXWmxJaXdpYzJOb1pXMWhWbVZ5YzJsdmJpSTZNU3dpZFhCa1lYUmxaRUYwSWpvNE1USTFOemc0TURBdU1Dd2llQ0k2ZTMxOQotLS0KVGFiCWhlcmUNCkNSTEYsIE5VTC1mcmVlIGNvbnRyb2wgASwgc2xhc2ggLywgZW1vamkg8J+UkSwgZcyBLCDigKhsaW5lIHNlcAo="
+        },
+        {
+          "id": "ecbe1b1e8dfe8fd3ca5a732ce4c495ede020d0cf",
+          "paths": ["records/11/11111111-2222-4333-8444-555555555555.json"],
+          "byteCount": 1080,
+          "text": "{\"blob\":\"djEudExTMHRMUzB0TFMwdExTMC5qcXYtcHZBZDc3VnhZQjBuR05QQ1FqZ085bjBUQmMxVDNnaU1mUDU0b0RHT1lyeW8tWFlGX083VFdESXVxQXJRVnpTTjdEWkQwLThJQl9jc1RTTjkzQ2JrOUtoTVNObjhXcVhmV3dOVGpsSXczbWhSanAwRkNjbE02c2FGUTFqLVh4SWJ3WTNwbmVOMkpjcEM4bmZQX1l5QnkwT0Z0MnctU01BdU9DanM4ak90TTNSLTlCbnBaMlJVVnlhN2puTFhyWXd4N3NtdGZraVRPbEI3ajl3MjV6OGNlbkQtNXk0elMwdHYxMW0tZ21JTXBHSmEwbEhLQVVpTVVBcHJCQWhacEFKTC0yT0ZlUmI0WFlLMGRHVzVYMzI5aEFhUVZzTEQxLVZSRW5xUVNnd1NHN0xPbVdzMmkyaVh4SmQtQkMwc2ZxXzFIS0w1SVpvUlZtbEF0R2EzZHlKRExEaHZocVNaZm9oWVdWVW9LeWlxRnlTSl9RYzJMLThlZlc4UmlNWVd5S1BRT081UjlzNzAtbGF3eWFhODduVlpKcVJxNEZEdVVLWlRnNUNEaEhVTXZPanpPVlB3MEJNWGJHb3F2OE1hTW10Tngyb3M3SHNfakJNcHVpbEFuTVQ0WUFNRWZwQ2dPR2k3aWRkYTFXTVE3NEZmazcyaWNCSmxLU2xuNFJ1cUhqWFZabVRPdDNGZ0h2bUJMamw2UTR2NUpTUWtHekZFd2RRMzhvSV9nelBOQzQzXzVYNDh2Y2RWUW5IUE84VmdQaWk2clQ1Q2R2ODVPNnUxR1d4WGZzcW9mUHljdlJOejBVbm9ZWlY5UlRmdVF4a05yMERRa0NzVjNfb3M5MHdoTjZOZldYd1RHc0pxdVlUM2tzek80d1gxdlkyc3VWRmNIbnBnUnRwUmtuUE1ILVRjQXlMbDRka1lSWVF2NWxhMg==\",\"deleted\":true,\"id\":\"11111111-2222-4333-8444-555555555555\",\"rev\":\"b41ae3add258b4bbf62c554a19d75895\"}\n",
+          "base64": "eyJibG9iIjoiZGpFdWRFeFRNSFJNVXpCMFRGTXdkRXhUTUM1cWNYWXRjSFpCWkRjM1ZuaFpRakJ1UjA1UVExRnFaMDg1YmpCVVFtTXhWRE5uYVUxbVVEVTBiMFJIVDFseWVXOHRXRmxHWDA4M1ZGZEVTWFZ4UVhKUlZucFRUamRFV2tRd0xUaEpRbDlqYzFSVFRqa3pRMkpyT1V0b1RWTk9iamhYY1ZobVYzZE9WR3BzU1hjemJXaFNhbkF3UmtOamJFMDJjMkZHVVRGcUxWaDRTV0ozV1ROd2JtVk9Na3BqY0VNNGJtWlFYMWw1UW5rd1QwWjBNbmN0VTAxQmRVOURhbk00YWs5MFRUTlNMVGxDYm5CYU1sSlZWbmxoTjJwdVRGaHlXWGQ0TjNOdGRHWnJhVlJQYkVJM2FqbDNNalY2T0dObGJrUXROWGswZWxNd2RIWXhNVzB0WjIxSlRYQkhTbUV3YkVoTFFWVnBUVlZCY0hKQ1FXaGFjRUZLVEMweVQwWmxVbUkwV0ZsTE1HUkhWelZZTXpJNWFFRmhVVlp6VEVReExWWlNSVzV4VVZObmQxTkhOMHhQYlZkek1ta3lhVmg0U21RdFFrTXdjMlp4WHpGSVMwdzFTVnB2VWxadGJFRjBSMkV6WkhsS1JFeEVhSFpvY1ZOYVptOW9XVmRXVlc5TGVXbHhSbmxUU2w5Ull6Sk1MVGhsWmxjNFVtbE5XVmQ1UzFCUlQwODFVamx6TnpBdGJHRjNlV0ZoT0RkdVZscEtjVkp4TkVaRWRWVkxXbFJuTlVORWFFaFZUWFpQYW5wUFZsQjNNRUpOV0dKSGIzRjJPRTFoVFcxMFRuZ3liM00zU0hOZmFrSk5jSFZwYkVGdVRWUTBXVUZOUldad1EyZFBSMmszYVdSa1lURlhUVkUzTkVabWF6Y3lhV05DU214TFUyeHVORkoxY1VocVdGWmFiVlJQZEROR1owaDJiVUpNYW13MlVUUjJOVXBUVVd0SGVrWkZkMlJSTXpodlNWOW5lbEJPUXpRelh6VllORGgyWTJSV1VXNUlVRTg0Vm1kUWFXazJjbFExUTJSMk9EVlBOblV4UjFkNFdHWnpjVzltVUhsamRsSk9lakJWYm05WldsWTVVbFJtZFZGNGEwNXlNRVJSYTBOelZqTmZiM001TUhkb1RqWk9abGRZZDFSSGMwcHhkVmxVTTJ0emVrODBkMWd4ZGxreWMzVldSbU5JYm5CblVuUndVbXR1VUUxSUxWUmpRWGxNYkRSa2ExbFNXVkYyTld4aE1nPT0iLCJkZWxldGVkIjp0cnVlLCJpZCI6IjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSIsInJldiI6ImI0MWFlM2FkZDI1OGI0YmJmNjJjNTU0YTE5ZDc1ODk1In0K"
+        },
+        {
+          "id": "fd1259b1e17761577b864a379dbdaa6e65af5b3c",
+          "paths": ["records/a0/a0b1c2d3-e4f5-4607-8899-aabbccddeeff.json"],
+          "byteCount": 1989,
+          "text": "{\"blob\":\"djEuczdPenM3T3pzN096czdPei4wMGQ1U3JjUy1YRjh5UEIyVVkzR1hMY1lRUFFCNlB3bks2MFEtd0czWVJ6MzFwUHVadGs3TC1TMl9BV1hJVWZFcThTcjBVRnoyYURnRG53YXIyODR4b3Vxbks1ZHFXd0RqQnZvMG9mTGJiYUJVb1o5M1ZUWXNicThsNHBtbkRYaW1mQkFOS3NKXzJSNDBROExzRmtWSTFuWW43dmVwOHY2aDlha0trSVdXOVZvZllfVXNESnpJb3dsczhwRWxacGlnamIwRHlMYjVxbklKWDdaZk5iRmhfZnpab2pfczByeVBUNWNXVFJEOEZqejctSUprV3VCYUtiNUJaMmJjVHhLd2dtRGV2WXVQRm1waU5IbDB4Nk9DamRrQVNaYXd1VWh1QkpuSWd5bF9FNlNrZmFLUTlHWE1rMlkzbTJseUpKTFc3UmwycThPb3ROT25XRERsN2t1dEZPeUhCUnVoa1Y5Y05SOWNEcktMYzFCN0o5Rl9zSTdud2J3UEx3VnBZU2UzV1FqQ1NCT3RGU2RhR3Q3NXNnOVNrb0dsVU5qRDByRE5JOFlGRGxQQTY0VWVnRDR4NTM2NE5lQ2E3MHRBTzZwS3FBd0hyQ3JRZUV6NVdiYVh4elpkbDdKOENLUy1EYnlnZDh6clNJWlhlZXpnS2NWWkp6N3lIY2lQblZkUk9qLV9sNFhCN1NHb1d5NnUtYzJoWWZjTW5tYVVxbXNBaVo2NDdGV1VDMkhIampsZEFBOW9wemNZNFMwWldJSVdCVFNaSUludTlZdVRUaTZXcUU4Q0o5ekRlTk9nY29Mc2U1bnAtdWV5aDlhWkdDMHJjM21MXy1KcmxxWTIyU25QYkg0SUFUazZKU3Nna1I0UkEyNlp2UGxnRXFGdVJ5Qmpwei1YcDY2ZWQ5OFBqQng2UDZ6QW9ub1pYcWt4NzNmaGp4bG95QmdXVTV5ZWt5alg2Rkd5RDQ4ZE9iNGZHT3cxYmNmdkFoV25uSVhuM0FSMDlRV2p6S3QtQ3FrNHhNTHV1eGl5MFBzUjEtaTF5M3ZaU0xIS2xkbGRkMlU3QXVwTEc2ak5weFpLd3ZTMVlLYTBqRVVSeVJoMC1LQWZUUUVBaW5DM3hlUHB0UWZON1pwY3JXR3dSRTFWX3VxLXZUSXd2ak5BM2VyRlpoaDZQVkIxTVVjTDJFbU1xLUV5b3J2T0tndmR6RkJWLWRnZUU0c240SFpZVzZVS1g3a1RzYkJRbF9XRnhuX1VuSXNXME9fNWZqUUI4TFdWNXVDM1JyMk4yVDZtb01uWUQ3M2hyQmxrbGR6TlhCVEcyQzdNYXNOTnllcU5HeDEtWHZrQzBOTlVtMWMwVXZtV0tEbEY3NWk1enZQWnRkM19VZ2ZvMTZqZWdFNXFJRlEzV1dRaXNJT05QM2lSSzRKOEdabndmb0N2TXZQNDFTY3VpTm1DNFMyQmlPZFRuaE5jRDB6TnpHYmpQVFY3d2NyS1M3Q0d0OFNsR1lZODA3X3NGM28takI5X0hKQ2kzaDdPLXU5OHQ4ZEFzQUJlS3ZFOTVoa3dRZjdYSEI3cERCU2NIc1pvYkVMX3FXLU9LcFBuazRWU3lKaTJha0hZMzlNdlVmd09nV2x0LWUyaXdoVXZxTk1jOFl3T29GY1VtNUhKUFVDYV9Mam9aRVRKbG5TdXlsRUlUaVpZdjhjWjFqTUVDM01Id2dDaE54TUNLczZFNDJDWGxDRGR6TzRKYTAzdFZfU3hpWmtUSm1zUEhGOVR3NmlRWXdpOTdKU3ctWnEyQ0ZGUm5uc1kyaFhQVEJJV2xFM29jNVhLdWhUdTM5NlFFR1FlVlBWYkp3cDU0LTFjZzdVVjF3\",\"deleted\":false,\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"rev\":\"cacd70ca9afe1f7503b1e1bc85146988\"}\n",
+          "base64": "eyJibG9iIjoiZGpFdWN6ZFBlbk0zVDNwek4wOTZjemRQZWk0d01HUTFVM0pqVXkxWVJqaDVVRUl5VlZrelIxaE1ZMWxSVUZGQ05sQjNia3MyTUZFdGQwY3pXVko2TXpGd1VIVmFkR3MzVEMxVE1sOUJWMWhKVldaRmNUaFRjakJWUm5veVlVUm5SRzUzWVhJeU9EUjRiM1Z4YmtzMVpIRlhkMFJxUW5adk1HOW1UR0ppWVVKVmIxbzVNMVpVV1hOaWNUaHNOSEJ0YmtSWWFXMW1Ra0ZPUzNOS1h6SlNOREJST0V4elJtdFdTVEZ1V1c0M2RtVndPSFkyYURsaGEwdHJTVmRYT1ZadlpsbGZWWE5FU25wSmIzZHNjemh3Uld4YWNHbG5hbUl3UkhsTVlqVnhia2xLV0RkYVprNWlSbWhmWm5wYWIycGZjekJ5ZVZCVU5XTlhWRkpFT0VacWVqY3RTVXByVjNWQ1lVdGlOVUphTW1KalZIaExkMmR0UkdWMldYVlFSbTF3YVU1SWJEQjROazlEYW1SclFWTmFZWGQxVldoMVFrcHVTV2Q1YkY5Rk5sTnJabUZMVVRsSFdFMXJNbGt6YlRKc2VVcEtURmMzVW13eWNUaFBiM1JPVDI1WFJFUnNOMnQxZEVaUGVVaENVblZvYTFZNVkwNVNPV05FY2t0TVl6RkNOMG81Umw5elNUZHVkMkozVUV4M1ZuQlpVMlV6VjFGcVExTkNUM1JHVTJSaFIzUTNOWE5uT1ZOcmIwZHNWVTVxUkRCeVJFNUpPRmxHUkd4UVFUWTBWV1ZuUkRSNE5UTTJORTVsUTJFM01IUkJUelp3UzNGQmQwaHlRM0pSWlVWNk5WZGlZVmg0ZWxwa2JEZEtPRU5MVXkxRVlubG5aRGg2Y2xOSldsaGxaWHBuUzJOV1drcDZOM2xJWTJsUWJsWmtVazlxTFY5c05GaENOMU5IYjFkNU5uVXRZekpvV1daalRXNXRZVlZ4YlhOQmFWbzJORGRHVjFWRE1raElhbXBzWkVGQk9XOXdlbU5aTkZNd1dsZEpTVmRDVkZOYVNVbHVkVGxaZFZSVWFUWlhjVVU0UTBvNWVrUmxUazluWTI5TWMyVTFibkF0ZFdWNWFEbGhXa2RETUhKak0yMU1YeTFLY214eFdUSXlVMjVRWWtnMFNVRlVhelpLVTNObmExSTBVa0V5TmxwMlVHeG5SWEZHZFZKNVFtcHdlaTFZY0RZMlpXUTVPRkJxUW5nMlVEWjZRVzl1YjFwWWNXdDROek5tYUdwNGJHOTVRbWRYVlRWNVpXdDVhbGcyUmtkNVJEUTRaRTlpTkdaSFQzY3hZbU5tZGtGb1YyNXVTVmh1TTBGU01EbFJWMnA2UzNRdFEzRnJOSGhOVEhWMWVHbDVNRkJ6VWpFdGFURjVNM1phVTB4SVMyeGtiR1JrTWxVM1FYVndURWMyYWs1d2VGcExkM1pUTVZsTFlUQnFSVlZTZVZKb01DMUxRV1pVVVVWQmFXNURNM2hsVUhCMFVXWk9OMXB3WTNKWFIzZFNSVEZXWDNWeExYWlVTWGQyYWs1Qk0yVnlSbHBvYURaUVZrSXhUVlZqVERKRmJVMXhMVVY1YjNKMlQwdG5kbVI2UmtKV0xXUm5aVVUwYzI0MFNGcFpWelpWUzFnM2ExUnpZa0pSYkY5WFJuaHVYMVZ1U1hOWE1FOWZOV1pxVVVJNFRGZFdOWFZETTFKeU1rNHlWRFp0YjAxdVdVUTNNMmh5UW14cmJHUjZUbGhDVkVjeVF6ZE5ZWE5PVG5sbGNVNUhlREV0V0haclF6Qk9UbFZ0TVdNd1ZYWnRWMHRFYkVZM05XazFlblpRV25Sa00xOVZaMlp2TVRacVpXZEZOWEZKUmxFelYxZFJhWE5KVDA1UU0ybFNTelJLT0VkYWJuZG1iME4yVFhaUU5ERlRZM1ZwVG0xRE5GTXlRbWxQWkZSdWFFNWpSREI2VG5wSFltcFFWRlkzZDJOeVMxTTNRMGQwT0ZOc1IxbFpPREEzWDNOR00yOHRha0k1WDBoS1Eya3phRGRQTFhVNU9IUTRaRUZ6UVVKbFMzWkZPVFZvYTNkUlpqZFlTRUkzY0VSQ1UyTkljMXB2WWtWTVgzRlhMVTlMY0ZCdWF6UldVM2xLYVRKaGEwaFpNemxOZGxWbWQwOW5WMngwTFdVeWFYZG9WWFp4VGsxak9GbDNUMjlHWTFWdE5VaEtVRlZEWVY5TWFtOWFSVlJLYkc1VGRYbHNSVWxVYVZwWmRqaGpXakZxVFVWRE0wMUlkMmREYUU1NFRVTkxjelpGTkRKRFdHeERSR1I2VHpSS1lUQXpkRlpmVTNocFdtdFVTbTF6VUVoR09WUjNObWxSV1hkcE9UZEtVM2N0V25FeVEwWkdVbTV1YzFreWFGaFFWRUpKVjJ4Rk0yOWpOVmhMZFdoVWRUTTVObEZGUjFGbFZsQldZa3AzY0RVMExURmpaemRWVmpGMyIsImRlbGV0ZWQiOmZhbHNlLCJpZCI6ImEwYjFjMmQzLWU0ZjUtNDYwNy04ODk5LWFhYmJjY2RkZWVmZiIsInJldiI6ImNhY2Q3MGNhOWFmZTFmNzUwM2IxZTFiYzg1MTQ2OTg4In0K"
+        },
+        {
+          "id": "fd2e9eda53453fb97cc0bbbeb5d1ce50d0b7ce85",
+          "paths": ["README.md"],
+          "byteCount": 1322,
+          "text": null,
+          "base64": null
+        }
+      ],
+      "fsck": "git fsck --strict: clean"
+    },
+    {
+      "name": "tree-sort-order",
+      "kind": "tree",
+      "inputEntries": [
+        {
+          "mode": "100644",
+          "nameHex": "612e62",
+          "id": "1111111111111111111111111111111111111111"
+        },
+        {
+          "mode": "40000",
+          "nameHex": "61",
+          "id": "2222222222222222222222222222222222222222"
+        },
+        {
+          "mode": "100644",
+          "nameHex": "612d62",
+          "id": "3333333333333333333333333333333333333333"
+        },
+        {
+          "mode": "100644",
+          "nameHex": "42",
+          "id": "4444444444444444444444444444444444444444"
+        },
+        {
+          "mode": "100644",
+          "nameHex": "6130",
+          "id": "5555555555555555555555555555555555555555"
+        },
+        {
+          "mode": "40000",
+          "nameHex": "612e",
+          "id": "6666666666666666666666666666666666666666"
+        },
+        {
+          "mode": "100755",
+          "nameHex": "72756e2e7368",
+          "id": "1111111111111111111111111111111111111111"
+        },
+        {
+          "mode": "120000",
+          "nameHex": "6c696e6b",
+          "id": "2222222222222222222222222222222222222222"
+        },
+        {
+          "mode": "160000",
+          "nameHex": "7375626d6f64756c65",
+          "id": "3333333333333333333333333333333333333333"
+        },
+        {
+          "mode": "100644",
+          "nameHex": "66ff6f",
+          "id": "4444444444444444444444444444444444444444"
+        },
+        {
+          "mode": "100644",
+          "nameHex": "c3a92e6d64",
+          "id": "5555555555555555555555555555555555555555"
+        }
+      ],
+      "sortedNamesHex": [
+        "42",
+        "612d62",
+        "612e",
+        "612e62",
+        "61",
+        "6130",
+        "66ff6f",
+        "6c696e6b",
+        "72756e2e7368",
+        "7375626d6f64756c65",
+        "c3a92e6d64"
+      ],
+      "treeHex": "313030363434204200444444444444444444444444444444444444444431303036343420612d62003333333333333333333333333333333333333333343030303020612e00666666666666666666666666666666666666666631303036343420612e62001111111111111111111111111111111111111111343030303020610022222222222222222222222222222222222222223130303634342061300055555555555555555555555555555555555555553130303634342066ff6f004444444444444444444444444444444444444444313230303030206c696e6b0022222222222222222222222222222222222222223130303735352072756e2e7368001111111111111111111111111111111111111111313630303030207375626d6f64756c6500333333333333333333333333333333333333333331303036343420c3a92e6d64005555555555555555555555555555555555555555",
+      "treeID": "2f2c6991879b09b31b3df07c093beebc806ec754"
+    },
+    {
+      "name": "commit-creating",
+      "kind": "commit",
+      "tree": "6666666666666666666666666666666666666666",
+      "parents": [],
+      "unixSeconds": {
+        "bits": "41da9a6cc0000000",
+        "swift": "1785312000.0"
+      },
+      "message": "Create Snippets library",
+      "rawText": "tree 6666666666666666666666666666666666666666\nauthor Snippets Sync <sync@snippets.invalid> 1785312000 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 1785312000 +0000\n\nCreate Snippets library\n",
+      "rawHex": "7472656520363636363636363636363636363636363636363636363636363636363636363636363636363636360a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303030202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303030202b303030300a0a43726561746520536e697070657473206c6962726172790a",
+      "commitID": "2f1f3b4c3a1d5554860e04f6abe9702a66a3e5bd"
+    },
+    {
+      "name": "commit-with-parent-fractional-date",
+      "kind": "commit",
+      "tree": "6666666666666666666666666666666666666666",
+      "parents": ["1111111111111111111111111111111111111111"],
+      "unixSeconds": {
+        "bits": "41da9a6ccf3fef9e",
+        "swift": "1785312060.999"
+      },
+      "message": "Sync 1 record",
+      "rawText": "tree 6666666666666666666666666666666666666666\nparent 1111111111111111111111111111111111111111\nauthor Snippets Sync <sync@snippets.invalid> 1785312060 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 1785312060 +0000\n\nSync 1 record\n",
+      "rawHex": "7472656520363636363636363636363636363636363636363636363636363636363636363636363636363636360a706172656e7420313131313131313131313131313131313131313131313131313131313131313131313131313131310a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303630202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2031373835333132303630202b303030300a0a53796e632031207265636f72640a",
+      "commitID": "f4559c0778d9ecb3975ad17743b573533af0f11b"
+    },
+    {
+      "name": "commit-negative-date-clamps-to-zero",
+      "kind": "commit",
+      "tree": "6666666666666666666666666666666666666666",
+      "parents": ["1111111111111111111111111111111111111111"],
+      "unixSeconds": {
+        "bits": "c014000000000000",
+        "swift": "-5.0"
+      },
+      "message": "Sync 2 records",
+      "rawText": "tree 6666666666666666666666666666666666666666\nparent 1111111111111111111111111111111111111111\nauthor Snippets Sync <sync@snippets.invalid> 0 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 0 +0000\n\nSync 2 records\n",
+      "rawHex": "7472656520363636363636363636363636363636363636363636363636363636363636363636363636363636360a706172656e7420313131313131313131313131313131313131313131313131313131313131313131313131313131310a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2030202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2030202b303030300a0a53796e632032207265636f7264730a",
+      "commitID": "f4511a3ce997b397b2c7b0179bc8c31482aac3f6"
+    },
+    {
+      "name": "commit-normalize-message",
+      "kind": "commit",
+      "tree": "6666666666666666666666666666666666666666",
+      "parents": ["2222222222222222222222222222222222222222"],
+      "unixSeconds": {
+        "bits": "0000000000000000",
+        "swift": "0.0"
+      },
+      "message": "Normalize 3 file(s) edited outside Snippets",
+      "rawText": "tree 6666666666666666666666666666666666666666\nparent 2222222222222222222222222222222222222222\nauthor Snippets Sync <sync@snippets.invalid> 0 +0000\ncommitter Snippets Sync <sync@snippets.invalid> 0 +0000\n\nNormalize 3 file(s) edited outside Snippets\n",
+      "rawHex": "7472656520363636363636363636363636363636363636363636363636363636363636363636363636363636360a706172656e7420323232323232323232323232323232323232323232323232323232323232323232323232323232320a617574686f7220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2030202b303030300a636f6d6d697474657220536e6970706574732053796e63203c73796e6340736e6970706574732e696e76616c69643e2030202b303030300a0a4e6f726d616c697a6520332066696c6528732920656469746564206f75747369646520536e6970706574730a",
+      "commitID": "cb3f1d6c7666d8f21a3e1ac855245646a6c5b75f"
+    },
+    {
+      "name": "object-empty-blob",
+      "kind": "object-id",
+      "type": "blob",
+      "contentHex": "",
+      "headerHex": "626c6f62203000",
+      "id": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+    },
+    {
+      "name": "object-hello-blob",
+      "kind": "object-id",
+      "type": "blob",
+      "contentHex": "68656c6c6f0a",
+      "headerHex": "626c6f62203600",
+      "id": "ce013625030ba8dba906f756967f9e9ca394464a"
+    },
+    {
+      "name": "object-empty-tree",
+      "kind": "object-id",
+      "type": "tree",
+      "contentHex": "",
+      "headerHex": "74726565203000",
+      "id": "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+    }
+  ]
+}

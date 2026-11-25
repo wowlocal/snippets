@@ -1,0 +1,3608 @@
+{
+  "format": "snippets-swift-interop/L03-keyword-and-tags/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "Snippet.sanitizedKeyword, SnippetTagging.normalizedTags, SnippetTagging.filterKey, and the Foundation character sets they use (brief 01 §3 Snippet, Tags)",
+  "notes": ["There is no keyword or tag length limit in the Swift model; the 300- and 400-character cases pass through unchanged.", "Scalars are listed as hex code points wherever the visible text would hide the difference."],
+  "cases": [
+    {
+      "name": "keyword-0",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "sanitized": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "filterKey": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      }
+    },
+    {
+      "name": "keyword-1",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "  sig  ",
+        "utf8Hex": "20207369672020"
+      },
+      "sanitized": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "filterKey": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      }
+    },
+    {
+      "name": "keyword-2",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "\\sig",
+        "utf8Hex": "5c736967"
+      },
+      "sanitized": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "filterKey": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      }
+    },
+    {
+      "name": "keyword-3",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "\\\\sig",
+        "utf8Hex": "5c5c736967"
+      },
+      "sanitized": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "filterKey": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      }
+    },
+    {
+      "name": "keyword-4",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": " \\ \\ sig",
+        "utf8Hex": "205c205c20736967"
+      },
+      "sanitized": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "filterKey": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      }
+    },
+    {
+      "name": "keyword-5",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "my key",
+        "utf8Hex": "6d79206b6579"
+      },
+      "sanitized": {
+        "text": "my-key",
+        "utf8Hex": "6d792d6b6579"
+      },
+      "filterKey": {
+        "text": "my-key",
+        "utf8Hex": "6d792d6b6579"
+      }
+    },
+    {
+      "name": "keyword-6",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "my   key\tword\nhere",
+        "utf8Hex": "6d792020206b657909776f72640a68657265"
+      },
+      "sanitized": {
+        "text": "my-key-word-here",
+        "utf8Hex": "6d792d6b65792d776f72642d68657265"
+      },
+      "filterKey": {
+        "text": "my-key-word-here",
+        "utf8Hex": "6d792d6b65792d776f72642d68657265"
+      }
+    },
+    {
+      "name": "keyword-7",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "\\",
+        "utf8Hex": "5c"
+      },
+      "sanitized": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "filterKey": {
+        "text": "",
+        "utf8Hex": ""
+      }
+    },
+    {
+      "name": "keyword-8",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "\\\\",
+        "utf8Hex": "5c5c"
+      },
+      "sanitized": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "filterKey": {
+        "text": "",
+        "utf8Hex": ""
+      }
+    },
+    {
+      "name": "keyword-9",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "sanitized": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "filterKey": {
+        "text": "",
+        "utf8Hex": ""
+      }
+    },
+    {
+      "name": "keyword-10",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "   ",
+        "utf8Hex": "202020"
+      },
+      "sanitized": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "filterKey": {
+        "text": "",
+        "utf8Hex": ""
+      }
+    },
+    {
+      "name": "keyword-11",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "Sig",
+        "utf8Hex": "536967"
+      },
+      "sanitized": {
+        "text": "Sig",
+        "utf8Hex": "536967"
+      },
+      "filterKey": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      }
+    },
+    {
+      "name": "keyword-12",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "SIG",
+        "utf8Hex": "534947"
+      },
+      "sanitized": {
+        "text": "SIG",
+        "utf8Hex": "534947"
+      },
+      "filterKey": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      }
+    },
+    {
+      "name": "keyword-13",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "café",
+        "utf8Hex": "636166c3a9"
+      },
+      "sanitized": {
+        "text": "café",
+        "utf8Hex": "636166c3a9"
+      },
+      "filterKey": {
+        "text": "cafe",
+        "utf8Hex": "63616665"
+      }
+    },
+    {
+      "name": "keyword-14",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "café",
+        "utf8Hex": "63616665cc81"
+      },
+      "sanitized": {
+        "text": "café",
+        "utf8Hex": "63616665cc81"
+      },
+      "filterKey": {
+        "text": "cafe",
+        "utf8Hex": "63616665"
+      }
+    },
+    {
+      "name": "keyword-15",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "\\́sig",
+        "utf8Hex": "5ccc81736967"
+      },
+      "sanitized": {
+        "text": "\\́sig",
+        "utf8Hex": "5ccc81736967"
+      },
+      "filterKey": {
+        "text": "\\sig",
+        "utf8Hex": "5c736967"
+      }
+    },
+    {
+      "name": "keyword-16",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a\\b",
+        "utf8Hex": "615c62"
+      },
+      "sanitized": {
+        "text": "a\\b",
+        "utf8Hex": "615c62"
+      },
+      "filterKey": {
+        "text": "a\\b",
+        "utf8Hex": "615c62"
+      }
+    },
+    {
+      "name": "keyword-17",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "sig\\",
+        "utf8Hex": "7369675c"
+      },
+      "sanitized": {
+        "text": "sig\\",
+        "utf8Hex": "7369675c"
+      },
+      "filterKey": {
+        "text": "sig\\",
+        "utf8Hex": "7369675c"
+      }
+    },
+    {
+      "name": "keyword-18",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": " sig ",
+        "utf8Hex": "c2a0736967c2a0"
+      },
+      "sanitized": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "filterKey": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      }
+    },
+    {
+      "name": "keyword-19",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a b",
+        "utf8Hex": "61c2a062"
+      },
+      "sanitized": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      },
+      "filterKey": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      }
+    },
+    {
+      "name": "keyword-20",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a b",
+        "utf8Hex": "61e2808362"
+      },
+      "sanitized": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      },
+      "filterKey": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      }
+    },
+    {
+      "name": "keyword-21",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a\u200bb",
+        "utf8Hex": "61e2808b62"
+      },
+      "sanitized": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      },
+      "filterKey": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      }
+    },
+    {
+      "name": "keyword-22",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "\u200bsig",
+        "utf8Hex": "e2808b736967"
+      },
+      "sanitized": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "filterKey": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      }
+    },
+    {
+      "name": "keyword-23",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a　b",
+        "utf8Hex": "61e3808062"
+      },
+      "sanitized": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      },
+      "filterKey": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      }
+    },
+    {
+      "name": "keyword-24",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a\u0085b",
+        "utf8Hex": "61c28562"
+      },
+      "sanitized": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      },
+      "filterKey": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      }
+    },
+    {
+      "name": "keyword-25",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a\u2028b",
+        "utf8Hex": "61e280a862"
+      },
+      "sanitized": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      },
+      "filterKey": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      }
+    },
+    {
+      "name": "keyword-26",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a\u001fb",
+        "utf8Hex": "611f62"
+      },
+      "sanitized": {
+        "text": "a\u001fb",
+        "utf8Hex": "611f62"
+      },
+      "filterKey": {
+        "text": "a\u001fb",
+        "utf8Hex": "611f62"
+      }
+    },
+    {
+      "name": "keyword-27",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a\u000bb",
+        "utf8Hex": "610b62"
+      },
+      "sanitized": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      },
+      "filterKey": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      }
+    },
+    {
+      "name": "keyword-28",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a\ufeffb",
+        "utf8Hex": "61efbbbf62"
+      },
+      "sanitized": {
+        "text": "a\ufeffb",
+        "utf8Hex": "61efbbbf62"
+      },
+      "filterKey": {
+        "text": "a\ufeffb",
+        "utf8Hex": "61efbbbf62"
+      }
+    },
+    {
+      "name": "keyword-29",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a\u2060b",
+        "utf8Hex": "61e281a062"
+      },
+      "sanitized": {
+        "text": "a\u2060b",
+        "utf8Hex": "61e281a062"
+      },
+      "filterKey": {
+        "text": "a\u2060b",
+        "utf8Hex": "61e281a062"
+      }
+    },
+    {
+      "name": "keyword-30",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a᠎b",
+        "utf8Hex": "61e1a08e62"
+      },
+      "sanitized": {
+        "text": "a᠎b",
+        "utf8Hex": "61e1a08e62"
+      },
+      "filterKey": {
+        "text": "a᠎b",
+        "utf8Hex": "61e1a08e62"
+      }
+    },
+    {
+      "name": "keyword-31",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "🔑 key",
+        "utf8Hex": "f09f9491206b6579"
+      },
+      "sanitized": {
+        "text": "🔑-key",
+        "utf8Hex": "f09f94912d6b6579"
+      },
+      "filterKey": {
+        "text": "🔑-key",
+        "utf8Hex": "f09f94912d6b6579"
+      }
+    },
+    {
+      "name": "keyword-32",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "\\🔑",
+        "utf8Hex": "5cf09f9491"
+      },
+      "sanitized": {
+        "text": "🔑",
+        "utf8Hex": "f09f9491"
+      },
+      "filterKey": {
+        "text": "🔑",
+        "utf8Hex": "f09f9491"
+      }
+    },
+    {
+      "name": "keyword-33",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "\\ \\",
+        "utf8Hex": "5c205c"
+      },
+      "sanitized": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "filterKey": {
+        "text": "",
+        "utf8Hex": ""
+      }
+    },
+    {
+      "name": "keyword-34",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "/sig",
+        "utf8Hex": "2f736967"
+      },
+      "sanitized": {
+        "text": "/sig",
+        "utf8Hex": "2f736967"
+      },
+      "filterKey": {
+        "text": "/sig",
+        "utf8Hex": "2f736967"
+      }
+    },
+    {
+      "name": "keyword-35",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": ";;sig",
+        "utf8Hex": "3b3b736967"
+      },
+      "sanitized": {
+        "text": ";;sig",
+        "utf8Hex": "3b3b736967"
+      },
+      "filterKey": {
+        "text": ";;sig",
+        "utf8Hex": "3b3b736967"
+      }
+    },
+    {
+      "name": "keyword-36",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+        "utf8Hex": "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b"
+      },
+      "sanitized": {
+        "text": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+        "utf8Hex": "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b"
+      },
+      "filterKey": {
+        "text": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+        "utf8Hex": "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b"
+      }
+    },
+    {
+      "name": "keyword-37",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      },
+      "sanitized": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      },
+      "filterKey": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      }
+    },
+    {
+      "name": "keyword-38",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a--b",
+        "utf8Hex": "612d2d62"
+      },
+      "sanitized": {
+        "text": "a--b",
+        "utf8Hex": "612d2d62"
+      },
+      "filterKey": {
+        "text": "a--b",
+        "utf8Hex": "612d2d62"
+      }
+    },
+    {
+      "name": "keyword-39",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": " - ",
+        "utf8Hex": "202d20"
+      },
+      "sanitized": {
+        "text": "-",
+        "utf8Hex": "2d"
+      },
+      "filterKey": {
+        "text": "-",
+        "utf8Hex": "2d"
+      }
+    },
+    {
+      "name": "keyword-40",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "a\r\nb",
+        "utf8Hex": "610d0a62"
+      },
+      "sanitized": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      },
+      "filterKey": {
+        "text": "a-b",
+        "utf8Hex": "612d62"
+      }
+    },
+    {
+      "name": "keyword-41",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "\\\r\nsig",
+        "utf8Hex": "5c0d0a736967"
+      },
+      "sanitized": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "filterKey": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      }
+    },
+    {
+      "name": "keyword-42",
+      "kind": "sanitizedKeyword",
+      "input": {
+        "text": "\\ sig \\ more",
+        "utf8Hex": "5c20736967205c206d6f7265"
+      },
+      "sanitized": {
+        "text": "sig-\\-more",
+        "utf8Hex": "7369672d5c2d6d6f7265"
+      },
+      "filterKey": {
+        "text": "sig-\\-more",
+        "utf8Hex": "7369672d5c2d6d6f7265"
+      }
+    },
+    {
+      "name": "tags-0",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "Work",
+          "utf8Hex": "576f726b"
+        },
+        {
+          "text": "work",
+          "utf8Hex": "776f726b"
+        },
+        {
+          "text": "WORK",
+          "utf8Hex": "574f524b"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "Work",
+          "utf8Hex": "576f726b"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "work",
+          "utf8Hex": "776f726b"
+        },
+        {
+          "text": "work",
+          "utf8Hex": "776f726b"
+        },
+        {
+          "text": "work",
+          "utf8Hex": "776f726b"
+        }
+      ]
+    },
+    {
+      "name": "tags-1",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "  Team\n Notes  ",
+          "utf8Hex": "20205465616d0a204e6f7465732020"
+        },
+        {
+          "text": "TEAM NOTES",
+          "utf8Hex": "5445414d204e4f544553"
+        },
+        {
+          "text": "Café",
+          "utf8Hex": "436166c3a9"
+        },
+        {
+          "text": "CAFE",
+          "utf8Hex": "43414645"
+        },
+        {
+          "text": " \t ",
+          "utf8Hex": "200920"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "Team Notes",
+          "utf8Hex": "5465616d204e6f746573"
+        },
+        {
+          "text": "Café",
+          "utf8Hex": "436166c3a9"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "  team\n notes  ",
+          "utf8Hex": "20207465616d0a206e6f7465732020"
+        },
+        {
+          "text": "team notes",
+          "utf8Hex": "7465616d206e6f746573"
+        },
+        {
+          "text": "cafe",
+          "utf8Hex": "63616665"
+        },
+        {
+          "text": "cafe",
+          "utf8Hex": "63616665"
+        },
+        {
+          "text": " \t ",
+          "utf8Hex": "200920"
+        }
+      ]
+    },
+    {
+      "name": "tags-2",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "b",
+          "utf8Hex": "62"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "B",
+          "utf8Hex": "42"
+        },
+        {
+          "text": "A",
+          "utf8Hex": "41"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "b",
+          "utf8Hex": "62"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "b",
+          "utf8Hex": "62"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "b",
+          "utf8Hex": "62"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        }
+      ]
+    },
+    {
+      "name": "tags-3",
+      "kind": "normalizedTags",
+      "input": [],
+      "normalized": [],
+      "inputFilterKeys": []
+    },
+    {
+      "name": "tags-4",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "",
+          "utf8Hex": ""
+        },
+        {
+          "text": " ",
+          "utf8Hex": "20"
+        },
+        {
+          "text": "\n",
+          "utf8Hex": "0a"
+        }
+      ],
+      "normalized": [],
+      "inputFilterKeys": [
+        {
+          "text": "",
+          "utf8Hex": ""
+        },
+        {
+          "text": " ",
+          "utf8Hex": "20"
+        },
+        {
+          "text": "\n",
+          "utf8Hex": "0a"
+        }
+      ]
+    },
+    {
+      "name": "tags-5",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "two   words",
+          "utf8Hex": "74776f202020776f726473"
+        },
+        {
+          "text": "two words",
+          "utf8Hex": "74776f20776f726473"
+        },
+        {
+          "text": "Two\tWords",
+          "utf8Hex": "54776f09576f726473"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "two words",
+          "utf8Hex": "74776f20776f726473"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "two   words",
+          "utf8Hex": "74776f202020776f726473"
+        },
+        {
+          "text": "two words",
+          "utf8Hex": "74776f20776f726473"
+        },
+        {
+          "text": "two\twords",
+          "utf8Hex": "74776f09776f726473"
+        }
+      ]
+    },
+    {
+      "name": "tags-6",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "Ünïcode",
+          "utf8Hex": "c39c6ec3af636f6465"
+        },
+        {
+          "text": "unicode",
+          "utf8Hex": "756e69636f6465"
+        },
+        {
+          "text": "UNICODE",
+          "utf8Hex": "554e49434f4445"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "Ünïcode",
+          "utf8Hex": "c39c6ec3af636f6465"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "unicode",
+          "utf8Hex": "756e69636f6465"
+        },
+        {
+          "text": "unicode",
+          "utf8Hex": "756e69636f6465"
+        },
+        {
+          "text": "unicode",
+          "utf8Hex": "756e69636f6465"
+        }
+      ]
+    },
+    {
+      "name": "tags-7",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "straße",
+          "utf8Hex": "73747261c39f65"
+        },
+        {
+          "text": "STRASSE",
+          "utf8Hex": "53545241535345"
+        },
+        {
+          "text": "strasse",
+          "utf8Hex": "73747261737365"
+        },
+        {
+          "text": "Straẞe",
+          "utf8Hex": "53747261e1ba9e65"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "straße",
+          "utf8Hex": "73747261c39f65"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "strasse",
+          "utf8Hex": "73747261737365"
+        },
+        {
+          "text": "strasse",
+          "utf8Hex": "73747261737365"
+        },
+        {
+          "text": "strasse",
+          "utf8Hex": "73747261737365"
+        },
+        {
+          "text": "strasse",
+          "utf8Hex": "73747261737365"
+        }
+      ]
+    },
+    {
+      "name": "tags-8",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "ﬁle",
+          "utf8Hex": "efac816c65"
+        },
+        {
+          "text": "file",
+          "utf8Hex": "66696c65"
+        },
+        {
+          "text": "FILE",
+          "utf8Hex": "46494c45"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "ﬁle",
+          "utf8Hex": "efac816c65"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "file",
+          "utf8Hex": "66696c65"
+        },
+        {
+          "text": "file",
+          "utf8Hex": "66696c65"
+        },
+        {
+          "text": "file",
+          "utf8Hex": "66696c65"
+        }
+      ]
+    },
+    {
+      "name": "tags-9",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "İstanbul",
+          "utf8Hex": "c4b07374616e62756c"
+        },
+        {
+          "text": "istanbul",
+          "utf8Hex": "697374616e62756c"
+        },
+        {
+          "text": "ıstanbul",
+          "utf8Hex": "c4b17374616e62756c"
+        },
+        {
+          "text": "ISTANBUL",
+          "utf8Hex": "495354414e42554c"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "İstanbul",
+          "utf8Hex": "c4b07374616e62756c"
+        },
+        {
+          "text": "ıstanbul",
+          "utf8Hex": "c4b17374616e62756c"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "istanbul",
+          "utf8Hex": "697374616e62756c"
+        },
+        {
+          "text": "istanbul",
+          "utf8Hex": "697374616e62756c"
+        },
+        {
+          "text": "ıstanbul",
+          "utf8Hex": "c4b17374616e62756c"
+        },
+        {
+          "text": "istanbul",
+          "utf8Hex": "697374616e62756c"
+        }
+      ]
+    },
+    {
+      "name": "tags-10",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "Ａ",
+          "utf8Hex": "efbca1"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "ａ",
+          "utf8Hex": "efbd81"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "Ａ",
+          "utf8Hex": "efbca1"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "ａ",
+          "utf8Hex": "efbd81"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "ａ",
+          "utf8Hex": "efbd81"
+        }
+      ]
+    },
+    {
+      "name": "tags-11",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "が",
+          "utf8Hex": "e3818c"
+        },
+        {
+          "text": "か",
+          "utf8Hex": "e3818b"
+        },
+        {
+          "text": "が",
+          "utf8Hex": "e3818be38299"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "が",
+          "utf8Hex": "e3818c"
+        },
+        {
+          "text": "か",
+          "utf8Hex": "e3818b"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "が",
+          "utf8Hex": "e3818c"
+        },
+        {
+          "text": "か",
+          "utf8Hex": "e3818b"
+        },
+        {
+          "text": "が",
+          "utf8Hex": "e3818be38299"
+        }
+      ]
+    },
+    {
+      "name": "tags-12",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "日本語",
+          "utf8Hex": "e697a5e69cace8aa9e"
+        },
+        {
+          "text": "日本語 ",
+          "utf8Hex": "e697a5e69cace8aa9e20"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "日本語",
+          "utf8Hex": "e697a5e69cace8aa9e"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "日本語",
+          "utf8Hex": "e697a5e69cace8aa9e"
+        },
+        {
+          "text": "日本語 ",
+          "utf8Hex": "e697a5e69cace8aa9e20"
+        }
+      ]
+    },
+    {
+      "name": "tags-13",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "é",
+          "utf8Hex": "c3a9"
+        },
+        {
+          "text": "é",
+          "utf8Hex": "65cc81"
+        },
+        {
+          "text": "É",
+          "utf8Hex": "45cc81"
+        },
+        {
+          "text": "e",
+          "utf8Hex": "65"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "é",
+          "utf8Hex": "c3a9"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "e",
+          "utf8Hex": "65"
+        },
+        {
+          "text": "e",
+          "utf8Hex": "65"
+        },
+        {
+          "text": "e",
+          "utf8Hex": "65"
+        },
+        {
+          "text": "e",
+          "utf8Hex": "65"
+        }
+      ]
+    },
+    {
+      "name": "tags-14",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "Å",
+          "utf8Hex": "c385"
+        },
+        {
+          "text": "Å",
+          "utf8Hex": "e284ab"
+        },
+        {
+          "text": "Å",
+          "utf8Hex": "41cc8a"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "Å",
+          "utf8Hex": "c385"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        }
+      ]
+    },
+    {
+      "name": "tags-15",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "Σ",
+          "utf8Hex": "cea3"
+        },
+        {
+          "text": "σ",
+          "utf8Hex": "cf83"
+        },
+        {
+          "text": "ς",
+          "utf8Hex": "cf82"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "Σ",
+          "utf8Hex": "cea3"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "σ",
+          "utf8Hex": "cf83"
+        },
+        {
+          "text": "σ",
+          "utf8Hex": "cf83"
+        },
+        {
+          "text": "σ",
+          "utf8Hex": "cf83"
+        }
+      ]
+    },
+    {
+      "name": "tags-16",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "ø",
+          "utf8Hex": "c3b8"
+        },
+        {
+          "text": "o",
+          "utf8Hex": "6f"
+        },
+        {
+          "text": "Ø",
+          "utf8Hex": "c398"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "ø",
+          "utf8Hex": "c3b8"
+        },
+        {
+          "text": "o",
+          "utf8Hex": "6f"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "ø",
+          "utf8Hex": "c3b8"
+        },
+        {
+          "text": "o",
+          "utf8Hex": "6f"
+        },
+        {
+          "text": "ø",
+          "utf8Hex": "c3b8"
+        }
+      ]
+    },
+    {
+      "name": "tags-17",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "conflict",
+          "utf8Hex": "636f6e666c696374"
+        },
+        {
+          "text": "Conflict",
+          "utf8Hex": "436f6e666c696374"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "conflict",
+          "utf8Hex": "636f6e666c696374"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "conflict",
+          "utf8Hex": "636f6e666c696374"
+        },
+        {
+          "text": "conflict",
+          "utf8Hex": "636f6e666c696374"
+        }
+      ]
+    },
+    {
+      "name": "tags-18",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "🔑",
+          "utf8Hex": "f09f9491"
+        },
+        {
+          "text": "🔑️",
+          "utf8Hex": "f09f9491efb88f"
+        },
+        {
+          "text": "🔑 ",
+          "utf8Hex": "f09f949120"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "🔑",
+          "utf8Hex": "f09f9491"
+        },
+        {
+          "text": "🔑️",
+          "utf8Hex": "f09f9491efb88f"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "🔑",
+          "utf8Hex": "f09f9491"
+        },
+        {
+          "text": "🔑️",
+          "utf8Hex": "f09f9491efb88f"
+        },
+        {
+          "text": "🔑 ",
+          "utf8Hex": "f09f949120"
+        }
+      ]
+    },
+    {
+      "name": "tags-19",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "a b",
+          "utf8Hex": "61c2a062"
+        },
+        {
+          "text": "a b",
+          "utf8Hex": "612062"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "a b",
+          "utf8Hex": "612062"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "a b",
+          "utf8Hex": "61c2a062"
+        },
+        {
+          "text": "a b",
+          "utf8Hex": "612062"
+        }
+      ]
+    },
+    {
+      "name": "tags-20",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "a\u200bb",
+          "utf8Hex": "61e2808b62"
+        },
+        {
+          "text": "a b",
+          "utf8Hex": "612062"
+        },
+        {
+          "text": "ab",
+          "utf8Hex": "6162"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "a b",
+          "utf8Hex": "612062"
+        },
+        {
+          "text": "ab",
+          "utf8Hex": "6162"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "a\u200bb",
+          "utf8Hex": "61e2808b62"
+        },
+        {
+          "text": "a b",
+          "utf8Hex": "612062"
+        },
+        {
+          "text": "ab",
+          "utf8Hex": "6162"
+        }
+      ]
+    },
+    {
+      "name": "tags-21",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "#tag",
+          "utf8Hex": "23746167"
+        },
+        {
+          "text": "tag",
+          "utf8Hex": "746167"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "#tag",
+          "utf8Hex": "23746167"
+        },
+        {
+          "text": "tag",
+          "utf8Hex": "746167"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "#tag",
+          "utf8Hex": "23746167"
+        },
+        {
+          "text": "tag",
+          "utf8Hex": "746167"
+        }
+      ]
+    },
+    {
+      "name": "tags-22",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "й",
+          "utf8Hex": "d0b9"
+        },
+        {
+          "text": "и",
+          "utf8Hex": "d0b8"
+        },
+        {
+          "text": "ё",
+          "utf8Hex": "d191"
+        },
+        {
+          "text": "е",
+          "utf8Hex": "d0b5"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "й",
+          "utf8Hex": "d0b9"
+        },
+        {
+          "text": "ё",
+          "utf8Hex": "d191"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "и",
+          "utf8Hex": "d0b8"
+        },
+        {
+          "text": "и",
+          "utf8Hex": "d0b8"
+        },
+        {
+          "text": "е",
+          "utf8Hex": "d0b5"
+        },
+        {
+          "text": "е",
+          "utf8Hex": "d0b5"
+        }
+      ]
+    },
+    {
+      "name": "tags-23",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "x⃝",
+          "utf8Hex": "78e2839d"
+        },
+        {
+          "text": "x",
+          "utf8Hex": "78"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "x⃝",
+          "utf8Hex": "78e2839d"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "x",
+          "utf8Hex": "78"
+        },
+        {
+          "text": "x",
+          "utf8Hex": "78"
+        }
+      ]
+    },
+    {
+      "name": "tags-24",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "ǅ",
+          "utf8Hex": "c785"
+        },
+        {
+          "text": "ǆ",
+          "utf8Hex": "c786"
+        },
+        {
+          "text": "Ǆ",
+          "utf8Hex": "c784"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "ǅ",
+          "utf8Hex": "c785"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "ǆ",
+          "utf8Hex": "c786"
+        },
+        {
+          "text": "ǆ",
+          "utf8Hex": "c786"
+        },
+        {
+          "text": "ǆ",
+          "utf8Hex": "c786"
+        }
+      ]
+    },
+    {
+      "name": "tags-25",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "tag, with comma",
+          "utf8Hex": "7461672c207769746820636f6d6d61"
+        },
+        {
+          "text": "tag",
+          "utf8Hex": "746167"
+        },
+        {
+          "text": "with comma",
+          "utf8Hex": "7769746820636f6d6d61"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "tag, with comma",
+          "utf8Hex": "7461672c207769746820636f6d6d61"
+        },
+        {
+          "text": "tag",
+          "utf8Hex": "746167"
+        },
+        {
+          "text": "with comma",
+          "utf8Hex": "7769746820636f6d6d61"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "tag, with comma",
+          "utf8Hex": "7461672c207769746820636f6d6d61"
+        },
+        {
+          "text": "tag",
+          "utf8Hex": "746167"
+        },
+        {
+          "text": "with comma",
+          "utf8Hex": "7769746820636f6d6d61"
+        }
+      ]
+    },
+    {
+      "name": "tags-26",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong",
+          "utf8Hex": "6c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e67"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong",
+          "utf8Hex": "6c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e67"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "longlonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglonglong",
+          "utf8Hex": "6c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e676c6f6e67"
+        }
+      ]
+    },
+    {
+      "name": "tags-27",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        },
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        }
+      ]
+    },
+    {
+      "name": "tags-28",
+      "kind": "normalizedTags",
+      "input": [
+        {
+          "text": "  a  ",
+          "utf8Hex": "2020612020"
+        },
+        {
+          "text": "\ta\n",
+          "utf8Hex": "09610a"
+        }
+      ],
+      "normalized": [
+        {
+          "text": "a",
+          "utf8Hex": "61"
+        }
+      ],
+      "inputFilterKeys": [
+        {
+          "text": "  a  ",
+          "utf8Hex": "2020612020"
+        },
+        {
+          "text": "\ta\n",
+          "utf8Hex": "09610a"
+        }
+      ]
+    },
+    {
+      "name": "filterKey-0",
+      "kind": "filterKey",
+      "input": {
+        "text": "Work",
+        "utf8Hex": "576f726b"
+      },
+      "inputScalars": "0057 006F 0072 006B",
+      "folded": {
+        "text": "work",
+        "utf8Hex": "776f726b"
+      },
+      "foldedScalars": "0077 006F 0072 006B"
+    },
+    {
+      "name": "filterKey-1",
+      "kind": "filterKey",
+      "input": {
+        "text": "WÖRK",
+        "utf8Hex": "57c396524b"
+      },
+      "inputScalars": "0057 00D6 0052 004B",
+      "folded": {
+        "text": "work",
+        "utf8Hex": "776f726b"
+      },
+      "foldedScalars": "0077 006F 0072 006B"
+    },
+    {
+      "name": "filterKey-2",
+      "kind": "filterKey",
+      "input": {
+        "text": "wörk",
+        "utf8Hex": "77c3b6726b"
+      },
+      "inputScalars": "0077 00F6 0072 006B",
+      "folded": {
+        "text": "work",
+        "utf8Hex": "776f726b"
+      },
+      "foldedScalars": "0077 006F 0072 006B"
+    },
+    {
+      "name": "filterKey-3",
+      "kind": "filterKey",
+      "input": {
+        "text": "straße",
+        "utf8Hex": "73747261c39f65"
+      },
+      "inputScalars": "0073 0074 0072 0061 00DF 0065",
+      "folded": {
+        "text": "strasse",
+        "utf8Hex": "73747261737365"
+      },
+      "foldedScalars": "0073 0074 0072 0061 0073 0073 0065"
+    },
+    {
+      "name": "filterKey-4",
+      "kind": "filterKey",
+      "input": {
+        "text": "Straẞe",
+        "utf8Hex": "53747261e1ba9e65"
+      },
+      "inputScalars": "0053 0074 0072 0061 1E9E 0065",
+      "folded": {
+        "text": "strasse",
+        "utf8Hex": "73747261737365"
+      },
+      "foldedScalars": "0073 0074 0072 0061 0073 0073 0065"
+    },
+    {
+      "name": "filterKey-5",
+      "kind": "filterKey",
+      "input": {
+        "text": "ﬁ",
+        "utf8Hex": "efac81"
+      },
+      "inputScalars": "FB01",
+      "folded": {
+        "text": "fi",
+        "utf8Hex": "6669"
+      },
+      "foldedScalars": "0066 0069"
+    },
+    {
+      "name": "filterKey-6",
+      "kind": "filterKey",
+      "input": {
+        "text": "ŉ",
+        "utf8Hex": "c589"
+      },
+      "inputScalars": "0149",
+      "folded": {
+        "text": "ʼn",
+        "utf8Hex": "cabc6e"
+      },
+      "foldedScalars": "02BC 006E"
+    },
+    {
+      "name": "filterKey-7",
+      "kind": "filterKey",
+      "input": {
+        "text": "İ",
+        "utf8Hex": "c4b0"
+      },
+      "inputScalars": "0130",
+      "folded": {
+        "text": "i",
+        "utf8Hex": "69"
+      },
+      "foldedScalars": "0069"
+    },
+    {
+      "name": "filterKey-8",
+      "kind": "filterKey",
+      "input": {
+        "text": "ı",
+        "utf8Hex": "c4b1"
+      },
+      "inputScalars": "0131",
+      "folded": {
+        "text": "ı",
+        "utf8Hex": "c4b1"
+      },
+      "foldedScalars": "0131"
+    },
+    {
+      "name": "filterKey-9",
+      "kind": "filterKey",
+      "input": {
+        "text": "I",
+        "utf8Hex": "49"
+      },
+      "inputScalars": "0049",
+      "folded": {
+        "text": "i",
+        "utf8Hex": "69"
+      },
+      "foldedScalars": "0069"
+    },
+    {
+      "name": "filterKey-10",
+      "kind": "filterKey",
+      "input": {
+        "text": "i",
+        "utf8Hex": "69"
+      },
+      "inputScalars": "0069",
+      "folded": {
+        "text": "i",
+        "utf8Hex": "69"
+      },
+      "foldedScalars": "0069"
+    },
+    {
+      "name": "filterKey-11",
+      "kind": "filterKey",
+      "input": {
+        "text": "Σ",
+        "utf8Hex": "cea3"
+      },
+      "inputScalars": "03A3",
+      "folded": {
+        "text": "σ",
+        "utf8Hex": "cf83"
+      },
+      "foldedScalars": "03C3"
+    },
+    {
+      "name": "filterKey-12",
+      "kind": "filterKey",
+      "input": {
+        "text": "ς",
+        "utf8Hex": "cf82"
+      },
+      "inputScalars": "03C2",
+      "folded": {
+        "text": "σ",
+        "utf8Hex": "cf83"
+      },
+      "foldedScalars": "03C3"
+    },
+    {
+      "name": "filterKey-13",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ω",
+        "utf8Hex": "cea9"
+      },
+      "inputScalars": "03A9",
+      "folded": {
+        "text": "ω",
+        "utf8Hex": "cf89"
+      },
+      "foldedScalars": "03C9"
+    },
+    {
+      "name": "filterKey-14",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ω",
+        "utf8Hex": "e284a6"
+      },
+      "inputScalars": "2126",
+      "folded": {
+        "text": "ω",
+        "utf8Hex": "cf89"
+      },
+      "foldedScalars": "03C9"
+    },
+    {
+      "name": "filterKey-15",
+      "kind": "filterKey",
+      "input": {
+        "text": "ǅ",
+        "utf8Hex": "c785"
+      },
+      "inputScalars": "01C5",
+      "folded": {
+        "text": "ǆ",
+        "utf8Hex": "c786"
+      },
+      "foldedScalars": "01C6"
+    },
+    {
+      "name": "filterKey-16",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ǆ",
+        "utf8Hex": "c784"
+      },
+      "inputScalars": "01C4",
+      "folded": {
+        "text": "ǆ",
+        "utf8Hex": "c786"
+      },
+      "foldedScalars": "01C6"
+    },
+    {
+      "name": "filterKey-17",
+      "kind": "filterKey",
+      "input": {
+        "text": "é",
+        "utf8Hex": "c3a9"
+      },
+      "inputScalars": "00E9",
+      "folded": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "foldedScalars": "0065"
+    },
+    {
+      "name": "filterKey-18",
+      "kind": "filterKey",
+      "input": {
+        "text": "é",
+        "utf8Hex": "65cc81"
+      },
+      "inputScalars": "0065 0301",
+      "folded": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "foldedScalars": "0065"
+    },
+    {
+      "name": "filterKey-19",
+      "kind": "filterKey",
+      "input": {
+        "text": "á́",
+        "utf8Hex": "61cc81cc81"
+      },
+      "inputScalars": "0061 0301 0301",
+      "folded": {
+        "text": "a",
+        "utf8Hex": "61"
+      },
+      "foldedScalars": "0061"
+    },
+    {
+      "name": "filterKey-20",
+      "kind": "filterKey",
+      "input": {
+        "text": "́a",
+        "utf8Hex": "cc8161"
+      },
+      "inputScalars": "0301 0061",
+      "folded": {
+        "text": "́a",
+        "utf8Hex": "cc8161"
+      },
+      "foldedScalars": "0301 0061"
+    },
+    {
+      "name": "filterKey-21",
+      "kind": "filterKey",
+      "input": {
+        "text": "Å",
+        "utf8Hex": "c385"
+      },
+      "inputScalars": "00C5",
+      "folded": {
+        "text": "a",
+        "utf8Hex": "61"
+      },
+      "foldedScalars": "0061"
+    },
+    {
+      "name": "filterKey-22",
+      "kind": "filterKey",
+      "input": {
+        "text": "Å",
+        "utf8Hex": "e284ab"
+      },
+      "inputScalars": "212B",
+      "folded": {
+        "text": "a",
+        "utf8Hex": "61"
+      },
+      "foldedScalars": "0061"
+    },
+    {
+      "name": "filterKey-23",
+      "kind": "filterKey",
+      "input": {
+        "text": "й",
+        "utf8Hex": "d0b9"
+      },
+      "inputScalars": "0439",
+      "folded": {
+        "text": "и",
+        "utf8Hex": "d0b8"
+      },
+      "foldedScalars": "0438"
+    },
+    {
+      "name": "filterKey-24",
+      "kind": "filterKey",
+      "input": {
+        "text": "ё",
+        "utf8Hex": "d191"
+      },
+      "inputScalars": "0451",
+      "folded": {
+        "text": "е",
+        "utf8Hex": "d0b5"
+      },
+      "foldedScalars": "0435"
+    },
+    {
+      "name": "filterKey-25",
+      "kind": "filterKey",
+      "input": {
+        "text": "ΐ",
+        "utf8Hex": "ce90"
+      },
+      "inputScalars": "0390",
+      "folded": {
+        "text": "ι",
+        "utf8Hex": "ceb9"
+      },
+      "foldedScalars": "03B9"
+    },
+    {
+      "name": "filterKey-26",
+      "kind": "filterKey",
+      "input": {
+        "text": "ø",
+        "utf8Hex": "c3b8"
+      },
+      "inputScalars": "00F8",
+      "folded": {
+        "text": "ø",
+        "utf8Hex": "c3b8"
+      },
+      "foldedScalars": "00F8"
+    },
+    {
+      "name": "filterKey-27",
+      "kind": "filterKey",
+      "input": {
+        "text": "đ",
+        "utf8Hex": "c491"
+      },
+      "inputScalars": "0111",
+      "folded": {
+        "text": "đ",
+        "utf8Hex": "c491"
+      },
+      "foldedScalars": "0111"
+    },
+    {
+      "name": "filterKey-28",
+      "kind": "filterKey",
+      "input": {
+        "text": "ł",
+        "utf8Hex": "c582"
+      },
+      "inputScalars": "0142",
+      "folded": {
+        "text": "ł",
+        "utf8Hex": "c582"
+      },
+      "foldedScalars": "0142"
+    },
+    {
+      "name": "filterKey-29",
+      "kind": "filterKey",
+      "input": {
+        "text": "が",
+        "utf8Hex": "e3818c"
+      },
+      "inputScalars": "304C",
+      "folded": {
+        "text": "が",
+        "utf8Hex": "e3818c"
+      },
+      "foldedScalars": "304C"
+    },
+    {
+      "name": "filterKey-30",
+      "kind": "filterKey",
+      "input": {
+        "text": "が",
+        "utf8Hex": "e3818be38299"
+      },
+      "inputScalars": "304B 3099",
+      "folded": {
+        "text": "が",
+        "utf8Hex": "e3818be38299"
+      },
+      "foldedScalars": "304B 3099"
+    },
+    {
+      "name": "filterKey-31",
+      "kind": "filterKey",
+      "input": {
+        "text": "آ",
+        "utf8Hex": "d8a2"
+      },
+      "inputScalars": "0622",
+      "folded": {
+        "text": "آ",
+        "utf8Hex": "d8a2"
+      },
+      "foldedScalars": "0622"
+    },
+    {
+      "name": "filterKey-32",
+      "kind": "filterKey",
+      "input": {
+        "text": "أ",
+        "utf8Hex": "d8a7d994"
+      },
+      "inputScalars": "0627 0654",
+      "folded": {
+        "text": "أ",
+        "utf8Hex": "d8a7d994"
+      },
+      "foldedScalars": "0627 0654"
+    },
+    {
+      "name": "filterKey-33",
+      "kind": "filterKey",
+      "input": {
+        "text": "क़",
+        "utf8Hex": "e0a495e0a4bc"
+      },
+      "inputScalars": "0915 093C",
+      "folded": {
+        "text": "क़",
+        "utf8Hex": "e0a495e0a4bc"
+      },
+      "foldedScalars": "0915 093C"
+    },
+    {
+      "name": "filterKey-34",
+      "kind": "filterKey",
+      "input": {
+        "text": "אָ",
+        "utf8Hex": "d790d6b8"
+      },
+      "inputScalars": "05D0 05B8",
+      "folded": {
+        "text": "אָ",
+        "utf8Hex": "d790d6b8"
+      },
+      "foldedScalars": "05D0 05B8"
+    },
+    {
+      "name": "filterKey-35",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ａ",
+        "utf8Hex": "efbca1"
+      },
+      "inputScalars": "FF21",
+      "folded": {
+        "text": "ａ",
+        "utf8Hex": "efbd81"
+      },
+      "foldedScalars": "FF41"
+    },
+    {
+      "name": "filterKey-36",
+      "kind": "filterKey",
+      "input": {
+        "text": "ａ",
+        "utf8Hex": "efbd81"
+      },
+      "inputScalars": "FF41",
+      "folded": {
+        "text": "ａ",
+        "utf8Hex": "efbd81"
+      },
+      "foldedScalars": "FF41"
+    },
+    {
+      "name": "filterKey-37",
+      "kind": "filterKey",
+      "input": {
+        "text": "１",
+        "utf8Hex": "efbc91"
+      },
+      "inputScalars": "FF11",
+      "folded": {
+        "text": "１",
+        "utf8Hex": "efbc91"
+      },
+      "foldedScalars": "FF11"
+    },
+    {
+      "name": "filterKey-38",
+      "kind": "filterKey",
+      "input": {
+        "text": "x⃝",
+        "utf8Hex": "78e2839d"
+      },
+      "inputScalars": "0078 20DD",
+      "folded": {
+        "text": "x",
+        "utf8Hex": "78"
+      },
+      "foldedScalars": "0078"
+    },
+    {
+      "name": "filterKey-39",
+      "kind": "filterKey",
+      "input": {
+        "text": "a️",
+        "utf8Hex": "61efb88f"
+      },
+      "inputScalars": "0061 FE0F",
+      "folded": {
+        "text": "a",
+        "utf8Hex": "61"
+      },
+      "foldedScalars": "0061"
+    },
+    {
+      "name": "filterKey-40",
+      "kind": "filterKey",
+      "input": {
+        "text": "한́",
+        "utf8Hex": "ed959ccc81"
+      },
+      "inputScalars": "D55C 0301",
+      "folded": {
+        "text": "한",
+        "utf8Hex": "ed959c"
+      },
+      "foldedScalars": "D55C"
+    },
+    {
+      "name": "filterKey-41",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ꭰ",
+        "utf8Hex": "e18ea0"
+      },
+      "inputScalars": "13A0",
+      "folded": {
+        "text": "ꭰ",
+        "utf8Hex": "eaadb0"
+      },
+      "foldedScalars": "AB70"
+    },
+    {
+      "name": "filterKey-42",
+      "kind": "filterKey",
+      "input": {
+        "text": "ꭰ",
+        "utf8Hex": "eaadb0"
+      },
+      "inputScalars": "AB70",
+      "folded": {
+        "text": "ꭰ",
+        "utf8Hex": "eaadb0"
+      },
+      "foldedScalars": "AB70"
+    },
+    {
+      "name": "filterKey-43",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ⱥ́",
+        "utf8Hex": "c8bacc81"
+      },
+      "inputScalars": "023A 0301",
+      "folded": {
+        "text": "ⱥ́",
+        "utf8Hex": "e2b1a5cc81"
+      },
+      "foldedScalars": "2C65 0301"
+    },
+    {
+      "name": "filterKey-44",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ա́",
+        "utf8Hex": "d4b1cc81"
+      },
+      "inputScalars": "0531 0301",
+      "folded": {
+        "text": "ա́",
+        "utf8Hex": "d5a1cc81"
+      },
+      "foldedScalars": "0561 0301"
+    },
+    {
+      "name": "filterKey-45",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ⴀ́",
+        "utf8Hex": "e182a0cc81"
+      },
+      "inputScalars": "10A0 0301",
+      "folded": {
+        "text": "ⴀ́",
+        "utf8Hex": "e2b480cc81"
+      },
+      "foldedScalars": "2D00 0301"
+    },
+    {
+      "name": "filterKey-46",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ⅰ́",
+        "utf8Hex": "e285a0cc81"
+      },
+      "inputScalars": "2160 0301",
+      "folded": {
+        "text": "ⅰ́",
+        "utf8Hex": "e285b0cc81"
+      },
+      "foldedScalars": "2170 0301"
+    },
+    {
+      "name": "filterKey-47",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ԑ́",
+        "utf8Hex": "d490cc81"
+      },
+      "inputScalars": "0510 0301",
+      "folded": {
+        "text": "ԑ́",
+        "utf8Hex": "d491cc81"
+      },
+      "foldedScalars": "0511 0301"
+    },
+    {
+      "name": "filterKey-48",
+      "kind": "filterKey",
+      "input": {
+        "text": "ԑ́",
+        "utf8Hex": "d491cc81"
+      },
+      "inputScalars": "0511 0301",
+      "folded": {
+        "text": "ԑ",
+        "utf8Hex": "d491"
+      },
+      "foldedScalars": "0511"
+    },
+    {
+      "name": "filterKey-49",
+      "kind": "filterKey",
+      "input": {
+        "text": "🔑",
+        "utf8Hex": "f09f9491"
+      },
+      "inputScalars": "1F511",
+      "folded": {
+        "text": "🔑",
+        "utf8Hex": "f09f9491"
+      },
+      "foldedScalars": "1F511"
+    },
+    {
+      "name": "filterKey-50",
+      "kind": "filterKey",
+      "input": {
+        "text": "👨\u200d👩\u200d👧",
+        "utf8Hex": "f09f91a8e2808df09f91a9e2808df09f91a7"
+      },
+      "inputScalars": "1F468 200D 1F469 200D 1F467",
+      "folded": {
+        "text": "👨\u200d👩\u200d👧",
+        "utf8Hex": "f09f91a8e2808df09f91a9e2808df09f91a7"
+      },
+      "foldedScalars": "1F468 200D 1F469 200D 1F467"
+    },
+    {
+      "name": "filterKey-51",
+      "kind": "filterKey",
+      "input": {
+        "text": "🇫🇷",
+        "utf8Hex": "f09f87abf09f87b7"
+      },
+      "inputScalars": "1F1EB 1F1F7",
+      "folded": {
+        "text": "🇫🇷",
+        "utf8Hex": "f09f87abf09f87b7"
+      },
+      "foldedScalars": "1F1EB 1F1F7"
+    },
+    {
+      "name": "filterKey-52",
+      "kind": "filterKey",
+      "input": {
+        "text": "ẹ́",
+        "utf8Hex": "65cc81cca3"
+      },
+      "inputScalars": "0065 0301 0323",
+      "folded": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "foldedScalars": "0065"
+    },
+    {
+      "name": "filterKey-53",
+      "kind": "filterKey",
+      "input": {
+        "text": "ệ",
+        "utf8Hex": "e1bb87"
+      },
+      "inputScalars": "1EC7",
+      "folded": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "foldedScalars": "0065"
+    },
+    {
+      "name": "filterKey-54",
+      "kind": "filterKey",
+      "input": {
+        "text": "ǖ",
+        "utf8Hex": "c796"
+      },
+      "inputScalars": "01D6",
+      "folded": {
+        "text": "u",
+        "utf8Hex": "75"
+      },
+      "foldedScalars": "0075"
+    },
+    {
+      "name": "filterKey-55",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ǆ́",
+        "utf8Hex": "c784cc81"
+      },
+      "inputScalars": "01C4 0301",
+      "folded": {
+        "text": "ǆ",
+        "utf8Hex": "c786"
+      },
+      "foldedScalars": "01C6"
+    },
+    {
+      "name": "filterKey-56",
+      "kind": "filterKey",
+      "input": {
+        "text": "ẞ",
+        "utf8Hex": "e1ba9e"
+      },
+      "inputScalars": "1E9E",
+      "folded": {
+        "text": "ss",
+        "utf8Hex": "7373"
+      },
+      "foldedScalars": "0073 0073"
+    },
+    {
+      "name": "filterKey-57",
+      "kind": "filterKey",
+      "input": {
+        "text": "ſ",
+        "utf8Hex": "c5bf"
+      },
+      "inputScalars": "017F",
+      "folded": {
+        "text": "s",
+        "utf8Hex": "73"
+      },
+      "foldedScalars": "0073"
+    },
+    {
+      "name": "filterKey-58",
+      "kind": "filterKey",
+      "input": {
+        "text": "K",
+        "utf8Hex": "4b"
+      },
+      "inputScalars": "004B",
+      "folded": {
+        "text": "k",
+        "utf8Hex": "6b"
+      },
+      "foldedScalars": "006B"
+    },
+    {
+      "name": "filterKey-59",
+      "kind": "filterKey",
+      "input": {
+        "text": "K",
+        "utf8Hex": "e284aa"
+      },
+      "inputScalars": "212A",
+      "folded": {
+        "text": "k",
+        "utf8Hex": "6b"
+      },
+      "foldedScalars": "006B"
+    },
+    {
+      "name": "filterKey-60",
+      "kind": "filterKey",
+      "input": {
+        "text": "µ",
+        "utf8Hex": "c2b5"
+      },
+      "inputScalars": "00B5",
+      "folded": {
+        "text": "μ",
+        "utf8Hex": "cebc"
+      },
+      "foldedScalars": "03BC"
+    },
+    {
+      "name": "filterKey-61",
+      "kind": "filterKey",
+      "input": {
+        "text": "μ",
+        "utf8Hex": "cebc"
+      },
+      "inputScalars": "03BC",
+      "folded": {
+        "text": "μ",
+        "utf8Hex": "cebc"
+      },
+      "foldedScalars": "03BC"
+    },
+    {
+      "name": "filterKey-62",
+      "kind": "filterKey",
+      "input": {
+        "text": "ǰ",
+        "utf8Hex": "c7b0"
+      },
+      "inputScalars": "01F0",
+      "folded": {
+        "text": "j",
+        "utf8Hex": "6a"
+      },
+      "foldedScalars": "006A"
+    },
+    {
+      "name": "filterKey-63",
+      "kind": "filterKey",
+      "input": {
+        "text": "ΰ",
+        "utf8Hex": "ceb0"
+      },
+      "inputScalars": "03B0",
+      "folded": {
+        "text": "υ",
+        "utf8Hex": "cf85"
+      },
+      "foldedScalars": "03C5"
+    },
+    {
+      "name": "filterKey-64",
+      "kind": "filterKey",
+      "input": {
+        "text": "ﬃ",
+        "utf8Hex": "efac83"
+      },
+      "inputScalars": "FB03",
+      "folded": {
+        "text": "ffi",
+        "utf8Hex": "666669"
+      },
+      "foldedScalars": "0066 0066 0069"
+    },
+    {
+      "name": "filterKey-65",
+      "kind": "filterKey",
+      "input": {
+        "text": "ﬆ",
+        "utf8Hex": "efac86"
+      },
+      "inputScalars": "FB06",
+      "folded": {
+        "text": "st",
+        "utf8Hex": "7374"
+      },
+      "foldedScalars": "0073 0074"
+    },
+    {
+      "name": "filterKey-66",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ⅷ",
+        "utf8Hex": "e285a7"
+      },
+      "inputScalars": "2167",
+      "folded": {
+        "text": "ⅷ",
+        "utf8Hex": "e285b7"
+      },
+      "foldedScalars": "2177"
+    },
+    {
+      "name": "filterKey-67",
+      "kind": "filterKey",
+      "input": {
+        "text": "ⅷ",
+        "utf8Hex": "e285b7"
+      },
+      "inputScalars": "2177",
+      "folded": {
+        "text": "ⅷ",
+        "utf8Hex": "e285b7"
+      },
+      "foldedScalars": "2177"
+    },
+    {
+      "name": "filterKey-68",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ⓐ",
+        "utf8Hex": "e292b6"
+      },
+      "inputScalars": "24B6",
+      "folded": {
+        "text": "ⓐ",
+        "utf8Hex": "e29390"
+      },
+      "foldedScalars": "24D0"
+    },
+    {
+      "name": "filterKey-69",
+      "kind": "filterKey",
+      "input": {
+        "text": "ⓐ",
+        "utf8Hex": "e29390"
+      },
+      "inputScalars": "24D0",
+      "folded": {
+        "text": "ⓐ",
+        "utf8Hex": "e29390"
+      },
+      "foldedScalars": "24D0"
+    },
+    {
+      "name": "filterKey-70",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ǉ",
+        "utf8Hex": "c787"
+      },
+      "inputScalars": "01C7",
+      "folded": {
+        "text": "ǉ",
+        "utf8Hex": "c789"
+      },
+      "foldedScalars": "01C9"
+    },
+    {
+      "name": "filterKey-71",
+      "kind": "filterKey",
+      "input": {
+        "text": "ǈ",
+        "utf8Hex": "c788"
+      },
+      "inputScalars": "01C8",
+      "folded": {
+        "text": "ǉ",
+        "utf8Hex": "c789"
+      },
+      "foldedScalars": "01C9"
+    },
+    {
+      "name": "filterKey-72",
+      "kind": "filterKey",
+      "input": {
+        "text": "ǉ",
+        "utf8Hex": "c789"
+      },
+      "inputScalars": "01C9",
+      "folded": {
+        "text": "ǉ",
+        "utf8Hex": "c789"
+      },
+      "foldedScalars": "01C9"
+    },
+    {
+      "name": "filterKey-73",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ð",
+        "utf8Hex": "c390"
+      },
+      "inputScalars": "00D0",
+      "folded": {
+        "text": "ð",
+        "utf8Hex": "c3b0"
+      },
+      "foldedScalars": "00F0"
+    },
+    {
+      "name": "filterKey-74",
+      "kind": "filterKey",
+      "input": {
+        "text": "ð",
+        "utf8Hex": "c3b0"
+      },
+      "inputScalars": "00F0",
+      "folded": {
+        "text": "ð",
+        "utf8Hex": "c3b0"
+      },
+      "foldedScalars": "00F0"
+    },
+    {
+      "name": "filterKey-75",
+      "kind": "filterKey",
+      "input": {
+        "text": "Þ",
+        "utf8Hex": "c39e"
+      },
+      "inputScalars": "00DE",
+      "folded": {
+        "text": "þ",
+        "utf8Hex": "c3be"
+      },
+      "foldedScalars": "00FE"
+    },
+    {
+      "name": "filterKey-76",
+      "kind": "filterKey",
+      "input": {
+        "text": "þ",
+        "utf8Hex": "c3be"
+      },
+      "inputScalars": "00FE",
+      "folded": {
+        "text": "þ",
+        "utf8Hex": "c3be"
+      },
+      "foldedScalars": "00FE"
+    },
+    {
+      "name": "filterKey-77",
+      "kind": "filterKey",
+      "input": {
+        "text": "Æ",
+        "utf8Hex": "c386"
+      },
+      "inputScalars": "00C6",
+      "folded": {
+        "text": "æ",
+        "utf8Hex": "c3a6"
+      },
+      "foldedScalars": "00E6"
+    },
+    {
+      "name": "filterKey-78",
+      "kind": "filterKey",
+      "input": {
+        "text": "æ",
+        "utf8Hex": "c3a6"
+      },
+      "inputScalars": "00E6",
+      "folded": {
+        "text": "æ",
+        "utf8Hex": "c3a6"
+      },
+      "foldedScalars": "00E6"
+    },
+    {
+      "name": "filterKey-79",
+      "kind": "filterKey",
+      "input": {
+        "text": "Œ",
+        "utf8Hex": "c592"
+      },
+      "inputScalars": "0152",
+      "folded": {
+        "text": "œ",
+        "utf8Hex": "c593"
+      },
+      "foldedScalars": "0153"
+    },
+    {
+      "name": "filterKey-80",
+      "kind": "filterKey",
+      "input": {
+        "text": "œ",
+        "utf8Hex": "c593"
+      },
+      "inputScalars": "0153",
+      "folded": {
+        "text": "œ",
+        "utf8Hex": "c593"
+      },
+      "foldedScalars": "0153"
+    },
+    {
+      "name": "filterKey-81",
+      "kind": "filterKey",
+      "input": {
+        "text": "ñ",
+        "utf8Hex": "c3b1"
+      },
+      "inputScalars": "00F1",
+      "folded": {
+        "text": "n",
+        "utf8Hex": "6e"
+      },
+      "foldedScalars": "006E"
+    },
+    {
+      "name": "filterKey-82",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ñ",
+        "utf8Hex": "c391"
+      },
+      "inputScalars": "00D1",
+      "folded": {
+        "text": "n",
+        "utf8Hex": "6e"
+      },
+      "foldedScalars": "006E"
+    },
+    {
+      "name": "filterKey-83",
+      "kind": "filterKey",
+      "input": {
+        "text": "ç",
+        "utf8Hex": "c3a7"
+      },
+      "inputScalars": "00E7",
+      "folded": {
+        "text": "c",
+        "utf8Hex": "63"
+      },
+      "foldedScalars": "0063"
+    },
+    {
+      "name": "filterKey-84",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ç",
+        "utf8Hex": "c387"
+      },
+      "inputScalars": "00C7",
+      "folded": {
+        "text": "c",
+        "utf8Hex": "63"
+      },
+      "foldedScalars": "0063"
+    },
+    {
+      "name": "filterKey-85",
+      "kind": "filterKey",
+      "input": {
+        "text": "ü",
+        "utf8Hex": "c3bc"
+      },
+      "inputScalars": "00FC",
+      "folded": {
+        "text": "u",
+        "utf8Hex": "75"
+      },
+      "foldedScalars": "0075"
+    },
+    {
+      "name": "filterKey-86",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ü",
+        "utf8Hex": "c39c"
+      },
+      "inputScalars": "00DC",
+      "folded": {
+        "text": "u",
+        "utf8Hex": "75"
+      },
+      "foldedScalars": "0075"
+    },
+    {
+      "name": "filterKey-87",
+      "kind": "filterKey",
+      "input": {
+        "text": "ÿ",
+        "utf8Hex": "c3bf"
+      },
+      "inputScalars": "00FF",
+      "folded": {
+        "text": "y",
+        "utf8Hex": "79"
+      },
+      "foldedScalars": "0079"
+    },
+    {
+      "name": "filterKey-88",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ÿ",
+        "utf8Hex": "c5b8"
+      },
+      "inputScalars": "0178",
+      "folded": {
+        "text": "y",
+        "utf8Hex": "79"
+      },
+      "foldedScalars": "0079"
+    },
+    {
+      "name": "filterKey-89",
+      "kind": "filterKey",
+      "input": {
+        "text": "А",
+        "utf8Hex": "d090"
+      },
+      "inputScalars": "0410",
+      "folded": {
+        "text": "а",
+        "utf8Hex": "d0b0"
+      },
+      "foldedScalars": "0430"
+    },
+    {
+      "name": "filterKey-90",
+      "kind": "filterKey",
+      "input": {
+        "text": "а",
+        "utf8Hex": "d0b0"
+      },
+      "inputScalars": "0430",
+      "folded": {
+        "text": "а",
+        "utf8Hex": "d0b0"
+      },
+      "foldedScalars": "0430"
+    },
+    {
+      "name": "filterKey-91",
+      "kind": "filterKey",
+      "input": {
+        "text": "Я",
+        "utf8Hex": "d0af"
+      },
+      "inputScalars": "042F",
+      "folded": {
+        "text": "я",
+        "utf8Hex": "d18f"
+      },
+      "foldedScalars": "044F"
+    },
+    {
+      "name": "filterKey-92",
+      "kind": "filterKey",
+      "input": {
+        "text": "я",
+        "utf8Hex": "d18f"
+      },
+      "inputScalars": "044F",
+      "folded": {
+        "text": "я",
+        "utf8Hex": "d18f"
+      },
+      "foldedScalars": "044F"
+    },
+    {
+      "name": "filterKey-93",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ё",
+        "utf8Hex": "d081"
+      },
+      "inputScalars": "0401",
+      "folded": {
+        "text": "е",
+        "utf8Hex": "d0b5"
+      },
+      "foldedScalars": "0435"
+    },
+    {
+      "name": "filterKey-94",
+      "kind": "filterKey",
+      "input": {
+        "text": "Й",
+        "utf8Hex": "d099"
+      },
+      "inputScalars": "0419",
+      "folded": {
+        "text": "и",
+        "utf8Hex": "d0b8"
+      },
+      "foldedScalars": "0438"
+    },
+    {
+      "name": "filterKey-95",
+      "kind": "filterKey",
+      "input": {
+        "text": "ї",
+        "utf8Hex": "d197"
+      },
+      "inputScalars": "0457",
+      "folded": {
+        "text": "і",
+        "utf8Hex": "d196"
+      },
+      "foldedScalars": "0456"
+    },
+    {
+      "name": "filterKey-96",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ї",
+        "utf8Hex": "d087"
+      },
+      "inputScalars": "0407",
+      "folded": {
+        "text": "і",
+        "utf8Hex": "d196"
+      },
+      "foldedScalars": "0456"
+    },
+    {
+      "name": "filterKey-97",
+      "kind": "filterKey",
+      "input": {
+        "text": "ґ",
+        "utf8Hex": "d291"
+      },
+      "inputScalars": "0491",
+      "folded": {
+        "text": "ґ",
+        "utf8Hex": "d291"
+      },
+      "foldedScalars": "0491"
+    },
+    {
+      "name": "filterKey-98",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ґ",
+        "utf8Hex": "d290"
+      },
+      "inputScalars": "0490",
+      "folded": {
+        "text": "ґ",
+        "utf8Hex": "d291"
+      },
+      "foldedScalars": "0491"
+    },
+    {
+      "name": "filterKey-99",
+      "kind": "filterKey",
+      "input": {
+        "text": "α",
+        "utf8Hex": "ceb1"
+      },
+      "inputScalars": "03B1",
+      "folded": {
+        "text": "α",
+        "utf8Hex": "ceb1"
+      },
+      "foldedScalars": "03B1"
+    },
+    {
+      "name": "filterKey-100",
+      "kind": "filterKey",
+      "input": {
+        "text": "Α",
+        "utf8Hex": "ce91"
+      },
+      "inputScalars": "0391",
+      "folded": {
+        "text": "α",
+        "utf8Hex": "ceb1"
+      },
+      "foldedScalars": "03B1"
+    },
+    {
+      "name": "filterKey-101",
+      "kind": "filterKey",
+      "input": {
+        "text": "ά",
+        "utf8Hex": "ceac"
+      },
+      "inputScalars": "03AC",
+      "folded": {
+        "text": "α",
+        "utf8Hex": "ceb1"
+      },
+      "foldedScalars": "03B1"
+    },
+    {
+      "name": "filterKey-102",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ά",
+        "utf8Hex": "ce86"
+      },
+      "inputScalars": "0386",
+      "folded": {
+        "text": "α",
+        "utf8Hex": "ceb1"
+      },
+      "foldedScalars": "03B1"
+    },
+    {
+      "name": "filterKey-103",
+      "kind": "filterKey",
+      "input": {
+        "text": "ϊ",
+        "utf8Hex": "cf8a"
+      },
+      "inputScalars": "03CA",
+      "folded": {
+        "text": "ι",
+        "utf8Hex": "ceb9"
+      },
+      "foldedScalars": "03B9"
+    },
+    {
+      "name": "filterKey-104",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ϊ",
+        "utf8Hex": "ceaa"
+      },
+      "inputScalars": "03AA",
+      "folded": {
+        "text": "ι",
+        "utf8Hex": "ceb9"
+      },
+      "foldedScalars": "03B9"
+    },
+    {
+      "name": "filterKey-105",
+      "kind": "filterKey",
+      "input": {
+        "text": "ῃ",
+        "utf8Hex": "e1bf83"
+      },
+      "inputScalars": "1FC3",
+      "folded": {
+        "text": "η",
+        "utf8Hex": "ceb7"
+      },
+      "foldedScalars": "03B7"
+    },
+    {
+      "name": "filterKey-106",
+      "kind": "filterKey",
+      "input": {
+        "text": "ᾳ",
+        "utf8Hex": "e1beb3"
+      },
+      "inputScalars": "1FB3",
+      "folded": {
+        "text": "α",
+        "utf8Hex": "ceb1"
+      },
+      "foldedScalars": "03B1"
+    },
+    {
+      "name": "filterKey-107",
+      "kind": "filterKey",
+      "input": {
+        "text": "ᾼ",
+        "utf8Hex": "e1bebc"
+      },
+      "inputScalars": "1FBC",
+      "folded": {
+        "text": "α",
+        "utf8Hex": "ceb1"
+      },
+      "foldedScalars": "03B1"
+    },
+    {
+      "name": "filterKey-108",
+      "kind": "filterKey",
+      "input": {
+        "text": "Hello World",
+        "utf8Hex": "48656c6c6f20576f726c64"
+      },
+      "inputScalars": "0048 0065 006C 006C 006F 0020 0057 006F 0072 006C 0064",
+      "folded": {
+        "text": "hello world",
+        "utf8Hex": "68656c6c6f20776f726c64"
+      },
+      "foldedScalars": "0068 0065 006C 006C 006F 0020 0077 006F 0072 006C 0064"
+    },
+    {
+      "name": "filterKey-109",
+      "kind": "filterKey",
+      "input": {
+        "text": "MiXeD cAsE 123",
+        "utf8Hex": "4d69586544206341734520313233"
+      },
+      "inputScalars": "004D 0069 0058 0065 0044 0020 0063 0041 0073 0045 0020 0031 0032 0033",
+      "folded": {
+        "text": "mixed case 123",
+        "utf8Hex": "6d69786564206361736520313233"
+      },
+      "foldedScalars": "006D 0069 0078 0065 0064 0020 0063 0061 0073 0065 0020 0031 0032 0033"
+    },
+    {
+      "name": "filterKey-110",
+      "kind": "filterKey",
+      "input": {
+        "text": "tab\tsep",
+        "utf8Hex": "74616209736570"
+      },
+      "inputScalars": "0074 0061 0062 0009 0073 0065 0070",
+      "folded": {
+        "text": "tab\tsep",
+        "utf8Hex": "74616209736570"
+      },
+      "foldedScalars": "0074 0061 0062 0009 0073 0065 0070"
+    },
+    {
+      "name": "filterKey-111",
+      "kind": "filterKey",
+      "input": {
+        "text": "naïve café",
+        "utf8Hex": "6e61c3af766520636166c3a9"
+      },
+      "inputScalars": "006E 0061 00EF 0076 0065 0020 0063 0061 0066 00E9",
+      "folded": {
+        "text": "naive cafe",
+        "utf8Hex": "6e616976652063616665"
+      },
+      "foldedScalars": "006E 0061 0069 0076 0065 0020 0063 0061 0066 0065"
+    },
+    {
+      "name": "filterKey-112",
+      "kind": "filterKey",
+      "input": {
+        "text": "ＦＵＬＬ",
+        "utf8Hex": "efbca6efbcb5efbcacefbcac"
+      },
+      "inputScalars": "FF26 FF35 FF2C FF2C",
+      "folded": {
+        "text": "ｆｕｌｌ",
+        "utf8Hex": "efbd86efbd95efbd8cefbd8c"
+      },
+      "foldedScalars": "FF46 FF55 FF4C FF4C"
+    },
+    {
+      "name": "filterKey-113",
+      "kind": "filterKey",
+      "input": {
+        "text": "ｈａｌｆ",
+        "utf8Hex": "efbd88efbd81efbd8cefbd86"
+      },
+      "inputScalars": "FF48 FF41 FF4C FF46",
+      "folded": {
+        "text": "ｈａｌｆ",
+        "utf8Hex": "efbd88efbd81efbd8cefbd86"
+      },
+      "foldedScalars": "FF48 FF41 FF4C FF46"
+    },
+    {
+      "name": "filterKey-114",
+      "kind": "filterKey",
+      "input": {
+        "text": "ｶﾞ",
+        "utf8Hex": "efbdb6efbe9e"
+      },
+      "inputScalars": "FF76 FF9E",
+      "folded": {
+        "text": "ｶﾞ",
+        "utf8Hex": "efbdb6efbe9e"
+      },
+      "foldedScalars": "FF76 FF9E"
+    },
+    {
+      "name": "filterKey-115",
+      "kind": "filterKey",
+      "input": {
+        "text": "㍿",
+        "utf8Hex": "e38dbf"
+      },
+      "inputScalars": "337F",
+      "folded": {
+        "text": "㍿",
+        "utf8Hex": "e38dbf"
+      },
+      "foldedScalars": "337F"
+    },
+    {
+      "name": "filterKey-116",
+      "kind": "filterKey",
+      "input": {
+        "text": "①",
+        "utf8Hex": "e291a0"
+      },
+      "inputScalars": "2460",
+      "folded": {
+        "text": "①",
+        "utf8Hex": "e291a0"
+      },
+      "foldedScalars": "2460"
+    },
+    {
+      "name": "filterKey-117",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ⱥ",
+        "utf8Hex": "c8ba"
+      },
+      "inputScalars": "023A",
+      "folded": {
+        "text": "ⱥ",
+        "utf8Hex": "e2b1a5"
+      },
+      "foldedScalars": "2C65"
+    },
+    {
+      "name": "filterKey-118",
+      "kind": "filterKey",
+      "input": {
+        "text": "ⱥ",
+        "utf8Hex": "e2b1a5"
+      },
+      "inputScalars": "2C65",
+      "folded": {
+        "text": "ⱥ",
+        "utf8Hex": "e2b1a5"
+      },
+      "foldedScalars": "2C65"
+    },
+    {
+      "name": "filterKey-119",
+      "kind": "filterKey",
+      "input": {
+        "text": "Ǆemal",
+        "utf8Hex": "c784656d616c"
+      },
+      "inputScalars": "01C4 0065 006D 0061 006C",
+      "folded": {
+        "text": "ǆemal",
+        "utf8Hex": "c786656d616c"
+      },
+      "foldedScalars": "01C6 0065 006D 0061 006C"
+    },
+    {
+      "name": "filterKey-120",
+      "kind": "filterKey",
+      "input": {
+        "text": "ǅemal",
+        "utf8Hex": "c785656d616c"
+      },
+      "inputScalars": "01C5 0065 006D 0061 006C",
+      "folded": {
+        "text": "ǆemal",
+        "utf8Hex": "c786656d616c"
+      },
+      "foldedScalars": "01C6 0065 006D 0061 006C"
+    },
+    {
+      "name": "filterKey-121",
+      "kind": "filterKey",
+      "input": {
+        "text": "ẞ́",
+        "utf8Hex": "e1ba9ecc81"
+      },
+      "inputScalars": "1E9E 0301",
+      "folded": {
+        "text": "ss",
+        "utf8Hex": "7373"
+      },
+      "foldedScalars": "0073 0073"
+    },
+    {
+      "name": "filterKey-122",
+      "kind": "filterKey",
+      "input": {
+        "text": "ö́",
+        "utf8Hex": "c3b6cc81"
+      },
+      "inputScalars": "00F6 0301",
+      "folded": {
+        "text": "o",
+        "utf8Hex": "6f"
+      },
+      "foldedScalars": "006F"
+    },
+    {
+      "name": "filterKey-123",
+      "kind": "filterKey",
+      "input": {
+        "text": "ö́",
+        "utf8Hex": "6fcc88cc81"
+      },
+      "inputScalars": "006F 0308 0301",
+      "folded": {
+        "text": "o",
+        "utf8Hex": "6f"
+      },
+      "foldedScalars": "006F"
+    },
+    {
+      "name": "filterKey-124",
+      "kind": "filterKey",
+      "input": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "inputScalars": "",
+      "folded": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "foldedScalars": ""
+    },
+    {
+      "name": "filterKey-125",
+      "kind": "filterKey",
+      "input": {
+        "text": " ",
+        "utf8Hex": "20"
+      },
+      "inputScalars": "0020",
+      "folded": {
+        "text": " ",
+        "utf8Hex": "20"
+      },
+      "foldedScalars": "0020"
+    },
+    {
+      "name": "characterSet-whitespacesAndNewlines",
+      "kind": "characterSet",
+      "set": "whitespacesAndNewlines",
+      "ranges": [
+        "0009-000D",
+        "0020",
+        "0085",
+        "00A0",
+        "1680",
+        "2000-200B",
+        "2028-2029",
+        "202F",
+        "205F",
+        "3000"
+      ]
+    },
+    {
+      "name": "characterSet-whitespaces",
+      "kind": "characterSet",
+      "set": "whitespaces",
+      "ranges": ["0009", "0020", "00A0", "1680", "2000-200B", "202F", "205F", "3000"]
+    },
+    {
+      "name": "characterSet-newlines",
+      "kind": "characterSet",
+      "set": "newlines",
+      "ranges": ["000A-000D", "0085", "2028-2029"]
+    }
+  ]
+}

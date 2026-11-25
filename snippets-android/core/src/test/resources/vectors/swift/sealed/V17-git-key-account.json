@@ -1,0 +1,80 @@
+{
+  "format": "snippets-swift-interop/V17-git-key-account/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "GitSyncKeyStore.Scope.account: \"git-library-v1-\" + hex(SHA-256(\"snippets-git-key-v1\" LF location LF refName LF lower(datasetID))[0..<16]) (brief 02 §6.2, brief 03 §2.12)",
+  "notes": ["snippets/Sync/GitSyncKeyStore.swift is compiled unmodified into the tool; no Keychain is touched."],
+  "cases": [
+    {
+      "name": "github-main",
+      "location": "github.com/example/snippets-library",
+      "refName": "refs/heads/main",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "preimageHex": "736e6970706574732d6769742d6b65792d76310a6769746875622e636f6d2f6578616d706c652f736e6970706574732d6c6962726172790a726566732f68656164732f6d61696e0a36313761303030312d303030302d343030302d383030302d303030303030303030306161",
+      "account": "git-library-v1-310262b0aa977c6556667daea9b29018"
+    },
+    {
+      "name": "github-other-branch",
+      "location": "github.com/example/snippets-library",
+      "refName": "refs/heads/snippets",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "preimageHex": "736e6970706574732d6769742d6b65792d76310a6769746875622e636f6d2f6578616d706c652f736e6970706574732d6c6962726172790a726566732f68656164732f736e6970706574730a36313761303030312d303030302d343030302d383030302d303030303030303030306161",
+      "account": "git-library-v1-bf1e84bbb5e369b1aee8f544aa7fb1b8"
+    },
+    {
+      "name": "github-other-dataset",
+      "location": "github.com/example/snippets-library",
+      "refName": "refs/heads/main",
+      "datasetID": "11111111-2222-4333-8444-555555555555",
+      "preimageHex": "736e6970706574732d6769742d6b65792d76310a6769746875622e636f6d2f6578616d706c652f736e6970706574732d6c6962726172790a726566732f68656164732f6d61696e0a31313131313131312d323232322d343333332d383434342d353535353535353535353535",
+      "account": "git-library-v1-997b8ea5c5f83155fd6570fc9c072ace"
+    },
+    {
+      "name": "gitea-nested-path",
+      "location": "git.example.org/team/sub/library",
+      "refName": "refs/heads/release/1.0",
+      "datasetID": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+      "preimageHex": "736e6970706574732d6769742d6b65792d76310a6769742e6578616d706c652e6f72672f7465616d2f7375622f6c6962726172790a726566732f68656164732f72656c656173652f312e300a61306231633264332d653466352d343630372d383839392d616162626363646465656666",
+      "account": "git-library-v1-bba758b48d106e45eada56cea594c033"
+    },
+    {
+      "name": "loopback",
+      "location": "127.0.0.1/library",
+      "refName": "refs/heads/main",
+      "datasetID": "00000000-0000-4000-8000-000000000001",
+      "preimageHex": "736e6970706574732d6769742d6b65792d76310a3132372e302e302e312f6c6962726172790a726566732f68656164732f6d61696e0a30303030303030302d303030302d343030302d383030302d303030303030303030303031",
+      "account": "git-library-v1-393993b01c4253c7dc081bec9d0c1f0a"
+    },
+    {
+      "name": "from-https-remote",
+      "remote": "https://GitHub.com/Example/Snippets-Library.git",
+      "branch": "main",
+      "location": "github.com/Example/Snippets-Library",
+      "refName": "refs/heads/main",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "account": "git-library-v1-ea88faf5a53fa1c3167b6d721227a65b"
+    },
+    {
+      "name": "from-scp-remote",
+      "remote": "git@github.com:Example/Snippets-Library.git",
+      "branch": "main",
+      "location": "github.com/Example/Snippets-Library",
+      "refName": "refs/heads/main",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "account": "git-library-v1-ea88faf5a53fa1c3167b6d721227a65b"
+    },
+    {
+      "name": "from-ssh-url-remote",
+      "remote": "ssh://git@GitHub.com:2222/Example/Snippets-Library.git/",
+      "branch": "main",
+      "location": "github.com/Example/Snippets-Library.git",
+      "refName": "refs/heads/main",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "account": "git-library-v1-a88e2dd4c30c8cff65c37a5804ebc0ea"
+    }
+  ]
+}

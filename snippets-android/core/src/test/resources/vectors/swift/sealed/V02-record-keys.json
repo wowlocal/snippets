@@ -1,0 +1,204 @@
+{
+  "format": "snippets-swift-interop/V02-record-keys/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "Keyring.recordKey(for:) and Keyring.contentHashKey raw bytes (HKDF-SHA256, brief 02 §1.2)",
+  "cases": [
+    {
+      "name": "recordKey-vault-11111111",
+      "kind": "recordKey",
+      "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "saltHex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "recordID": "11111111-2222-4333-8444-555555555555",
+      "uuid16Hex": "11111111222243338444555555555555",
+      "hkdfInfoHex": "736e69702e776972652e76317c11111111222243338444555555555555",
+      "keyHex": "eae66137530dbb34de1ef82424b62e9ba0f9339545928a54999ccbccb5ce6c9b"
+    },
+    {
+      "name": "recordKey-vault-a0b1c2d3",
+      "kind": "recordKey",
+      "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "saltHex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "recordID": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+      "uuid16Hex": "a0b1c2d3e4f546078899aabbccddeeff",
+      "hkdfInfoHex": "736e69702e776972652e76317ca0b1c2d3e4f546078899aabbccddeeff",
+      "keyHex": "9269cae3b0fd3f81a9a1a3a80228b3a6c23a2f16b030010813fd797825310047"
+    },
+    {
+      "name": "recordKey-vault-00000000",
+      "kind": "recordKey",
+      "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "saltHex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "recordID": "00000000-0000-4000-8000-000000000001",
+      "uuid16Hex": "00000000000040008000000000000001",
+      "hkdfInfoHex": "736e69702e776972652e76317c00000000000040008000000000000001",
+      "keyHex": "b2feaed4ea58fd0306cc12a72d09a28ea6be1a45097c1da07083061729747804"
+    },
+    {
+      "name": "recordKey-vault-ffffffff",
+      "kind": "recordKey",
+      "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "saltHex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "recordID": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+      "uuid16Hex": "ffffffffffff4fffbfffffffffffffff",
+      "hkdfInfoHex": "736e69702e776972652e76317cffffffffffff4fffbfffffffffffffff",
+      "keyHex": "c80cc3c948e4c47415c7777638faf5855318ad6d7a462e6df79f34f2d9020d1b"
+    },
+    {
+      "name": "contentHashKey-vault",
+      "kind": "contentHashKey",
+      "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "saltHex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "hkdfInfoHex": "736e69702e63686173682e7631",
+      "keyHex": "e069c8dcc7e17b15e48e2c90de3f90a3fd1c74f72be21dec03e1c003e2806e69"
+    },
+    {
+      "name": "recordKey-sync-11111111",
+      "kind": "recordKey",
+      "rootKeyHex": "9999999999999999999999999999999999999999999999999999999999999999",
+      "saltHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "recordID": "11111111-2222-4333-8444-555555555555",
+      "uuid16Hex": "11111111222243338444555555555555",
+      "hkdfInfoHex": "736e69702e776972652e76317c11111111222243338444555555555555",
+      "keyHex": "bfb19501bb18c986f4ab18beba1a087e93df6852289c2241c1024e1b47aa2142"
+    },
+    {
+      "name": "recordKey-sync-a0b1c2d3",
+      "kind": "recordKey",
+      "rootKeyHex": "9999999999999999999999999999999999999999999999999999999999999999",
+      "saltHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "recordID": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+      "uuid16Hex": "a0b1c2d3e4f546078899aabbccddeeff",
+      "hkdfInfoHex": "736e69702e776972652e76317ca0b1c2d3e4f546078899aabbccddeeff",
+      "keyHex": "7db438b7bed8e4558d8760062be4908c538b3707c79d297fdcfeec9d9ca980d4"
+    },
+    {
+      "name": "recordKey-sync-00000000",
+      "kind": "recordKey",
+      "rootKeyHex": "9999999999999999999999999999999999999999999999999999999999999999",
+      "saltHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "recordID": "00000000-0000-4000-8000-000000000001",
+      "uuid16Hex": "00000000000040008000000000000001",
+      "hkdfInfoHex": "736e69702e776972652e76317c00000000000040008000000000000001",
+      "keyHex": "af2cf3ca6806dbc267f0c238fd74c95ec8f8367b72a6ceba166b632fa7ce2e53"
+    },
+    {
+      "name": "recordKey-sync-ffffffff",
+      "kind": "recordKey",
+      "rootKeyHex": "9999999999999999999999999999999999999999999999999999999999999999",
+      "saltHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "recordID": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+      "uuid16Hex": "ffffffffffff4fffbfffffffffffffff",
+      "hkdfInfoHex": "736e69702e776972652e76317cffffffffffff4fffbfffffffffffffff",
+      "keyHex": "2e9616056227aa42ef9fc5f59ab3ac25b8c6b932f9441fafa49c30b2fdb4bb62"
+    },
+    {
+      "name": "contentHashKey-sync",
+      "kind": "contentHashKey",
+      "rootKeyHex": "9999999999999999999999999999999999999999999999999999999999999999",
+      "saltHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hkdfInfoHex": "736e69702e63686173682e7631",
+      "keyHex": "df661a9c3d94154ad495dc1f42c8ec0b901a1b794e66a6f7b320d5a213fa12ff"
+    },
+    {
+      "name": "recordKey-counting-11111111",
+      "kind": "recordKey",
+      "rootKeyHex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "recordID": "11111111-2222-4333-8444-555555555555",
+      "uuid16Hex": "11111111222243338444555555555555",
+      "hkdfInfoHex": "736e69702e776972652e76317c11111111222243338444555555555555",
+      "keyHex": "e1b6b40a0dce40d4cf63a4cf4a85412779bd5289abb7db34fc8d4ee1cfb28fdb"
+    },
+    {
+      "name": "recordKey-counting-a0b1c2d3",
+      "kind": "recordKey",
+      "rootKeyHex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "recordID": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+      "uuid16Hex": "a0b1c2d3e4f546078899aabbccddeeff",
+      "hkdfInfoHex": "736e69702e776972652e76317ca0b1c2d3e4f546078899aabbccddeeff",
+      "keyHex": "0a13307c2b65f86f383d9dce11201be8e77fe4eae86e120144a03567a7cfb5e8"
+    },
+    {
+      "name": "recordKey-counting-00000000",
+      "kind": "recordKey",
+      "rootKeyHex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "recordID": "00000000-0000-4000-8000-000000000001",
+      "uuid16Hex": "00000000000040008000000000000001",
+      "hkdfInfoHex": "736e69702e776972652e76317c00000000000040008000000000000001",
+      "keyHex": "a174c751ce02e41b787ec93341358d14eaf99d54c499abc746414899c2272adf"
+    },
+    {
+      "name": "recordKey-counting-ffffffff",
+      "kind": "recordKey",
+      "rootKeyHex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "recordID": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+      "uuid16Hex": "ffffffffffff4fffbfffffffffffffff",
+      "hkdfInfoHex": "736e69702e776972652e76317cffffffffffff4fffbfffffffffffffff",
+      "keyHex": "726f49e345d544d2f38f92dafbaeb315cd3798873a110e8e547557ddc2bab0e2"
+    },
+    {
+      "name": "contentHashKey-counting",
+      "kind": "contentHashKey",
+      "rootKeyHex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "saltHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "hkdfInfoHex": "736e69702e63686173682e7631",
+      "keyHex": "52fde9571ab185ac1c165bae0b84237bfc215b8db0b09ea26cde5d69122dc8d3"
+    },
+    {
+      "name": "recordKey-salt-16-bytes-11111111",
+      "kind": "recordKey",
+      "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "saltHex": "22222222222222222222222222222222",
+      "recordID": "11111111-2222-4333-8444-555555555555",
+      "uuid16Hex": "11111111222243338444555555555555",
+      "hkdfInfoHex": "736e69702e776972652e76317c11111111222243338444555555555555",
+      "keyHex": "57487c4a1245136cdefc48e6dd5e34f150adcfc263c392e4f6cd2571a132225b"
+    },
+    {
+      "name": "recordKey-salt-16-bytes-a0b1c2d3",
+      "kind": "recordKey",
+      "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "saltHex": "22222222222222222222222222222222",
+      "recordID": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+      "uuid16Hex": "a0b1c2d3e4f546078899aabbccddeeff",
+      "hkdfInfoHex": "736e69702e776972652e76317ca0b1c2d3e4f546078899aabbccddeeff",
+      "keyHex": "b4b32ccc2616e4cdd4a218fce86eb997df7beba627445bf750f074df079b94fe"
+    },
+    {
+      "name": "recordKey-salt-16-bytes-00000000",
+      "kind": "recordKey",
+      "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "saltHex": "22222222222222222222222222222222",
+      "recordID": "00000000-0000-4000-8000-000000000001",
+      "uuid16Hex": "00000000000040008000000000000001",
+      "hkdfInfoHex": "736e69702e776972652e76317c00000000000040008000000000000001",
+      "keyHex": "d4968c9a73e1330d5ac7458ba3cc518f4ddea231172c035f33b29c5f2d66fbcf"
+    },
+    {
+      "name": "recordKey-salt-16-bytes-ffffffff",
+      "kind": "recordKey",
+      "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "saltHex": "22222222222222222222222222222222",
+      "recordID": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+      "uuid16Hex": "ffffffffffff4fffbfffffffffffffff",
+      "hkdfInfoHex": "736e69702e776972652e76317cffffffffffff4fffbfffffffffffffff",
+      "keyHex": "e4c0f94683161d8aaefdbb72897477729fcfbb393b51cd26fc1006e84c64026f"
+    },
+    {
+      "name": "contentHashKey-salt-16-bytes",
+      "kind": "contentHashKey",
+      "rootKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "saltHex": "22222222222222222222222222222222",
+      "hkdfInfoHex": "736e69702e63686173682e7631",
+      "keyHex": "5b5e1dc298dfb599c3f90b8ee5fb6b30c8f90d9f4a8ab8b4f06af6eb69fe68dc"
+    }
+  ]
+}

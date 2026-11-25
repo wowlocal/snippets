@@ -1,0 +1,3036 @@
+{
+  "format": "snippets-swift-interop/L04-search/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "FuzzyMatch score and highlight ranges, FuzzyMatch membership, PreparedSubstringSearch, SnippetSearchSnapshot results and SnippetLibraryProjection tag list for a fixed library (brief 01 §6 Fuzzy match, Search index)",
+  "notes": ["matchedRangesUTF16 are [location, length] in UTF-16 units of the target. When several alignments reach the same score the highlighted path is not unique by contract (Swift's own tests accept any); score and matched are.", "Search has no ranking: results keep the input (display) order. searchMatchIDs is before the tag filter, resultIDs after. Tag keys are SnippetTagging.filterKey values.", "Locales are passed explicitly (en_US, tr_TR, az_AZ); the app passes the user's locale.", "Secure snippets enter the index as shells with empty content."],
+  "cases": [
+    {
+      "name": "fuzzy-0",
+      "kind": "fuzzy",
+      "query": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "target": {
+        "text": "anything",
+        "utf8Hex": "616e797468696e67"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "anything",
+        "utf8Hex": "616e797468696e67"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-1",
+      "kind": "fuzzy",
+      "query": {
+        "text": "a",
+        "utf8Hex": "61"
+      },
+      "target": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "locale": "en_US",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "fuzzy-2",
+      "kind": "fuzzy",
+      "query": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "target": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-3",
+      "kind": "fuzzy",
+      "query": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "target": {
+        "text": "Signature",
+        "utf8Hex": "5369676e6174757265"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 17,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "signature",
+        "utf8Hex": "7369676e6174757265"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-4",
+      "kind": "fuzzy",
+      "query": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "target": {
+        "text": "Email signature",
+        "utf8Hex": "456d61696c207369676e6174757265"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 12,
+      "matchedRangesUTF16": [
+        [6, 1],
+        [7, 1],
+        [8, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "email signature",
+        "utf8Hex": "656d61696c207369676e6174757265"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-5",
+      "kind": "fuzzy",
+      "query": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "target": {
+        "text": "design",
+        "utf8Hex": "64657369676e"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 9,
+      "matchedRangesUTF16": [
+        [2, 1],
+        [3, 1],
+        [4, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "design",
+        "utf8Hex": "64657369676e"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-6",
+      "kind": "fuzzy",
+      "query": {
+        "text": "es",
+        "utf8Hex": "6573"
+      },
+      "target": {
+        "text": "Email signature",
+        "utf8Hex": "456d61696c207369676e6174757265"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 13,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [6, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "email signature",
+        "utf8Hex": "656d61696c207369676e6174757265"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-7",
+      "kind": "fuzzy",
+      "query": {
+        "text": "ES",
+        "utf8Hex": "4553"
+      },
+      "target": {
+        "text": "email signature",
+        "utf8Hex": "656d61696c207369676e6174757265"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 13,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [6, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "email signature",
+        "utf8Hex": "656d61696c207369676e6174757265"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-8",
+      "kind": "fuzzy",
+      "query": {
+        "text": "prjal",
+        "utf8Hex": "70726a616c"
+      },
+      "target": {
+        "text": "Project Alpha",
+        "utf8Hex": "50726f6a65637420416c706861"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 20,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [3, 1],
+        [8, 1],
+        [9, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "project alpha",
+        "utf8Hex": "70726f6a65637420616c706861"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-9",
+      "kind": "fuzzy",
+      "query": {
+        "text": "pa",
+        "utf8Hex": "7061"
+      },
+      "target": {
+        "text": "Project Alpha",
+        "utf8Hex": "50726f6a65637420416c706861"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 13,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [8, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "project alpha",
+        "utf8Hex": "70726f6a65637420616c706861"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-10",
+      "kind": "fuzzy",
+      "query": {
+        "text": "pa",
+        "utf8Hex": "7061"
+      },
+      "target": {
+        "text": "papa",
+        "utf8Hex": "70617061"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 12,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "papa",
+        "utf8Hex": "70617061"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-11",
+      "kind": "fuzzy",
+      "query": {
+        "text": "abc",
+        "utf8Hex": "616263"
+      },
+      "target": {
+        "text": "a-b-c",
+        "utf8Hex": "612d622d63"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 17,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [2, 1],
+        [4, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "a-b-c",
+        "utf8Hex": "612d622d63"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-12",
+      "kind": "fuzzy",
+      "query": {
+        "text": "abc",
+        "utf8Hex": "616263"
+      },
+      "target": {
+        "text": "abc",
+        "utf8Hex": "616263"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 17,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "abc",
+        "utf8Hex": "616263"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-13",
+      "kind": "fuzzy",
+      "query": {
+        "text": "abc",
+        "utf8Hex": "616263"
+      },
+      "target": {
+        "text": "xabc",
+        "utf8Hex": "78616263"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 9,
+      "matchedRangesUTF16": [
+        [1, 1],
+        [2, 1],
+        [3, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "xabc",
+        "utf8Hex": "78616263"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-14",
+      "kind": "fuzzy",
+      "query": {
+        "text": "abc",
+        "utf8Hex": "616263"
+      },
+      "target": {
+        "text": "ab",
+        "utf8Hex": "6162"
+      },
+      "locale": "en_US",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "ab",
+        "utf8Hex": "6162"
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "fuzzy-15",
+      "kind": "fuzzy",
+      "query": {
+        "text": "abc",
+        "utf8Hex": "616263"
+      },
+      "target": {
+        "text": "acb",
+        "utf8Hex": "616362"
+      },
+      "locale": "en_US",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "acb",
+        "utf8Hex": "616362"
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "fuzzy-16",
+      "kind": "fuzzy",
+      "query": {
+        "text": "aaa",
+        "utf8Hex": "616161"
+      },
+      "target": {
+        "text": "aaaa",
+        "utf8Hex": "61616161"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 17,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "aaaa",
+        "utf8Hex": "61616161"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-17",
+      "kind": "fuzzy",
+      "query": {
+        "text": "aaaaaa",
+        "utf8Hex": "616161616161"
+      },
+      "target": {
+        "text": "a×256",
+        "utf8Hex": "61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 44,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1],
+        [3, 1],
+        [4, 1],
+        [5, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "a×256",
+        "utf8Hex": "61c397323536"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-18",
+      "kind": "fuzzy",
+      "query": {
+        "text": "ab",
+        "utf8Hex": "6162"
+      },
+      "target": {
+        "text": "a b a b",
+        "utf8Hex": "61206220612062"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 13,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [2, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "a b a b",
+        "utf8Hex": "61206220612062"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-19",
+      "kind": "fuzzy",
+      "query": {
+        "text": "ab",
+        "utf8Hex": "6162"
+      },
+      "target": {
+        "text": "ba ab",
+        "utf8Hex": "6261206162"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 7,
+      "matchedRangesUTF16": [
+        [3, 1],
+        [4, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "ba ab",
+        "utf8Hex": "6261206162"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-20",
+      "kind": "fuzzy",
+      "query": {
+        "text": "fb",
+        "utf8Hex": "6662"
+      },
+      "target": {
+        "text": "FooBar foo_bar fooBar",
+        "utf8Hex": "466f6f42617220666f6f5f62617220666f6f426172"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 13,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [11, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "foobar foo_bar foobar",
+        "utf8Hex": "666f6f62617220666f6f5f62617220666f6f626172"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-21",
+      "kind": "fuzzy",
+      "query": {
+        "text": "foo bar",
+        "utf8Hex": "666f6f20626172"
+      },
+      "target": {
+        "text": "foo bar",
+        "utf8Hex": "666f6f20626172"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 60,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1],
+        [3, 1],
+        [4, 1],
+        [5, 1],
+        [6, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "foo bar",
+        "utf8Hex": "666f6f20626172"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-22",
+      "kind": "fuzzy",
+      "query": {
+        "text": "foobar",
+        "utf8Hex": "666f6f626172"
+      },
+      "target": {
+        "text": "foo bar",
+        "utf8Hex": "666f6f20626172"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 29,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1],
+        [4, 1],
+        [5, 1],
+        [6, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "foo bar",
+        "utf8Hex": "666f6f20626172"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-23",
+      "kind": "fuzzy",
+      "query": {
+        "text": "f b",
+        "utf8Hex": "662062"
+      },
+      "target": {
+        "text": "foo bar",
+        "utf8Hex": "666f6f20626172"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 16,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [3, 1],
+        [4, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "foo bar",
+        "utf8Hex": "666f6f20626172"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-24",
+      "kind": "fuzzy",
+      "query": {
+        "text": "wifi",
+        "utf8Hex": "77696669"
+      },
+      "target": {
+        "text": "Wi-Fi password",
+        "utf8Hex": "57692d46692070617373776f7264"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 19,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [3, 1],
+        [4, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "wi-fi password",
+        "utf8Hex": "77692d66692070617373776f7264"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-25",
+      "kind": "fuzzy",
+      "query": {
+        "text": "w-f",
+        "utf8Hex": "772d66"
+      },
+      "target": {
+        "text": "Wi-Fi password",
+        "utf8Hex": "57692d46692070617373776f7264"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 16,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [2, 1],
+        [3, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "wi-fi password",
+        "utf8Hex": "77692d66692070617373776f7264"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-26",
+      "kind": "fuzzy",
+      "query": {
+        "text": "123",
+        "utf8Hex": "313233"
+      },
+      "target": {
+        "text": "a1b2c3",
+        "utf8Hex": "613162326333"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 3,
+      "matchedRangesUTF16": [
+        [1, 1],
+        [3, 1],
+        [5, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "a1b2c3",
+        "utf8Hex": "613162326333"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-27",
+      "kind": "fuzzy",
+      "query": {
+        "text": "a1",
+        "utf8Hex": "6131"
+      },
+      "target": {
+        "text": "A1 steak",
+        "utf8Hex": "413120737465616b"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 12,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "a1 steak",
+        "utf8Hex": "613120737465616b"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-28",
+      "kind": "fuzzy",
+      "query": {
+        "text": "cafe",
+        "utf8Hex": "63616665"
+      },
+      "target": {
+        "text": "Café crème",
+        "utf8Hex": "436166c3a9206372c3a86d65"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 24,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1],
+        [3, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "cafe creme",
+        "utf8Hex": "63616665206372656d65"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-29",
+      "kind": "fuzzy",
+      "query": {
+        "text": "café",
+        "utf8Hex": "636166c3a9"
+      },
+      "target": {
+        "text": "Cafe creme",
+        "utf8Hex": "43616665206372656d65"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 24,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1],
+        [3, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "cafe creme",
+        "utf8Hex": "63616665206372656d65"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-30",
+      "kind": "fuzzy",
+      "query": {
+        "text": "creme",
+        "utf8Hex": "6372656d65"
+      },
+      "target": {
+        "text": "Café crème",
+        "utf8Hex": "436166c3a9206372c3a86d65"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 28,
+      "matchedRangesUTF16": [
+        [5, 1],
+        [6, 1],
+        [7, 1],
+        [8, 1],
+        [9, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "cafe creme",
+        "utf8Hex": "63616665206372656d65"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-31",
+      "kind": "fuzzy",
+      "query": {
+        "text": "cc",
+        "utf8Hex": "6363"
+      },
+      "target": {
+        "text": "Café crème",
+        "utf8Hex": "436166c3a9206372c3a86d65"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 13,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [5, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "cafe creme",
+        "utf8Hex": "63616665206372656d65"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-32",
+      "kind": "fuzzy",
+      "query": {
+        "text": "ss",
+        "utf8Hex": "7373"
+      },
+      "target": {
+        "text": "Straße",
+        "utf8Hex": "53747261c39f65"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 10,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [4, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "strasse",
+        "utf8Hex": "73747261737365"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-33",
+      "kind": "fuzzy",
+      "query": {
+        "text": "strasse",
+        "utf8Hex": "73747261737365"
+      },
+      "target": {
+        "text": "Straße",
+        "utf8Hex": "53747261c39f65"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 57,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1],
+        [3, 1],
+        [4, 1],
+        [4, 1],
+        [5, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "strasse",
+        "utf8Hex": "73747261737365"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-34",
+      "kind": "fuzzy",
+      "query": {
+        "text": "straße",
+        "utf8Hex": "73747261c39f65"
+      },
+      "target": {
+        "text": "Strasse",
+        "utf8Hex": "53747261737365"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 57,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1],
+        [3, 1],
+        [4, 1],
+        [5, 1],
+        [6, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "strasse",
+        "utf8Hex": "73747261737365"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-35",
+      "kind": "fuzzy",
+      "query": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "target": {
+        "text": "é",
+        "utf8Hex": "65cc81"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 9,
+      "matchedRangesUTF16": [
+        [0, 2]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-36",
+      "kind": "fuzzy",
+      "query": {
+        "text": "é",
+        "utf8Hex": "c3a9"
+      },
+      "target": {
+        "text": "é",
+        "utf8Hex": "65cc81"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 9,
+      "matchedRangesUTF16": [
+        [0, 2]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-37",
+      "kind": "fuzzy",
+      "query": {
+        "text": "fi",
+        "utf8Hex": "6669"
+      },
+      "target": {
+        "text": "ﬁle",
+        "utf8Hex": "efac816c65"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 12,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [0, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "file",
+        "utf8Hex": "66696c65"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-38",
+      "kind": "fuzzy",
+      "query": {
+        "text": "file",
+        "utf8Hex": "66696c65"
+      },
+      "target": {
+        "text": "ﬁle",
+        "utf8Hex": "efac816c65"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 24,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [0, 1],
+        [1, 1],
+        [2, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "file",
+        "utf8Hex": "66696c65"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-39",
+      "kind": "fuzzy",
+      "query": {
+        "text": "日本",
+        "utf8Hex": "e697a5e69cac"
+      },
+      "target": {
+        "text": "日本語のテキスト",
+        "utf8Hex": "e697a5e69cace8aa9ee381aee38386e382ade382b9e38388"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 12,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "日本語のテキスト",
+        "utf8Hex": "e697a5e69cace8aa9ee381aee38386e382ade382b9e38388"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-40",
+      "kind": "fuzzy",
+      "query": {
+        "text": "語テ",
+        "utf8Hex": "e8aa9ee38386"
+      },
+      "target": {
+        "text": "日本語のテキスト",
+        "utf8Hex": "e697a5e69cace8aa9ee381aee38386e382ade382b9e38388"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 2,
+      "matchedRangesUTF16": [
+        [2, 1],
+        [4, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "日本語のテキスト",
+        "utf8Hex": "e697a5e69cace8aa9ee381aee38386e382ade382b9e38388"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-41",
+      "kind": "fuzzy",
+      "query": {
+        "text": "key",
+        "utf8Hex": "6b6579"
+      },
+      "target": {
+        "text": "🔑 key",
+        "utf8Hex": "f09f9491206b6579"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 12,
+      "matchedRangesUTF16": [
+        [3, 1],
+        [4, 1],
+        [5, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "🔑 key",
+        "utf8Hex": "f09f9491206b6579"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-42",
+      "kind": "fuzzy",
+      "query": {
+        "text": "🔑",
+        "utf8Hex": "f09f9491"
+      },
+      "target": {
+        "text": "🔑 key 🔑",
+        "utf8Hex": "f09f9491206b657920f09f9491"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 9,
+      "matchedRangesUTF16": [
+        [0, 2]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "🔑 key 🔑",
+        "utf8Hex": "f09f9491206b657920f09f9491"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-43",
+      "kind": "fuzzy",
+      "query": {
+        "text": "👩",
+        "utf8Hex": "f09f91a9"
+      },
+      "target": {
+        "text": "👩🏽\u200d💻 dev",
+        "utf8Hex": "f09f91a9f09f8fbde2808df09f92bb20646576"
+      },
+      "locale": "en_US",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "👩🏽\u200d💻 dev",
+        "utf8Hex": "f09f91a9f09f8fbde2808df09f92bb20646576"
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "fuzzy-44",
+      "kind": "fuzzy",
+      "query": {
+        "text": "dev",
+        "utf8Hex": "646576"
+      },
+      "target": {
+        "text": "👩🏽\u200d💻 dev",
+        "utf8Hex": "f09f91a9f09f8fbde2808df09f92bb20646576"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 12,
+      "matchedRangesUTF16": [
+        [8, 1],
+        [9, 1],
+        [10, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "👩🏽\u200d💻 dev",
+        "utf8Hex": "f09f91a9f09f8fbde2808df09f92bb20646576"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-45",
+      "kind": "fuzzy",
+      "query": {
+        "text": "ab",
+        "utf8Hex": "6162"
+      },
+      "target": {
+        "text": "a\r\nb",
+        "utf8Hex": "610d0a62"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 13,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [3, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "a\r\nb",
+        "utf8Hex": "610d0a62"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-46",
+      "kind": "fuzzy",
+      "query": {
+        "text": "b",
+        "utf8Hex": "62"
+      },
+      "target": {
+        "text": "a\r\nb",
+        "utf8Hex": "610d0a62"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 4,
+      "matchedRangesUTF16": [
+        [3, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "a\r\nb",
+        "utf8Hex": "610d0a62"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-47",
+      "kind": "fuzzy",
+      "query": {
+        "text": "привет",
+        "utf8Hex": "d0bfd180d0b8d0b2d0b5d182"
+      },
+      "target": {
+        "text": "Привет мир",
+        "utf8Hex": "d09fd180d0b8d0b2d0b5d18220d0bcd0b8d180"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 44,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1],
+        [3, 1],
+        [4, 1],
+        [5, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "привет мир",
+        "utf8Hex": "d0bfd180d0b8d0b2d0b5d18220d0bcd0b8d180"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-48",
+      "kind": "fuzzy",
+      "query": {
+        "text": "пм",
+        "utf8Hex": "d0bfd0bc"
+      },
+      "target": {
+        "text": "Привет мир",
+        "utf8Hex": "d09fd180d0b8d0b2d0b5d18220d0bcd0b8d180"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 13,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [7, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "привет мир",
+        "utf8Hex": "d0bfd180d0b8d0b2d0b5d18220d0bcd0b8d180"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-49",
+      "kind": "fuzzy",
+      "query": {
+        "text": "i",
+        "utf8Hex": "69"
+      },
+      "target": {
+        "text": "İstanbul",
+        "utf8Hex": "c4b07374616e62756c"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 9,
+      "matchedRangesUTF16": [
+        [0, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "istanbul",
+        "utf8Hex": "697374616e62756c"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-50",
+      "kind": "fuzzy",
+      "query": {
+        "text": "ı",
+        "utf8Hex": "c4b1"
+      },
+      "target": {
+        "text": "ISTANBUL",
+        "utf8Hex": "495354414e42554c"
+      },
+      "locale": "en_US",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "istanbul",
+        "utf8Hex": "697374616e62756c"
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "fuzzy-51",
+      "kind": "fuzzy",
+      "query": {
+        "text": "i",
+        "utf8Hex": "69"
+      },
+      "target": {
+        "text": "ISTANBUL",
+        "utf8Hex": "495354414e42554c"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 9,
+      "matchedRangesUTF16": [
+        [0, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "istanbul",
+        "utf8Hex": "697374616e62756c"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-52",
+      "kind": "fuzzy",
+      "query": {
+        "text": "i",
+        "utf8Hex": "69"
+      },
+      "target": {
+        "text": "İstanbul",
+        "utf8Hex": "c4b07374616e62756c"
+      },
+      "locale": "tr_TR",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "ıstanbul",
+        "utf8Hex": "c4b17374616e62756c"
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "fuzzy-53",
+      "kind": "fuzzy",
+      "query": {
+        "text": "ı",
+        "utf8Hex": "c4b1"
+      },
+      "target": {
+        "text": "ISTANBUL",
+        "utf8Hex": "495354414e42554c"
+      },
+      "locale": "tr_TR",
+      "matched": true,
+      "score": 9,
+      "matchedRangesUTF16": [
+        [0, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "ıstanbul",
+        "utf8Hex": "c4b17374616e62756c"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-54",
+      "kind": "fuzzy",
+      "query": {
+        "text": "i",
+        "utf8Hex": "69"
+      },
+      "target": {
+        "text": "ISTANBUL",
+        "utf8Hex": "495354414e42554c"
+      },
+      "locale": "tr_TR",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "ıstanbul",
+        "utf8Hex": "c4b17374616e62756c"
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "fuzzy-55",
+      "kind": "fuzzy",
+      "query": {
+        "text": "I",
+        "utf8Hex": "49"
+      },
+      "target": {
+        "text": "ıstanbul",
+        "utf8Hex": "c4b17374616e62756c"
+      },
+      "locale": "tr_TR",
+      "matched": true,
+      "score": 9,
+      "matchedRangesUTF16": [
+        [0, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "ıstanbul",
+        "utf8Hex": "c4b17374616e62756c"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-56",
+      "kind": "fuzzy",
+      "query": {
+        "text": "title",
+        "utf8Hex": "7469746c65"
+      },
+      "target": {
+        "text": "TITLE",
+        "utf8Hex": "5449544c45"
+      },
+      "locale": "tr_TR",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "tıtle",
+        "utf8Hex": "74c4b1746c65"
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "fuzzy-57",
+      "kind": "fuzzy",
+      "query": {
+        "text": "title",
+        "utf8Hex": "7469746c65"
+      },
+      "target": {
+        "text": "TITLE",
+        "utf8Hex": "5449544c45"
+      },
+      "locale": "az_AZ",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "tıtle",
+        "utf8Hex": "74c4b1746c65"
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "fuzzy-58",
+      "kind": "fuzzy",
+      "query": {
+        "text": "a.b",
+        "utf8Hex": "612e62"
+      },
+      "target": {
+        "text": "a.b.c",
+        "utf8Hex": "612e622e63"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 20,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "a.b.c",
+        "utf8Hex": "612e622e63"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-59",
+      "kind": "fuzzy",
+      "query": {
+        "text": "{d",
+        "utf8Hex": "7b64"
+      },
+      "target": {
+        "text": "{date}",
+        "utf8Hex": "7b646174657d"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 15,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "{date}",
+        "utf8Hex": "7b646174657d"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-60",
+      "kind": "fuzzy",
+      "query": {
+        "text": "xyz",
+        "utf8Hex": "78797a"
+      },
+      "target": {
+        "text": "The quick brown fox",
+        "utf8Hex": "54686520717569636b2062726f776e20666f78"
+      },
+      "locale": "en_US",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "the quick brown fox",
+        "utf8Hex": "74686520717569636b2062726f776e20666f78"
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "fuzzy-61",
+      "kind": "fuzzy",
+      "query": {
+        "text": "tqbf",
+        "utf8Hex": "74716266"
+      },
+      "target": {
+        "text": "The quick brown fox",
+        "utf8Hex": "54686520717569636b2062726f776e20666f78"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 21,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [4, 1],
+        [10, 1],
+        [16, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "the quick brown fox",
+        "utf8Hex": "74686520717569636b2062726f776e20666f78"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-62",
+      "kind": "fuzzy",
+      "query": {
+        "text": "the",
+        "utf8Hex": "746865"
+      },
+      "target": {
+        "text": "The quick brown fox",
+        "utf8Hex": "54686520717569636b2062726f776e20666f78"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 17,
+      "matchedRangesUTF16": [
+        [0, 1],
+        [1, 1],
+        [2, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "the quick brown fox",
+        "utf8Hex": "74686520717569636b2062726f776e20666f78"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-63",
+      "kind": "fuzzy",
+      "query": {
+        "text": "ox",
+        "utf8Hex": "6f78"
+      },
+      "target": {
+        "text": "The quick brown fox",
+        "utf8Hex": "54686520717569636b2062726f776e20666f78"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 4,
+      "matchedRangesUTF16": [
+        [17, 1],
+        [18, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "the quick brown fox",
+        "utf8Hex": "74686520717569636b2062726f776e20666f78"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-64",
+      "kind": "fuzzy",
+      "query": {
+        "text": "quick fox",
+        "utf8Hex": "717569636b20666f78"
+      },
+      "target": {
+        "text": "The quick brown fox",
+        "utf8Hex": "54686520717569636b2062726f776e20666f78"
+      },
+      "locale": "en_US",
+      "matched": true,
+      "score": 51,
+      "matchedRangesUTF16": [
+        [4, 1],
+        [5, 1],
+        [6, 1],
+        [7, 1],
+        [8, 1],
+        [9, 1],
+        [16, 1],
+        [17, 1],
+        [18, 1]
+      ],
+      "subsequenceMatches": true,
+      "foldedTarget": {
+        "text": "the quick brown fox",
+        "utf8Hex": "74686520717569636b2062726f776e20666f78"
+      },
+      "matchesFoldedTarget": true
+    },
+    {
+      "name": "fuzzy-65",
+      "kind": "fuzzy",
+      "query": {
+        "text": "  sig",
+        "utf8Hex": "2020736967"
+      },
+      "target": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "locale": "en_US",
+      "matched": false,
+      "score": 0,
+      "matchedRangesUTF16": [],
+      "subsequenceMatches": false,
+      "foldedTarget": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "matchesFoldedTarget": false
+    },
+    {
+      "name": "substring-0",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "cafe creme",
+        "utf8Hex": "63616665206372656d65"
+      },
+      "needle": {
+        "text": "cafe",
+        "utf8Hex": "63616665"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-1",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "cafe creme",
+        "utf8Hex": "63616665206372656d65"
+      },
+      "needle": {
+        "text": "CAFE",
+        "utf8Hex": "43414645"
+      },
+      "contains": false,
+      "swiftStringContains": false
+    },
+    {
+      "name": "substring-2",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "cafe creme",
+        "utf8Hex": "63616665206372656d65"
+      },
+      "needle": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "contains": false,
+      "swiftStringContains": false
+    },
+    {
+      "name": "substring-3",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "needle": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "contains": false,
+      "swiftStringContains": false
+    },
+    {
+      "name": "substring-4",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "needle": {
+        "text": "a",
+        "utf8Hex": "61"
+      },
+      "contains": false,
+      "swiftStringContains": false
+    },
+    {
+      "name": "substring-5",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "école",
+        "utf8Hex": "65cc81636f6c65"
+      },
+      "needle": {
+        "text": "é",
+        "utf8Hex": "c3a9"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-6",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "école",
+        "utf8Hex": "c3a9636f6c65"
+      },
+      "needle": {
+        "text": "é",
+        "utf8Hex": "65cc81"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-7",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "école",
+        "utf8Hex": "c3a9636f6c65"
+      },
+      "needle": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-8",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "école",
+        "utf8Hex": "65cc81636f6c65"
+      },
+      "needle": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-9",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "a\r\nb",
+        "utf8Hex": "610d0a62"
+      },
+      "needle": {
+        "text": "\r",
+        "utf8Hex": "0d"
+      },
+      "contains": false,
+      "swiftStringContains": false
+    },
+    {
+      "name": "substring-10",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "a\r\nb",
+        "utf8Hex": "610d0a62"
+      },
+      "needle": {
+        "text": "\n",
+        "utf8Hex": "0a"
+      },
+      "contains": false,
+      "swiftStringContains": false
+    },
+    {
+      "name": "substring-11",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "a\r\nb",
+        "utf8Hex": "610d0a62"
+      },
+      "needle": {
+        "text": "\r\n",
+        "utf8Hex": "0d0a"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-12",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "a\nb",
+        "utf8Hex": "610a62"
+      },
+      "needle": {
+        "text": "\n",
+        "utf8Hex": "0a"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-13",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "👩🏽\u200d💻 dev",
+        "utf8Hex": "f09f91a9f09f8fbde2808df09f92bb20646576"
+      },
+      "needle": {
+        "text": "👩",
+        "utf8Hex": "f09f91a9"
+      },
+      "contains": false,
+      "swiftStringContains": false
+    },
+    {
+      "name": "substring-14",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "👩🏽\u200d💻 dev",
+        "utf8Hex": "f09f91a9f09f8fbde2808df09f92bb20646576"
+      },
+      "needle": {
+        "text": "👩🏽\u200d💻",
+        "utf8Hex": "f09f91a9f09f8fbde2808df09f92bb"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-15",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "kelvin K",
+        "utf8Hex": "6b656c76696e20e284aa"
+      },
+      "needle": {
+        "text": "k",
+        "utf8Hex": "6b"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-16",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "kelvin K",
+        "utf8Hex": "6b656c76696e20e284aa"
+      },
+      "needle": {
+        "text": "K",
+        "utf8Hex": "4b"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-17",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "abc",
+        "utf8Hex": "616263"
+      },
+      "needle": {
+        "text": "abcd",
+        "utf8Hex": "61626364"
+      },
+      "contains": false,
+      "swiftStringContains": false
+    },
+    {
+      "name": "substring-18",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "abcabc",
+        "utf8Hex": "616263616263"
+      },
+      "needle": {
+        "text": "cab",
+        "utf8Hex": "636162"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-19",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "日本語",
+        "utf8Hex": "e697a5e69cace8aa9e"
+      },
+      "needle": {
+        "text": "本",
+        "utf8Hex": "e69cac"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-20",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "a/b",
+        "utf8Hex": "612f62"
+      },
+      "needle": {
+        "text": "/",
+        "utf8Hex": "2f"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "substring-21",
+      "kind": "preparedSubstring",
+      "field": {
+        "text": "tab\there",
+        "utf8Hex": "7461620968657265"
+      },
+      "needle": {
+        "text": "\t",
+        "utf8Hex": "09"
+      },
+      "contains": true,
+      "swiftStringContains": true
+    },
+    {
+      "name": "search-library",
+      "kind": "search-library",
+      "locale": "en_US",
+      "ordinary": [
+        {
+          "id": "5ea4c400-0000-4000-8000-000000000001",
+          "name": "Email signature",
+          "keyword": "sig",
+          "content": "Best regards,\nMichael",
+          "contentUtf8Hex": "4265737420726567617264732c0a4d69636861656c",
+          "tags": ["Work", "mail"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          },
+          "updatedAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "5ea4c400-0000-4000-8000-000000000002",
+          "name": "Project Alpha kickoff",
+          "keyword": "pa",
+          "content": "Agenda for the kickoff meeting",
+          "contentUtf8Hex": "4167656e646120666f7220746865206b69636b6f6666206d656574696e67",
+          "tags": ["Work", "Projects"],
+          "isEnabled": true,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "4056800000000000",
+            "swift": "90.0"
+          },
+          "updatedAt": {
+            "bits": "4056800000000000",
+            "swift": "90.0"
+          }
+        },
+        {
+          "id": "5ea4c400-0000-4000-8000-000000000003",
+          "name": "",
+          "keyword": "",
+          "content": "Project Alpha notes in the body only\nsecond line",
+          "contentUtf8Hex": "50726f6a65637420416c706861206e6f74657320696e2074686520626f6479206f6e6c790a7365636f6e64206c696e65",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4054000000000000",
+            "swift": "80.0"
+          },
+          "updatedAt": {
+            "bits": "4054000000000000",
+            "swift": "80.0"
+          }
+        },
+        {
+          "id": "5ea4c400-0000-4000-8000-000000000004",
+          "name": "Café order",
+          "keyword": "\\cafe",
+          "content": "Un café crème, s'il vous plaît",
+          "contentUtf8Hex": "556e20636166c3a9206372c3a86d652c207327696c20766f757320706c61c3ae74",
+          "tags": ["Français", "food"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4051800000000000",
+            "swift": "70.0"
+          },
+          "updatedAt": {
+            "bits": "4051800000000000",
+            "swift": "70.0"
+          }
+        },
+        {
+          "id": "5ea4c400-0000-4000-8000-000000000005",
+          "name": "Straße & Hausnummer",
+          "keyword": "addr",
+          "content": "Musterstraße 1\n12345 Berlin",
+          "contentUtf8Hex": "4d757374657273747261c39f6520310a3132333435204265726c696e",
+          "tags": ["home", "Adresse"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "404e000000000000",
+            "swift": "60.0"
+          },
+          "updatedAt": {
+            "bits": "404e000000000000",
+            "swift": "60.0"
+          }
+        },
+        {
+          "id": "5ea4c400-0000-4000-8000-000000000006",
+          "name": "日本語メモ",
+          "keyword": "jp",
+          "content": "これは日本語のテキストです",
+          "contentUtf8Hex": "e38193e3828ce381afe697a5e69cace8aa9ee381aee38386e382ade382b9e38388e381a7e38199",
+          "tags": ["日本語"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4049000000000000",
+            "swift": "50.0"
+          },
+          "updatedAt": {
+            "bits": "4049000000000000",
+            "swift": "50.0"
+          }
+        },
+        {
+          "id": "5ea4c400-0000-4000-8000-000000000007",
+          "name": "Temporary Password",
+          "keyword": "tp",
+          "content": "TP-{date:yyyyMMdd}-{clipboard}",
+          "contentUtf8Hex": "54502d7b646174653a797979794d4d64647d2d7b636c6970626f6172647d",
+          "tags": ["work"],
+          "isEnabled": true,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "4044000000000000",
+            "swift": "40.0"
+          },
+          "updatedAt": {
+            "bits": "4044000000000000",
+            "swift": "40.0"
+          }
+        },
+        {
+          "id": "5ea4c400-0000-4000-8000-000000000008",
+          "name": "git commands",
+          "keyword": "gitc",
+          "content": "git status\r\ngit log --oneline",
+          "contentUtf8Hex": "676974207374617475730d0a676974206c6f67202d2d6f6e656c696e65",
+          "tags": ["dev", "Work"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "403e000000000000",
+            "swift": "30.0"
+          },
+          "updatedAt": {
+            "bits": "403e000000000000",
+            "swift": "30.0"
+          }
+        },
+        {
+          "id": "5ea4c400-0000-4000-8000-000000000009",
+          "name": "  ",
+          "keyword": "ws",
+          "content": "   \n\tIndented first line",
+          "contentUtf8Hex": "2020200a09496e64656e746564206669727374206c696e65",
+          "tags": ["misc"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4034000000000000",
+            "swift": "20.0"
+          },
+          "updatedAt": {
+            "bits": "4034000000000000",
+            "swift": "20.0"
+          }
+        }
+      ],
+      "secureShells": [
+        {
+          "id": "5ea4c400-0000-4000-8000-00000000000a",
+          "name": "Wi-Fi password",
+          "keyword": "wifi",
+          "content": "",
+          "contentUtf8Hex": "",
+          "tags": ["home", "Secret"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4057c00000000000",
+            "swift": "95.0"
+          },
+          "updatedAt": {
+            "bits": "4057c00000000000",
+            "swift": "95.0"
+          }
+        },
+        {
+          "id": "5ea4c400-0000-4000-8000-00000000000b",
+          "name": "Bank PIN",
+          "keyword": "pin",
+          "content": "",
+          "contentUtf8Hex": "",
+          "tags": ["Secret"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4024000000000000",
+            "swift": "10.0"
+          },
+          "updatedAt": {
+            "bits": "4024000000000000",
+            "swift": "10.0"
+          }
+        }
+      ],
+      "displayOrderIDs": [
+        "5ea4c400-0000-4000-8000-000000000002",
+        "5ea4c400-0000-4000-8000-000000000007",
+        "5ea4c400-0000-4000-8000-000000000001",
+        "5ea4c400-0000-4000-8000-00000000000a",
+        "5ea4c400-0000-4000-8000-000000000003",
+        "5ea4c400-0000-4000-8000-000000000004",
+        "5ea4c400-0000-4000-8000-000000000005",
+        "5ea4c400-0000-4000-8000-000000000006",
+        "5ea4c400-0000-4000-8000-000000000008",
+        "5ea4c400-0000-4000-8000-000000000009",
+        "5ea4c400-0000-4000-8000-00000000000b"
+      ],
+      "projectionSortedIDs": [
+        "5ea4c400-0000-4000-8000-000000000002",
+        "5ea4c400-0000-4000-8000-000000000007",
+        "5ea4c400-0000-4000-8000-000000000001",
+        "5ea4c400-0000-4000-8000-00000000000a",
+        "5ea4c400-0000-4000-8000-000000000003",
+        "5ea4c400-0000-4000-8000-000000000004",
+        "5ea4c400-0000-4000-8000-000000000005",
+        "5ea4c400-0000-4000-8000-000000000006",
+        "5ea4c400-0000-4000-8000-000000000008",
+        "5ea4c400-0000-4000-8000-000000000009",
+        "5ea4c400-0000-4000-8000-00000000000b"
+      ],
+      "tagUsage": [
+        {
+          "tag": "Adresse",
+          "count": 1
+        },
+        {
+          "tag": "dev",
+          "count": 1
+        },
+        {
+          "tag": "food",
+          "count": 1
+        },
+        {
+          "tag": "Français",
+          "count": 1
+        },
+        {
+          "tag": "home",
+          "count": 2
+        },
+        {
+          "tag": "mail",
+          "count": 1
+        },
+        {
+          "tag": "misc",
+          "count": 1
+        },
+        {
+          "tag": "Projects",
+          "count": 1
+        },
+        {
+          "tag": "Secret",
+          "count": 2
+        },
+        {
+          "tag": "Work",
+          "count": 4
+        },
+        {
+          "tag": "日本語",
+          "count": 1
+        }
+      ],
+      "tagKeys": [
+        "adresse",
+        "dev",
+        "food",
+        "francais",
+        "home",
+        "mail",
+        "misc",
+        "projects",
+        "secret",
+        "work",
+        "日本語"
+      ]
+    },
+    {
+      "name": "search-0",
+      "kind": "search",
+      "query": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "normalizedQuery": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-1",
+      "kind": "search",
+      "query": {
+        "text": "SIG",
+        "utf8Hex": "534947"
+      },
+      "normalizedQuery": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-2",
+      "kind": "search",
+      "query": {
+        "text": "  sig  ",
+        "utf8Hex": "20207369672020"
+      },
+      "normalizedQuery": {
+        "text": "sig",
+        "utf8Hex": "736967"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-3",
+      "kind": "search",
+      "query": {
+        "text": "signature",
+        "utf8Hex": "7369676e6174757265"
+      },
+      "normalizedQuery": {
+        "text": "signature",
+        "utf8Hex": "7369676e6174757265"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-4",
+      "kind": "search",
+      "query": {
+        "text": "regards",
+        "utf8Hex": "72656761726473"
+      },
+      "normalizedQuery": {
+        "text": "regards",
+        "utf8Hex": "72656761726473"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-5",
+      "kind": "search",
+      "query": {
+        "text": "prjal",
+        "utf8Hex": "70726a616c"
+      },
+      "normalizedQuery": {
+        "text": "prjal",
+        "utf8Hex": "70726a616c"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000002"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000002"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-6",
+      "kind": "search",
+      "query": {
+        "text": "project alpha",
+        "utf8Hex": "70726f6a65637420616c706861"
+      },
+      "normalizedQuery": {
+        "text": "project alpha",
+        "utf8Hex": "70726f6a65637420616c706861"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000003"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000003"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-7",
+      "kind": "search",
+      "query": {
+        "text": "alpha",
+        "utf8Hex": "616c706861"
+      },
+      "normalizedQuery": {
+        "text": "alpha",
+        "utf8Hex": "616c706861"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000003"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000003"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-8",
+      "kind": "search",
+      "query": {
+        "text": "pa",
+        "utf8Hex": "7061"
+      },
+      "normalizedQuery": {
+        "text": "pa",
+        "utf8Hex": "7061"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000007", "5ea4c400-0000-4000-8000-00000000000a"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000007", "5ea4c400-0000-4000-8000-00000000000a"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-9",
+      "kind": "search",
+      "query": {
+        "text": "cafe",
+        "utf8Hex": "63616665"
+      },
+      "normalizedQuery": {
+        "text": "cafe",
+        "utf8Hex": "63616665"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000004"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000004"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-10",
+      "kind": "search",
+      "query": {
+        "text": "café",
+        "utf8Hex": "636166c3a9"
+      },
+      "normalizedQuery": {
+        "text": "cafe",
+        "utf8Hex": "63616665"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000004"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000004"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-11",
+      "kind": "search",
+      "query": {
+        "text": "creme",
+        "utf8Hex": "6372656d65"
+      },
+      "normalizedQuery": {
+        "text": "creme",
+        "utf8Hex": "6372656d65"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000004"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000004"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-12",
+      "kind": "search",
+      "query": {
+        "text": "strasse",
+        "utf8Hex": "73747261737365"
+      },
+      "normalizedQuery": {
+        "text": "strasse",
+        "utf8Hex": "73747261737365"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000005"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000005"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-13",
+      "kind": "search",
+      "query": {
+        "text": "straße",
+        "utf8Hex": "73747261c39f65"
+      },
+      "normalizedQuery": {
+        "text": "strasse",
+        "utf8Hex": "73747261737365"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000005"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000005"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-14",
+      "kind": "search",
+      "query": {
+        "text": "musterstrasse",
+        "utf8Hex": "6d757374657273747261737365"
+      },
+      "normalizedQuery": {
+        "text": "musterstrasse",
+        "utf8Hex": "6d757374657273747261737365"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000005"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000005"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-15",
+      "kind": "search",
+      "query": {
+        "text": "hausnummer",
+        "utf8Hex": "686175736e756d6d6572"
+      },
+      "normalizedQuery": {
+        "text": "hausnummer",
+        "utf8Hex": "686175736e756d6d6572"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000005"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000005"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-16",
+      "kind": "search",
+      "query": {
+        "text": "日本",
+        "utf8Hex": "e697a5e69cac"
+      },
+      "normalizedQuery": {
+        "text": "日本",
+        "utf8Hex": "e697a5e69cac"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000006"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000006"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-17",
+      "kind": "search",
+      "query": {
+        "text": "テキスト",
+        "utf8Hex": "e38386e382ade382b9e38388"
+      },
+      "normalizedQuery": {
+        "text": "テキスト",
+        "utf8Hex": "e38386e382ade382b9e38388"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000006"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000006"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-18",
+      "kind": "search",
+      "query": {
+        "text": "wifi",
+        "utf8Hex": "77696669"
+      },
+      "normalizedQuery": {
+        "text": "wifi",
+        "utf8Hex": "77696669"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-00000000000a"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-00000000000a"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-19",
+      "kind": "search",
+      "query": {
+        "text": "wi-fi",
+        "utf8Hex": "77692d6669"
+      },
+      "normalizedQuery": {
+        "text": "wi-fi",
+        "utf8Hex": "77692d6669"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-00000000000a"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-00000000000a"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-20",
+      "kind": "search",
+      "query": {
+        "text": "secret",
+        "utf8Hex": "736563726574"
+      },
+      "normalizedQuery": {
+        "text": "secret",
+        "utf8Hex": "736563726574"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-00000000000a", "5ea4c400-0000-4000-8000-00000000000b"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-00000000000a", "5ea4c400-0000-4000-8000-00000000000b"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-21",
+      "kind": "search",
+      "query": {
+        "text": "pin",
+        "utf8Hex": "70696e"
+      },
+      "normalizedQuery": {
+        "text": "pin",
+        "utf8Hex": "70696e"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-00000000000b"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-00000000000b"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-22",
+      "kind": "search",
+      "query": {
+        "text": "work",
+        "utf8Hex": "776f726b"
+      },
+      "normalizedQuery": {
+        "text": "work",
+        "utf8Hex": "776f726b"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000007", "5ea4c400-0000-4000-8000-000000000001", "5ea4c400-0000-4000-8000-000000000008"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000007", "5ea4c400-0000-4000-8000-000000000001", "5ea4c400-0000-4000-8000-000000000008"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-23",
+      "kind": "search",
+      "query": {
+        "text": "wrk",
+        "utf8Hex": "77726b"
+      },
+      "normalizedQuery": {
+        "text": "wrk",
+        "utf8Hex": "77726b"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000007", "5ea4c400-0000-4000-8000-000000000001", "5ea4c400-0000-4000-8000-000000000008"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000007", "5ea4c400-0000-4000-8000-000000000001", "5ea4c400-0000-4000-8000-000000000008"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-24",
+      "kind": "search",
+      "query": {
+        "text": "{date",
+        "utf8Hex": "7b64617465"
+      },
+      "normalizedQuery": {
+        "text": "{date",
+        "utf8Hex": "7b64617465"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000007"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000007"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-25",
+      "kind": "search",
+      "query": {
+        "text": "clipboard",
+        "utf8Hex": "636c6970626f617264"
+      },
+      "normalizedQuery": {
+        "text": "clipboard",
+        "utf8Hex": "636c6970626f617264"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000007"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000007"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-26",
+      "kind": "search",
+      "query": {
+        "text": "git log",
+        "utf8Hex": "676974206c6f67"
+      },
+      "normalizedQuery": {
+        "text": "git log",
+        "utf8Hex": "676974206c6f67"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000008"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000008"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-27",
+      "kind": "search",
+      "query": {
+        "text": "status\r\ngit",
+        "utf8Hex": "7374617475730d0a676974"
+      },
+      "normalizedQuery": {
+        "text": "status\r\ngit",
+        "utf8Hex": "7374617475730d0a676974"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000008"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000008"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-28",
+      "kind": "search",
+      "query": {
+        "text": "status\ngit",
+        "utf8Hex": "7374617475730a676974"
+      },
+      "normalizedQuery": {
+        "text": "status\ngit",
+        "utf8Hex": "7374617475730a676974"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": [],
+      "resultIDs": [],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-29",
+      "kind": "search",
+      "query": {
+        "text": "indented",
+        "utf8Hex": "696e64656e746564"
+      },
+      "normalizedQuery": {
+        "text": "indented",
+        "utf8Hex": "696e64656e746564"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000009"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000009"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-30",
+      "kind": "search",
+      "query": {
+        "text": "untitled",
+        "utf8Hex": "756e7469746c6564"
+      },
+      "normalizedQuery": {
+        "text": "untitled",
+        "utf8Hex": "756e7469746c6564"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": [],
+      "resultIDs": [],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-31",
+      "kind": "search",
+      "query": {
+        "text": "zzz",
+        "utf8Hex": "7a7a7a"
+      },
+      "normalizedQuery": {
+        "text": "zzz",
+        "utf8Hex": "7a7a7a"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": [],
+      "resultIDs": [],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-32",
+      "kind": "search",
+      "query": {
+        "text": "a",
+        "utf8Hex": "61"
+      },
+      "normalizedQuery": {
+        "text": "a",
+        "utf8Hex": "61"
+      },
+      "activeTagKeys": [],
+      "searchMatchIDs": [
+        "5ea4c400-0000-4000-8000-000000000002",
+        "5ea4c400-0000-4000-8000-000000000007",
+        "5ea4c400-0000-4000-8000-000000000001",
+        "5ea4c400-0000-4000-8000-00000000000a",
+        "5ea4c400-0000-4000-8000-000000000003",
+        "5ea4c400-0000-4000-8000-000000000004",
+        "5ea4c400-0000-4000-8000-000000000005",
+        "5ea4c400-0000-4000-8000-000000000008",
+        "5ea4c400-0000-4000-8000-00000000000b"
+      ],
+      "resultIDs": [
+        "5ea4c400-0000-4000-8000-000000000002",
+        "5ea4c400-0000-4000-8000-000000000007",
+        "5ea4c400-0000-4000-8000-000000000001",
+        "5ea4c400-0000-4000-8000-00000000000a",
+        "5ea4c400-0000-4000-8000-000000000003",
+        "5ea4c400-0000-4000-8000-000000000004",
+        "5ea4c400-0000-4000-8000-000000000005",
+        "5ea4c400-0000-4000-8000-000000000008",
+        "5ea4c400-0000-4000-8000-00000000000b"
+      ],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-33",
+      "kind": "search",
+      "query": {
+        "text": " ",
+        "utf8Hex": "20"
+      },
+      "normalizedQuery": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "activeTagKeys": [],
+      "resultIDs": [
+        "5ea4c400-0000-4000-8000-000000000002",
+        "5ea4c400-0000-4000-8000-000000000007",
+        "5ea4c400-0000-4000-8000-000000000001",
+        "5ea4c400-0000-4000-8000-00000000000a",
+        "5ea4c400-0000-4000-8000-000000000003",
+        "5ea4c400-0000-4000-8000-000000000004",
+        "5ea4c400-0000-4000-8000-000000000005",
+        "5ea4c400-0000-4000-8000-000000000006",
+        "5ea4c400-0000-4000-8000-000000000008",
+        "5ea4c400-0000-4000-8000-000000000009",
+        "5ea4c400-0000-4000-8000-00000000000b"
+      ],
+      "usesEmptySearchPath": true
+    },
+    {
+      "name": "search-34",
+      "kind": "search",
+      "query": {
+        "text": "mail",
+        "utf8Hex": "6d61696c"
+      },
+      "normalizedQuery": {
+        "text": "mail",
+        "utf8Hex": "6d61696c"
+      },
+      "activeTagKeys": ["work"],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-35",
+      "kind": "search",
+      "query": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "normalizedQuery": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "activeTagKeys": ["work"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000007", "5ea4c400-0000-4000-8000-000000000001", "5ea4c400-0000-4000-8000-000000000008"],
+      "usesEmptySearchPath": true
+    },
+    {
+      "name": "search-36",
+      "kind": "search",
+      "query": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "normalizedQuery": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "activeTagKeys": ["work", "mail"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000001"],
+      "usesEmptySearchPath": true
+    },
+    {
+      "name": "search-37",
+      "kind": "search",
+      "query": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "normalizedQuery": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "activeTagKeys": ["secret"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-00000000000a", "5ea4c400-0000-4000-8000-00000000000b"],
+      "usesEmptySearchPath": true
+    },
+    {
+      "name": "search-38",
+      "kind": "search",
+      "query": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "normalizedQuery": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "activeTagKeys": ["home", "secret"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-00000000000a"],
+      "usesEmptySearchPath": true
+    },
+    {
+      "name": "search-39",
+      "kind": "search",
+      "query": {
+        "text": "p",
+        "utf8Hex": "70"
+      },
+      "normalizedQuery": {
+        "text": "p",
+        "utf8Hex": "70"
+      },
+      "activeTagKeys": ["work"],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000007", "5ea4c400-0000-4000-8000-00000000000a", "5ea4c400-0000-4000-8000-000000000003", "5ea4c400-0000-4000-8000-000000000004", "5ea4c400-0000-4000-8000-000000000006", "5ea4c400-0000-4000-8000-00000000000b"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000007"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-40",
+      "kind": "search",
+      "query": {
+        "text": "alpha",
+        "utf8Hex": "616c706861"
+      },
+      "normalizedQuery": {
+        "text": "alpha",
+        "utf8Hex": "616c706861"
+      },
+      "activeTagKeys": ["projects"],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000003"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000002"],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-41",
+      "kind": "search",
+      "query": {
+        "text": "alpha",
+        "utf8Hex": "616c706861"
+      },
+      "normalizedQuery": {
+        "text": "alpha",
+        "utf8Hex": "616c706861"
+      },
+      "activeTagKeys": ["home"],
+      "searchMatchIDs": ["5ea4c400-0000-4000-8000-000000000002", "5ea4c400-0000-4000-8000-000000000003"],
+      "resultIDs": [],
+      "usesEmptySearchPath": false
+    },
+    {
+      "name": "search-42",
+      "kind": "search",
+      "query": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "normalizedQuery": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "activeTagKeys": ["francais"],
+      "resultIDs": ["5ea4c400-0000-4000-8000-000000000004"],
+      "usesEmptySearchPath": true
+    },
+    {
+      "name": "search-43",
+      "kind": "search",
+      "query": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "normalizedQuery": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "activeTagKeys": ["missing"],
+      "resultIDs": [],
+      "usesEmptySearchPath": true
+    },
+    {
+      "name": "search-44",
+      "kind": "search",
+      "query": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "normalizedQuery": {
+        "text": "e",
+        "utf8Hex": "65"
+      },
+      "activeTagKeys": ["日本語"],
+      "searchMatchIDs": [
+        "5ea4c400-0000-4000-8000-000000000002",
+        "5ea4c400-0000-4000-8000-000000000007",
+        "5ea4c400-0000-4000-8000-000000000001",
+        "5ea4c400-0000-4000-8000-00000000000a",
+        "5ea4c400-0000-4000-8000-000000000003",
+        "5ea4c400-0000-4000-8000-000000000004",
+        "5ea4c400-0000-4000-8000-000000000005",
+        "5ea4c400-0000-4000-8000-000000000008",
+        "5ea4c400-0000-4000-8000-000000000009",
+        "5ea4c400-0000-4000-8000-00000000000b"
+      ],
+      "resultIDs": [],
+      "usesEmptySearchPath": false
+    }
+  ]
+}

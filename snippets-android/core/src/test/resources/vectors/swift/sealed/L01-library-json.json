@@ -1,0 +1,1257 @@
+{
+  "format": "snippets-swift-interop/L01-library-json/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "SnippetLibraryCodec.encode / encodeCollection bytes and digest, SnippetLibraryCodec.decode outcomes, SnippetDisplayOrder, Snippet.displayName / contentFirstLine, VaultRecord.shell (brief 01 §2 `snippets.json`, §3)",
+  "notes": ["snippets.json is device-local: Kotlin needs to parse the same, not to write the same bytes. The bytes are recorded so drift in Foundation's printer is visible. Note `\\/` for a slash, the blank line inside an empty array, uppercase ids, and that dates are JSON numbers (seconds since 2001).", "decode errors are all SnippetLibraryCodec.Failure.unreadable; the codec does not say why.", "A secure snippet never has a row in snippets.json. `secure-shell-from-vault-record` shows the content-free Snippet the rest of the app sees for one."],
+  "cases": [
+    {
+      "name": "encode-array",
+      "kind": "encode",
+      "shape": "array",
+      "snippets": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "Email signature",
+          "keyword": "sig",
+          "content": "Best regards,\nMichael\n",
+          "contentUtf8Hex": "4265737420726567617264732c0a4d69636861656c0a",
+          "tags": ["Work", "mail"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c80cf540400000",
+            "swift": "807004800.5"
+          },
+          "updatedAt": {
+            "bits": "41c8377bf80fcd68",
+            "swift": "812578800.123456"
+          }
+        },
+        {
+          "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+          "name": "Café \"quoted\" \\ name ☕",
+          "keyword": "café",
+          "content": "Tab\there\r\nCRLF, control \u0001, slash a/b, emoji 🔑, é, \u2028line sep, \u007fDEL",
+          "contentUtf8Hex": "54616209686572650d0a43524c462c20636f6e74726f6c20012c20736c61736820612f622c20656d6f6a6920f09f94912c2065cc812c20e280a86c696e65207365702c207f44454c",
+          "tags": ["Ünïcode", "日本語", "two words"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380000000",
+            "swift": "700000000.0"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "name": "",
+          "keyword": "",
+          "content": "",
+          "contentUtf8Hex": "",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "0000000000000000",
+            "swift": "0.0"
+          },
+          "updatedAt": {
+            "bits": "8000000000000000",
+            "swift": "-0.0"
+          }
+        },
+        {
+          "id": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "name": "Odd dates",
+          "keyword": "odd",
+          "content": "{date:yyyy-MM-dd} {clipboard}",
+          "contentUtf8Hex": "7b646174653a797979792d4d4d2d64647d207b636c6970626f6172647d",
+          "tags": ["x"],
+          "isEnabled": true,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "c17e285004000000",
+            "swift": "-31622400.25"
+          },
+          "updatedAt": {
+            "bits": "4341c37937e08000",
+            "swift": "1e+16"
+          }
+        }
+      ],
+      "fileText": "[\n  {\n    \"content\" : \"Best regards,\\nMichael\\n\",\n    \"createdAt\" : 807004800.5,\n    \"id\" : \"11111111-2222-4333-8444-555555555555\",\n    \"isEnabled\" : true,\n    \"isPinned\" : false,\n    \"keyword\" : \"sig\",\n    \"name\" : \"Email signature\",\n    \"tags\" : [\n      \"Work\",\n      \"mail\"\n    ],\n    \"updatedAt\" : 812578800.123456\n  },\n  {\n    \"content\" : \"Tab\\there\\r\\nCRLF, control \\u0001, slash a\\/b, emoji 🔑, é, \u2028line sep, \u007fDEL\",\n    \"createdAt\" : 700000000,\n    \"id\" : \"A0B1C2D3-E4F5-4607-8899-AABBCCDDEEFF\",\n    \"isEnabled\" : false,\n    \"isPinned\" : true,\n    \"keyword\" : \"café\",\n    \"name\" : \"Café \\\"quoted\\\" \\\\ name ☕\",\n    \"tags\" : [\n      \"Ünïcode\",\n      \"日本語\",\n      \"two words\"\n    ],\n    \"updatedAt\" : 700000123.5\n  },\n  {\n    \"content\" : \"\",\n    \"createdAt\" : 0,\n    \"id\" : \"00000000-0000-4000-8000-000000000001\",\n    \"isEnabled\" : true,\n    \"isPinned\" : false,\n    \"keyword\" : \"\",\n    \"name\" : \"\",\n    \"tags\" : [\n\n    ],\n    \"updatedAt\" : -0\n  },\n  {\n    \"content\" : \"{date:yyyy-MM-dd} {clipboard}\",\n    \"createdAt\" : -31622400.25,\n    \"id\" : \"FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF\",\n    \"isEnabled\" : true,\n    \"isPinned\" : true,\n    \"keyword\" : \"odd\",\n    \"name\" : \"Odd dates\",\n    \"tags\" : [\n      \"x\"\n    ],\n    \"updatedAt\" : 1e+16\n  }\n]",
+      "fileHex": "5b0a20207b0a2020202022636f6e74656e7422203a20224265737420726567617264732c5c6e4d69636861656c5c6e222c0a202020202263726561746564417422203a203830373030343830302e352c0a2020202022696422203a202231313131313131312d323232322d343333332d383434342d353535353535353535353535222c0a20202020226973456e61626c656422203a20747275652c0a2020202022697350696e6e656422203a2066616c73652c0a20202020226b6579776f726422203a2022736967222c0a20202020226e616d6522203a2022456d61696c207369676e6174757265222c0a20202020227461677322203a205b0a20202020202022576f726b222c0a202020202020226d61696c220a202020205d2c0a202020202275706461746564417422203a203831323537383830302e3132333435360a20207d2c0a20207b0a2020202022636f6e74656e7422203a20225461625c74686572655c725c6e43524c462c20636f6e74726f6c205c75303030312c20736c61736820615c2f622c20656d6f6a6920f09f94912c2065cc812c20e280a86c696e65207365702c207f44454c222c0a202020202263726561746564417422203a203730303030303030302c0a2020202022696422203a202241304231433244332d453446352d343630372d383839392d414142424343444445454646222c0a20202020226973456e61626c656422203a2066616c73652c0a2020202022697350696e6e656422203a20747275652c0a20202020226b6579776f726422203a2022636166c3a9222c0a20202020226e616d6522203a2022436166c3a9205c2271756f7465645c22205c5c206e616d6520e29895222c0a20202020227461677322203a205b0a20202020202022c39c6ec3af636f6465222c0a20202020202022e697a5e69cace8aa9e222c0a2020202020202274776f20776f726473220a202020205d2c0a202020202275706461746564417422203a203730303030303132332e350a20207d2c0a20207b0a2020202022636f6e74656e7422203a2022222c0a202020202263726561746564417422203a20302c0a2020202022696422203a202230303030303030302d303030302d343030302d383030302d303030303030303030303031222c0a20202020226973456e61626c656422203a20747275652c0a2020202022697350696e6e656422203a2066616c73652c0a20202020226b6579776f726422203a2022222c0a20202020226e616d6522203a2022222c0a20202020227461677322203a205b0a0a202020205d2c0a202020202275706461746564417422203a202d300a20207d2c0a20207b0a2020202022636f6e74656e7422203a20227b646174653a797979792d4d4d2d64647d207b636c6970626f6172647d222c0a202020202263726561746564417422203a202d33313632323430302e32352c0a2020202022696422203a202246464646464646462d464646462d344646462d424646462d464646464646464646464646222c0a20202020226973456e61626c656422203a20747275652c0a2020202022697350696e6e656422203a20747275652c0a20202020226b6579776f726422203a20226f6464222c0a20202020226e616d6522203a20224f6464206461746573222c0a20202020227461677322203a205b0a2020202020202278220a202020205d2c0a202020202275706461746564417422203a2031652b31360a20207d0a5d",
+      "digest": "1b43cac251fbe904b380ae04d92d9909d5c5beb93adce048a0f3bf68fb193639"
+    },
+    {
+      "name": "encode-collection",
+      "kind": "encode",
+      "shape": "collection",
+      "snippets": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "Email signature",
+          "keyword": "sig",
+          "content": "Best regards,\nMichael\n",
+          "contentUtf8Hex": "4265737420726567617264732c0a4d69636861656c0a",
+          "tags": ["Work", "mail"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c80cf540400000",
+            "swift": "807004800.5"
+          },
+          "updatedAt": {
+            "bits": "41c8377bf80fcd68",
+            "swift": "812578800.123456"
+          }
+        },
+        {
+          "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+          "name": "Café \"quoted\" \\ name ☕",
+          "keyword": "café",
+          "content": "Tab\there\r\nCRLF, control \u0001, slash a/b, emoji 🔑, é, \u2028line sep, \u007fDEL",
+          "contentUtf8Hex": "54616209686572650d0a43524c462c20636f6e74726f6c20012c20736c61736820612f622c20656d6f6a6920f09f94912c2065cc812c20e280a86c696e65207365702c207f44454c",
+          "tags": ["Ünïcode", "日本語", "two words"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380000000",
+            "swift": "700000000.0"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "name": "",
+          "keyword": "",
+          "content": "",
+          "contentUtf8Hex": "",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "0000000000000000",
+            "swift": "0.0"
+          },
+          "updatedAt": {
+            "bits": "8000000000000000",
+            "swift": "-0.0"
+          }
+        },
+        {
+          "id": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "name": "Odd dates",
+          "keyword": "odd",
+          "content": "{date:yyyy-MM-dd} {clipboard}",
+          "contentUtf8Hex": "7b646174653a797979792d4d4d2d64647d207b636c6970626f6172647d",
+          "tags": ["x"],
+          "isEnabled": true,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "c17e285004000000",
+            "swift": "-31622400.25"
+          },
+          "updatedAt": {
+            "bits": "4341c37937e08000",
+            "swift": "1e+16"
+          }
+        }
+      ],
+      "fileText": "{\n  \"snippets\" : [\n    {\n      \"content\" : \"Best regards,\\nMichael\\n\",\n      \"createdAt\" : 807004800.5,\n      \"id\" : \"11111111-2222-4333-8444-555555555555\",\n      \"isEnabled\" : true,\n      \"isPinned\" : false,\n      \"keyword\" : \"sig\",\n      \"name\" : \"Email signature\",\n      \"tags\" : [\n        \"Work\",\n        \"mail\"\n      ],\n      \"updatedAt\" : 812578800.123456\n    },\n    {\n      \"content\" : \"Tab\\there\\r\\nCRLF, control \\u0001, slash a\\/b, emoji 🔑, é, \u2028line sep, \u007fDEL\",\n      \"createdAt\" : 700000000,\n      \"id\" : \"A0B1C2D3-E4F5-4607-8899-AABBCCDDEEFF\",\n      \"isEnabled\" : false,\n      \"isPinned\" : true,\n      \"keyword\" : \"café\",\n      \"name\" : \"Café \\\"quoted\\\" \\\\ name ☕\",\n      \"tags\" : [\n        \"Ünïcode\",\n        \"日本語\",\n        \"two words\"\n      ],\n      \"updatedAt\" : 700000123.5\n    },\n    {\n      \"content\" : \"\",\n      \"createdAt\" : 0,\n      \"id\" : \"00000000-0000-4000-8000-000000000001\",\n      \"isEnabled\" : true,\n      \"isPinned\" : false,\n      \"keyword\" : \"\",\n      \"name\" : \"\",\n      \"tags\" : [\n\n      ],\n      \"updatedAt\" : -0\n    },\n    {\n      \"content\" : \"{date:yyyy-MM-dd} {clipboard}\",\n      \"createdAt\" : -31622400.25,\n      \"id\" : \"FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF\",\n      \"isEnabled\" : true,\n      \"isPinned\" : true,\n      \"keyword\" : \"odd\",\n      \"name\" : \"Odd dates\",\n      \"tags\" : [\n        \"x\"\n      ],\n      \"updatedAt\" : 1e+16\n    }\n  ]\n}",
+      "fileHex": "7b0a202022736e69707065747322203a205b0a202020207b0a20202020202022636f6e74656e7422203a20224265737420726567617264732c5c6e4d69636861656c5c6e222c0a2020202020202263726561746564417422203a203830373030343830302e352c0a20202020202022696422203a202231313131313131312d323232322d343333332d383434342d353535353535353535353535222c0a202020202020226973456e61626c656422203a20747275652c0a20202020202022697350696e6e656422203a2066616c73652c0a202020202020226b6579776f726422203a2022736967222c0a202020202020226e616d6522203a2022456d61696c207369676e6174757265222c0a202020202020227461677322203a205b0a202020202020202022576f726b222c0a2020202020202020226d61696c220a2020202020205d2c0a2020202020202275706461746564417422203a203831323537383830302e3132333435360a202020207d2c0a202020207b0a20202020202022636f6e74656e7422203a20225461625c74686572655c725c6e43524c462c20636f6e74726f6c205c75303030312c20736c61736820615c2f622c20656d6f6a6920f09f94912c2065cc812c20e280a86c696e65207365702c207f44454c222c0a2020202020202263726561746564417422203a203730303030303030302c0a20202020202022696422203a202241304231433244332d453446352d343630372d383839392d414142424343444445454646222c0a202020202020226973456e61626c656422203a2066616c73652c0a20202020202022697350696e6e656422203a20747275652c0a202020202020226b6579776f726422203a2022636166c3a9222c0a202020202020226e616d6522203a2022436166c3a9205c2271756f7465645c22205c5c206e616d6520e29895222c0a202020202020227461677322203a205b0a202020202020202022c39c6ec3af636f6465222c0a202020202020202022e697a5e69cace8aa9e222c0a20202020202020202274776f20776f726473220a2020202020205d2c0a2020202020202275706461746564417422203a203730303030303132332e350a202020207d2c0a202020207b0a20202020202022636f6e74656e7422203a2022222c0a2020202020202263726561746564417422203a20302c0a20202020202022696422203a202230303030303030302d303030302d343030302d383030302d303030303030303030303031222c0a202020202020226973456e61626c656422203a20747275652c0a20202020202022697350696e6e656422203a2066616c73652c0a202020202020226b6579776f726422203a2022222c0a202020202020226e616d6522203a2022222c0a202020202020227461677322203a205b0a0a2020202020205d2c0a2020202020202275706461746564417422203a202d300a202020207d2c0a202020207b0a20202020202022636f6e74656e7422203a20227b646174653a797979792d4d4d2d64647d207b636c6970626f6172647d222c0a2020202020202263726561746564417422203a202d33313632323430302e32352c0a20202020202022696422203a202246464646464646462d464646462d344646462d424646462d464646464646464646464646222c0a202020202020226973456e61626c656422203a20747275652c0a20202020202022697350696e6e656422203a20747275652c0a202020202020226b6579776f726422203a20226f6464222c0a202020202020226e616d6522203a20224f6464206461746573222c0a202020202020227461677322203a205b0a20202020202020202278220a2020202020205d2c0a2020202020202275706461746564417422203a2031652b31360a202020207d0a20205d0a7d",
+      "digest": "0fed69a1e547ebf62ebc3d23d19f78766a14b8cae67b21b9beee528c1ac360a5"
+    },
+    {
+      "name": "encode-empty-array",
+      "kind": "encode",
+      "shape": "array",
+      "snippets": [],
+      "fileText": "[\n\n]",
+      "fileHex": "5b0a0a5d",
+      "digest": "ace810d7e2cbb4f8c40ce09dc8e191ae466adb4e1a7d49c59f2215b411d38b05"
+    },
+    {
+      "name": "decode-full-record",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":[\"t\"],\"isEnabled\":false,\"isPinned\":true,\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c2274616773223a5b2274225d2c226973456e61626c6564223a66616c73652c22697350696e6e6564223a747275652c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "3242ec1d6228dfe205e29cfda3c07e5f6eef14622e8711b7a6f9319b3f9b19ee",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["t"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-collection-shape",
+      "kind": "decode",
+      "fileText": "{\"snippets\":[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":[\"t\"],\"isEnabled\":false,\"isPinned\":true,\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]}",
+      "fileHex": "7b22736e697070657473223a5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c2274616773223a5b2274225d2c226973456e61626c6564223a66616c73652c22697350696e6e6564223a747275652c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d7d",
+      "digest": "7bbe5933b1cb25e8c86597ea1348ce5f6523fc03ace9faf8f1f336d6c756a88c",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["t"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-collection-with-extra-top-level-keys",
+      "kind": "decode",
+      "fileText": "{\"version\":3,\"snippets\":[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":[\"t\"],\"isEnabled\":false,\"isPinned\":true,\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]}",
+      "fileHex": "7b2276657273696f6e223a332c22736e697070657473223a5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c2274616773223a5b2274225d2c226973456e61626c6564223a66616c73652c22697350696e6e6564223a747275652c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d7d",
+      "digest": "b14bda330dd230c0da0dd68d67a6f61a9c2f60555226981af4f345e070b318f0",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["t"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-lowercase-id",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"a0b1c2d3-e4f5-4607-8899-aabbccddeeff\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2261306231633264332d653466352d343630372d383839392d616162626363646465656666222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "384018703bae67ef092fd574852ccc91ad1883b12081162736aaafd9d6a3fcb6",
+      "ok": [
+        {
+          "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-optional-fields-absent-except-dates",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "e8c32fb3cd29db4660467e1f8b5d1bfe3dd2438a09f1c4b9a48e82311194e7c6",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-only-createdAt",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a357d5d",
+      "digest": "4aac5554e330575ada75d97a4578813e14c83b1123ac0c2df07be3a398616d2e",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4014000000000000",
+            "swift": "5.0"
+          },
+          "updatedAt": {
+            "bits": "4014000000000000",
+            "swift": "5.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-unknown-keys-ignored",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5,\"color\":\"red\",\"x\":{\"a\":1}}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e352c22636f6c6f72223a22726564222c2278223a7b2261223a317d7d5d",
+      "digest": "b71768b3d12e815ce5f629dd6488139fabfa54d2ba596e0bb112ae1931712a89",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-tags-normalised-on-decode",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5,\"tags\":[\"  Work \",\"work\",\"WÖRK\",\"two   words\",\"\",\"Two\\nWords\"]}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e352c2274616773223a5b222020576f726b20222c22776f726b222c2257c396524b222c2274776f202020776f726473222c22222c2254776f5c6e576f726473225d7d5d",
+      "digest": "6f61f118baa6f7896b949953a71a5ed00d7a7d7e06091c2fbc92624b59727343",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["Work", "two words"],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-keyword-not-sanitised-on-decode",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"  n  \",\"keyword\":\" \\\\my key \",\"content\":\"c\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a2220206e2020222c226b6579776f7264223a22205c5c6d79206b657920222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "900d2e7dc35fae727b7fe49b0a3ecd61ba4b006237e18d791041e3208052ddf4",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "  n  ",
+          "keyword": " \\my key ",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-integer-dates",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":700000000,\"updatedAt\":700000001}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302c22757064617465644174223a3730303030303030317d5d",
+      "digest": "21123b545b78474ec5686b36328d0804506af2d0123c06dfb19395c21ee17bd6",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c4dc9380000000",
+            "swift": "700000000.0"
+          },
+          "updatedAt": {
+            "bits": "41c4dc9380800000",
+            "swift": "700000001.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-exponent-dates",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":7e8,\"updatedAt\":7.000001235e+8}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3765382c22757064617465644174223a372e303030303031323335652b387d5d",
+      "digest": "cfd1262cef207607015066502d04678233948b7726f76bbbc5195016577ee932",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c4dc9380000000",
+            "swift": "700000000.0"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-null-optional-fields",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":null,\"isEnabled\":null,\"isPinned\":null,\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c2274616773223a6e756c6c2c226973456e61626c6564223a6e756c6c2c22697350696e6e6564223a6e756c6c2c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "90b3a89d84acbdf07809127b0fe6824aac2efdc2105afabfbcba06eb9516028a",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-duplicate-ids-accepted-by-codec",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":[\"t\"],\"isEnabled\":false,\"isPinned\":true,\"createdAt\":700000000.25,\"updatedAt\":700000123.5},{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":[\"t\"],\"isEnabled\":false,\"isPinned\":true,\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c2274616773223a5b2274225d2c226973456e61626c6564223a66616c73652c22697350696e6e6564223a747275652c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d2c7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c2274616773223a5b2274225d2c226973456e61626c6564223a66616c73652c22697350696e6e6564223a747275652c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "2a4ba822109ec10e1bf3db11664cc91d462d78978b4bc3abb1ea4464dd1914a9",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["t"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        },
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["t"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-escapes-and-unicode",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"a\\/b \\u00e9 \\ud83d\\udd11\",\"keyword\":\"k\",\"content\":\"l1\\nl2\\ttab\\\\\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a22615c2f62205c7530306539205c75643833645c7564643131222c226b6579776f7264223a226b222c22636f6e74656e74223a226c315c6e6c325c747461625c5c222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "05021dc4f57b3c3e8c2a87c58763adda1d5262133eae993595c27178915f56dd",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "a/b é 🔑",
+          "keyword": "k",
+          "content": "l1\nl2\ttab\\",
+          "contentUtf8Hex": "6c310a6c32097461625c",
+          "tags": [],
+          "isEnabled": true,
+          "isPinned": false,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-empty-array",
+      "kind": "decode",
+      "fileText": "[]",
+      "fileHex": "5b5d",
+      "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "ok": []
+    },
+    {
+      "name": "decode-empty-collection",
+      "kind": "decode",
+      "fileText": "{\"snippets\":[]}",
+      "fileHex": "7b22736e697070657473223a5b5d7d",
+      "digest": "fca491ce8afb2434b2e7eb613bd48a57b855aa798ec4d60d6fc0f7996d66320d",
+      "ok": []
+    },
+    {
+      "name": "decode-whitespace-only-array",
+      "kind": "decode",
+      "fileText": " [ ] \n",
+      "fileHex": "205b205d200a",
+      "digest": "e373359a3cdfa5d034cf958b276c2af35876684c1d73b59c80610e5e5b37a1c4",
+      "ok": []
+    },
+    {
+      "name": "decode-missing-name",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "12bfaa1abfcb288419bb4a8ffb74acd493168a9f1a4bc4582c6be2813e0153f4",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-missing-content",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "a69a54e6dc5ad49867aec4a93100521a6a72152fa68001cba6ad6e379131ea38",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-missing-id",
+      "kind": "decode",
+      "fileText": "[{\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "0439af1813f35a7d400e2304bcc69d9ab71b1f6d09db1f48b16081828306aced",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-id-not-uuid",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"1\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "a186c523a60d6d96b0a33d8fed9eea8d5972931287616802ddcd4a5da21176ea",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-id-without-hyphens",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111222243338444555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a223131313131313131323232323433333338343434353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "159f7bd2214f37d5ef8fd7558bb30ddd3b07c135ff15ef967d87d1227d7916dc",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-name-is-number",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":1,\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a312c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "196699a713c1c2b174f885c50751692923dbddeda1caec4dcd1a3a60f5c803c2",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-tags-is-string",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":\"work\",\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c2274616773223a22776f726b222c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "d514b1a8e5902a6becc2072d49e99f1810cb5517b2a65f3e935fcc9a6243ab3a",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-flag-is-number",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"isEnabled\":1,\"createdAt\":700000000.25,\"updatedAt\":700000123.5}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c226973456e61626c6564223a312c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d5d",
+      "digest": "6ca441e8b4824a0801ce8ed4867de8d124297e33d2ec45bf1787f46534f428eb",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-date-is-iso-string",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"createdAt\":\"2026-07-29T08:00:00Z\"}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c22637265617465644174223a22323032362d30372d32395430383a30303a30305a227d5d",
+      "digest": "98642658aed68aa04eafe7e914f0cbad4e813d4694a77be611ef145f5b809688",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-one-bad-element-fails-all",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":[\"t\"],\"isEnabled\":false,\"isPinned\":true,\"createdAt\":700000000.25,\"updatedAt\":700000123.5},{\"name\":\"n\"}]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c2274616773223a5b2274225d2c226973456e61626c6564223a66616c73652c22697350696e6e6564223a747275652c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d2c7b226e616d65223a226e227d5d",
+      "digest": "3b7beb8fe8e527395d271fde02d4b716e3952d701f96b0ed6819d6c531ac47af",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-raycast-shape-not-accepted",
+      "kind": "decode",
+      "fileText": "[{\"name\":\"n\",\"text\":\"c\",\"keyword\":\"k\"}]",
+      "fileHex": "5b7b226e616d65223a226e222c2274657874223a2263222c226b6579776f7264223a226b227d5d",
+      "digest": "a4fbec54476f9e389e2c7fbe0ea446bc89b506ee9e62c8103c6a8e05ff690a2b",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-object-without-snippets-key",
+      "kind": "decode",
+      "fileText": "{\"items\":[]}",
+      "fileHex": "7b226974656d73223a5b5d7d",
+      "digest": "eef46741adfc3a9f76294d3b78f37a45f113092ac9d44ee77c7a038a88ff09a1",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-top-level-string",
+      "kind": "decode",
+      "fileText": "\"snippets\"",
+      "fileHex": "22736e69707065747322",
+      "digest": "339e49abbb7d275a9432b1a6a96720761e6e89080f966cd8f495ebe34c050c3c",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-not-json",
+      "kind": "decode",
+      "fileText": "snippets",
+      "fileHex": "736e697070657473",
+      "digest": "21a355f19d529498dec6a0e8b2e937b856e2b58685661aeb9ef2048c8fc8e48d",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-empty-file",
+      "kind": "decode",
+      "fileText": "",
+      "fileHex": "",
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "error": "SnippetLibraryCodec.Failure.unreadable"
+    },
+    {
+      "name": "decode-bom-prefixed-array",
+      "kind": "decode",
+      "fileText": "\ufeff[]",
+      "fileHex": "efbbbf5b5d",
+      "digest": "1b7a6afb58ce9d1ab0dd41e566d637dbc98647399002c198af5943c6f362a794",
+      "ok": []
+    },
+    {
+      "name": "decode-trailing-comma",
+      "kind": "decode",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"tags\":[\"t\"],\"isEnabled\":false,\"isPinned\":true,\"createdAt\":700000000.25,\"updatedAt\":700000123.5},]",
+      "fileHex": "5b7b226964223a2231313131313131312d323232322d343333332d383434342d353535353535353535353535222c226e616d65223a226e222c226b6579776f7264223a226b222c22636f6e74656e74223a2263222c2274616773223a5b2274225d2c226973456e61626c6564223a66616c73652c22697350696e6e6564223a747275652c22637265617465644174223a3730303030303030302e32352c22757064617465644174223a3730303030303132332e357d2c5d",
+      "digest": "af4135fac24dc595e1305901eadf442c52000489824a60c00589b28ffb645b11",
+      "ok": [
+        {
+          "id": "11111111-2222-4333-8444-555555555555",
+          "name": "n",
+          "keyword": "k",
+          "content": "c",
+          "contentUtf8Hex": "63",
+          "tags": ["t"],
+          "isEnabled": false,
+          "isPinned": true,
+          "createdAt": {
+            "bits": "41c4dc9380200000",
+            "swift": "700000000.25"
+          },
+          "updatedAt": {
+            "bits": "41c4dc93bdc00000",
+            "swift": "700000123.5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode-dates-absent",
+      "kind": "decode-defaults",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\"}]",
+      "createdAtIsDecodeTime": true,
+      "updatedAtEqualsCreatedAt": true,
+      "tags": [],
+      "isEnabled": true,
+      "isPinned": false
+    },
+    {
+      "name": "decode-only-updatedAt",
+      "kind": "decode-defaults",
+      "fileText": "[{\"id\":\"11111111-2222-4333-8444-555555555555\",\"name\":\"n\",\"keyword\":\"k\",\"content\":\"c\",\"updatedAt\":9}]",
+      "createdAtIsDecodeTime": true,
+      "updatedAt": {
+        "bits": "4022000000000000",
+        "swift": "9.0"
+      }
+    },
+    {
+      "name": "display-order",
+      "kind": "display-order",
+      "input": [
+        {
+          "id": "00000000-0000-4000-8000-00000000000a",
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000009",
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "f0000000-0000-4000-8000-000000000000",
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "80000000-0000-4000-8000-000000000000",
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "7fffffff-0000-4000-8000-000000000000",
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000000",
+            "swift": "100.0"
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "isPinned": false,
+          "createdAt": {
+            "bits": "4059000000000001",
+            "swift": "100.00000000000001"
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "isPinned": true,
+          "createdAt": {
+            "bits": "3ff0000000000000",
+            "swift": "1.0"
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "isPinned": true,
+          "createdAt": {
+            "bits": "4000000000000000",
+            "swift": "2.0"
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "isPinned": false,
+          "createdAt": {
+            "bits": "c014000000000000",
+            "swift": "-5.0"
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "isPinned": false,
+          "createdAt": {
+            "bits": "426d1a94a2000000",
+            "swift": "1000000000000.0"
+          }
+        }
+      ],
+      "sortedIDs": [
+        "00000000-0000-4000-8000-000000000003",
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000005",
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000009",
+        "00000000-0000-4000-8000-00000000000a",
+        "7fffffff-0000-4000-8000-000000000000",
+        "80000000-0000-4000-8000-000000000000",
+        "f0000000-0000-4000-8000-000000000000",
+        "00000000-0000-4000-8000-000000000004"
+      ]
+    },
+    {
+      "name": "display-name-wins",
+      "kind": "display",
+      "snippetName": {
+        "text": "  Name  ",
+        "utf8Hex": "20204e616d652020"
+      },
+      "content": {
+        "text": "body",
+        "utf8Hex": "626f6479"
+      },
+      "displayName": {
+        "text": "Name",
+        "utf8Hex": "4e616d65"
+      },
+      "contentFirstLine": {
+        "text": "body",
+        "utf8Hex": "626f6479"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "body",
+        "utf8Hex": "626f6479"
+      }
+    },
+    {
+      "name": "display-blank-name-first-line",
+      "kind": "display",
+      "snippetName": {
+        "text": " \n\t",
+        "utf8Hex": "200a09"
+      },
+      "content": {
+        "text": "\n\n  first line  \nsecond",
+        "utf8Hex": "0a0a20206669727374206c696e6520200a7365636f6e64"
+      },
+      "displayName": {
+        "text": "first line",
+        "utf8Hex": "6669727374206c696e65"
+      },
+      "contentFirstLine": {
+        "text": "first line",
+        "utf8Hex": "6669727374206c696e65"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "first line",
+        "utf8Hex": "6669727374206c696e65"
+      }
+    },
+    {
+      "name": "display-empty-everything",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "displayName": {
+        "text": "Untitled Snippet",
+        "utf8Hex": "556e7469746c656420536e6970706574"
+      },
+      "contentFirstLine": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "contentFirstLineUntruncated": {
+        "text": "",
+        "utf8Hex": ""
+      }
+    },
+    {
+      "name": "display-whitespace-body",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": " \n\t \u2028",
+        "utf8Hex": "200a09c2a0e280a8"
+      },
+      "displayName": {
+        "text": "Untitled Snippet",
+        "utf8Hex": "556e7469746c656420536e6970706574"
+      },
+      "contentFirstLine": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "contentFirstLineUntruncated": {
+        "text": "",
+        "utf8Hex": ""
+      }
+    },
+    {
+      "name": "display-crlf-body",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": "\r\nline one\r\nline two",
+        "utf8Hex": "0d0a6c696e65206f6e650d0a6c696e652074776f"
+      },
+      "displayName": {
+        "text": "line one",
+        "utf8Hex": "6c696e65206f6e65"
+      },
+      "contentFirstLine": {
+        "text": "line one",
+        "utf8Hex": "6c696e65206f6e65"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "line one",
+        "utf8Hex": "6c696e65206f6e65"
+      }
+    },
+    {
+      "name": "display-line-separator-body",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": "one\u2028two",
+        "utf8Hex": "6f6e65e280a874776f"
+      },
+      "displayName": {
+        "text": "one",
+        "utf8Hex": "6f6e65"
+      },
+      "contentFirstLine": {
+        "text": "one",
+        "utf8Hex": "6f6e65"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "one",
+        "utf8Hex": "6f6e65"
+      }
+    },
+    {
+      "name": "display-nel-body",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": "one\u0085two",
+        "utf8Hex": "6f6e65c28574776f"
+      },
+      "displayName": {
+        "text": "one",
+        "utf8Hex": "6f6e65"
+      },
+      "contentFirstLine": {
+        "text": "one",
+        "utf8Hex": "6f6e65"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "one",
+        "utf8Hex": "6f6e65"
+      }
+    },
+    {
+      "name": "display-vertical-tab-and-form-feed",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": "\u000b\fone\ftwo",
+        "utf8Hex": "0b0c6f6e650c74776f"
+      },
+      "displayName": {
+        "text": "one",
+        "utf8Hex": "6f6e65"
+      },
+      "contentFirstLine": {
+        "text": "one",
+        "utf8Hex": "6f6e65"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "one",
+        "utf8Hex": "6f6e65"
+      }
+    },
+    {
+      "name": "display-exactly-50-characters",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "utf8Hex": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+      },
+      "displayName": {
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "utf8Hex": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+      },
+      "contentFirstLine": {
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "utf8Hex": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "utf8Hex": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+      }
+    },
+    {
+      "name": "display-51-characters",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy",
+        "utf8Hex": "787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787879"
+      },
+      "displayName": {
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+        "utf8Hex": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878e280a6"
+      },
+      "contentFirstLine": {
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+        "utf8Hex": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878e280a6"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy",
+        "utf8Hex": "787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787879"
+      }
+    },
+    {
+      "name": "display-51-emoji-clusters",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": "👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧",
+        "utf8Hex": "f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7"
+      },
+      "displayName": {
+        "text": "👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧…",
+        "utf8Hex": "f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7e280a6"
+      },
+      "contentFirstLine": {
+        "text": "👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧…",
+        "utf8Hex": "f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7e280a6"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧👨\u200d👩\u200d👧",
+        "utf8Hex": "f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7f09f91a8e2808df09f91a9e2808df09f91a7"
+      }
+    },
+    {
+      "name": "display-combining-marks-count-as-one",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": "ééééééééééééééééééééééééééééééééééééééééééééééééééé",
+        "utf8Hex": "65cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc81"
+      },
+      "displayName": {
+        "text": "éééééééééééééééééééééééééééééééééééééééééééééééééé…",
+        "utf8Hex": "65cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc81e280a6"
+      },
+      "contentFirstLine": {
+        "text": "éééééééééééééééééééééééééééééééééééééééééééééééééé…",
+        "utf8Hex": "65cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc81e280a6"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "ééééééééééééééééééééééééééééééééééééééééééééééééééé",
+        "utf8Hex": "65cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc8165cc81"
+      }
+    },
+    {
+      "name": "display-zero-width-space-is-whitespace",
+      "kind": "display",
+      "snippetName": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "content": {
+        "text": "\u200btext\u200b",
+        "utf8Hex": "e2808b74657874e2808b"
+      },
+      "displayName": {
+        "text": "text",
+        "utf8Hex": "74657874"
+      },
+      "contentFirstLine": {
+        "text": "text",
+        "utf8Hex": "74657874"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "text",
+        "utf8Hex": "74657874"
+      }
+    },
+    {
+      "name": "display-name-only-zero-width-space",
+      "kind": "display",
+      "snippetName": {
+        "text": "\u200b",
+        "utf8Hex": "e2808b"
+      },
+      "content": {
+        "text": "body",
+        "utf8Hex": "626f6479"
+      },
+      "displayName": {
+        "text": "body",
+        "utf8Hex": "626f6479"
+      },
+      "contentFirstLine": {
+        "text": "body",
+        "utf8Hex": "626f6479"
+      },
+      "contentFirstLineUntruncated": {
+        "text": "body",
+        "utf8Hex": "626f6479"
+      }
+    },
+    {
+      "name": "secure-shell-from-vault-record",
+      "kind": "secure-shell",
+      "vaultRecord": {
+        "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+        "name": "Wi-Fi password",
+        "keyword": "wifi",
+        "tags": ["home", "Ünïcode ☕"],
+        "isEnabled": true,
+        "isPinned": true,
+        "createdAt": {
+          "bits": "41c80cf540400000",
+          "swift": "807004800.5"
+        },
+        "updatedAt": {
+          "bits": "41c8377bf80fbe77",
+          "swift": "812578800.123"
+        },
+        "hlc": "019face339f4-0003-aabbccdd",
+        "contentHash": "681386449739cff132c5ba8511a9f1bb",
+        "sealed": "v1.RERERERERERERERE.ZtbmZgnDVyQmIn-kq121aN21xDCY9NgpN1k6oldKFOMBjeOdrIcdTR5QcgEJpUKGf1PqHetH8J5GOYl5kUn8x8g7CXHaZX1hCxlB9v88j3nAr5Uilv9O6Lhk8l6RtOsbR1piPY_t-GWnrWYyrdVQJ9hjUYOxyrUAvjd_5HNv0UUZFtoVaO2HzS_BOC0oKNk3dJSsAUAwAjPDyszNCXh5-IdL4AxG4T9XhbWBaSSsDw8GLc5tFY6VIQnaR30VIuMzuLI1PM4iLgoFoCTv57C5B_UrouZfJi6RxBD60q4e1NcrY_ZRG929b4xDvu7bahW_6Y2BtbOrITWY9uuxa3ArJIYUM8CQdXBiyIYC7DOk67Q",
+        "x": []
+      },
+      "shell": {
+        "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+        "name": "Wi-Fi password",
+        "keyword": "wifi",
+        "content": "",
+        "contentUtf8Hex": "",
+        "tags": ["home", "Ünïcode ☕"],
+        "isEnabled": true,
+        "isPinned": true,
+        "createdAt": {
+          "bits": "41c80cf540400000",
+          "swift": "807004800.5"
+        },
+        "updatedAt": {
+          "bits": "41c8377bf80fbe77",
+          "swift": "812578800.123"
+        }
+      }
+    }
+  ]
+}

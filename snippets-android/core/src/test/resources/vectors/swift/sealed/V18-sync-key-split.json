@@ -1,0 +1,81 @@
+{
+  "format": "snippets-swift-interop/V18-sync-key-split/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "SyncKeyStore.keyring(from:) (64-byte K_sync material = key ‖ salt) followed by one WireCodec.seal under scope sync-v1 (brief 02 §2.7)",
+  "notes": ["snippets/Sync/SyncKeyStore.swift is compiled unmodified; two app-layer types it names (SnippetsCloudKeychainScope, SyncBackendSelectionStore) are compile-only shims the tool never runs.", "The sealed envelope is V11's `plain`."],
+  "cases": [
+    {
+      "name": "material-99-aa",
+      "materialHex": "9999999999999999999999999999999999999999999999999999999999999999aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyHex": "9999999999999999999999999999999999999999999999999999999999999999",
+      "saltHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "scopeID": "sync-v1",
+      "recordKeyHex": "bfb19501bb18c986f4ab18beba1a087e93df6852289c2241c1024e1b47aa2142",
+      "nonceHex": "d0d0d0d0d0d0d0d0d0d0d0d0",
+      "envelopeCanonicalText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "wire": {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "rev": "711b0565f95acbd63b02ec6570677891",
+        "deleted": false,
+        "blobText": "v1.0NDQ0NDQ0NDQ0NDQ.iMgae1eRqDfMUrsv6fbhvUjreHcp8oGGXWx43qwYxA79tqQJ7sIorKvrTiBWyVE_uC49TuB-zD19-PHwl4iNqJDV6BipbaoF-eEPQrcYncJVLA61elQT1bypeM3WXI2KPArz_nj8FYcu3xUl2AbpzhKHvYByUI04xNiUipmc1tmgRAixwpMieythH72Y94BVfkv8_343sTZiQ7eA_c2hxhOa7GTX3Cqzkp_vfW8cQMXa-4PtjP-uCL0SmFVnxwS17lxE0CCpX8YCsO2jKnkc9sWcR3j_1NUP1YBacSlb9QVEZAJMotpTFuCZjH_ZazPCpdEyc9ZJj6r-oncKj3xJW-3dUSVuxuzlo1ZfByTeBpCBtEOFwHSyHCVGVP4_oXT_Rme_kwL7PooRPTZWGlswz76brokPrd9iaVQBJ3irNE0ekw7VbHtpy_7PuoA-hjF7CgJZuc_UqM-px_GWY9ab6_cVn8gLZFOxqc3H-ZolfSX1Hs2IwfII7SZJm4qG83T8b7g4sIiWg-6mFlOYk0ReU9ASlzTOlmmXAHXPbxY7G1M6UOWQZDfaFMRw3KccRWvJH5IjttlxsOlG7hKLUOrbbl_uCJkT6FYI_lIbU0GEytMXhB2ctr-SfPRq5Ov_glr6Axduu7Ua07LbQlxAKPSCDxs8OEyle8s-fQ6aZGZ9lh2ge2Rc0DycjlprdjnQJ6Mv"
+      }
+    },
+    {
+      "name": "material-0-63",
+      "materialHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "saltHex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "scopeID": "sync-v1",
+      "recordKeyHex": "0d680322b9d72f12a576769ea53c8a86016ffe6a760b662ccf6c30d931593a67",
+      "nonceHex": "d1d1d1d1d1d1d1d1d1d1d1d1",
+      "envelopeCanonicalText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "wire": {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "rev": "711b0565f95acbd63b02ec6570677891",
+        "deleted": false,
+        "blobText": "v1.0dHR0dHR0dHR0dHR.P9KIQyIlYLC1W002eqvnAFZW2GIED4_IExa_XlQw03ydtz8FBRjGc4hUFXooy32ljhwbDgrV2dmIYEMRIynaREYos8FksZUAoaW3iiO4Xx65rGe8jOGVVi-pqHFKz8Ybm_IV0kaUHzR0AS4i26Lw8JakILFZRFecNWeMRjq7vOgIDheQiihzXIYaIz4yl37PyWpx5NBcT3fMrstIC0CYujA63UlMOrGrJOxllfcaHQlgAY_8m7LQbsiknVFkA8svMYEy6SfNI4cd9Ys_gx0lAGvw589Naay_QlCaqt2_Ap7x9uF1LcCx23uxv_mEhW60NkOPzOu3EPRZJgxujiB4P9wyPPE4s4ueiF4I0m9FjuFhctLkaV9_YnecBN70R_jmA5V1gX0YUu3ypCMig44-Q_iHJKFMlqdIt1zcz4xyshVI3EOXV7YcDC6RmSiw-IO-sWFbvxw3cyS3Bw2Q-dR6w1j_EK1WO6Iw8Yqw7qP1HvgXFHUHZBWW6zCPwqbaSPvA6aU_op8CnhA6xzGM0bOmjE9WZukaabWU7sHClIyXBSp8XWasdr1hFKENK_pURNcRRw_qXy1Ac3AnxZmo8nUS39C2-_PX0UIcQdvq6yoSonGFXTxR9ILqA5oVbqu-A7WsX6kqEnaB6bOuz6c8qNAkA2ln3RmCculLWOSxHtnrJUusddgMWiHZFWqmlb4f8Y05"
+      }
+    },
+    {
+      "name": "material-slice-of-larger-buffer",
+      "materialHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+      "keyHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "saltHex": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+      "scopeID": "sync-v1",
+      "recordKeyHex": "f0cca2455e3878dedf1a4ecc2807a0c282008816477a3aca66fb5bd7dbcc18b4",
+      "nonceHex": "d2d2d2d2d2d2d2d2d2d2d2d2",
+      "envelopeCanonicalText": "{\"contentHash\":\"8a171d201fc223f19bed293ac39af38139b69f14699c76d5b6b25f2b11e0e44f\",\"deleted\":false,\"fields\":{\"content\":\"Best regards,\\nMichael\\n\",\"createdAt\":807004800.5,\"isEnabled\":true,\"isPinned\":false,\"keyword\":\"sig\",\"name\":\"Email signature\",\"tags\":[\"Work\",\"mail\"],\"updatedAt\":812578800.123456},\"hash\":\"711b0565f95acbd63b02ec657067789102a58feb8a464436aa0dd8b5a81e8c51\",\"hlc\":\"019face339f4-0003-aabbccdd\",\"id\":\"11111111-2222-4333-8444-555555555555\",\"origin\":\"aabbccdd\",\"schemaVersion\":1,\"secure\":false,\"x\":{}}",
+      "wire": {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "rev": "711b0565f95acbd63b02ec6570677891",
+        "deleted": false,
+        "blobText": "v1.0tLS0tLS0tLS0tLS.VN1saPZNio7nyk3Z-HtHb4KokYnf_hA_2bETEhJLJPmbfPO8tU-vSxGvJu3RCZHPYHp7N_aYMWMOSuaUJvu6V3obe1mmzKS9ge5gngUBnIzdy46Xtqgz5V2Yl6PS_eo6oZLwvBgQrFx_CaN7qmpRva8Qc5W9NG3y-FyIzQJgxIi8Nn4VcPCACZjdcZYEpQSw--QBLEGG7vFyW8Nf66_6B7G-5kHxtwaZIYTIJV3GW_frCRyx4wPFxctrpbaOrH6wGUGAcarCApGdgDCrS2zy-stnnmNY6hro2ATVMKEvbErICkkOikQyNc2wr43aGmg_0jlrsw3yRq7_mcegygvw24_Y1y2Jbhd6EJ2J6x_2wm5E3y2Eczr1xl3FB7TmXW93505gxfb2Zfd69sRDv78aTf0TOuEZTHDN1bMArtyscU9DoTGYnVMjIPcgZ7dl1r7JJr8ayYs1E_PxkH6cS-HoiwJ7FBeGPSgWmIo2rGBng3i_gHJ_5vWjaOZ71ZToSrjoobwefxeYgQ8BxlBdl0O50HRdJaNFsPh3p4iySZz7QAExDwIkxQ02ofNeAbyTqQhAsVMfJCjYqmxJPZ93eynQXaey9pgv-9IHBBVxDBfJGc5A0qWPnRbjQEYuxjXgF2Nktrl7JFJv8_V1T_o3zEaUdWzPE4aFohiJ-dV-mqM46HKq1ZVzIe1KpmI1NEeKMBuX"
+      }
+    },
+    {
+      "name": "material-0-bytes",
+      "materialHex": "",
+      "error": "SyncKeyStore.Failure.malformedMaterial"
+    },
+    {
+      "name": "material-32-bytes",
+      "materialHex": "0101010101010101010101010101010101010101010101010101010101010101",
+      "error": "SyncKeyStore.Failure.malformedMaterial"
+    },
+    {
+      "name": "material-63-bytes",
+      "materialHex": "010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+      "error": "SyncKeyStore.Failure.malformedMaterial"
+    },
+    {
+      "name": "material-65-bytes",
+      "materialHex": "0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+      "error": "SyncKeyStore.Failure.malformedMaterial"
+    }
+  ]
+}

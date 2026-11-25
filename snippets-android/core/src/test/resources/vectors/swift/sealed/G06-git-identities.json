@@ -1,0 +1,237 @@
+{
+  "format": "snippets-swift-interop/G06-git-identities/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "The identities of brief 03 §2.12: account identity, dataset identity, cache scope, key-store account, local sync-state folder key, cursor and record-version strings",
+  "notes": ["keyStoreAccount, cursor, record versions and SyncProtocolLocations come from the compiled Swift sources.", "accountIdentity and datasetIdentity are private members of GitSyncTransport; the formulas here are transcribed from GitSyncTransport.swift (accountDigest, datasetIdentity) and are confirmed against a running transport by G04's `transportScope`, which uses the `interop-loopback` scope.", "syncStateFolderKey is transcribed from SyncBackendSelectionStore.gitProtocolLocations (app layer, needs CloudKit, not compiled here): first 16 bytes of SHA-256 over the five strings joined with NUL. It is device-local."],
+  "cases": [
+    {
+      "name": "github-main",
+      "kind": "identities",
+      "canonicalIdentity": "github.com/example/snippets-library",
+      "branch": "main",
+      "refName": "refs/heads/main",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "accountIdentityPreimageHex": "736e6970706574732d6769742d6163636f756e742d76310a6769746875622e636f6d2f6578616d706c652f736e6970706574732d6c6962726172790a726566732f68656164732f6d61696e",
+      "accountIdentityHex": "9089b06d2dde13fef644a551c73210412c4b453b6889c04bedc4196ce41d2581",
+      "cacheScope": "9089b06d2dde13fef644a551c73210412c4b453b6889c04bedc4196ce41d2581",
+      "datasetIdentityPreimageHex": "736e6970706574732d6769742d646174617365742d76310a6769746875622e636f6d2f6578616d706c652f736e6970706574732d6c6962726172790a726566732f68656164732f6d61696e0a36313761303030312d303030302d343030302d383030302d303030303030303030306161",
+      "datasetIdentityHex": "cf53cc88f007fe1c329c6a62e9fa5091f8dc78bf9c65cc6dbefc516459d25b68",
+      "keyStoreAccount": "git-library-v1-310262b0aa977c6556667daea9b29018",
+      "syncStateFolderPreimageHex": "736e6970706574732e73796e632e70726f76696465722e763100676974006769746875622e636f6d2f6578616d706c652f736e6970706574732d6c69627261727900726566732f68656164732f6d61696e0036313761303030312d303030302d343030302d383030302d303030303030303030306161",
+      "syncStateFolderKey": "babb55770f63132cf2a9e2161bd7c4ec",
+      "syncStateFolder": "Sync/Providers/babb55770f63132cf2a9e2161bd7c4ec",
+      "syncProtocolIdentifier": "http-babb55770f63132cf2a9e2161bd7c4ec"
+    },
+    {
+      "name": "github-other-branch",
+      "kind": "identities",
+      "canonicalIdentity": "github.com/example/snippets-library",
+      "branch": "snippets",
+      "refName": "refs/heads/snippets",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "accountIdentityPreimageHex": "736e6970706574732d6769742d6163636f756e742d76310a6769746875622e636f6d2f6578616d706c652f736e6970706574732d6c6962726172790a726566732f68656164732f736e697070657473",
+      "accountIdentityHex": "69af22842923d1a1b1475c614494b6df6cd19bca720279d332c0768166e55319",
+      "cacheScope": "69af22842923d1a1b1475c614494b6df6cd19bca720279d332c0768166e55319",
+      "datasetIdentityPreimageHex": "736e6970706574732d6769742d646174617365742d76310a6769746875622e636f6d2f6578616d706c652f736e6970706574732d6c6962726172790a726566732f68656164732f736e6970706574730a36313761303030312d303030302d343030302d383030302d303030303030303030306161",
+      "datasetIdentityHex": "7a76d7f422b55e5fed5068674826a574abde38b8d563a89e325e55991acf3746",
+      "keyStoreAccount": "git-library-v1-bf1e84bbb5e369b1aee8f544aa7fb1b8",
+      "syncStateFolderPreimageHex": "736e6970706574732e73796e632e70726f76696465722e763100676974006769746875622e636f6d2f6578616d706c652f736e6970706574732d6c69627261727900726566732f68656164732f736e6970706574730036313761303030312d303030302d343030302d383030302d303030303030303030306161",
+      "syncStateFolderKey": "3f12098f112d5c5e6de936ac80915c1e",
+      "syncStateFolder": "Sync/Providers/3f12098f112d5c5e6de936ac80915c1e",
+      "syncProtocolIdentifier": "http-3f12098f112d5c5e6de936ac80915c1e"
+    },
+    {
+      "name": "gitea-nested",
+      "kind": "identities",
+      "canonicalIdentity": "git.example.org/team/sub/library",
+      "branch": "release/1.0",
+      "refName": "refs/heads/release/1.0",
+      "datasetID": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+      "accountIdentityPreimageHex": "736e6970706574732d6769742d6163636f756e742d76310a6769742e6578616d706c652e6f72672f7465616d2f7375622f6c6962726172790a726566732f68656164732f72656c656173652f312e30",
+      "accountIdentityHex": "086bbaf19c4b30c6b0ce2ccebfb905b8cd5d5c9f174ff23c13f83081380ce4e4",
+      "cacheScope": "086bbaf19c4b30c6b0ce2ccebfb905b8cd5d5c9f174ff23c13f83081380ce4e4",
+      "datasetIdentityPreimageHex": "736e6970706574732d6769742d646174617365742d76310a6769742e6578616d706c652e6f72672f7465616d2f7375622f6c6962726172790a726566732f68656164732f72656c656173652f312e300a61306231633264332d653466352d343630372d383839392d616162626363646465656666",
+      "datasetIdentityHex": "d38d65ed782db055eb52b47f4f6a2ccb3ed1c01f4b47d2523cc098db47555533",
+      "keyStoreAccount": "git-library-v1-bba758b48d106e45eada56cea594c033",
+      "syncStateFolderPreimageHex": "736e6970706574732e73796e632e70726f76696465722e763100676974006769742e6578616d706c652e6f72672f7465616d2f7375622f6c69627261727900726566732f68656164732f72656c656173652f312e300061306231633264332d653466352d343630372d383839392d616162626363646465656666",
+      "syncStateFolderKey": "ca74830870bdc986644717e79dddbf73",
+      "syncStateFolder": "Sync/Providers/ca74830870bdc986644717e79dddbf73",
+      "syncProtocolIdentifier": "http-ca74830870bdc986644717e79dddbf73"
+    },
+    {
+      "name": "interop-loopback",
+      "kind": "identities",
+      "canonicalIdentity": "snippets-interop.localhost/repo",
+      "branch": "main",
+      "refName": "refs/heads/main",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "accountIdentityPreimageHex": "736e6970706574732d6769742d6163636f756e742d76310a736e6970706574732d696e7465726f702e6c6f63616c686f73742f7265706f0a726566732f68656164732f6d61696e",
+      "accountIdentityHex": "16befdb4538ab28509a17ffe79cbe90beb52bd34ecf99853ffec6d6a24c50da3",
+      "cacheScope": "16befdb4538ab28509a17ffe79cbe90beb52bd34ecf99853ffec6d6a24c50da3",
+      "datasetIdentityPreimageHex": "736e6970706574732d6769742d646174617365742d76310a736e6970706574732d696e7465726f702e6c6f63616c686f73742f7265706f0a726566732f68656164732f6d61696e0a36313761303030312d303030302d343030302d383030302d303030303030303030306161",
+      "datasetIdentityHex": "2cb5bb55e69844d48d895802d2e3dc89d23d8c624a6340aa47cdbd69f0fa9d89",
+      "keyStoreAccount": "git-library-v1-152d6ceab20c92461d1a06a47c57cd97",
+      "syncStateFolderPreimageHex": "736e6970706574732e73796e632e70726f76696465722e76310067697400736e6970706574732d696e7465726f702e6c6f63616c686f73742f7265706f00726566732f68656164732f6d61696e0036313761303030312d303030302d343030302d383030302d303030303030303030306161",
+      "syncStateFolderKey": "e60187350b33fb30ceb9ebc806674ce1",
+      "syncStateFolder": "Sync/Providers/e60187350b33fb30ceb9ebc806674ce1",
+      "syncProtocolIdentifier": "http-e60187350b33fb30ceb9ebc806674ce1"
+    },
+    {
+      "name": "cursor-format",
+      "kind": "cursor",
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "cursor": "git1.617a0001-0000-4000-8000-0000000000aa.0123456789abcdef0123456789abcdef01234567",
+      "recordVersionText": "git-blob-sha1:0123456789abcdef0123456789abcdef01234567",
+      "markdownVersionText": "git-md-blob-sha1:0123456789abcdef0123456789abcdef01234567"
+    },
+    {
+      "name": "cursor-parse-0",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "git1.617a0001-0000-4000-8000-0000000000aa.0123456789abcdef0123456789abcdef01234567",
+        "utf8Hex": "676974312e36313761303030312d303030302d343030302d383030302d3030303030303030303061612e30313233343536373839616263646566303132333435363738396162636465663031323334353637"
+      },
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "commitForExpectedDataset": "0123456789abcdef0123456789abcdef01234567"
+    },
+    {
+      "name": "cursor-parse-1",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "git1.617A0001-0000-4000-8000-0000000000AA.0123456789abcdef0123456789abcdef01234567",
+        "utf8Hex": "676974312e36313741303030312d303030302d343030302d383030302d3030303030303030303041412e30313233343536373839616263646566303132333435363738396162636465663031323334353637"
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    },
+    {
+      "name": "cursor-parse-2",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "git1.617a0001-0000-4000-8000-0000000000aa.0123456789ABCDEF0123456789ABCDEF01234567",
+        "utf8Hex": "676974312e36313761303030312d303030302d343030302d383030302d3030303030303030303061612e30313233343536373839414243444546303132333435363738394142434445463031323334353637"
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    },
+    {
+      "name": "cursor-parse-3",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "git2.617a0001-0000-4000-8000-0000000000aa.0123456789abcdef0123456789abcdef01234567",
+        "utf8Hex": "676974322e36313761303030312d303030302d343030302d383030302d3030303030303030303061612e30313233343536373839616263646566303132333435363738396162636465663031323334353637"
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    },
+    {
+      "name": "cursor-parse-4",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "GIT1.617a0001-0000-4000-8000-0000000000aa.0123456789abcdef0123456789abcdef01234567",
+        "utf8Hex": "474954312e36313761303030312d303030302d343030302d383030302d3030303030303030303061612e30313233343536373839616263646566303132333435363738396162636465663031323334353637"
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    },
+    {
+      "name": "cursor-parse-5",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "git1.617a0001-0000-4000-8000-0000000000aa",
+        "utf8Hex": "676974312e36313761303030312d303030302d343030302d383030302d303030303030303030306161"
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    },
+    {
+      "name": "cursor-parse-6",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "git1.617a0001-0000-4000-8000-0000000000aa.0123456789abcdef0123456789abcdef01234567.x",
+        "utf8Hex": "676974312e36313761303030312d303030302d343030302d383030302d3030303030303030303061612e303132333435363738396162636465663031323334353637383961626364656630313233343536372e78"
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    },
+    {
+      "name": "cursor-parse-7",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "git1.617a0001-0000-4000-8000-0000000000aa.0123456789abcdef0123456789abcdef0123456",
+        "utf8Hex": "676974312e36313761303030312d303030302d343030302d383030302d3030303030303030303061612e303132333435363738396162636465663031323334353637383961626364656630313233343536"
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    },
+    {
+      "name": "cursor-parse-8",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "git1..0123456789abcdef0123456789abcdef01234567",
+        "utf8Hex": "676974312e2e30313233343536373839616263646566303132333435363738396162636465663031323334353637"
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    },
+    {
+      "name": "cursor-parse-9",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    },
+    {
+      "name": "cursor-parse-10",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "git1.617a0001-0000-4000-8000-0000000000aa.0000000000000000000000000000000000000000",
+        "utf8Hex": "676974312e36313761303030312d303030302d343030302d383030302d3030303030303030303061612e30303030303030303030303030303030303030303030303030303030303030303030303030303030"
+      },
+      "datasetID": "617a0001-0000-4000-8000-0000000000aa",
+      "commit": "0000000000000000000000000000000000000000",
+      "commitForExpectedDataset": "0000000000000000000000000000000000000000"
+    },
+    {
+      "name": "cursor-parse-11",
+      "kind": "cursor-parse",
+      "input": {
+        "text": " git1.617a0001-0000-4000-8000-0000000000aa.0123456789abcdef0123456789abcdef01234567",
+        "utf8Hex": "20676974312e36313761303030312d303030302d343030302d383030302d3030303030303030303061612e30313233343536373839616263646566303132333435363738396162636465663031323334353637"
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    },
+    {
+      "name": "cursor-parse-12",
+      "kind": "cursor-parse",
+      "input": {
+        "text": "git1.617a0001-0000-4000-8000-0000000000aa.0123456789abcdef0123456789abcdef01234567\n",
+        "utf8Hex": "676974312e36313761303030312d303030302d343030302d383030302d3030303030303030303061612e303132333435363738396162636465663031323334353637383961626364656630313233343536370a"
+      },
+      "datasetID": null,
+      "commit": null,
+      "commitForExpectedDataset": null
+    }
+  ]
+}

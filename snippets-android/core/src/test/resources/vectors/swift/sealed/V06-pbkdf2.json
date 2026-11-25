@@ -1,0 +1,393 @@
+{
+  "format": "snippets-swift-interop/V06-pbkdf2/v1",
+  "generator": {
+    "tool": "swift-interop",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)",
+    "source": "unmodified snippets/Core (+ GitSyncKeyStore, SyncKeyStore)"
+  },
+  "direction": "sealed",
+  "pins": "PassphraseKDF.derive: PBKDF2-HMAC-SHA512 over UTF-8(NFC(passphrase)), dkLen 32 (brief 02 §2.6, hazard H15)",
+  "notes": ["passwordBytesHex is what Swift feeds to PBKDF2 (after precomposedStringWithCanonicalMapping); cafe-nfc and cafe-nfd must therefore derive the same key.", "The ceiling itself (20 000 000 iterations) is accepted; it is not exercised because it takes several seconds."],
+  "cases": [
+    {
+      "name": "ascii-1",
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "passwordBytesHex": "636f727265637420686f727365206261747465727920737461706c65",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 1,
+      "derivedKeyHex": "afb8cb26dc4e0c736e54b17cdfed921e7d3c802fe658b31dddf8412be955b3f8"
+    },
+    {
+      "name": "ascii-2",
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "passwordBytesHex": "636f727265637420686f727365206261747465727920737461706c65",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 2,
+      "derivedKeyHex": "cc89dcf25ee2fd69e540ef06f6c0105ab4eb09bc06ebc9eaa15765314bab90dd"
+    },
+    {
+      "name": "ascii-4096",
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "passwordBytesHex": "636f727265637420686f727365206261747465727920737461706c65",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 4096,
+      "derivedKeyHex": "eb0b6d0f3c709ad7bf25b0547ea9a8a5be6db22101132b6166fb47f1b98df222"
+    },
+    {
+      "name": "cafe-nfc-1",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "436166c3a9207075626c69632066697874757265"
+      },
+      "passwordBytesHex": "436166c3a9207075626c69632066697874757265",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 1,
+      "derivedKeyHex": "e029ceaa61fb6148ffbea389a22fd6dbd6b0e560d4e9a614ede1a396faeb55e1"
+    },
+    {
+      "name": "cafe-nfc-2",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "436166c3a9207075626c69632066697874757265"
+      },
+      "passwordBytesHex": "436166c3a9207075626c69632066697874757265",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 2,
+      "derivedKeyHex": "a374f885e2d86bf3bfa5a9d55d69bd5dc9c966d94b616ff0baa51df5748b983f"
+    },
+    {
+      "name": "cafe-nfc-4096",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "436166c3a9207075626c69632066697874757265"
+      },
+      "passwordBytesHex": "436166c3a9207075626c69632066697874757265",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 4096,
+      "derivedKeyHex": "357ef00b3cffae2d1123bdf13a0ef80ac2cde9e83e25d8949f1f00b536027173"
+    },
+    {
+      "name": "cafe-nfd-1",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "43616665cc81207075626c69632066697874757265"
+      },
+      "passwordBytesHex": "436166c3a9207075626c69632066697874757265",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 1,
+      "derivedKeyHex": "e029ceaa61fb6148ffbea389a22fd6dbd6b0e560d4e9a614ede1a396faeb55e1"
+    },
+    {
+      "name": "cafe-nfd-2",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "43616665cc81207075626c69632066697874757265"
+      },
+      "passwordBytesHex": "436166c3a9207075626c69632066697874757265",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 2,
+      "derivedKeyHex": "a374f885e2d86bf3bfa5a9d55d69bd5dc9c966d94b616ff0baa51df5748b983f"
+    },
+    {
+      "name": "cafe-nfd-4096",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "43616665cc81207075626c69632066697874757265"
+      },
+      "passwordBytesHex": "436166c3a9207075626c69632066697874757265",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 4096,
+      "derivedKeyHex": "357ef00b3cffae2d1123bdf13a0ef80ac2cde9e83e25d8949f1f00b536027173"
+    },
+    {
+      "name": "non-bmp-1",
+      "passphrase": {
+        "text": "pässwörd 🔑 𝒳𝓎𝓏",
+        "utf8Hex": "70c3a4737377c3b6726420f09f949120f09d92b3f09d938ef09d938f"
+      },
+      "passwordBytesHex": "70c3a4737377c3b6726420f09f949120f09d92b3f09d938ef09d938f",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 1,
+      "derivedKeyHex": "1e83ca8795f46284618a978343f58fae88fbe8d959f94157b6e00cfa4682e4c0"
+    },
+    {
+      "name": "non-bmp-2",
+      "passphrase": {
+        "text": "pässwörd 🔑 𝒳𝓎𝓏",
+        "utf8Hex": "70c3a4737377c3b6726420f09f949120f09d92b3f09d938ef09d938f"
+      },
+      "passwordBytesHex": "70c3a4737377c3b6726420f09f949120f09d92b3f09d938ef09d938f",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 2,
+      "derivedKeyHex": "2630a1014d7effa8910eae3a11c8d3aa4195b0a5420a50a9af32f006c6ced654"
+    },
+    {
+      "name": "non-bmp-4096",
+      "passphrase": {
+        "text": "pässwörd 🔑 𝒳𝓎𝓏",
+        "utf8Hex": "70c3a4737377c3b6726420f09f949120f09d92b3f09d938ef09d938f"
+      },
+      "passwordBytesHex": "70c3a4737377c3b6726420f09f949120f09d92b3f09d938ef09d938f",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 4096,
+      "derivedKeyHex": "e653461d1e49ab3bc84ea2a92dd8111bb8bd9cbea476de50fb10c51a7a15fb34"
+    },
+    {
+      "name": "angstrom-sign-1",
+      "passphrase": {
+        "text": "Ångström",
+        "utf8Hex": "e284ab6e67737472c3b66d"
+      },
+      "passwordBytesHex": "c3856e67737472c3b66d",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 1,
+      "derivedKeyHex": "9e9a167647da08b61102a8d01cd7e330ea3b606690defe6901776527c9f7ca59"
+    },
+    {
+      "name": "angstrom-sign-2",
+      "passphrase": {
+        "text": "Ångström",
+        "utf8Hex": "e284ab6e67737472c3b66d"
+      },
+      "passwordBytesHex": "c3856e67737472c3b66d",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 2,
+      "derivedKeyHex": "3c783668180ae1ad5c728b6aa0d48c2579ef47346b0204cf199978489741911b"
+    },
+    {
+      "name": "angstrom-sign-4096",
+      "passphrase": {
+        "text": "Ångström",
+        "utf8Hex": "e284ab6e67737472c3b66d"
+      },
+      "passwordBytesHex": "c3856e67737472c3b66d",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 4096,
+      "derivedKeyHex": "ed53467a579fe6b3d6679fd545e76bef7a504bbacfa5e449e57acd6fc595014f"
+    },
+    {
+      "name": "hangul-jamo-1",
+      "passphrase": {
+        "text": "한",
+        "utf8Hex": "e18492e185a1e186ab"
+      },
+      "passwordBytesHex": "ed959c",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 1,
+      "derivedKeyHex": "b22fb0058722fa94e723de8752be6c2f88e2ea64b06b01a31317cdccd8d491f5"
+    },
+    {
+      "name": "hangul-jamo-2",
+      "passphrase": {
+        "text": "한",
+        "utf8Hex": "e18492e185a1e186ab"
+      },
+      "passwordBytesHex": "ed959c",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 2,
+      "derivedKeyHex": "f1e141941df9da44b8c0d1d9862157eac249792bc1b3cbdfeb182d95cfca6cba"
+    },
+    {
+      "name": "hangul-jamo-4096",
+      "passphrase": {
+        "text": "한",
+        "utf8Hex": "e18492e185a1e186ab"
+      },
+      "passwordBytesHex": "ed959c",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 4096,
+      "derivedKeyHex": "a35f212013cb9c38cbe410f64750b8ddbf5d185619c769eb0c25058e8310f3c7"
+    },
+    {
+      "name": "compatibility-ligature-1",
+      "passphrase": {
+        "text": "oﬃce",
+        "utf8Hex": "6fefac836365"
+      },
+      "passwordBytesHex": "6fefac836365",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 1,
+      "derivedKeyHex": "a08e137b660801225439a38a95116829347daca1917681bc61ffbfd2d5072deb"
+    },
+    {
+      "name": "compatibility-ligature-2",
+      "passphrase": {
+        "text": "oﬃce",
+        "utf8Hex": "6fefac836365"
+      },
+      "passwordBytesHex": "6fefac836365",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 2,
+      "derivedKeyHex": "80a00d3fc48fbfc743273778fd8eef14ffa3817eff48cf816a849c3ce6ced6b8"
+    },
+    {
+      "name": "compatibility-ligature-4096",
+      "passphrase": {
+        "text": "oﬃce",
+        "utf8Hex": "6fefac836365"
+      },
+      "passwordBytesHex": "6fefac836365",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 4096,
+      "derivedKeyHex": "3ae5f245ed570c4f4f076edbc03762d03fe15e551b71fa797fc83d4bd682bd21"
+    },
+    {
+      "name": "single-space-1",
+      "passphrase": {
+        "text": " ",
+        "utf8Hex": "20"
+      },
+      "passwordBytesHex": "20",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 1,
+      "derivedKeyHex": "452beeaac097ee8c3f2054b1abd2a2e7618716d7ee2f88e14f78543270d6ce9a"
+    },
+    {
+      "name": "single-space-2",
+      "passphrase": {
+        "text": " ",
+        "utf8Hex": "20"
+      },
+      "passwordBytesHex": "20",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 2,
+      "derivedKeyHex": "4f900f46c34dc29aebf2ef92ad20b647a51fa581056dd8e5a6c4dbf1cbdc4fbc"
+    },
+    {
+      "name": "single-space-4096",
+      "passphrase": {
+        "text": " ",
+        "utf8Hex": "20"
+      },
+      "passwordBytesHex": "20",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 4096,
+      "derivedKeyHex": "d687474a9148b55893ac03525620cb5f7222659cab6c316eb65d7bb9b04482f9"
+    },
+    {
+      "name": "ascii-600000",
+      "passphrase": {
+        "text": "correct horse battery staple",
+        "utf8Hex": "636f727265637420686f727365206261747465727920737461706c65"
+      },
+      "passwordBytesHex": "636f727265637420686f727365206261747465727920737461706c65",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 600000,
+      "derivedKeyHex": "a94006864ddab73da9e1cf0a0bd7880446dd8fe5fdee388af0d517c4146fa767"
+    },
+    {
+      "name": "cafe-nfc-600000",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "436166c3a9207075626c69632066697874757265"
+      },
+      "passwordBytesHex": "436166c3a9207075626c69632066697874757265",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 600000,
+      "derivedKeyHex": "c4eb8e8ad8775483e8384667a784b678abb08ac98a356243ff4ef589b0c1aa82"
+    },
+    {
+      "name": "cafe-nfd-600000",
+      "passphrase": {
+        "text": "Café public fixture",
+        "utf8Hex": "43616665cc81207075626c69632066697874757265"
+      },
+      "passwordBytesHex": "436166c3a9207075626c69632066697874757265",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 600000,
+      "derivedKeyHex": "c4eb8e8ad8775483e8384667a784b678abb08ac98a356243ff4ef589b0c1aa82"
+    },
+    {
+      "name": "non-bmp-600000",
+      "passphrase": {
+        "text": "pässwörd 🔑 𝒳𝓎𝓏",
+        "utf8Hex": "70c3a4737377c3b6726420f09f949120f09d92b3f09d938ef09d938f"
+      },
+      "passwordBytesHex": "70c3a4737377c3b6726420f09f949120f09d92b3f09d938ef09d938f",
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 600000,
+      "derivedKeyHex": "e1a790cea949148e9cb0dc7d28aadd3c60b1226dc4c4e1490daa22808a7e28ce"
+    },
+    {
+      "name": "long-passphrase-salt-1-byte",
+      "passphrase": {
+        "text": "long passphrase over one SHA-512 block long passphrase over one SHA-512 block long passphrase over one SHA-512 block long passphrase over one SHA-512 block long passphrase over one SHA-512 block ",
+        "utf8Hex": "6c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b20"
+      },
+      "passwordBytesHex": "6c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b20",
+      "saltHex": "01",
+      "iterations": 3,
+      "derivedKeyHex": "130627e3742e12da29b912f4a374a7037b91f6f60af54510e96d92f1a0692897"
+    },
+    {
+      "name": "long-passphrase-salt-64-bytes",
+      "passphrase": {
+        "text": "long passphrase over one SHA-512 block long passphrase over one SHA-512 block long passphrase over one SHA-512 block long passphrase over one SHA-512 block long passphrase over one SHA-512 block ",
+        "utf8Hex": "6c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b20"
+      },
+      "passwordBytesHex": "6c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b206c6f6e672070617373706872617365206f766572206f6e65205348412d35313220626c6f636b20",
+      "saltHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "iterations": 3,
+      "derivedKeyHex": "2812495f86af1acd55805b22cf991f2cdc26bbf149cbcbef0768ae538d1309d5"
+    },
+    {
+      "name": "fail-empty-passphrase",
+      "passphrase": {
+        "text": "",
+        "utf8Hex": ""
+      },
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 1,
+      "error": "PassphraseKDF.Failure.emptyPassphrase"
+    },
+    {
+      "name": "fail-empty-salt",
+      "passphrase": {
+        "text": "x",
+        "utf8Hex": "78"
+      },
+      "saltHex": "",
+      "iterations": 1,
+      "error": "PassphraseKDF.Failure.invalidParameters"
+    },
+    {
+      "name": "fail-zero-iterations",
+      "passphrase": {
+        "text": "x",
+        "utf8Hex": "78"
+      },
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 0,
+      "error": "PassphraseKDF.Failure.invalidParameters"
+    },
+    {
+      "name": "fail-negative-iterations",
+      "passphrase": {
+        "text": "x",
+        "utf8Hex": "78"
+      },
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": -1,
+      "error": "PassphraseKDF.Failure.invalidParameters"
+    },
+    {
+      "name": "fail-above-ceiling",
+      "passphrase": {
+        "text": "x",
+        "utf8Hex": "78"
+      },
+      "saltHex": "55555555555555555555555555555555",
+      "iterations": 20000001,
+      "error": "PassphraseKDF.Failure.invalidParameters"
+    }
+  ]
+}
