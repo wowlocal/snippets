@@ -1,4 +1,174 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Snippets</string>
+
+    <!-- Shared actions. Title Case; a label that opens a further step ends with an ellipsis. -->
+    <string name="action_copy">Copy</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_pin">Pin</string>
+    <string name="action_unpin">Unpin</string>
+    <string name="action_enable">Enable</string>
+    <string name="action_disable">Disable</string>
+    <string name="action_make_secure">Make Secure</string>
+    <string name="action_make_ordinary">Make Ordinary</string>
+    <string name="action_duplicate">Duplicate</string>
+    <string name="action_copy_share_link">Copy Share Link</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_paste">Paste</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_ok">OK</string>
+    <string name="action_close">Close</string>
+    <string name="action_more">More</string>
+    <string name="action_details">Details</string>
+    <string name="action_not_now">Not Now</string>
+    <string name="action_go_back">Go Back</string>
+
+    <!-- Library row (components.md §1) -->
+    <string name="library_row_untitled">Untitled Snippet</string>
+    <string name="library_row_no_content">No content</string>
+    <string name="library_row_secure_preview">Secure snippet</string>
+    <string name="library_row_disabled">Disabled</string>
+    <string name="library_row_disabled_preview">Disabled · %1$s</string>
+    <string name="library_row_excerpt">…%1$s</string>
+    <string name="library_row_more_tags">+%1$d</string>
+    <string name="library_row_copied">Copied</string>
+    <string name="library_row_copied_announcement">Copied “%1$s”.</string>
+    <string name="library_row_copied_secure_announcement">Copied “%1$s”. Clears from the clipboard in 60 seconds.</string>
+    <string name="library_row_state_secure">Secure</string>
+    <string name="library_row_state_standard">Standard</string>
+    <string name="library_row_state_pinned">Pinned</string>
+    <string name="library_row_state_enabled">Enabled</string>
+    <string name="library_row_state_disabled">Disabled</string>
+    <string name="library_row_state_keyword">Keyword \\%1$s</string>
+    <string name="library_row_state_tags">Tags: %1$s</string>
+    <string name="library_row_click_copy">copy</string>
+    <string name="library_row_click_authenticate">authenticate and copy</string>
+    <string name="library_row_click_open">open</string>
+    <string name="keyword_token">\\%1$s</string>
+
+    <!-- Library chrome (components.md §3 to §5, §18) -->
+    <string name="library_search_placeholder">Search snippets</string>
+    <string name="library_search_back_description">Clear search</string>
+    <string name="library_search_clear_description">Clear text</string>
+    <string name="library_header_pinned">Pinned</string>
+    <plurals name="library_count">
+        <item quantity="one">%d snippet</item>
+        <item quantity="other">%d snippets</item>
+    </plurals>
+    <!-- The quantity is the library total (the second number). -->
+    <plurals name="library_count_filtered">
+        <item quantity="one">%1$d of %2$d snippet</item>
+        <item quantity="other">%1$d of %2$d snippets</item>
+    </plurals>
+    <string name="library_fab_label">New Snippet</string>
+    <string name="library_fab_description">New snippet</string>
+
+    <!-- Tag filter row -->
+    <string name="library_filter_description">Filter by tags</string>
+    <string name="library_filter_click_label">show tag filters</string>
+    <string name="library_filter_state_none">No active filters</string>
+    <plurals name="library_filter_state_active">
+        <item quantity="one">%d active filter</item>
+        <item quantity="other">%d active filters</item>
+    </plurals>
+    <string name="library_tag_chip_description">Filter by tag %1$s</string>
+    <string name="library_tag_chip_state_on">on</string>
+    <string name="library_tag_chip_state_off">off</string>
+    <string name="library_tag_chip_state">%1$s, %2$s</string>
+
+    <!-- Tag filter sheet -->
+    <string name="tags_sheet_title">Filter by Tags</string>
+    <string name="tags_sheet_title_count">Filter by Tags (%1$d)</string>
+    <string name="tags_clear">Clear</string>
+    <string name="tags_clear_click_label">remove every tag filter</string>
+    <string name="tags_cleared_announcement">Tag filters cleared</string>
+    <string name="tags_search_placeholder">Search tags</string>
+    <string name="tags_no_match">No tags match “%1$s”.</string>
+    <string name="tags_footer">A snippet must match every selected tag.</string>
+    <string name="tags_empty_title">No Tags Yet</string>
+    <string name="tags_empty_message">Add tags to a snippet, then return here to filter your library.</string>
+    <plurals name="tags_row_value_selected">
+        <item quantity="one">%d snippet, selected</item>
+        <item quantity="other">%d snippets, selected</item>
+    </plurals>
+    <plurals name="tags_row_value_not_selected">
+        <item quantity="one">%d snippet, not selected</item>
+        <item quantity="other">%d snippets, not selected</item>
+    </plurals>
+    <string name="tags_row_click_remove">remove this filter</string>
+    <string name="tags_row_click_apply">apply this filter</string>
+
+    <!-- Sync status (components.md §7) -->
+    <string name="sync_row_label">Sync</string>
+    <string name="sync_row_click_label">show sync status</string>
+    <string name="sync_card_title_stopped">Sync Stopped</string>
+    <string name="sync_card_title_attention">Sync Needs Attention</string>
+    <string name="sync_card_title_waiting">Sync Is Waiting</string>
+    <string name="sync_card_value_action">%1$s Action: %2$s.</string>
+    <string name="problem_code">Code: %1$s</string>
+
+    <!-- Secure body panel (components.md §8) -->
+    <string name="secure_panel_reveal">Reveal Secure Content</string>
+    <string name="secure_panel_authenticating">Authenticating…</string>
+    <string name="secure_panel_revealed">Revealed</string>
+    <string name="secure_panel_lock">Lock</string>
+    <string name="secure_panel_placeholder">Paste or type</string>
+    <string name="secure_panel_footer_locked">Content is encrypted. Metadata remains searchable.</string>
+    <string name="secure_panel_footer_revealed">Secure content is revealed and editable until you leave this screen.</string>
+    <string name="secure_panel_recording">Screen recording detected. Secure content stays hidden.</string>
+    <string name="secure_panel_display">Protected display unavailable. Secure content stays hidden.</string>
+    <string name="secure_panel_footer_display">Secure content was hidden because protected display failed.</string>
+    <string name="secure_panel_reason_idle">Locked after 5 minutes without use.</string>
+    <string name="secure_panel_reason_expired">Locked after 30 minutes.</string>
+    <string name="secure_panel_reason_left_app">Locked when you left the app.</string>
+    <string name="secure_panel_no_screen_lock">Set a screen lock to use secure snippets.</string>
+    <string name="secure_panel_open_settings">Open Settings</string>
+    <string name="secure_panel_git_vault_missing">This device can’t open this secure snippet yet. Set up secure snippets for your Git library first.</string>
+    <string name="secure_panel_open_git">Open Git Repository</string>
+    <string name="secure_panel_vault_key_missing">This device can’t open this secure snippet yet. Restore the vault key with your recovery key.</string>
+    <string name="secure_panel_open_secure">Open Secure Snippets</string>
+    <string name="secure_panel_standin_description">Protected secure snippet body</string>
+    <string name="secure_panel_standin_locked">Use Reveal Secure Content to show it visually. The text is unavailable to accessibility.</string>
+    <string name="secure_panel_standin_unlocking">Authenticated secure content is being prepared. The text is unavailable to accessibility.</string>
+    <string name="secure_panel_standin_revealed">Content is shown visually. The text remains unavailable to accessibility.</string>
+
+    <!-- Secret display block and secret screen (components.md §9, §14, §16.3) -->
+    <string name="secret_public_key_description">SSH public key, ending in %1$s. Use Copy Public Key to add it.</string>
+    <string name="secret_fingerprint_description">Host key fingerprint %1$s</string>
+    <string name="secret_hidden">Hidden while Snippets is in the background.</string>
+    <string name="secret_leave_title">Have You Saved It?</string>
+
+    <!-- Secure-copy countdown row (components.md §10) -->
+    <string name="countdown_text">Copied “%1$s”. Clears in %2$s</string>
+    <string name="countdown_clear">Clear Now</string>
+    <string name="countdown_cleared">Clipboard cleared.</string>
+    <string name="countdown_announcement">Copied “%1$s”. Clears from the clipboard in 60 seconds.</string>
+
+    <!-- Form fields (components.md §11) -->
+    <string name="field_password_show">Show password</string>
+    <string name="field_password_hide">Hide password</string>
+    <!-- The quantity is the expected length (the second number). -->
+    <plurals name="field_code_counter">
+        <item quantity="one">%1$d of %2$d character</item>
+        <item quantity="other">%1$d of %2$d characters</item>
+    </plurals>
+    <string name="field_keyword_placeholder">sig</string>
+    <string name="field_keyword_prefix">\\</string>
+    <string name="field_keyword_warning_description">Keyword, warning: %1$s</string>
+    <string name="field_tags_placeholder">work, email</string>
+    <string name="field_tag_remove">Remove tag %1$s</string>
+
+    <!-- Progress steps (components.md §13): state descriptions -->
+    <string name="step_state_pending">pending</string>
+    <string name="step_state_running">running</string>
+    <string name="step_state_done">done</string>
+    <string name="step_state_failed">failed</string>
+
+    <!-- Review screen (components.md §15) -->
+    <string name="review_happened">What happened</string>
+    <string name="review_explanation">What this does</string>
+    <string name="review_device">On this device</string>
+
+    <!-- Snackbar (components.md §17): what a screen reader hears when there is an action -->
+    <string name="snackbar_action_available">%1$s %2$s available.</string>
 </resources>

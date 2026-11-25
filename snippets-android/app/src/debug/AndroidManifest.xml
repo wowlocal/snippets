@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+            Debug-only component gallery. Exported so it can be started with adb:
+            adb shell am start -n com.khm.snippets.android.debug/com.khm.snippets.android.ui.gallery.GalleryActivity
+            Optional extras: section (string id), dark (boolean), fontScale (float), open (string).
+        -->
+        <activity
+            android:name=".ui.gallery.GalleryActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Snippets"
+            android:windowSoftInputMode="adjustResize" />
+    </application>
+
+</manifest>
