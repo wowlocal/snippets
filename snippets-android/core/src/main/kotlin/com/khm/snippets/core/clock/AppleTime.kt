@@ -20,8 +20,16 @@ object AppleTime {
     /** The largest wall reading an HLC holds: 48 bits of milliseconds. */
     const val MAX_HLC_MILLIS: Long = 0xFFFF_FFFF_FFFFL
 
-    /** `Date().timeIntervalSinceReferenceDate`, at the millisecond resolution of the system clock. */
-    fun now(): Double = fromUnixMillis(System.currentTimeMillis())
+    private val systemClock = AppleClock()
+
+    /**
+     * `Date().timeIntervalSinceReferenceDate`, from the process-wide [AppleClock]: the
+     * wall clock with sub-millisecond resolution, and every call returns a value above
+     * the one before it, on any thread. Records created in one loop therefore get
+     * distinct, increasing times, as they do in Swift; with a millisecond clock they
+     * would share one, and the display order would fall back to the ids.
+     */
+    fun now(): Double = systemClock.now()
 
     /** Milliseconds since 1970 as seconds since 2001. Subtracting before dividing keeps the result the nearest double. */
     fun fromUnixMillis(unixMillis: Long): Double = (unixMillis - UNIX_EPOCH_OFFSET_MILLIS) / 1000.0
@@ -57,4 +65,50 @@ object AppleTime {
 
     /** `System.currentTimeMillis()`, the default physical clock of [HlcGenerator] (`HLCGenerator.systemNowMs`). */
     fun systemUnixMillis(): Long = maxOf(0L, System.currentTimeMillis())
+}
+
+/**
+ * A source of "now" in seconds since 2001 that never repeats or goes back.
+ *
+ * `System.currentTimeMillis()` alone cannot tell two calls within a millisecond apart.
+ * This reads the position inside the millisecond from the monotonic clock, anchored to
+ * the wall clock: whenever the two disagree (the wall clock was set, or the monotonic
+ * clock stood still while the device slept) it anchors again, so a reading always lies
+ * within the wall clock's current millisecond. A reading that would not exceed the
+ * previous one is replaced by the next double above it; after the wall clock is set
+ * back, readings therefore creep forward until it has caught up.
+ *
+ * Thread-safe. The two sources are parameters so tests can drive time by hand.
+ */
+class AppleClock(
+    private val wallMillis: () -> Long = System::currentTimeMillis,
+    private val monotonicNanos: () -> Long = System::nanoTime,
+) {
+    private var anchorWallMillis = wallMillis()
+    private var anchorNanos = monotonicNanos()
+    private var last = Double.NEGATIVE_INFINITY
+
+    @Synchronized
+    fun now(): Double {
+        val wall = wallMillis()
+        val elapsed = monotonicNanos() - anchorNanos
+        val drift = anchorWallMillis - wall
+        // The first test keeps the multiplication from overflowing after a huge clock change.
+        var withinMillisecond = if (drift < -MAX_DRIFT_MILLIS || drift > MAX_DRIFT_MILLIS) -1L else drift * NANOS_PER_MILLI + elapsed
+        if (withinMillisecond < 0 || withinMillisecond >= NANOS_PER_MILLI) {
+            anchorWallMillis = wall
+            anchorNanos += elapsed
+            withinMillisecond = 0
+        }
+        // Whole milliseconds since 2001 are exact in a double; the fraction is added to that.
+        val reading = (wall - UNIX_EPOCH_OFFSET_MILLIS) / 1000.0 + withinMillisecond / 1e9
+        last = if (reading > last) reading else Math.nextUp(last)
+        return last
+    }
+
+    private companion object {
+        const val NANOS_PER_MILLI = 1_000_000L
+        const val MAX_DRIFT_MILLIS = 86_400_000L
+        const val UNIX_EPOCH_OFFSET_MILLIS = 978_307_200_000L
+    }
 }

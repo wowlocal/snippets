@@ -134,6 +134,109 @@ class FoundationTextCorpusTest {
         assertEquals("\uDE00e", FoundationText.fold("\uDE00É"))
     }
 
+    // Case
+
+    /** Every scalar on its own, then whole strings: Swift maps scalar by scalar, with no final sigma. */
+    @Test
+    fun lowercasedAndUppercasedMatchSwiftOnTheWholeCorpus() {
+        val singleLower = HashMap<Int, String>()
+        val singleUpper = HashMap<Int, String>()
+        var strings = 0
+        for (row in FoundationFixture.rows("case-corpus.tsv")) {
+            val input = FoundationFixture.text(row[1])
+            val actual = when (row[0]) {
+                "lower" -> FoundationText.swiftLowercased(input)
+                "upper" -> FoundationText.swiftUppercased(input)
+                else -> fail("unknown row kind ${row[0]}")
+            }
+            assertEquals(row[2], FoundationFixture.scalars(actual), "${row[0]} ${row[1]}")
+            if (input.codePointCount(0, input.length) == 1) {
+                (if (row[0] == "lower") singleLower else singleUpper)[input.codePointAt(0)] = row[2]
+            } else {
+                strings += 1
+            }
+        }
+        assertTrue(strings > 5_000, "only $strings multi-scalar rows")
+
+        // The corpus lists every scalar that changes; every other scalar must not.
+        var lowerChanges = 0
+        var upperChanges = 0
+        for (scalar in 0..0x10FFFF) {
+            if (scalar in 0xD800..0xDFFF) continue
+            val text = String(Character.toChars(scalar))
+            val own = FoundationFixture.scalars(text)
+            val lower = FoundationFixture.scalars(FoundationText.swiftLowercased(text))
+            val upper = FoundationFixture.scalars(FoundationText.swiftUppercased(text))
+            if (scalar in singleLower || scalar in singleUpper) {
+                assertEquals(singleLower.getValue(scalar), lower, "lower U+%04X".format(scalar))
+                assertEquals(singleUpper.getValue(scalar), upper, "upper U+%04X".format(scalar))
+            } else {
+                assertEquals(own, lower, "lower U+%04X".format(scalar))
+                assertEquals(own, upper, "upper U+%04X".format(scalar))
+            }
+            if (lower != own) lowerChanges += 1
+            if (upper != own) upperChanges += 1
+        }
+        assertEquals(1488, lowerChanges)
+        assertEquals(1580, upperChanges)
+    }
+
+    @Test
+    fun caseExamples() {
+        // No final sigma, unlike the JVM.
+        assertEquals("ασ", FoundationText.swiftLowercased("ΑΣ"))
+        assertEquals("ας", "ΑΣ".lowercase(java.util.Locale.ROOT))
+        assertEquals("οδυσσεύσ", FoundationText.swiftLowercased("ΟΔΥΣΣΕΎΣ"))
+        assertEquals("ΑΣΣ", FoundationText.swiftUppercased("ασς"))
+        // No locale: the Turkish letters keep their Unicode default mappings.
+        assertEquals("i\u0307stanbul", FoundationText.swiftLowercased("İstanbul"))
+        assertEquals("ISTANBUL", FoundationText.swiftUppercased("istanbul"))
+        assertEquals("I", FoundationText.swiftUppercased("ı"))
+        assertEquals("STRASSE", FoundationText.swiftUppercased("Straße"))
+        assertEquals("ß", FoundationText.swiftLowercased("ẞ"))
+        assertEquals("FI", FoundationText.swiftUppercased("ﬁ"))
+        assertEquals("ǆ", FoundationText.swiftLowercased("ǅ"))
+        assertEquals("Ǆ", FoundationText.swiftUppercased("ǅ"))
+        assertEquals("α\u0301", FoundationText.swiftLowercased("Α\u0301"))
+        assertEquals("hello, world! 123", FoundationText.swiftLowercased("Hello, World! 123"))
+        assertEquals("HELLO, WORLD! 123", FoundationText.swiftUppercased("Hello, World! 123"))
+        assertEquals("", FoundationText.swiftLowercased(""))
+        assertEquals("a\uD83Db", FoundationText.swiftLowercased("A\uD83DB"))
+        // A case pair from Unicode 16, newer than this runtime's own tables.
+        assertEquals("\u1C8A", FoundationText.swiftLowercased("\u1C89"))
+    }
+
+    /** A damaged table must stop the first fold with its name and line, not surface later as a wrong index. */
+    @Test
+    fun aDamagedFoldTableFailsFastWithItsLine() {
+        fun failure(table: String): String {
+            val thrown = kotlin.test.assertFailsWith<IllegalStateException> {
+                FoundationFold.parse(TableReader("damaged.txt", table.toByteArray()))
+            }
+            return thrown.message ?: ""
+        }
+        val rest = "[nonbase]\n0300\n[priority]\n0300 230\n[markdecomposition]\n0344 2 0308 0301\n"
+        FoundationFold.parse(TableReader("fine.txt", ("# comment\n[base]\n0041 0061\n$rest").toByteArray()))
+        assertEquals("damaged.txt line 2: expected a scalar value", failure("[base]\n0041 -\n$rest"))
+        assertEquals("damaged.txt line 2: a scalar cannot fold to nothing", failure("[base]\n0041\n$rest"))
+        assertTrue(failure("[base]\n0041 0061 0061 0061 0061 0061 0061 0061 0061 0061\n$rest").contains("longer than"))
+        assertTrue(failure("[base]\n0042 0062\n0041 0061\n$rest").contains("out of order"))
+        assertTrue(failure("[base]\n0041 0061\n[nonbase]\n0300-02FF\n").contains("ends before it starts"))
+        assertTrue(failure("[base]\n0041 0061\n[nonbase]\n0041\n[priority]\n[markdecomposition]\n0344 2 0308 0301\n").contains("below U+0300"))
+        assertTrue(failure("[base]\n0041 0061\n[markdecomposition]\n0344 1 0308 0301\n").contains("fit the space"))
+        assertTrue(failure("[base]\n0041 0061 x\n$rest").contains("line 2"))
+        assertTrue(failure("0041 0061\n").contains("before the first section"))
+        assertTrue(failure("[other]\n").contains("unexpected section"))
+        assertTrue(failure("[base]\n110000 0061\n$rest").contains("expected a scalar value"))
+    }
+
+    @Test
+    fun warmUpParsesEveryTableAndMayBeCalledAgain() {
+        FoundationTables.warmUp()
+        FoundationTables.warmUp()
+        assertEquals("cafe", FoundationText.fold("Café"))
+    }
+
     // Characters
 
     @Test
@@ -210,7 +313,13 @@ class FoundationTextCorpusTest {
             assertEquals(row[4].toInt(), order, "order of the NFC forms $label")
             if (row[3] != row[4]) {
                 // Swift's shortcut for a binary prefix: see swiftOrdersABinaryPrefixByLength below.
-                assertTrue(first.startsWith(second) || second.startsWith(first), "Swift and NFC order differ without a prefix: $label")
+                // ... or its "neither is smaller" for two NFC forms in a prefix relation.
+                val firstNfc = FoundationText.nfc(first)
+                val secondNfc = FoundationText.nfc(second)
+                assertTrue(
+                    first.startsWith(second) || second.startsWith(first) || firstNfc.startsWith(secondNfc) || secondNfc.startsWith(firstNfc),
+                    "Swift and NFC order differ without a prefix: $label",
+                )
                 prefixShortcuts += 1
             }
         }

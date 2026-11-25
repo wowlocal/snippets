@@ -190,17 +190,33 @@ class StorageAndGuardTest {
     }
 
     @Test
-    fun aLockCanBeReleasedFromAnotherThreadAndAnInterruptIsBusy() {
+    fun aLockCanBeReleasedFromAnotherThreadAndAnInterruptNeitherShortensNorSpoilsTheWait() {
         val guard = locations.guard
         val held = assertNotNull(guard.acquire(0))
         Thread { held.close() }.also { it.start(); it.join() }
         assertFalse(guard.isHeld)
 
-        val blocker = assertNotNull(guard.acquire(0))
+        // A cancelled thread must still be able to take a free lock, and keeps its flag.
         Thread.currentThread().interrupt()
-        assertNull(guard.acquire(5_000))
+        val taken = guard.acquire(0)
         assertTrue(Thread.interrupted(), "the interrupt flag must survive")
-        blocker.close()
+        assertNotNull(taken)
+
+        // Held by someone else: busy after the whole timeout, not at once, flag kept.
+        Thread.currentThread().interrupt()
+        val started = System.nanoTime()
+        assertNull(guard.acquire(150))
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) >= 100)
+        assertTrue(Thread.interrupted(), "the interrupt flag must survive")
+
+        // An interrupt that arrives during the wait does not end it either.
+        val waiter = Thread.currentThread()
+        Thread { Thread.sleep(50); waiter.interrupt(); Thread.sleep(100); taken.close() }.start()
+        val late = guard.acquire(10_000)
+        assertTrue(Thread.interrupted(), "the interrupt flag must survive")
+        assertNotNull(late).close()
+        // The longest timeout there is must not overflow into "no time left".
+        assertNotNull(guard.acquire(Long.MAX_VALUE)).close()
     }
 
     // Missing, bytes, unreadable

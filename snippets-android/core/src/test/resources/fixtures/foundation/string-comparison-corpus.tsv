@@ -5,9 +5,9 @@
 # a<TAB>b<TAB>equal<TAB>order<TAB>normalizedOrder<TAB>outlier
 # equal is a == b; order is -1, 0 or 1 for a < b, a == b, a > b, as the standard library answers;
 # normalizedOrder is the scalar order of the two NFC forms (precomposedStringWithCanonicalMapping).
-# The two orders differ only where one string's bytes are a prefix of the other's: Swift then
-# answers by length without normalizing, although a mark in the longer string may sort before
-# the end of the shorter one.
+# Swift's < is not a consistent order for strings that are not in NFC. Where the two columns
+# differ, either one string's bytes are a prefix of the other's (Swift answers by length without
+# normalizing) or the NFC forms are in a prefix relation (Swift may answer that neither is smaller).
 # Scalars are limited to those assigned in Unicode 10.0 or earlier.
 # outlier is 1 when a or b holds U+0F73, U+0F75 or U+0F81. Their class is 0 but they decompose
 # into marks of class 129/130, and neither Swift nor Foundation reorders earlier marks past

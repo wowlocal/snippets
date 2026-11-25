@@ -37,26 +37,35 @@ internal object GraphemeBreaker {
     private const val LINKER_FLAG = 0x20
     private const val CONJUNCT_EXTEND_FLAG = 0x40
 
-    private val table: RangeTable by lazy(LazyThreadSafetyMode.PUBLICATION) {
-        val builder = RangeTable.Builder()
-        FoundationTables.forEachLine("grapheme-break.txt") { line ->
-            val space = line.indexOf(' ')
-            builder.add(line.substring(0, space), line.substring(space + 1).toInt())
+    private val table: RangeTable by lazy(LazyThreadSafetyMode.PUBLICATION) { load() }
+
+    fun warmUp() {
+        table
+    }
+
+    private fun load(): RangeTable {
+        val reader = FoundationTables.open("grapheme-break.txt")
+        val builder = RangeTable.Builder(2048)
+        while (reader.nextLine() >= 0) {
+            val start = reader.range()
+            reader.expect(' ')
+            builder.add(start, reader.rangeEnd, reader.decimal())
+            reader.endOfLine()
         }
-        builder.build().also { loaded ->
-            check(loaded.valueAt(0x0D) == CARRIAGE_RETURN && loaded.valueAt(0x1F600) == EXTENDED_PICTOGRAPHIC) {
-                "the grapheme table is damaged"
-            }
-            // clusterEnd() takes a shortcut for two scalars below U+0300: nothing there
-            // may attach to its neighbour.
-            for (scalar in 0 until 0x0300) {
-                val value = loaded.valueAt(scalar)
-                check(
-                    value == OTHER || value == CARRIAGE_RETURN || value == LINE_FEED ||
-                        value == CONTROL || value == EXTENDED_PICTOGRAPHIC,
-                ) { "unexpected grapheme class below U+0300" }
-            }
+        val loaded = builder.build()
+        check(loaded.valueAt(0x0D) == CARRIAGE_RETURN && loaded.valueAt(0x1F600) == EXTENDED_PICTOGRAPHIC) {
+            "the grapheme table is damaged"
         }
+        // clusterEnd() takes a shortcut for two scalars below U+0300: nothing there
+        // may attach to its neighbour.
+        for (scalar in 0 until 0x0300) {
+            val value = loaded.valueAt(scalar)
+            check(
+                value == OTHER || value == CARRIAGE_RETURN || value == LINE_FEED ||
+                    value == CONTROL || value == EXTENDED_PICTOGRAPHIC,
+            ) { "unexpected grapheme class below U+0300" }
+        }
+        return loaded
     }
 
     private fun valueAt(table: RangeTable, scalar: Int): Int =

@@ -10,8 +10,14 @@ import java.text.Normalizer
  *   differ from `Char.isWhitespace` (U+0085 and U+200B are members, U+001C…U+001F are not).
  * - Characters: a Swift `Character` is an extended grapheme cluster, so `count`, `prefix`
  *   and `hasPrefix` work on clusters, not on UTF-16 units.
- * - Equality and order: Swift's `==` on strings is canonical equivalence and `<` is the
- *   scalar order of the normalized form. Kotlin's are UTF-16 code unit comparisons.
+ * - Equality and order: Swift's `==` on strings is canonical equivalence and `<` is
+ *   documented as the scalar order of the normalized form. Kotlin's are UTF-16 code unit
+ *   comparisons. See [compare] for where Swift's own `<` departs from its documentation.
+ *
+ * A Kotlin string can hold an unpaired surrogate, which a Swift string cannot. Every
+ * function here accepts one and leaves it where it is.
+ * - Case: `lowercased()` and `uppercased()` map scalar by scalar, without the JVM's
+ *   final-sigma rule.
  * - Folding: `String.folding(options:locale:)` as `SnippetTagging.filterKey` calls it.
  *
  * Expected results for all of these are generated from Foundation
@@ -114,14 +120,22 @@ object FoundationText {
 
     // Equality and order
 
-    /** Normalization Form C. Two Swift strings are `==` exactly when their NFC forms are identical. */
+    /**
+     * Normalization Form C, from `java.text.Normalizer`. The data is the runtime's: a
+     * scalar assigned after the runtime's Unicode version (10.0 on Android API 28) is
+     * left as it stands, where a newer runtime or Swift would decompose or reorder it.
+     */
     fun nfc(text: String): String = if (isUnaffectedByNormalization(text)) text else Normalizer.normalize(text, Normalizer.Form.NFC)
 
     /**
-     * Swift's `a == b` for strings: canonical equivalence.
+     * Canonical equivalence: `true` exactly when the [nfc] forms are identical. This is
+     * what Swift's `a == b` on strings means.
      *
-     * Normalization comes from the runtime, so a scalar newer than the runtime's Unicode
-     * version is compared as it stands. Normalization of assigned scalars never changes.
+     * Two limits, both far from ordinary text. Normalization follows the runtime's
+     * Unicode version (see [nfc]), so for scalars newer than that the answer can differ
+     * from Swift's and between two Android versions. And Apple's normalizers do not move
+     * an earlier mark behind the decomposition of U+0F73, U+0F75 or U+0F81 as the
+     * standard requires, so Swift calls a few such strings different that are equal here.
      */
     fun canonicalEquals(first: String, second: String): Boolean {
         if (first == second) return true
@@ -130,12 +144,32 @@ object FoundationText {
     }
 
     /**
-     * Swift's `<` for strings as a three-way result: scalar-value order of the NFC forms.
-     * Zero exactly when [canonicalEquals] is true.
+     * The order of two strings by the scalar values of their [nfc] forms: a total order,
+     * zero exactly when [canonicalEquals] is true.
+     *
+     * This is the order Swift documents for `<` on strings, and for two strings that are
+     * already in NFC it is the answer Swift gives. It is deliberately **not** a copy of
+     * Swift's `<` beyond that: on strings that are not in NFC, Swift's operator is not an
+     * order at all (it has cycles, and pairs for which neither `a < b` nor `b < a` holds,
+     * so `sorted()` returns them in either order from one launch to the next), and a
+     * comparator that copied it could not be sorted with. Swift differs from this
+     * function in three classes of pairs:
+     *
+     * 1. Binary prefix: one string's code units are a prefix of the other's. Swift
+     *    answers by length without normalizing; here a mark in the longer string may
+     *    sort before the end of the shorter one (`U+0627 U+0653` is `U+0622`, below `U+0627`).
+     * 2. U+0F73, U+0F75, U+0F81 after an earlier mark: Apple's normalizers leave that
+     *    mark in front of the decomposition, the standard moves it behind.
+     * 3. NFC prefix: the NFC forms are in a prefix relation but the code units are not
+     *    (`U+0958` against `U+0915`). Swift answers "neither is smaller" although the
+     *    strings are not equal.
+     *
+     * Anything that must come out the same on Apple devices, such as the order of tags
+     * in a merged record, is only guaranteed to for NFC input.
      */
     fun compare(first: String, second: String): Int = compareScalars(nfc(first), nfc(second))
 
-    /** [compare] as a `Comparator`, for `sortedWith` where Swift calls `sorted()` on strings. */
+    /** [compare] as a `Comparator`: a total order, safe for `sortedWith`. See [compare] for how it relates to Swift's `sorted()`. */
     val order: Comparator<String> = Comparator { first, second -> compare(first, second) }
 
     /**
@@ -166,6 +200,19 @@ object FoundationText {
         for (unit in text) if (unit.code >= 0x0300) return false
         return true
     }
+
+    // Case
+
+    /**
+     * Swift's `text.lowercased()`: every scalar mapped on its own with Swift's tables. No
+     * locale and no context, so `ΑΣ` becomes `ασ`; `lowercase(Locale.ROOT)` would write a
+     * final sigma and depends on the runtime's Unicode version. Use this wherever the
+     * Swift source says `lowercased()`.
+     */
+    fun swiftLowercased(text: String): String = SwiftCase.lowercased(text)
+
+    /** Swift's `text.uppercased()`, scalar by scalar like [swiftLowercased]: `ß` becomes `SS`, `ǅ` becomes `Ǆ`. */
+    fun swiftUppercased(text: String): String = SwiftCase.uppercased(text)
 
     // Folding
 

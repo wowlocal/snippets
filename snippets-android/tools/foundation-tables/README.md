@@ -23,7 +23,9 @@ code), runs the probes, checks the rules below against Foundation, and writes:
 | `core/src/main/resources/com/khm/snippets/core/text/foundation-fold.txt` | fold tables, read by `FoundationFold` |
 | `core/src/main/resources/com/khm/snippets/core/text/grapheme-break.txt` | grapheme classes, read by `GraphemeBreaker` |
 | `core/src/test/resources/fixtures/foundation/fold-corpus.tsv` | whole-string folds |
+| `core/src/main/resources/com/khm/snippets/core/text/swift-case.txt` | case mappings, read by `SwiftCase` |
 | `…/grapheme-corpus.tsv` | `Character` boundaries |
+| `…/case-corpus.tsv` | `String.lowercased()`, `String.uppercased()` |
 | `…/character-sets.tsv` | members of `.whitespaces`, `.newlines`, `.whitespacesAndNewlines` |
 | `…/trim-split-corpus.tsv` | `trimmingCharacters(in:)`, `components(separatedBy:)` |
 | `…/string-comparison-corpus.tsv` | Swift `==` and `<` on strings |
@@ -76,6 +78,15 @@ is compared with Swift on about 44 million strings (every scalar beside one memb
 every class, and four million random strings). `GraphemeBreaker.kt` is the same state
 machine. `java.text.BreakIterator` is not used: its rules are those of the runtime's ICU.
 
+## Case mappings
+
+`String.lowercased()` and `uppercased()` of the standard library map every scalar on its
+own and concatenate: no locale and no context, so `ΑΣ` lowercases to `ασ` where the JVM's
+`lowercase(Locale.ROOT)` writes a final sigma. The per-scalar mappings (1,488 scalars
+change in `lowercased()`, 1,580 in `uppercased()`) are measured, and the scalar-by-scalar
+rule is compared with Swift on about 4.2 million strings. `SwiftCase.kt` applies them;
+`FoundationText.swiftLowercased` / `swiftUppercased` are the entry points.
+
 ## Where Kotlin deliberately follows the standard instead of Apple
 
 Canonical equivalence and order go through `java.text.Normalizer`. Two findings, both
@@ -85,9 +96,13 @@ visible in `string-comparison-corpus.tsv` and pinned by tests in
 - U+0F73, U+0F75 and U+0F81 have class 0 and decompose into marks of class 129/130.
   Apple's normalizers (the standard library's and Foundation's) do not reorder an earlier
   mark of a higher class behind them. Rows that contain one are flagged `outlier`.
-- Swift's `<` on two native strings answers by length when one string's UTF-8 is a prefix
-  of the other's, without normalizing. The corpus records both that answer and the order
-  of the NFC forms; they differ in a handful of rows, all of them prefix pairs.
+- Swift's `<` is not a consistent order for strings that are not in NFC (the review found
+  cycles, and pairs for which neither side is smaller), so it cannot be copied.
+  `FoundationText.compare` is the scalar order of the NFC forms, which is what Swift
+  documents and what Swift answers for two NFC strings. The corpus records both answers.
+  They differ when one string's UTF-8 is a prefix of the other's (Swift answers by length
+  without normalizing) and when the NFC forms are in a prefix relation; see the KDoc of
+  `FoundationText.compare` and `review/foundation/SwiftStringOrderTest`.
 
 The comparison corpus only uses scalars assigned by Unicode 10.0, the version of the
 oldest supported Android runtime, since normalization of later scalars depends on the

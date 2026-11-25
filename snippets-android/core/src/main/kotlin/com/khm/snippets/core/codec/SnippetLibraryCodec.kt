@@ -51,7 +51,14 @@ object SnippetLibraryCodec {
         class Unreadable(val cause: IOException) : ReadResult()
     }
 
-    /** `encode(_:)`: the bare array, as the app writes `snippets.json`. */
+    /**
+     * `encode(_:)`: the bare array, as the app writes `snippets.json`.
+     *
+     * An unpaired surrogate in a text field is written as U+FFFD, since UTF-8 cannot
+     * hold one (and neither can a Swift string). Such a snippet does not read back equal
+     * to itself, so callers must repair text from the clipboard or an editor before they
+     * store it, or every save will look like a change.
+     */
     @Throws(NotEncodable::class)
     fun encode(snippets: List<Snippet>): ByteArray = write(arrayOf(snippets))
 

@@ -1,9 +1,9 @@
 package com.khm.snippets.core.io
 
+import com.khm.snippets.core.text.FoundationText
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
-import java.util.Locale
 
 /**
  * Every durable path of one library, relative to an injected [root]
@@ -97,7 +97,7 @@ class StorageLocations(root: File) {
      * @return `null` unless the key is exactly 32 hex digits; it is lowercased first.
      */
     fun protocolLocations(opaqueProviderKey: String): ProtocolLocations? {
-        val key = opaqueProviderKey.lowercase(Locale.ROOT)
+        val key = FoundationText.swiftLowercased(opaqueProviderKey)
         if (key.length != 32 || !key.all { it in '0'..'9' || it in 'a'..'f' }) return null
         return ProtocolLocations("http-$key", File(syncProvidersFolder, key))
     }

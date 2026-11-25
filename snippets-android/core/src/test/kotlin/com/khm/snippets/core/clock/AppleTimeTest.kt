@@ -21,8 +21,62 @@ class AppleTimeTest {
         val before = System.currentTimeMillis()
         val now = AppleTime.now()
         val after = System.currentTimeMillis()
-        assertTrue(AppleTime.displayUnixMillis(now) in before..after)
+        // Within the wall clock's millisecond; one more allowed for the double's rounding.
+        assertTrue(AppleTime.unixSeconds(now) * 1000 in (before - 1.0)..(after + 1.0))
         assertTrue(AppleTime.systemUnixMillis() >= before)
+    }
+
+    /** 500 records without dates must not share a time: the display order would fall back to their ids. */
+    @Test
+    fun nowNeverRepeatsOrGoesBackOnAnyThread() {
+        var previous = AppleTime.now()
+        repeat(200_000) {
+            val next = AppleTime.now()
+            assertTrue(next > previous)
+            previous = next
+        }
+        val perThread = List(8) { DoubleArray(20_000) }
+        val threads = perThread.map { values -> Thread { for (index in values.indices) values[index] = AppleTime.now() } }
+        threads.forEach(Thread::start)
+        threads.forEach { it.join(60_000) }
+        for (values in perThread) for (index in 1 until values.size) assertTrue(values[index] > values[index - 1])
+        assertEquals(8 * 20_000, perThread.flatMap { it.asList() }.toSet().size)
+    }
+
+    @Test
+    fun theClockReadsInsideTheWallClocksMillisecondAndAnchorsAgainWhenTheTwoSourcesDisagree() {
+        var wall = 978_307_200_000L + 5_000 // five seconds into 2001
+        var nanos = 1_000_000_000L
+        val clock = AppleClock({ wall }, { nanos })
+
+        assertEquals(5.0, clock.now())
+        nanos += 250_000 // a quarter of a millisecond later, same wall millisecond
+        assertEquals(5.00025, clock.now(), 1e-9)
+        // Both sources frozen: still strictly increasing, by the smallest step there is.
+        val frozen = clock.now()
+        assertEquals(Math.nextUp(5.00025), frozen, 1e-12)
+        assertTrue(clock.now() > frozen)
+
+        // The wall clock ticks with the monotonic clock: the fraction carries on.
+        wall += 1
+        nanos += 1_000_000
+        assertEquals(5.00125, clock.now(), 1e-9)
+
+        // The device slept: the wall clock moved an hour, the monotonic clock did not.
+        wall += 3_600_000
+        assertEquals(3605.001, clock.now(), 1e-9)
+        nanos += 500_000
+        assertEquals(3605.0015, clock.now(), 1e-9)
+
+        // The wall clock is set back: readings creep forward instead of repeating.
+        wall -= 7_200_000
+        val afterStepBack = clock.now()
+        assertEquals(Math.nextUp(3605.0015), afterStepBack, 1e-12)
+        assertTrue(clock.now() > afterStepBack)
+
+        // A change of centuries must not overflow.
+        wall += 10_000_000_000_000L
+        assertTrue(clock.now() > 9_000_000_000.0)
     }
 
     /** `Date.millisecondsSince1970`: truncation, never rounding; nothing before 1970; 48 bits at most. */

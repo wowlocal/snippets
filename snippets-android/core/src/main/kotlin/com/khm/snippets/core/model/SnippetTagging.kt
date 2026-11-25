@@ -26,10 +26,19 @@ object SnippetTagging {
      * folded without regard to case or diacritics, against a fixed locale so that every
      * device computes the same key from the same text.
      *
-     * Swift compares these keys with `==`, `<` and `Set<String>`, all of which treat
-     * canonically equivalent strings as one. So the key is returned in Normalization
-     * Form C: two keys are the same key in Swift exactly when they are `==` here, and
-     * [FoundationText.compareScalars] orders them as Swift's `<` does.
+     * Identity: Swift compares these keys with `==` and `Set<String>`, which treat
+     * canonically equivalent strings as one. The key is therefore returned in
+     * Normalization Form C, so two keys are the same key in Swift exactly when they are
+     * `==` here (within the limits stated at [FoundationText.canonicalEquals]: the
+     * runtime's Unicode version, and three deprecated Tibetan vowel signs).
+     *
+     * Order: sort keys with [FoundationText.order] (for these NFC keys the same as
+     * [FoundationText.compareScalars]). That is the order of the normalized scalars,
+     * which Swift documents for `<`; it is not a copy of Swift's `<`, which is not a
+     * consistent order for keys that Foundation returns unnormalized. The two agree
+     * whenever Foundation's fold of both tags is already in NFC, which covers text
+     * typed on a keyboard; see [FoundationText.compare] for the three classes of pairs
+     * where they do not.
      */
     fun filterKey(tag: String): String = FoundationText.nfc(FoundationText.fold(tag))
 

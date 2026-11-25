@@ -2,7 +2,6 @@ package com.khm.snippets.core.clock
 
 import com.khm.snippets.core.text.FoundationText
 import java.security.SecureRandom
-import java.util.Locale
 
 /**
  * A hybrid logical clock reading (`HLC` in `HybridLogicalClock.swift`): wall-clock
@@ -118,7 +117,7 @@ class Hlc private constructor(
          */
         fun normalizedDevice(raw: String): String {
             val digits = ArrayList<String>(8)
-            for (character in FoundationText.characters(raw.lowercase(Locale.ROOT))) {
+            for (character in FoundationText.characters(FoundationText.swiftLowercased(raw))) {
                 if (isSwiftHexDigit(character)) digits.add(character)
             }
             val padded = StringBuilder(8)

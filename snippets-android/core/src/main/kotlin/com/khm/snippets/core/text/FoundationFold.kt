@@ -5,7 +5,7 @@ package com.khm.snippets.core.text
  *
  * Foundation (CoreFoundation's `CFStringFold`) does not fold scalar by scalar. It walks
  * the string in clusters: one leading scalar plus the "non-base" scalars that follow it.
- * The leading scalar is replaced by its own fold ([base]); what happens to the followers
+ * The leading scalar is replaced by its own fold (`base`); what happens to the followers
  * depends on that fold:
  *
  * 1. U+0000 is copied and never leads a cluster.
@@ -13,12 +13,12 @@ package com.khm.snippets.core.text
  *    every follower is dropped. This is the diacritic-insensitive part.
  * 3. Otherwise the followers are kept. If the leader's fold is the leader itself, a
  *    first follower at or below U+050F is dropped all the same.
- * 4. Each kept follower is canonically decomposed ([markDecomposition]).
+ * 4. Each kept follower is canonically decomposed (`marks`).
  * 5. A cluster holds at most 64 scalars. A follower that does not fit, or a decomposing
- *    one that finds fewer free slots than it asks for ([MarkDecomposition.space]), ends
- *    the cluster and leads the next one.
+ *    one that finds fewer free slots than it asks for (`markSpace`), ends the cluster
+ *    and leads the next one.
  * 6. The kept followers, together with the scalar before them, are stably sorted by
- *    combining class ([priority]).
+ *    combining class (`priority`).
  *
  * The tables are measured from Foundation, and the rule was checked against Foundation
  * on several million strings by the generator (`tools/foundation-tables`). The corpus in
@@ -31,64 +31,88 @@ internal object FoundationFold {
     private const val CLUSTER_BUFFER_LENGTH = 64
     private const val FIRST_POSSIBLE_NON_BASE = 0x0300
 
-    private class MarkDecomposition(val space: Int, val pieces: IntArray)
-
-    private class Tables(
-        val baseKeys: IntArray,
-        val baseValues: Array<IntArray>,
+    internal class Tables(
+        /** Leader → its own fold. */
+        val base: ScalarMap,
         val nonBase: RangeTable,
         val priority: RangeTable,
-        val markKeys: IntArray,
-        val markValues: Array<MarkDecomposition>,
+        /** Kept follower → what replaces it. */
+        val marks: ScalarMap,
+        /** Free buffer slots each entry of [marks] needs, by entry index. */
+        val markSpace: IntArray,
     )
 
-    private val tables: Tables by lazy(LazyThreadSafetyMode.PUBLICATION) { load() }
+    private val tables: Tables by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        parse(FoundationTables.open("foundation-fold.txt"))
+    }
 
-    private fun load(): Tables {
-        val baseKeys = ArrayList<Int>(2048)
-        val baseValues = ArrayList<IntArray>(2048)
-        val nonBase = RangeTable.Builder()
-        val priority = RangeTable.Builder()
-        val markKeys = ArrayList<Int>()
-        val markValues = ArrayList<MarkDecomposition>()
-        var section = ""
-        FoundationTables.forEachLine("foundation-fold.txt") { line ->
-            if (line[0] == '[') {
-                section = line
-                return@forEachLine
+    fun warmUp() {
+        tables
+    }
+
+    /** Fails with the table's name and line for anything [fold] could not use safely. */
+    internal fun parse(reader: TableReader): Tables {
+        val base = ScalarMap.Builder(2048)
+        val nonBase = RangeTable.Builder(512)
+        val priority = RangeTable.Builder(512)
+        val marks = ScalarMap.Builder(64)
+        val markSpace = IntList(64)
+        var section = 0
+        while (true) {
+            val first = reader.nextLine()
+            if (first < 0) break
+            if (first == '['.code) {
+                section = when (val heading = reader.restOfLine()) {
+                    "[base]" -> SECTION_BASE
+                    "[nonbase]" -> SECTION_NON_BASE
+                    "[priority]" -> SECTION_PRIORITY
+                    "[markdecomposition]" -> SECTION_MARKS
+                    else -> reader.fail("unexpected section $heading")
+                }
+                continue
             }
-            val space = line.indexOf(' ')
             when (section) {
-                "[base]" -> {
-                    baseKeys.add(FoundationTables.scalar(line.substring(0, space)))
-                    baseValues.add(FoundationTables.scalars(line.substring(space + 1)))
+                SECTION_BASE -> {
+                    base.begin(reader.hex())
+                    while (reader.accept(' ')) base.append(reader.hex())
+                    // fold() reads the last scalar of every entry and copies it into the cluster buffer.
+                    if (base.currentLength == 0) reader.fail("a scalar cannot fold to nothing")
+                    if (base.currentLength > MAXIMUM_BASE_LENGTH) reader.fail("a fold longer than $MAXIMUM_BASE_LENGTH scalars")
                 }
-                "[nonbase]" -> nonBase.add(line, 1)
-                "[priority]" -> priority.add(line.substring(0, space), line.substring(space + 1).toInt())
-                "[markdecomposition]" -> {
-                    val second = line.indexOf(' ', space + 1)
-                    markKeys.add(FoundationTables.scalar(line.substring(0, space)))
-                    markValues.add(
-                        MarkDecomposition(
-                            space = line.substring(space + 1, second).toInt(),
-                            pieces = FoundationTables.scalars(line.substring(second + 1)),
-                        ),
-                    )
+                SECTION_NON_BASE -> nonBase.add(reader.range(), reader.rangeEnd, 1)
+                SECTION_PRIORITY -> {
+                    val start = reader.range()
+                    reader.expect(' ')
+                    priority.add(start, reader.rangeEnd, reader.decimal())
                 }
-                else -> throw IllegalStateException("unexpected section $section")
+                SECTION_MARKS -> {
+                    marks.begin(reader.hex())
+                    reader.expect(' ')
+                    val space = reader.decimal()
+                    while (reader.accept(' ')) marks.append(reader.hex())
+                    if (marks.currentLength == 0 || space < marks.currentLength || space > CLUSTER_BUFFER_LENGTH) {
+                        reader.fail("a mark's replacement must be non-empty and fit the space it asks for")
+                    }
+                    markSpace.add(space)
+                }
+                else -> reader.fail("data before the first section")
             }
+            reader.endOfLine()
         }
-        check(baseKeys.isNotEmpty() && markKeys.isNotEmpty()) { "the fold tables are empty" }
-        val nonBaseTable = nonBase.build()
+        val tables = Tables(base.build(), nonBase.build(), priority.build(), marks.build(), markSpace.toArray())
+        check(tables.base.size > 0 && tables.marks.size > 0) { "the fold tables are empty" }
         // fold() and isNonBase() take shortcuts for scalars below U+0300.
         for (scalar in 0 until FIRST_POSSIBLE_NON_BASE) {
-            check(nonBaseTable.valueAt(scalar) == 0) { "unexpected non-base scalar below U+0300" }
+            check(tables.nonBase.valueAt(scalar) == 0) { "unexpected non-base scalar below U+0300" }
         }
-        return Tables(
-            baseKeys.toIntArray(), baseValues.toTypedArray(), nonBaseTable, priority.build(),
-            markKeys.toIntArray(), markValues.toTypedArray(),
-        )
+        return tables
     }
+
+    private const val MAXIMUM_BASE_LENGTH = 8
+    private const val SECTION_BASE = 1
+    private const val SECTION_NON_BASE = 2
+    private const val SECTION_PRIORITY = 3
+    private const val SECTION_MARKS = 4
 
     fun fold(text: String): String {
         val length = text.length
@@ -109,12 +133,14 @@ internal object FoundationFold {
                 continue
             }
 
-            val mapped = baseOf(tables, lead)
+            val mapped = tables.base.indexOf(lead)
             var filled = 0
-            if (mapped == null) {
+            if (mapped < 0) {
                 buffer[filled++] = lead
             } else {
-                for (scalar in mapped) buffer[filled++] = scalar
+                for (position in tables.base.start(mapped) until tables.base.end(mapped)) {
+                    buffer[filled++] = tables.base.scalarAt(position)
+                }
             }
 
             if (buffer[filled - 1] < STRIP_LIMIT) {
@@ -123,22 +149,22 @@ internal object FoundationFold {
                 continue
             }
 
-            if (mapped == null) {
+            if (mapped < 0) {
                 val first = nonBaseAt(tables, text, index)
                 if (first < 0) {
                     out.appendCodePoint(lead)
                     continue
                 }
                 index += Character.charCount(first)
-                if (first > LOW_MARK_LIMIT) filled = appendMark(tables, first, buffer, filled)
+                if (first > LOW_MARK_LIMIT) filled = appendMark(tables, first, tables.marks.indexOf(first), buffer, filled)
             }
 
             while (filled < CLUSTER_BUFFER_LENGTH) {
                 val mark = nonBaseAt(tables, text, index)
                 if (mark < 0) break
-                val decomposition = markOf(tables, mark)
-                if (decomposition != null && decomposition.space > CLUSTER_BUFFER_LENGTH - filled) break
-                filled = appendMark(tables, mark, buffer, filled)
+                val decomposition = tables.marks.indexOf(mark)
+                if (decomposition >= 0 && tables.markSpace[decomposition] > CLUSTER_BUFFER_LENGTH - filled) break
+                filled = appendMark(tables, mark, decomposition, buffer, filled)
                 index += Character.charCount(mark)
             }
 
@@ -160,16 +186,6 @@ internal object FoundationFold {
         return String(out)
     }
 
-    private fun baseOf(tables: Tables, scalar: Int): IntArray? {
-        val position = tables.baseKeys.binarySearch(scalar)
-        return if (position >= 0) tables.baseValues[position] else null
-    }
-
-    private fun markOf(tables: Tables, scalar: Int): MarkDecomposition? {
-        val position = tables.markKeys.binarySearch(scalar)
-        return if (position >= 0) tables.markValues[position] else null
-    }
-
     private fun isNonBase(tables: Tables, scalar: Int): Boolean =
         scalar >= FIRST_POSSIBLE_NON_BASE && tables.nonBase.valueAt(scalar) != 0
 
@@ -189,13 +205,15 @@ internal object FoundationFold {
         }
     }
 
-    private fun appendMark(tables: Tables, mark: Int, buffer: IntArray, filled: Int): Int {
+    /** [decomposition] is the mark's entry in `marks`, or negative when it is kept as it is. */
+    private fun appendMark(tables: Tables, mark: Int, decomposition: Int, buffer: IntArray, filled: Int): Int {
         var count = filled
-        val decomposition = markOf(tables, mark)
-        if (decomposition == null) {
+        if (decomposition < 0) {
             buffer[count++] = mark
         } else {
-            for (piece in decomposition.pieces) buffer[count++] = piece
+            for (position in tables.marks.start(decomposition) until tables.marks.end(decomposition)) {
+                buffer[count++] = tables.marks.scalarAt(position)
+            }
         }
         return count
     }

@@ -1,8 +1,9 @@
 package com.khm.snippets.core.io
 
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
-import java.nio.ByteBuffer
+import java.nio.channels.ClosedByInterruptException
 import java.nio.channels.FileChannel
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -24,6 +25,9 @@ import java.util.EnumSet
  * anything is sent, and the base before an acknowledgement: without the first force a
  * power loss can leave a renamed file with missing blocks, without the second it can
  * roll the rename back.
+ *
+ * A write does not depend on the calling thread's interrupt flag: a thread that was
+ * cancelled can still save, and the flag is left as it was found.
  */
 object AtomicFileWriter {
 
@@ -54,7 +58,8 @@ object AtomicFileWriter {
      * @param temporaryDirectory where the temporary file is staged; created if missing.
      *   It must be on the same filesystem as [destination]. If it turns out not to be,
      *   the write is staged beside the destination instead.
-     * @param permissions POSIX mode bits of the result, also over an existing wider file.
+     * @param permissions POSIX mode bits of the result, also over an existing file of any
+     *   mode. A mode without owner-write is fine: it is applied after the bytes are written.
      * @param directorySync test seam for the final directory force. A failure it throws
      *   propagates although the new contents are already in place.
      */
@@ -86,13 +91,17 @@ object AtomicFileWriter {
         var renamed = false
         var stageBesideDestination = false
         try {
-            applyPermissions(temporary, permissions)
             try {
-                FileChannel.open(temporary, StandardOpenOption.WRITE).use { channel ->
-                    val buffer = ByteBuffer.wrap(data)
-                    while (buffer.hasRemaining()) channel.write(buffer)
+                // A stream, not a FileChannel: a channel closes itself and fails when the
+                // thread's interrupt flag is set, and a cancelled thread must still be
+                // able to save. Swift retries on EINTR for the same reason.
+                FileOutputStream(temporary.toFile()).use { stream ->
+                    stream.write(data)
+                    // `fchmod` in Swift. After the bytes, so a result without owner-write can
+                    // be written; before the sync, so the mode is as durable as the contents.
+                    applyPermissions(temporary, permissions)
                     // The bytes must be on stable storage before the rename publishes them.
-                    channel.force(true)
+                    stream.fd.sync()
                 }
             } catch (failure: IOException) {
                 throw Failure.WriteFailed(failure)
@@ -144,13 +153,31 @@ object AtomicFileWriter {
         synchronizeDirectory(parentOf(file))
     }
 
-    /** Forces a directory's entries to storage, the fence after a rename or a removal. */
+    /**
+     * Forces a directory's entries to storage, the fence after a rename or a removal.
+     *
+     * The only way to do this on the JVM is a `FileChannel`, which gives up when the
+     * thread is interrupted. An interrupt must not turn a completed rename into a failed
+     * fence, so the flag is set aside, the force is repeated if an interrupt lands in
+     * the middle of it, and the flag is restored for the caller.
+     */
     @Throws(Failure.DirectorySyncFailed::class)
     fun synchronizeDirectory(directory: File) {
+        var interrupted = false
         try {
-            FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
-        } catch (failure: IOException) {
-            throw Failure.DirectorySyncFailed(directory.path, failure)
+            while (true) {
+                if (Thread.interrupted()) interrupted = true
+                try {
+                    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+                    return
+                } catch (_: ClosedByInterruptException) {
+                    // The flag is set again; the next round clears it and forces once more.
+                } catch (failure: IOException) {
+                    throw Failure.DirectorySyncFailed(directory.path, failure)
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
         }
     }
 
@@ -174,7 +201,7 @@ object AtomicFileWriter {
     private fun supportsPosix(path: Path): Boolean =
         path.fileSystem.supportedFileAttributeViews().contains("posix")
 
-    // `fchmod`, whose result Swift ignores as well: the file was created owner-only.
+    // Swift ignores the result of its `fchmod` as well: the file was created owner-only.
     private fun applyPermissions(file: Path, mode: Int) {
         if (!supportsPosix(file)) return
         try {

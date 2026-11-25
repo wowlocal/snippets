@@ -45,17 +45,27 @@ class LibraryGuard private constructor() {
         get() = permit.availablePermits() == 0
 
     /**
-     * Waits up to [timeoutMillis] for the lock. `null` means busy. An interrupt while
-     * waiting also gives `null`, with the thread's interrupt flag left set.
+     * Waits up to [timeoutMillis] for the lock. `null` means busy, and only that: the wait
+     * is not cut short by an interrupt, because a cancelled thread must still be able to
+     * save. The thread's interrupt flag is left as it was found.
      */
     fun acquire(timeoutMillis: Long): Held? {
-        val taken = try {
-            permit.tryAcquire(maxOf(0L, timeoutMillis), TimeUnit.MILLISECONDS)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            false
+        val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(maxOf(0L, timeoutMillis))
+        val started = System.nanoTime()
+        var interrupted = false
+        try {
+            while (true) {
+                val remaining = maxOf(0L, timeoutNanos - (System.nanoTime() - started))
+                try {
+                    // The timed form queues behind earlier waiters even with no time left.
+                    return if (permit.tryAcquire(remaining, TimeUnit.NANOSECONDS)) Held() else null
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
         }
-        return if (taken) Held() else null
     }
 
     /** Runs [body] under the lock, or throws [Busy] without running it. */

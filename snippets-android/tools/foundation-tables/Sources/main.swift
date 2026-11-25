@@ -38,6 +38,16 @@ write(graphemeResourceLines(graphemeTables, environment: environment),
 write(graphemeCorpusLines(graphemeTables, environment: environment),
       to: fixtures.appendingPathComponent("grapheme-corpus.tsv"))
 
+print("probing the case mappings...")
+let caseTables = probeCaseTables()
+print("  \(caseTables.lower.count) scalars change in lowercased(), \(caseTables.upper.count) in uppercased()")
+let caseChecks = verifyCaseModel(caseTables)
+print("  scalar-by-scalar mapping matches Swift on \(caseChecks) strings")
+write(caseResourceLines(caseTables, environment: environment),
+      to: resources.appendingPathComponent("swift-case.txt"))
+write(caseCorpusLines(caseTables, environment: environment),
+      to: fixtures.appendingPathComponent("case-corpus.tsv"))
+
 print("writing the remaining corpora...")
 write(characterSetLines(environment: environment),
       to: fixtures.appendingPathComponent("character-sets.tsv"))

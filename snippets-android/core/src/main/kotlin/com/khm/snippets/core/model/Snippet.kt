@@ -15,7 +15,10 @@ import java.util.UUID
  * U+0301) and timestamps as IEEE doubles (`0.0` equals `-0.0`). Whole-snippet equality
  * decides whether the library is written, so it has to give the answers Swift gives.
  * Unlike Swift, a not-a-number timestamp equals itself, which `equals` requires; the
- * decoder cannot produce one.
+ * decoder cannot produce one. Canonical equivalence is computed by the runtime
+ * ([com.khm.snippets.core.text.FoundationText.canonicalEquals]).
+ *
+ * Text fields should be well-formed: the codec writes an unpaired surrogate as U+FFFD.
  */
 data class Snippet(
     val id: UUID = UUID.randomUUID(),

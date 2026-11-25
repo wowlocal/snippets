@@ -46,18 +46,23 @@ Orchestrator's running plan. Updated as waves finish.
 
 | Package | Contents | State |
 |---|---|---|
-| `core.git` (wire) | objects, pkt-line, pack, smart HTTP, SSH framing, cache, test server | in progress |
-| `core.crypto`, `core.canonical` | primitives, SwiftDouble, JsonValue, CanonicalJson | in progress |
-| `core.text`, `core.clock`, `core.io`, `core.model`, `core.codec` | foundation layer | in progress |
-| `core.wire`, `core.sync.transport`, fake transport | envelope, WireCodec, transport types | next |
-| `core.search`, `core.placeholders`, `core.assist`, `core.interchange`, `core.settings` | utilities | next |
-| `core.vault`, `core.backup` | vault document, session, store, backups | next |
+| `core.git` (wire) | objects, pkt-line, pack, smart HTTP, SSH framing, cache, test server | committed; review fixes in progress (11 findings) |
+| `core.crypto`, `core.canonical` | primitives, SwiftDouble, JsonValue, CanonicalJson | committed; not yet reviewed |
+| `core.text`, `core.clock`, `core.io`, `core.model`, `core.json`, `core.codec` | foundation layer | committed; review in progress |
+| `core.wire`, `core.sync.transport`, `core.sync.testing` | envelope, WireCodec, transport types, fake | in progress |
+| `core.search`, `core.placeholders`, `core.assist`, `core.interchange`, `core.settings` | utilities | in progress |
+| `core.vault`, `core.backup` | vault document, session, store, backups | in progress |
 | `core.state`, `core.sync.base`, `core.merge`, `core.library` | state, base, merge, writer | after wire |
 | `core.sync.journal`, `core.projection` | journal, projection, materializer | after merge |
 | `core.sync.engine` | engine | after journal |
 | `core.store`, `core.sync.app` | store, bridge, coordinator, provider selection | after engine |
-| `core.git` (transport, setup, plain text, key files, JSch) | Git provider | after engine types |
+| `core.git` (layout, key files, plain text, transport, setup, JSch) | Git provider | after wire and engine types |
 | `core.cloud` | Snippets Cloud | last |
+| `:app` `ui.theme`, `ui.components`, `ui.gallery` | design system | in progress |
+
+Review queue: crypto + canonical (independent review still owed). Git cache needs the transport
+to serialise installs (review finding 11). Android refuses repository paths with non-UTF-8
+percent escapes (Swift collapses them to the host root; tell the user).
 
 ## Waves
 
