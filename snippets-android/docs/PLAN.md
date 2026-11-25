@@ -82,3 +82,18 @@ Swift, fixes, re-test.
 - Swift placeholder resolver traps on `{date "}` (brief 01).
 - Linux tag folding differs from Apple outside Latin/Greek/Cyrillic (brief 01).
 - compileSdk 36 holds Compose/Lifecycle/OkHttp one release back.
+- Confirmed by running Swift: `snippets-linux/tests/fixtures/backup-v1.json` opens in Swift with
+  its secure record's dates lost (ISO strings become `distantPast`).
+- Swift quirks found by the interop tool: a recovery code pasted with CRLF fails `wrongLength`;
+  a changed `backupID` reports `wrongPassphrase`; `SyncEnvelope.parse` accepts schemaVersion <= 0;
+  `C:/Users/...` parses as scp-style SSH; trailing `.git/` stays in the SSH canonical identity but
+  not the HTTPS one; `{date format="it''s"}` resolves to an empty string.
+- `vault.json` timestamps round through whole milliseconds since 1970; Kotlin reproduces the
+  arithmetic (vector V14).
+
+## Working notes
+
+- Commits go to `feature/android-kotlin` (pushed), built without switching the checkout, via the
+  orchestrator's helper script. Commit each piece when its agent reports tests green.
+- Vectors: `core/src/test/resources/vectors/swift/{sealed,open}`, tool `tools/swift-interop`.
+- App UI is built against contracts with fakes first, then wired to `:core`.
