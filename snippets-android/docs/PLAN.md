@@ -96,6 +96,13 @@ Swift, fixes, re-test.
 - `vault.json` timestamps round through whole milliseconds since 1970; Kotlin reproduces the
   arithmetic (vector V14).
 
+- More Swift-side findings from the utilities port: `{date:BBBBBB}` crashes `DateFormatter`
+  (SIGSEGV); on iOS one enabled secure snippet without a keyword makes every keyword warn and
+  suppresses suggestions; creation links with a raw space or stray `%` are not percent-decoded.
+- Swift's merged tag order is nondeterministic for some non-NFC tag pairs (foundation review).
+- Android refuses repository addresses whose path has a non-UTF-8 percent escape (Swift collapses
+  the identity to the host root).
+
 ## Working notes
 
 - Commits go to `feature/android-kotlin` (pushed), built without switching the checkout, via the

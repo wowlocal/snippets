@@ -1,0 +1,66 @@
+# Generated from the unmodified Swift sources (snippets/Core) by the utilities probe. Do not edit.
+# macOS: Version 27.2.1 (Build 26B131)
+# platform<TAB>rowID<TAB>title<TAB>detail<TAB>destination; then sections as platform<TAB>#section<TAB>title<TAB>destinations
+macOS	launchAtLogin	Open Snippets at Login	General	general
+macOS	quitBehavior	Pressing Cmd+Q	General	general
+macOS	globalShortcuts	Global Shortcuts	Expansion	expansion
+macOS	accessibility	Accessibility Permission	Expansion	expansion
+macOS	matchHighlight	Match Highlighting	Expansion	expansion
+macOS	suggestionRanking	Suggestion Ranking	Expansion	expansion
+macOS	selectionMemory	Remember Selections	Expansion	expansion
+macOS	resetUsage	Reset Usage Data	Expansion	expansion
+macOS	clipboardHistoryEnabled	Keep Clipboard History	Clipboard History	clipboardHistory
+macOS	clearClipboardHistory	Clear Clipboard History	Clipboard History	clipboardHistory
+macOS	clipboardExcludedApps	Excluded Apps	Clipboard History	clipboardHistory
+macOS	cloudProvider	Cloud Provider	Sync	sync
+macOS	cloudAccount	Cloud Account	Sync	sync
+macOS	syncEnabled	Sync This Library	Sync	sync
+macOS	syncStatus	Sync Status	Sync	sync
+macOS	syncNow	Sync Now	Sync	sync
+macOS	syncRecovery	Sync Recovery	Sync	sync
+macOS	vaultStatus	Secure Snippets Status	Secure Snippets	secureSnippets
+macOS	keyStorage	Key Storage	Secure Snippets	secureSnippets
+macOS	vaultSetup	Set Up Secure Snippets	Secure Snippets	secureSnippets
+macOS	lockVault	Lock Now	Secure Snippets	secureSnippets
+macOS	recoveryKey	Add Recovery Key	Secure Snippets	secureSnippets
+macOS	restoreRecovery	Restore with Recovery Key	Secure Snippets	secureSnippets
+macOS	forgetVault	Remove Secure Snippets from This Device	Secure Snippets	secureSnippets
+macOS	importLibrary	Import Library	Backup	backup
+macOS	exportSharing	Export for Sharing	Backup	backup
+macOS	encryptedBackup	Export Encrypted Backup	Backup	backup
+macOS	chromiumApps	Chromium Apps	Integrations	integrations
+macOS	commandLineTool	Command Line Tool	Integrations	integrations
+macOS	persistentLogs	Persistent Logs	Diagnostics	diagnostics
+macOS	expansionLogging	Expansion Diagnostics	Diagnostics	diagnostics
+macOS	exportLogs	Export Logs	Diagnostics	diagnostics
+macOS	deleteLogs	Delete Logs	Diagnostics	diagnostics
+macOS	writeHealth	Write Health	Diagnostics	diagnostics
+macOS	version	Version and Build	About	about
+macOS	updates	Software Updates	About	about
+macOS	projectLink	Project and License	About	about
+macOS	#section	Application	general,expansion,clipboardHistory
+macOS	#section	Library	sync,secureSnippets,backup
+macOS	#section	Advanced	integrations,diagnostics,about
+iOS	cloudProvider	Cloud Provider	Sync	sync
+iOS	cloudAccount	Cloud Account	Sync	sync
+iOS	syncEnabled	Sync This Library	Sync	sync
+iOS	syncStatus	Sync Status	Sync	sync
+iOS	syncNow	Sync Now	Sync	sync
+iOS	syncRecovery	Sync Recovery	Sync	sync
+iOS	vaultStatus	Secure Snippets Status	Secure Snippets	secureSnippets
+iOS	keyStorage	Key Storage	Secure Snippets	secureSnippets
+iOS	vaultSetup	Set Up Secure Snippets	Secure Snippets	secureSnippets
+iOS	lockVault	Lock Now	Secure Snippets	secureSnippets
+iOS	recoveryKey	Add Recovery Key	Secure Snippets	secureSnippets
+iOS	restoreRecovery	Restore with Recovery Key	Secure Snippets	secureSnippets
+iOS	forgetVault	Remove Secure Snippets from This Device	Secure Snippets	secureSnippets
+iOS	importLibrary	Import Library	Backup	backup
+iOS	exportSharing	Export for Sharing	Backup	backup
+iOS	encryptedBackup	Export Encrypted Backup	Backup	backup
+iOS	persistentLogs	Persistent Logs	Diagnostics	diagnostics
+iOS	exportLogs	Export Logs	Diagnostics	diagnostics
+iOS	deleteLogs	Delete Logs	Diagnostics	diagnostics
+iOS	version	Version and Build	About	about
+iOS	projectLink	Project and License	About	about
+iOS	#section	Library	sync,secureSnippets,backup
+iOS	#section	Support	diagnostics,about
