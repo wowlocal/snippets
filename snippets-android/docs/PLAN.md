@@ -103,6 +103,13 @@ Swift, fixes, re-test.
 - Android refuses repository addresses whose path has a non-UTF-8 percent escape (Swift collapses
   the identity to the host root).
 
+- Swift sync never converges when two devices both add different tags to the same record (for
+  example ancestor `["work"]`, one side adds `urgent`, the other `draft`): each round restamps and
+  re-submits both records forever. Reproduced with two real Swift engines (9 of 16 scenarios).
+  Smallest fix: standard three-way rule for the tag list (if one side equals the ancestor, take the
+  other side's list). It changes synced bytes, so it needs a coordinated protocol change in Swift,
+  Linux and Kotlin. Not implemented on Android.
+
 ## Working notes
 
 - Commits go to `feature/android-kotlin` (pushed), built without switching the checkout, via the
