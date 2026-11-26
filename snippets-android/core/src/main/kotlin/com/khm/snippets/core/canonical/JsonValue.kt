@@ -135,7 +135,12 @@ sealed class JsonValue {
             else -> null
         }
 
-    /** Materialises a `String`. The final hop, and only for values that are plaintext by design. */
+    /**
+     * Materialises a `String`. The final hop, and only for values that are plaintext by design.
+     *
+     * Swift's `Value.text`: for [Utf8] that is `String(data:encoding: .utf8)`, which drops
+     * one leading U+FEFF (the bytes in [utf8OrNull] keep it). A [Text] is returned as it is.
+     */
     val textOrNull: String?
         get() = when (this) {
             is Text -> value

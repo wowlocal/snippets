@@ -18,6 +18,31 @@ let environment = GeneratorEnvironment(
     macOS: ProcessInfo.processInfo.operatingSystemVersionString,
     swift: arguments[3])
 
+// `FOUNDATION_TABLES_ONLY=precomposed` regenerates only the precomposition files.
+let only = ProcessInfo.processInfo.environment["FOUNDATION_TABLES_ONLY"]
+
+if only == nil || only == "precomposed" {
+    print("probing the precomposition tables...")
+    let precomposedTables = probePrecomposedTables()
+    print("  \(precomposedTables.decomposition.count) decompositions, "
+        + "\(precomposedTables.compose.values.map(\.count).reduce(0, +)) compositions, "
+        + "\(precomposedTables.nonBaseStarter.count) class-0 marks that join a run")
+    let pool = precomposedPool(precomposedTables)
+    let precomposedChecks = verifyPrecomposedModel(precomposedTables, pool: pool)
+    print("  precomposition rule matches Foundation on \(precomposedChecks.checked) strings")
+    write(precomposedResourceLines(precomposedTables, environment: environment),
+          to: resources.appendingPathComponent("foundation-precomposed.txt"))
+    write(precomposedDigestLines(pool, digests: precomposedChecks.digests, checked: precomposedChecks.checked,
+                                 environment: environment),
+          to: fixtures.appendingPathComponent("precomposed-digests.tsv"))
+    write(precomposedCorpusLines(precomposedChecks.rows, environment: environment),
+          to: fixtures.appendingPathComponent("precomposed-corpus.tsv"))
+}
+if only != nil {
+    print("done")
+    exit(0)
+}
+
 print("probing the fold tables...")
 let foldTables = probeFoldTables()
 print("  \(foldTables.base.count) scalars change, \(foldTables.nonBase.filter { $0 }.count) non-base scalars, "

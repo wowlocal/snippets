@@ -65,7 +65,7 @@ object CanonicalJson {
 
     /** Swift `CanonicalJSON.string`. For tests and diagnostics; never for a value that contains a secret. */
     @Throws(Failure::class)
-    fun encodeToString(value: JsonValue): String = String(encode(value), StandardCharsets.UTF_8)
+    fun encodeToString(value: JsonValue): String = Utf8.decodeStrict(encode(value)) ?: throw Failure.InvalidUtf8()
 
     private fun emit(value: JsonValue, out: ByteSink) {
         when (value) {
@@ -203,17 +203,30 @@ object CanonicalJson {
      * Numbers follow Swift exactly: a token with `.` or an exponent is a [JsonValue.Real]
      * (an out-of-range one is infinite, and emitting it then fails); any other token is a
      * [JsonValue.Integer], or a [JsonValue.Real] when it does not fit in 64 bits.
+     *
+     * A key is Foundation's `String(data:encoding: .utf8)` of its bytes, which drops one
+     * leading U+FEFF: `{"\u{FEFF}a":1}` has the key `a` and is re-emitted as `{"a":1}`, and
+     * `{"\u{FEFF}a":1,"a":2}` is [Failure.DuplicateKey], as in Swift. String values are bytes
+     * and keep every byte; [JsonValue.textOrNull] drops the mark when they become text.
      */
     @Throws(Failure::class)
-    fun parse(bytes: ByteArray): JsonValue {
-        val parser = Parser(bytes)
+    fun parse(bytes: ByteArray): JsonValue = parse(bytes, keysAsFoundationReadsThem = true)
+
+    /**
+     * [parse], with [keysAsFoundationReadsThem] `false` for a reader that ports a Swift
+     * `JSONDecoder` rather than `CanonicalJSON.value`: there a key keeps a leading U+FEFF,
+     * so it is another key than the one without it.
+     */
+    @Throws(Failure::class)
+    internal fun parse(bytes: ByteArray, keysAsFoundationReadsThem: Boolean): JsonValue {
+        val parser = Parser(bytes, keysAsFoundationReadsThem)
         val value = parser.parseValue(0)
         parser.skipWhitespace()
         if (parser.index != bytes.size) throw Failure.TrailingBytes(parser.index)
         return value
     }
 
-    private class Parser(private val bytes: ByteArray) {
+    private class Parser(private val bytes: ByteArray, private val keysAsFoundationReadsThem: Boolean) {
         var index = 0
 
         private fun byteAt(position: Int): Int = bytes[position].toInt() and 0xFF
@@ -264,7 +277,9 @@ object CanonicalJson {
             while (true) {
                 skipWhitespace()
                 if (index >= bytes.size || byteAt(index) != '"'.code) throw Failure.UnexpectedByte(index)
-                val key = String(parseString(), StandardCharsets.UTF_8)
+                val keyBytes = parseString()
+                val key = (if (keysAsFoundationReadsThem) Utf8.decodeStrict(keyBytes) else Utf8.decodeKeepingByteOrderMark(keyBytes))
+                    ?: throw Failure.InvalidUtf8()
                 if (!seen.add(normalizedKey(key))) throw Failure.DuplicateKey(key)
 
                 skipWhitespace()

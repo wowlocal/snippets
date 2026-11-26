@@ -31,6 +31,9 @@ code), runs the probes, checks the rules below against Foundation, and writes:
 | `…/string-comparison-corpus.tsv` | Swift `==` and `<` on strings |
 | `…/model-corpus.tsv` | `sanitizedKeyword`, `normalizedTags`, `displayName`, first content line, display order |
 | `…/codec-corpus.tsv` | `SnippetLibraryCodec` decode outcomes and encoded bytes |
+| `core/src/main/resources/com/khm/snippets/core/text/foundation-precomposed.txt` | precomposition tables, read by `FoundationPrecomposed` |
+| `…/precomposed-digests.tsv` | SHA-256 per 65,536 results of `precomposedStringWithCanonicalMapping` over 39 million strings |
+| `…/precomposed-corpus.tsv` | a readable sample of those results |
 
 Each file's header records the macOS and Swift versions that produced it and its line
 format. Strings are written as space-separated scalar values. Random cases come from a
@@ -68,6 +71,35 @@ classes by asking Foundation to order pairs of marks, and then compares the rule
 Foundation on about 6.5 million strings (every scalar alone and with followers, every
 non-base scalar after sixteen kinds of leader, two million random strings, and runs that
 cross the 64-scalar buffer). `FoundationFold.kt` is the same rule.
+
+## Precomposition (`precomposedStringWithCanonicalMapping`)
+
+`PassphraseKDF.derive` stretches `passphrase.precomposedStringWithCanonicalMapping`, which on
+Apple platforms is CoreFoundation's `CFStringNormalize(_, .C)` and not Unicode NFC. The
+rule (`PrecomposedModel`, and `FoundationPrecomposed.kt`) is that function statement for
+statement, on a UTF-16 buffer edited in place, over measured data:
+
+- `[decomposition]`: the normal form D of every scalar alone, which for a class-0 scalar at
+  the end of a string is CoreFoundation's unsorted decomposition (Hangul syllables are
+  algorithmic);
+- `[rank]`: combining classes, placed on a ladder by asking Foundation to order marks;
+- `[compose]`: a scalar that comes back from its own decomposition composes from the
+  composed prefix and the last piece; a BMP mark looks its base up by the low 16 bits;
+- `[nonbasestarter]`: class-0 marks that join a run after a base that does not decompose;
+- `[markspace]`: how much of the 64-scalar buffer a decomposable mark needs.
+
+Where it departs from NFC: a Hangul syllable is never decomposed (`AC00 11AB` stays);
+conjoining jamo compose with off-by-one bounds (`1105 1176` is `B9C8`, `1113 1176` a lone
+surrogate read back as U+FFFD); `10041 030A` is `00C5`; U+0F73, U+0F75 and U+0F81 are
+decomposed in place without reordering; a decomposable mark that does not fit the buffer is
+dropped. The generator checks that nothing below U+0300 ever changes (the Kotlin fast path)
+and compares the rule with Foundation on 39,048,691 strings: every scalar alone, after `a`
+and 13 other leaders, before U+0301 and 13 other followers, inside three-scalar contexts,
+every jamo pair, every L V T triple around the bounds, every syllable before every trailing
+consonant, three million random strings from the 3,952 scalars the tables mention (one in
+ten from anywhere), and runs that reach the buffer limit. The Kotlin test walks the same
+families and compares digests. `FOUNDATION_TABLES_ONLY=precomposed regenerate.sh` writes
+only these three files.
 
 ## Grapheme clusters
 

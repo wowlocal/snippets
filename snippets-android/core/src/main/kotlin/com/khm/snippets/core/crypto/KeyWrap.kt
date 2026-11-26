@@ -92,7 +92,8 @@ object KeyWrap {
     /**
      * Recovers `K_lib`, or throws; the caller wipes the result. [Failure.WrongKey] only for
      * a failed tag: a structural problem with the blob keeps its own [SnippetCrypto.Failure],
-     * so a truncated blob is never reported as a wrong recovery key.
+     * so a truncated blob is never reported as a wrong recovery key, and a platform AES-GCM
+     * that fails for another reason stays [SnippetCrypto.Failure.CryptoUnavailable].
      */
     @Throws(Failure::class, SnippetCrypto.Failure::class)
     fun unwrap(envelope: String, material: ByteArray, purpose: Purpose, kid: String, salt: ByteArray): ByteArray {

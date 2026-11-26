@@ -132,6 +132,11 @@ end-to-end emulator runs, interop with the Mac app's formats, replacing the old 
   that still holds records. Then delete `LibraryVaultTransaction`, `MoveMarker*`,
   `RecordingMarkers` and their test; use `transaction.pendingMarker()` in
   `reconcileInterruptedMove`.
+- `vault/SecureSnippetStore.kt:743,946` catch `Exception` around `KeyWrap.unwrap` and report
+  `IncorrectRecoveryCode`; catch only the wrong-key failures so `CryptoUnavailable` surfaces.
+- PBKDF2 is 1.88x faster (317 ms per 600k rounds on this Mac); measure on a device before deciding
+  on a hand-written SHA-512 compression.
+- Deep-link host with a raw leading BOM keeps it (Swift's `URL.host` drops it).
 - `core.json`: list an object's keys and read a number as written; then fold `core.vault.LenientJson`
   (about 170 duplicated lines) into it.
 - `tools/swift-interop/README.md`: the vault millisecond formula rounds halves toward the later

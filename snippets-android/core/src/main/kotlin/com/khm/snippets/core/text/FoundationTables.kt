@@ -2,8 +2,8 @@ package com.khm.snippets.core.text
 
 /**
  * The tables generated from Foundation and the Swift standard library by
- * `snippets-android/tools/foundation-tables`: the fold, the grapheme classes and the
- * case mappings. They are plain text, so a regenerated table shows up as a readable diff.
+ * `snippets-android/tools/foundation-tables`: the fold, the grapheme classes, the
+ * case mappings and the precomposition tables. They are plain text, so a regenerated table shows up as a readable diff.
  *
  * Each table is parsed on first use, which costs a few milliseconds once. An app that
  * does not want to pay that on its main thread calls [warmUp] from a background thread
@@ -18,6 +18,7 @@ object FoundationTables {
         FoundationFold.warmUp()
         GraphemeBreaker.warmUp()
         SwiftCase.warmUp()
+        FoundationPrecomposed.warmUp()
     }
 
     internal fun open(name: String): TableReader {

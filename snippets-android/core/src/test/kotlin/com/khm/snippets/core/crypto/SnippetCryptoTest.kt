@@ -510,8 +510,17 @@ class SnippetCryptoKeyHierarchyTest {
         assertContentEquals(filled(0x11, 32), ring.libraryKey())
         assertFalse(ring.toString().contains("11"))
 
+        // Decision D3: a closed keyring fails closed instead of answering from the wiped (zero) key.
         ring.close()
-        assertContentEquals(ByteArray(32), ring.libraryKey())
+        assertTrue(ring.isClosed)
+        assertFailsWith<IllegalStateException> { ring.libraryKey() }
+        assertFailsWith<IllegalStateException> { ring.salt() }
+        assertFailsWith<IllegalStateException> { ring.recordKey(recordId(0)) }
+        assertFailsWith<IllegalStateException> { ring.contentHashKey() }
+        val context = SnippetCrypto.RecordContext("scope", recordId(0))
+        assertFailsWith<IllegalStateException> { SnippetCrypto.seal(filled(0x33, 8), context, ring) }
+        assertFailsWith<IllegalStateException> { SnippetCrypto.contentHash(filled(0x33, 8), ring) }
+        ring.close()
     }
 }
 

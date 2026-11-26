@@ -12,6 +12,9 @@ import com.khm.snippets.core.vault.VaultKeyStoreException
 import com.khm.snippets.core.vault.VaultSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 
@@ -44,7 +47,9 @@ interface OrdinaryLibraryHost {
  * yields exact counts for a confirmation; nothing is written until [importPrepared]. The
  * two library files then change in one transaction.
  *
- * @param kdfContext where the password KDF runs (600 000 rounds).
+ * @param kdfContext where the password KDF runs (600 000 rounds, or as many as a backup file
+ *   asks for). Cancelling the caller's coroutine stops it within
+ *   [Pbkdf2HmacSha512.CANCELLATION_INTERVAL] rounds.
  * @param ioContext where files and the key store are touched.
  * @param pbkdf2 the PBKDF2 implementation, for tests that count or time derivations.
  */
@@ -107,7 +112,8 @@ class EncryptedBackupService(
         try {
             // The KDF is deliberately expensive; it runs on the immutable snapshot, away from the caller's thread.
             val data = withContext(kdfContext) {
-                EncryptedBackup.seal(snapshot.snippets, snapshot.vault, snapshot.vaultKey, passphrase, iterations, pbkdf2 = pbkdf2)
+                val kdf = cancellable(coroutineContext.job)
+                EncryptedBackup.seal(snapshot.snippets, snapshot.vault, snapshot.vaultKey, passphrase, iterations, pbkdf2 = kdf)
             }
             return Export(data, snapshot.snippets.size, snapshot.vault?.records?.size ?: 0)
         } finally {
@@ -140,7 +146,12 @@ class EncryptedBackupService(
      */
     @Throws(EncryptedBackup.Failure::class, CancellationException::class)
     suspend fun prepareImport(data: ByteArray, passphrase: CharArray): PreparedImport =
-        PreparedImport(withContext(kdfContext) { EncryptedBackup.open(data, passphrase, pbkdf2) })
+        PreparedImport(withContext(kdfContext) { EncryptedBackup.open(data, passphrase, cancellable(coroutineContext.job)) })
+
+    /** [pbkdf2], stopping within [Pbkdf2HmacSha512.CANCELLATION_INTERVAL] rounds once [job] is cancelled. */
+    private fun cancellable(job: Job): Pbkdf2HmacSha512 = Pbkdf2HmacSha512 { password, salt, iterations, count ->
+        pbkdf2.derive(password, salt, iterations, count) { job.ensureActive() }
+    }
 
     /** [prepareImport] and [importPrepared] in one step, for callers that need no confirmation. */
     @Throws(

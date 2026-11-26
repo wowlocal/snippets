@@ -1,0 +1,340 @@
+// The Swift recorder behind the fixtures in this directory (`xcheck`). Not compiled by Gradle.
+//
+// To rebuild it: make a SwiftPM package with two targets, exactly like
+// `snippets-android/tools/swift-interop/Package.swift`:
+//   Sources/SnippetsCore/        the same symlink overlay (Core, GitSyncKeyStore.swift, SyncKeyStore.swift,
+//                                KeychainSecretStore.swift, Shims/AppLayerShims.swift), language mode 5
+//   Sources/xcheck/main.swift    this file
+// and build it in debug with `xcrun swift build` (`@testable import` needs -enable-testing).
+//
+//   REVIEW_CRYPTO_XCHECK_DIR=<dir> ./gradlew :core:test --rerun --tests '*ReviewExchangeTest.exportInputs'
+//   xcheck judge < <dir>/<group>.in.tsv > <dir>/<group>.out.tsv      # then gzip -9 -n into <group>.tsv.gz
+//   xcheck dbl-digest 20261125 200 50000 > double-digests.txt
+//   REVIEW_CRYPTO_XCHECK_DIR=<dir> ./gradlew :core:test --rerun --tests '*ReviewExchangeTest.compareRecorded'
+//
+// Recorded with Apple Swift 6.4 (swiftlang-6.4.0.34.1), arm64, macOS 27.2.1.
+
+import CryptoKit
+import Foundation
+@testable import SnippetsCore
+
+// Ground-truth service for the Kotlin review tests. Reads TSV lines
+// `kind \t arg…` (arguments hex-encoded unless stated) and answers one line each with
+// what the shipping Swift code does.
+//
+//   xcheck judge  < in.tsv > out.tsv        out line = in line + "\t" + verdict
+//   xcheck verify < in.tsv                  last column is the expected verdict; prints a summary
+//   xcheck dbl-digest <seed> <chunks> <chunkSize>
+
+func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
+func hex(_ text: String) -> String { hex(Data(text.utf8)) }
+
+func unhex(_ text: Substring) -> Data {
+    var out = Data()
+    out.reserveCapacity(text.utf8.count / 2)
+    var high: UInt8? = nil
+    for byte in text.utf8 {
+        let value: UInt8
+        switch byte {
+        case 48...57: value = byte - 48
+        case 97...102: value = byte - 87
+        case 65...70: value = byte - 55
+        default: fatalError("bad hex")
+        }
+        if let h = high { out.append(h << 4 | value); high = nil } else { high = value }
+    }
+    precondition(high == nil, "odd hex")
+    return out
+}
+
+/// Arguments are bytes that are meant as text: invalid UTF-8 is a harness bug.
+func text(_ field: Substring) -> String {
+    let data = unhex(field)
+    return String(decoding: data, as: UTF8.self)
+}
+
+func errorName(_ error: Error) -> String {
+    let type: String
+    switch error {
+    case is SnippetCrypto.Failure: type = "SnippetCrypto"
+    case is KeyWrap.Failure: type = "KeyWrap"
+    case is PassphraseKDF.Failure: type = "PassphraseKDF"
+    case is RecoveryKey.Failure: type = "RecoveryKey"
+    case is CanonicalJSON.Failure: type = "CanonicalJSON"
+    default: type = String(reflecting: Swift.type(of: error))
+    }
+    return "err:\(type):\(hex(String(describing: error)))"
+}
+
+func dump(_ value: CanonicalJSON.Value) -> String {
+    switch value {
+    case .null: return "n"
+    case .bool(let flag): return flag ? "t" : "f"
+    case .int(let number): return "i\(number)"
+    case .double(let number): return "d" + String(format: "%016llx", number.bitPattern)
+    case .string(let text): return "s" + hex(text)
+    case .utf8(let bytes): return "s" + hex(bytes)
+    case .array(let elements): return "[" + elements.map(dump).joined(separator: ",") + "]"
+    case .object(let members):
+        let sorted = members.map { (Array($0.key.utf8), $0.value) }
+            .sorted { $0.0.lexicographicallyPrecedes($1.0) }
+        return "{" + sorted.map { hex(Data($0.0)) + ":" + dump($0.1) }.joined(separator: ",") + "}"
+    }
+}
+
+func canonFailure(_ error: Error) -> String {
+    guard let failure = error as? CanonicalJSON.Failure else { return "err:other" }
+    switch failure {
+    case .nonFiniteNumber: return "err:nonFiniteNumber"
+    case .invalidUTF8: return "err:invalidUTF8"
+    case .unexpectedEnd: return "err:unexpectedEnd"
+    case .unexpectedByte(let offset): return "err:unexpectedByte:\(offset)"
+    case .duplicateKey(let key): return "err:duplicateKey:\(hex(key))"
+    case .trailingBytes(let offset): return "err:trailingBytes:\(offset)"
+    case .tooDeep: return "err:tooDeep"
+    }
+}
+
+func keyring(_ key: Substring, _ salt: Substring) -> SnippetCrypto.Keyring {
+    SnippetCrypto.Keyring(libraryKey: SymmetricKey(data: unhex(key)), salt: unhex(salt))
+}
+
+func context(_ scope: Substring, _ id: Substring, _ deleted: Substring) -> SnippetCrypto.RecordContext {
+    SnippetCrypto.RecordContext(scopeID: text(scope), recordID: UUID(uuidString: String(id))!, isDeleted: deleted == "1")
+}
+
+func purpose(_ raw: Substring) -> KeyWrap.Purpose { KeyWrap.Purpose(rawValue: String(raw))! }
+
+func judge(_ f: [Substring]) -> String {
+    do {
+        switch f[0] {
+        case "canon":
+            let value: CanonicalJSON.Value
+            do { value = try CanonicalJSON.value(unhex(f[1])) } catch { return canonFailure(error) }
+            let emitted: String
+            do { emitted = hex(try CanonicalJSON.data(value)) } catch { emitted = canonFailure(error) }
+            return "ok:" + dump(value) + "|" + emitted
+        case "b64url":
+            return SnippetCrypto.data(fromBase64URL: text(f[1])).map { "ok:" + hex($0) } ?? "nil"
+        case "b64std":
+            // What every Swift reader of a standard-base64 field does.
+            let input = text(f[1])
+            guard let data = Data(base64Encoded: input), data.base64EncodedString() == input else { return "nil" }
+            return "ok:" + hex(data)
+        case "b64urlenc":
+            return hex(SnippetCrypto.base64URL(unhex(f[1])))
+        case "b64stdenc":
+            return hex(unhex(f[1]).base64EncodedString())
+        case "uuid":
+            return UUID(uuidString: text(f[1])).map { $0.uuidString.lowercased() } ?? "nil"
+        case "envparse":
+            let parsed = try SnippetCrypto.Envelope.parse(text(f[1]))
+            return "ok:\(hex(parsed.version)):\(hex(parsed.nonce)):\(hex(parsed.sealed))"
+        case "open":
+            let plain = try SnippetCrypto.open(text(f[1]), key: SymmetricKey(data: unhex(f[2])), aad: unhex(f[3]))
+            return "ok:" + hex(plain)
+        case "rec-open":
+            let plain = try SnippetCrypto.open(text(f[1]), for: context(f[4], f[5], f[6]), keyring: keyring(f[2], f[3]))
+            return "ok:" + hex(plain)
+        case "rec-seal":
+            // plaintext, key, salt, scope, id, deleted -> an envelope sealed by Swift with a system nonce
+            let sealed = try SnippetCrypto.seal(unhex(f[1]), for: context(f[4], f[5], f[6]), keyring: keyring(f[2], f[3]))
+            return "ok:" + hex(sealed)
+        case "rec-seal-nonce":
+            // as rec-seal, with the nonce given as a 7th argument: byte-for-byte comparable
+            let nonce = unhex(f[7])
+            let sealed = try SnippetCrypto.seal(
+                unhex(f[1]), for: context(f[4], f[5], f[6]), keyring: keyring(f[2], f[3]),
+                nonces: SnippetCrypto.NonceSource { nonce })
+            return "ok:" + hex(sealed)
+        case "aad-rec":
+            return hex(SnippetCrypto.additionalData(for: context(f[1], f[2], f[3])))
+        case "aad-kw":
+            return hex(KeyWrap.additionalData(purpose: purpose(f[1]), kid: text(f[2])))
+        case "aad-pw":
+            return hex(PassphraseKDF.additionalData(alg: text(f[1]), iterations: Int(f[2])!, salt: unhex(f[3]), kid: text(f[4])))
+        case "reckey":
+            let ring = keyring(f[1], f[2])
+            let record = ring.recordKey(for: UUID(uuidString: String(f[3]))!).withUnsafeBytes { Data($0) }
+            let hash = ring.contentHashKey.withUnsafeBytes { Data($0) }
+            return hex(record) + ":" + hex(hash)
+        case "chash":
+            return SnippetCrypto.contentHash(of: unhex(f[1]), keyring: keyring(f[2], f[3]))
+        case "pad":
+            return hex(SnippetCrypto.Padding.pad(unhex(f[1])))
+        case "unpad":
+            return "ok:" + hex(try SnippetCrypto.Padding.unpad(unhex(f[1])))
+        case "kw-wrap":
+            // libraryKey, material, purpose, kid, salt
+            let sealed = try KeyWrap.wrap(
+                SymmetricKey(data: unhex(f[1])), under: unhex(f[2]), purpose: purpose(f[3]), kid: text(f[4]), salt: unhex(f[5]))
+            return "ok:" + hex(sealed)
+        case "kw-unwrap":
+            // envelope, material, purpose, kid, salt
+            let key = try KeyWrap.unwrap(text(f[1]), under: unhex(f[2]), purpose: purpose(f[3]), kid: text(f[4]), salt: unhex(f[5]))
+            return "ok:" + hex(key.withUnsafeBytes { Data($0) })
+        case "kdf":
+            // passphrase, salt, iterations
+            let key = try PassphraseKDF.derive(passphrase: text(f[1]), salt: unhex(f[2]), iterations: Int(f[3])!)
+            return "ok:" + hex(key.withUnsafeBytes { Data($0) })
+        case "pw-wrap":
+            // key, passphrase, salt, kid, iterations
+            let wrapped = try PassphraseKDF.wrap(
+                SymmetricKey(data: unhex(f[1])), passphrase: text(f[2]), salt: unhex(f[3]), kid: text(f[4]), iterations: Int(f[5])!)
+            return "ok:\(hex(wrapped.alg)):\(wrapped.iterations):\(hex(wrapped.salt)):\(hex(wrapped.envelope))"
+        case "pw-unwrap":
+            // alg, iterations, salt text, envelope, passphrase, kid
+            let wrapped = PassphraseKDF.WrappedKey(alg: text(f[1]), iterations: Int(f[2])!, salt: text(f[3]), envelope: text(f[4]))
+            let key = try PassphraseKDF.unwrap(wrapped, passphrase: text(f[5]), kid: text(f[6]))
+            return "ok:" + hex(key.withUnsafeBytes { Data($0) })
+        case "rk-encode":
+            let bytes = unhex(f[1])
+            return "ok:" + hex(try RecoveryKey.encode(bytes)) + ":" + hex(try RecoveryKey.formatted(bytes))
+        case "rk-norm":
+            return hex(RecoveryKey.normalized(text(f[1])))
+        case "rk-group":
+            return hex(RecoveryKey.grouped(text(f[1])))
+        case "rk-decode":
+            return "ok:" + hex(try RecoveryKey.decode(text(f[1])))
+        case "detuuid":
+            return SyncMerge.deterministicUUID(namespace: UUID(uuidString: String(f[1]))!, name: text(f[2])).uuidString.lowercased()
+        case "dbl":
+            let bits = UInt64(f[1], radix: 16)!
+            return Double(bitPattern: bits).description
+        case "nfc":
+            return hex(text(f[1]).precomposedStringWithCanonicalMapping)
+        case "utf8str":
+            return String(data: unhex(f[1]), encoding: .utf8).map { "ok:" + hex($0) } ?? "nil"
+        case "plaintext":
+            return SnippetCrypto.plaintextString(unhex(f[1])).map { "ok:" + hex($0) } ?? "nil"
+        case "validutf8":
+            return CanonicalJSON.isValidUTF8([UInt8](unhex(f[1]))) ? "1" : "0"
+        default:
+            return "err:unknown-kind"
+        }
+    } catch {
+        return errorName(error)
+    }
+}
+
+struct SplitMix64 {
+    var state: UInt64
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
+/// The shared recipe for a "random" double; the Kotlin test implements the same.
+func nextDouble(_ rng: inout SplitMix64) -> Double {
+    while true {
+        let selector = rng.next() % 8
+        let raw = rng.next()
+        let value: Double
+        switch selector {
+        case 0, 1, 2, 3:
+            value = Double(bitPattern: raw)
+        case 4:
+            // a decimal with up to 17 digits and a small exponent
+            let digits = Double(Int64(raw % 100_000_000_000_000_000))
+            let power = Int(rng.next() % 40)
+            value = (rng.next() & 1 == 0) ? digits / pow10(power) : digits * pow10(power)
+        case 5:
+            // a timestamp: seconds since 2001 with millisecond or microsecond steps
+            let whole = Double(Int64(raw % 2_000_000_000))
+            let fraction = Double(Int64(rng.next() % 1_000_000))
+            value = (rng.next() & 1 == 0) ? whole + fraction / 1_000_000 : whole + Double(Int64(fraction) / 1000) / 1000
+        case 6:
+            // integers around the 2^53 layout threshold and small integers
+            let magnitude = raw % 3 == 0 ? raw % 1000 : (UInt64(1) << 53) &+ (raw % 4096) &- 2048
+            value = Double(magnitude)
+        default:
+            // a power of two and its neighbours
+            let exponent = Int(raw % 2098) - 1074
+            let base = scalb(1.0, exponent)
+            let step = Int(rng.next() % 5) - 2
+            var moved = base
+            if step > 0 { for _ in 0..<step { moved = moved.nextUp } }
+            if step < 0 { for _ in 0..<(-step) { moved = moved.nextDown } }
+            value = moved
+        }
+        if value.isFinite { return (rng.next() & 1 == 0) ? value : -value }
+    }
+}
+
+func pow10(_ power: Int) -> Double {
+    var out = 1.0
+    for _ in 0..<power { out *= 10 }
+    return out
+}
+
+func scalb(_ value: Double, _ exponent: Int) -> Double {
+    Double(sign: .plus, exponent: exponent, significand: value)
+}
+
+let arguments = CommandLine.arguments
+guard arguments.count >= 2 else { fatalError("usage") }
+
+switch arguments[1] {
+case "judge":
+    var out = ""
+    while let line = readLine(strippingNewline: true) {
+        if line.isEmpty { continue }
+        let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+        out += line + "\t" + judge(fields) + "\n"
+        if out.utf8.count > 1 << 20 { FileHandle.standardOutput.write(Data(out.utf8)); out = "" }
+    }
+    FileHandle.standardOutput.write(Data(out.utf8))
+case "verify":
+    var total = 0
+    var failed = 0
+    var perKind: [String: (Int, Int)] = [:]
+    while let line = readLine(strippingNewline: true) {
+        if line.isEmpty { continue }
+        let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+        let expected = String(fields[fields.count - 1])
+        let got = judge(Array(fields.dropLast()))
+        total += 1
+        var entry = perKind[String(fields[0])] ?? (0, 0)
+        entry.0 += 1
+        if got != expected {
+            failed += 1
+            entry.1 += 1
+            if failed <= 20 { print("MISMATCH line \(total) kind \(fields[0])\n  expected \(expected.prefix(300))\n  swift    \(got.prefix(300))\n  input    \(line.prefix(400))") }
+        }
+        perKind[String(fields[0])] = entry
+    }
+    for (kind, counts) in perKind.sorted(by: { $0.key < $1.key }) {
+        print("\(kind): \(counts.0) checked, \(counts.1) mismatched")
+    }
+    print("TOTAL \(total) checked, \(failed) mismatched")
+    exit(failed == 0 ? 0 : 1)
+case "dbl-digest":
+    var rng = SplitMix64(state: UInt64(arguments[2])!)
+    let chunks = Int(arguments[3])!
+    let chunkSize = Int(arguments[4])!
+    for _ in 0..<chunks {
+        var hasher = SHA256()
+        var buffer = ""
+        for _ in 0..<chunkSize {
+            buffer += nextDouble(&rng).description
+            buffer += "\n"
+        }
+        hasher.update(data: Data(buffer.utf8))
+        print(hex(Data(hasher.finalize())))
+    }
+case "dbl-list":
+    // prints the values of one chunk, to bisect a digest mismatch
+    var rng = SplitMix64(state: UInt64(arguments[2])!)
+    let skip = Int(arguments[3])!
+    let count = Int(arguments[4])!
+    for index in 0..<(skip + count) {
+        let value = nextDouble(&rng)
+        if index >= skip { print(String(format: "%016llx", value.bitPattern), value.description) }
+    }
+default:
+    fatalError("unknown mode")
+}

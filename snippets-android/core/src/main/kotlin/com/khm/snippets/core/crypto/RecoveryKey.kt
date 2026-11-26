@@ -1,8 +1,8 @@
 package com.khm.snippets.core.crypto
 
+import com.khm.snippets.core.text.FoundationText
 import com.khm.snippets.core.text.GraphemeBreaker
 import java.text.Normalizer
-import java.util.Locale
 
 /**
  * The recovery key / recovery code text (`snippets/Core/RecoveryKey.swift`): 128 random
@@ -115,8 +115,9 @@ object RecoveryKey {
      * Characters that are kept are kept as typed: nothing but the case is rewritten.
      */
     fun normalized(text: CharSequence): String {
-        // Root locale: the default one turns `i` into `I-with-dot (U+0130)` on a Turkish device.
-        val upper = text.toString().uppercase(Locale.ROOT)
+        // Swift's `uppercased()`: per scalar, no locale (a Turkish device does not turn `i`
+        // into U+0130) and no context, so an `InvalidCharacter` payload is the one Swift reports.
+        val upper = FoundationText.swiftUppercased(text.toString())
         val out = StringBuilder(upper.length)
         for (character in characters(upper)) {
             when (canonical(character)) {

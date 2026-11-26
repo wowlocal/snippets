@@ -128,6 +128,23 @@ object FoundationText {
     fun nfc(text: String): String = if (isUnaffectedByNormalization(text)) text else Normalizer.normalize(text, Normalizer.Form.NFC)
 
     /**
+     * Foundation's `text.precomposedStringWithCanonicalMapping`, exactly as an Apple device
+     * computes it, which is not [nfc] (see [FoundationPrecomposed] for the four ways it
+     * differs). Only for the one place Swift calls it: the passphrase that
+     * `PassphraseKdf` stretches. Everything else uses [nfc]. The data is Foundation's
+     * (measured on macOS), so unlike [nfc] it does not depend on the runtime's Unicode version.
+     */
+    fun foundationPrecomposed(text: String): String =
+        if (isUnaffectedByNormalization(text)) text else FoundationPrecomposed.precomposed(text)
+
+    /**
+     * As [foundationPrecomposed] for text that must never become a `String`: [characters] is
+     * read and not modified, the result is a new array the caller wipes, and every scratch
+     * buffer is wiped before it is dropped.
+     */
+    fun foundationPrecomposed(characters: CharArray): CharArray = FoundationPrecomposed.precomposed(characters)
+
+    /**
      * Canonical equivalence: `true` exactly when the [nfc] forms are identical. This is
      * what Swift's `a == b` on strings means.
      *

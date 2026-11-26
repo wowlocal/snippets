@@ -296,7 +296,9 @@ object FoundationJson {
 
     private fun decodeUtf8(bytes: ByteArray, start: Int, end: Int): String {
         if (start == end) return ""
-        return Utf8.decodeStrict(bytes.copyOfRange(start, end)) ?: fail("a string is not valid UTF-8")
+        // JSONDecoder keeps a leading U+FEFF in a string or key (measured, macOS 27.2), unlike
+        // `String(data:encoding:)`.
+        return Utf8.decodeKeepingByteOrderMark(bytes.copyOfRange(start, end)) ?: fail("a string is not valid UTF-8")
     }
 
     /** [index] is just past the backslash. Returns the index after the escape. */

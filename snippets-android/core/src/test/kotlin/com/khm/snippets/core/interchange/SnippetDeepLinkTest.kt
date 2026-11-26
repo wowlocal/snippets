@@ -300,12 +300,14 @@ class SnippetDeepLinkTest {
             val name = randomText(random, 5)
             val content = randomText(random, 12)
             val keyword = randomText(random, 3)
-            if (name.isEmpty() && keyword.isEmpty() && content.isEmpty()) return@repeat
+            // Crypto review D1: a value that is only U+FEFF is empty once `URLComponents` has read it.
+            if (listOf(name, keyword, content).all { it.removePrefix("\uFEFF").isEmpty() }) return@repeat
             val url = "snippets://new?name=${encode(name)}&KEYWORD=${encode(keyword)}&content=${encode(content)}"
             val snippet = SnippetDeepLink.snippet(url)
-            assertEquals(name, snippet.name)
-            assertEquals(content, snippet.content)
-            assertEquals(Snippet.sanitizedKeyword(keyword), snippet.keyword)
+            // Crypto review D1: `URLComponents.queryItems` drops one leading U+FEFF of a value (measured, macOS 27.2).
+            assertEquals(name.removePrefix("\uFEFF"), snippet.name)
+            assertEquals(content.removePrefix("\uFEFF"), snippet.content)
+            assertEquals(Snippet.sanitizedKeyword(keyword.removePrefix("\uFEFF")), snippet.keyword)
             assertTrue(SnippetDeepLink.isCreationLink(url))
         }
     }

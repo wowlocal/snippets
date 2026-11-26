@@ -60,6 +60,19 @@ object SnippetCrypto {
             Failure("a nonce source produced $count bytes; AES-GCM needs $NONCE_BYTE_COUNT")
 
         class WrongKeySize(val count: Int) : Failure("expected a $KEY_BYTE_COUNT-byte key, got $count")
+
+        /**
+         * The platform's AES-GCM failed for a reason other than a failed tag: no provider,
+         * or a provider that refused the key or the parameters. Never a statement about the
+         * key, so [KeyWrap] and [PassphraseKdf] pass it on instead of reporting a wrong
+         * recovery key or passphrase. Swift has no such case (CryptoKit is always there).
+         */
+        class CryptoUnavailable(cause: GeneralSecurityException) :
+            Failure("the platform's AES-GCM is unavailable (${cause.javaClass.simpleName})") {
+            init {
+                initCause(cause)
+            }
+        }
     }
 
     /**
@@ -68,36 +81,75 @@ object SnippetCrypto {
      * sync library's `K_sync` material.
      *
      * The constructor copies both arrays. Call [close] to wipe the copy when the vault locks.
+     *
+     * A closed keyring fails closed: every accessor, and every seal, open or content hash
+     * through it, throws [IllegalStateException]. It never answers from the wiped (all-zero)
+     * key, which would seal records anyone holding the public salt could open. Swift has no
+     * such state, its keyring being a value that cannot be emptied.
      */
     class Keyring(libraryKey: ByteArray, salt: ByteArray) : AutoCloseable {
 
         private val rootKey = libraryKey.copyOf()
         private val saltBytes = salt.copyOf()
 
+        @Volatile
+        private var closed = false
+
+        /** Whether [close] has been called. */
+        val isClosed: Boolean get() = closed
+
+        private fun checkOpen() {
+            check(!closed) { "the keyring was closed; its key has been wiped" }
+        }
+
         /** The root never seals anything itself. A copy the caller wipes. */
-        fun libraryKey(): ByteArray = rootKey.copyOf()
+        fun libraryKey(): ByteArray {
+            checkOpen()
+            return rootKey.copyOf()
+        }
 
         /** Public, stored in the clear beside the wrapped key. A copy. */
-        fun salt(): ByteArray = saltBytes.copyOf()
+        fun salt(): ByteArray {
+            checkOpen()
+            return saltBytes.copyOf()
+        }
 
         /** `K_rec(id)`. The info string takes the 16 raw UUID bytes, never the text form. */
-        fun recordKey(recordId: UUID): ByteArray = Hkdf.deriveKey(
-            inputKeyMaterial = rootKey,
-            salt = saltBytes,
-            info = Bytes.concat(Utf8.encode(RECORD_KEY_INFO_PREFIX), Uuids.toBytes(recordId)),
-            outputByteCount = KEY_BYTE_COUNT,
-        )
+        fun recordKey(recordId: UUID): ByteArray {
+            checkOpen()
+            val key = Hkdf.deriveKey(
+                inputKeyMaterial = rootKey,
+                salt = saltBytes,
+                info = Bytes.concat(Utf8.encode(RECORD_KEY_INFO_PREFIX), Uuids.toBytes(recordId)),
+                outputByteCount = KEY_BYTE_COUNT,
+            )
+            return checkedAfterUse(key)
+        }
 
         /** `K_hash`, separate from every record key. */
-        fun contentHashKey(): ByteArray = Hkdf.deriveKey(
-            inputKeyMaterial = rootKey,
-            salt = saltBytes,
-            info = Utf8.encode(CONTENT_HASH_INFO),
-            outputByteCount = KEY_BYTE_COUNT,
-        )
+        fun contentHashKey(): ByteArray {
+            checkOpen()
+            val key = Hkdf.deriveKey(
+                inputKeyMaterial = rootKey,
+                salt = saltBytes,
+                info = Utf8.encode(CONTENT_HASH_INFO),
+                outputByteCount = KEY_BYTE_COUNT,
+            )
+            return checkedAfterUse(key)
+        }
 
-        /** Zeroes the root key held here. The keyring derives from zeros afterwards, so drop it. */
+        /** A [close] that raced the derivation may have zeroed the root under it: refuse that key. */
+        private fun checkedAfterUse(key: ByteArray): ByteArray {
+            if (closed) {
+                key.fill(0)
+                checkOpen()
+            }
+            return key
+        }
+
+        /** Zeroes the root key held here. Every later use of this keyring throws [IllegalStateException]. */
         override fun close() {
+            closed = true
             rootKey.fill(0)
         }
 
@@ -186,10 +238,10 @@ object SnippetCrypto {
         val padded = Padding.pad(plaintext)
         val sealed = try {
             AesGcm.seal(key, nonce, padded, aad)
-        } catch (_: GeneralSecurityException) {
-            // Not reachable with a 32-byte key and a 12-byte nonce. Reported rather than
-            // crashing, as Swift does: this runs on the sync path.
-            throw Failure.MalformedEnvelope("AES-GCM refused a ${plaintext.size}-byte body")
+        } catch (failure: GeneralSecurityException) {
+            // Not reachable with a 32-byte key and a 12-byte nonce on a working provider.
+            // Reported rather than crashing, as Swift does: this runs on the sync path.
+            throw Failure.CryptoUnavailable(failure)
         } finally {
             padded.fill(0)
         }
@@ -210,8 +262,11 @@ object SnippetCrypto {
             throw Failure.MalformedEnvelope("body is too short to contain a tag")
         }
 
-        val padded = AesGcm.open(key, parsed.nonceBytes, parsed.sealedBytes, aad)
-            ?: throw Failure.AuthenticationFailed()
+        val padded = try {
+            AesGcm.open(key, parsed.nonceBytes, parsed.sealedBytes, aad)
+        } catch (failure: GeneralSecurityException) {
+            throw Failure.CryptoUnavailable(failure)
+        } ?: throw Failure.AuthenticationFailed()
         try {
             return Padding.unpad(padded)
         } finally {

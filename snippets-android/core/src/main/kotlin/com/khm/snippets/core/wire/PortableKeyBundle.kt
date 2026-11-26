@@ -110,6 +110,13 @@ class PortableKeyBundle private constructor(
          * The JSON reader is the strict canonical one, so input Foundation tolerates and no
          * Snippets build writes (a byte order mark, UTF-16, duplicate keys) is refused.
          *
+         * Swift checks the key set with `JSONSerialization`, which drops one leading U+FEFF
+         * from a key, and then decodes with `JSONDecoder`, which keeps it. So keys are read
+         * raw here: their set with one leading U+FEFF dropped must be the four
+         * ([Failure.InvalidFormat] otherwise), and the four must also be present as spelled
+         * ([Failure.Undecodable] otherwise, Swift's `keyNotFound`). `scopeID` is compared
+         * as `JSONDecoder` reads it, a leading U+FEFF included.
+         *
          * @throws Failure.Undecodable when [jsonData] is not JSON, is a bare scalar, or a
          *   member has the wrong JSON type.
          * @throws Failure.InvalidFormat for everything else.
@@ -118,7 +125,7 @@ class PortableKeyBundle private constructor(
         fun fromJson(jsonData: ByteArray): PortableKeyBundle {
             if (jsonData.size > MAXIMUM_JSON_BYTES) throw Failure.InvalidFormat()
             val root = try {
-                CanonicalJson.parse(jsonData)
+                CanonicalJson.parse(jsonData, keysAsFoundationReadsThem = false)
             } catch (_: CanonicalJson.Failure) {
                 throw Failure.Undecodable()
             }
@@ -132,11 +139,12 @@ class PortableKeyBundle private constructor(
                 }
                 // The parser's own copies of the two values, one of which is the key.
                 for (value in members.values) (value as? JsonValue.Utf8)?.let { wipeable.add(it.bytes) }
-                if (members.keys != KEYS) throw Failure.InvalidFormat()
+                if (members.keys.mapTo(HashSet()) { it.removePrefix("\uFEFF") } != KEYS) throw Failure.InvalidFormat()
+                if (!members.keys.containsAll(KEYS)) throw Failure.Undecodable()
 
                 val schemaVersion = integer(members.getValue("schemaVersion")) ?: throw Failure.Undecodable()
                 val scope = members.getValue("scopeID").let {
-                    if (it is JsonValue.Utf8 || it is JsonValue.Text) it.textOrNull else null
+                    if (it is JsonValue.Utf8 || it is JsonValue.Text) it.utf8OrNull?.let(Utf8::decodeKeepingByteOrderMark) else null
                 } ?: throw Failure.Undecodable()
                 val keyText = string(members.getValue("key")) ?: throw Failure.Undecodable()
                 val saltText = string(members.getValue("salt")) ?: throw Failure.Undecodable()

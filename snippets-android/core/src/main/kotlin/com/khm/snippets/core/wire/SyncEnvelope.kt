@@ -127,6 +127,14 @@ class SyncEnvelope private constructor(
      * member to U+FFFD, which is what Swift does when the string is created. Parsed
      * fields keep every spelling. [copy] replaces members exactly as given.
      *
+     * It also drops every leading U+FEFF from [name], [keyword] and each tag. Swift reads
+     * those members back with `String(data:encoding: .utf8)`, which drops one leading
+     * U+FEFF, so an envelope that hashed one fails its hash on every Apple device
+     * (`hashMismatch`, Swift refusing even its own such envelopes). This constructor is the
+     * one place every locally made envelope passes through (`plain`, `secureRecord` and the
+     * merge's conflict copies all build their fields here), so it is the choke point: what
+     * Android writes, every device reads back as written. The body is bytes and untouched.
+     *
      * Timestamps are raw doubles of seconds since 2001 and are emitted with Swift's
      * `Double.description`; they must never pass through milliseconds or an instant.
      */
@@ -155,8 +163,8 @@ class SyncEnvelope private constructor(
             createdAt: Double,
             updatedAt: Double,
         ) : this(
-            wellFormed(name), wellFormed(keyword), content.copyOf(),
-            SnippetTagging.normalizedTags(tags.map(::wellFormed)),
+            readableBack(name), readableBack(keyword), content.copyOf(),
+            SnippetTagging.normalizedTags(tags.map(::readableBack)),
             isEnabled, isPinned, createdAt, updatedAt, Unit,
         )
 
@@ -426,7 +434,8 @@ class SyncEnvelope private constructor(
         get() {
             val current = fields
             if (deleted || secure || current == null) return null
-            // The final hop: the body becomes a `String` here and nowhere earlier.
+            // The final hop: the body becomes a `String` here and nowhere earlier. Swift's
+            // `String(data:encoding: .utf8)`, so one leading U+FEFF of the body is dropped.
             val content = Utf8.decodeStrict(current.contentBytes) ?: return null
             return Snippet(
                 id = id, name = current.name, keyword = current.keyword, content = content,
@@ -654,6 +663,9 @@ class SyncEnvelope private constructor(
 
         /** `unknown.sorted().joined(separator: ", ")`, in Swift's string order. */
         private fun sortedList(keys: Set<String>): String = keys.sortedWith(FoundationText.order).joinToString(", ")
+
+        /** [wellFormed], without the leading U+FEFFs a Swift reader would not read back. */
+        private fun readableBack(text: String): String = Utf8.withoutLeadingByteOrderMarks(wellFormed(text))
 
         /**
          * A Swift `String` is always well-formed: an unpaired surrogate becomes U+FFFD when

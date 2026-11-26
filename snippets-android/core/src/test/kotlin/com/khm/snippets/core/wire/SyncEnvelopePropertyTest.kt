@@ -97,6 +97,8 @@ class SyncEnvelopePropertyTest {
         val seen = HashSet<String>()
         repeat(random.int(maxMembers + 1)) {
             val key = if (random.int(3) == 0) "future.${random.int(1000)}" else text(random, 3)
+            // Decision D1: Swift reads a key without its leading U+FEFF, so such a key never round-trips there either.
+            if (key.startsWith('\uFEFF')) return@repeat
             if (key != SyncEnvelope.USER_INITIATED_DELETION_EXTENSION_KEY && seen.add(FoundationText.nfc(key))) {
                 members[key] = jsonValue(random, depth)
             }
@@ -214,11 +216,18 @@ class SyncEnvelopePropertyTest {
             val envelope = SyncEnvelope.plain(original, hlc = hlc(random), origin = thisDevice)
             val restored = assertNotNull(SyncEnvelope.parse(envelope.canonicalBytes()).plainSnippet, "round $round")
 
-            assertEquals(original, restored, "round $round")
-            assertEquals(original.name, restored.name)
-            assertEquals(original.keyword, restored.keyword)
-            assertEquals(original.content, restored.content)
-            assertEquals(original.tags, restored.tags)
+            // Decision D1: new fields drop leading U+FEFFs from the text members, and Swift's
+            // `String(data:encoding:)` drops one from the body, so those come back without them.
+            val expected = original.copy(
+                name = original.name.trimStart('\uFEFF'), keyword = original.keyword.trimStart('\uFEFF'),
+                content = original.content.removePrefix("\uFEFF"),
+                tags = SnippetTagging.normalizedTags(original.tags.map { it.trimStart('\uFEFF') }),
+            )
+            assertEquals(expected, restored, "round $round")
+            assertEquals(expected.name, restored.name)
+            assertEquals(expected.keyword, restored.keyword)
+            assertEquals(expected.content, restored.content)
+            assertEquals(expected.tags, restored.tags)
             assertEquals(original.createdAt.toRawBits(), restored.createdAt.toRawBits())
             assertEquals(original.updatedAt.toRawBits(), restored.updatedAt.toRawBits())
         }
@@ -232,6 +241,8 @@ class SyncEnvelopePropertyTest {
             val members = LinkedHashMap(canonicalObject(envelope))
             val fields = LinkedHashMap(members.getValue("fields").objectOrNull!!)
             val rawTags = List(random.int(6)) { random.pick(listOf("  spaced  ", "", "DUP", "dup", "Dup", " \t ", "a\n b")) + text(random, 1) }
+                // Decision D1: Swift drops a leading U+FEFF when it reads a tag, so it would refuse such bytes.
+                .map { if (it.startsWith('\uFEFF')) "x$it" else it }
             fields["tags"] = JsonValue.Array(rawTags.map { JsonValue.of(it) })
             fields["name"] = JsonValue.of("  " + text(random) + "  ")
             fields["keyword"] = JsonValue.of("\\ " + text(random, 2))

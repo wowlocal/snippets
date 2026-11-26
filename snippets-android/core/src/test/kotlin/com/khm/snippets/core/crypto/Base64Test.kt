@@ -157,6 +157,7 @@ class Base64Test {
                     is SnippetCrypto.Failure.MalformedPadding -> "malformedPadding"
                     is SnippetCrypto.Failure.MalformedNonce -> "malformedNonce:" + failure.count
                     is SnippetCrypto.Failure.WrongKeySize -> "wrongKeySize:" + failure.count
+                    is SnippetCrypto.Failure.CryptoUnavailable -> "cryptoUnavailable"
                 }
             }
             assertEquals(case.string("result"), actual, "\"$text\"")
