@@ -1,19 +1,27 @@
 package com.khm.snippets.core.git
 
 import java.util.Locale
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The git services over SSH. The request bodies and response parsers are those of
  * smart HTTP; what differs is that each operation is one exec channel on which the
  * service speaks first, so capabilities and refs always come from that channel's own
  * advertisement, not from the one the caller passes in.
+ *
+ * Main-safe: the channel is used on `ioDispatcher` only, and what the service sent
+ * is parsed on `cpuDispatcher`.
  */
 class GitSshClient(
     val remote: GitRemote,
     val location: GitSshLocation,
     private val connector: GitSshConnector,
-    private val maximumPackBytes: Long = GitWire.MAXIMUM_PACK_BYTES,
+    private val maximumPackBytes: Long = GitPack.Limits.current().maximumPackBytes,
     private val idleTimeoutMillis: Long = GitSshExchangeRunner.DEFAULT_IDLE_TIMEOUT_MILLIS,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val cpuDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : GitWireClient {
 
     private suspend fun exchange(
@@ -21,12 +29,12 @@ class GitSshClient(
         maximumBytes: Long,
         request: (ByteArray) -> GitWireBody?,
     ): GitSshExchange = GitSshExchangeRunner.exchange(
-        connector, remoteCommand(service, location), location, maximumBytes, idleTimeoutMillis, request,
+        connector, remoteCommand(service, location), location, maximumBytes, idleTimeoutMillis, ioDispatcher, request,
     )
 
     override suspend fun discover(service: GitService): GitRefAdvertisement {
         val exchange = exchange(service, GitWire.MAXIMUM_ADVERTISEMENT_BYTES) { null }
-        return GitWire.parseAdvertisement(exchange.advertisement, service)
+        return withContext(cpuDispatcher) { GitWire.parseAdvertisement(exchange.advertisement, service) }
     }
 
     override suspend fun fetchPack(
@@ -40,10 +48,12 @@ class GitSshClient(
             val live = GitWire.parseAdvertisement(bytes, GitService.UPLOAD_PACK)
             if (live.refs.containsValue(want)) GitWire.uploadRequest(want, haves, live).body else null
         }
-        val live = GitWire.parseAdvertisement(exchange.advertisement, GitService.UPLOAD_PACK)
-        if (!live.refs.containsValue(want)) throw GitRemoteFailure.Unreachable("ref_moved")
-        val request = GitWire.uploadRequest(want, haves, live)
-        return GitWire.extractPack(exchange.response, request.shallow, request.sideBand)
+        return withContext(cpuDispatcher) {
+            val live = GitWire.parseAdvertisement(exchange.advertisement, GitService.UPLOAD_PACK)
+            if (!live.refs.containsValue(want)) throw GitRemoteFailure.Unreachable("ref_moved")
+            val request = GitWire.uploadRequest(want, haves, live)
+            GitWire.extractPack(exchange.response, request.shallow, request.sideBand)
+        }
     }
 
     override suspend fun push(
@@ -59,9 +69,11 @@ class GitSshClient(
             // The server would refuse the stale update anyway; don't upload the pack.
             if (current(live) == old) GitWire.pushRequest(old, new, refName, pack, live).body else null
         }
-        val live = GitWire.parseAdvertisement(exchange.advertisement, GitService.RECEIVE_PACK)
-        if (current(live) != old) return GitPushResult.REJECTED
-        return GitWire.parseReportStatus(exchange.response, refName, live.supports("side-band-64k"))
+        return withContext(cpuDispatcher) {
+            val live = GitWire.parseAdvertisement(exchange.advertisement, GitService.RECEIVE_PACK)
+            if (current(live) != old) GitPushResult.REJECTED
+            else GitWire.parseReportStatus(exchange.response, refName, live.supports("side-band-64k"))
+        }
     }
 
     companion object {

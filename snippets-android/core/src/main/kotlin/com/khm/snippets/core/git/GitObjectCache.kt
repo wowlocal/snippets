@@ -32,6 +32,18 @@ import kotlinx.serialization.json.intOrNull
  *
  * `scope` names the repository and branch. A cache written for any other scope, or by
  * an unknown schema, is discarded rather than interpreted.
+ *
+ * **Threading.** Every function, the constructor included, does blocking file I/O
+ * and hashing: the transport calls the cache from its I/O dispatcher, never from the
+ * main thread. Calls are serialized by the cache's own lock, so each is atomic, but a
+ * sequence of calls is not: a `pin`, `release` or `prune` from another thread may run
+ * between two of them and remove objects no snapshot holds yet. A snapshot is
+ * therefore added with [install], which stores and retains under one lock; [store]
+ * followed by [retain] is safe only while nothing else uses the cache.
+ *
+ * **Failures.** Reading never throws: whatever is found on disk is the right object
+ * or a miss. Writing throws `IOException` when the file system refuses (a full
+ * disk); the cache stays consistent, and the caller may go on without it.
  */
 class GitObjectCache(private val directory: File, private val scope: String) {
     data class Retained(val commit: String, val tree: String)
@@ -107,6 +119,24 @@ class GitObjectCache(private val directory: File, private val scope: String) {
         if (target.exists() && get(id) != null) return
         createDirectories(target.parentFile)
         writeAtomically(target, GitObjectType.header(obj.type, obj.content.size), obj.content)
+    }
+
+    /**
+     * Adds a complete snapshot in one step: stores `objects` (children before
+     * parents, as [store] would) and retains `commit`, with no other call able to
+     * prune in between.
+     *
+     * Objects of the snapshot that are not in `objects` must already be cached.
+     * That is checked here, under the same lock: when the commit or anything
+     * reachable from `tree` is missing afterwards, nothing is retained and the
+     * result is false (what was stored is unreferenced and goes with the next prune).
+     */
+    @Synchronized
+    fun install(objects: List<GitObject>, commit: GitObjectId, tree: GitObjectId): Boolean {
+        for (obj in objects) store(obj, obj.id)
+        if (get(commit)?.type != GitObjectType.COMMIT || reachableObjects(tree) == null) return false
+        retain(commit, tree)
+        return true
     }
 
     // MARK: Retained snapshots

@@ -76,8 +76,10 @@ class GitSmartHttpClientPolicyTest {
             listOf("Content-Type" to "application/x-git-upload-pack-request", "Accept" to "application/x-git-upload-pack-result"),
             engine.requests[1].headers.drop(4),
         )
-        // 8 MiB for an advertisement, the pack limit for a pack.
-        assertEquals(listOf(8L * 1024 * 1024, 128L * 1024 * 1024), engine.limits.toList())
+        // 8 MiB for an advertisement, the pack limit this heap allows for a pack.
+        val packLimit = GitPack.Limits.current().maximumPackBytes
+        assertTrue(packLimit in 1024 * 1024..GitWire.MAXIMUM_PACK_BYTES)
+        assertEquals(listOf(8L * 1024 * 1024, packLimit), engine.limits.toList())
         // Nothing about a request or a remote prints the credential or the address.
         for (text in listOf(engine.requests[0].toString(), remote.toString())) {
             assertTrue(!text.contains("tökén") && !text.contains(expected), text)
@@ -170,8 +172,9 @@ class GitSmartHttpClientPolicyTest {
         // One naming another origin never came from this client's discovery.
         engine.requests.clear()
         val foreign = GitRefAdvertisement(emptyMap(), mapOf("report-status" to null), serviceUrl = "https://evil.example/owner/repo")
-        assertFailsWith<IllegalArgumentException> { blocking { client.fetchPack(head, emptyList(), foreign) } }
-        assertFailsWith<IllegalArgumentException> { blocking { client.push(head, head, ByteArray(4), foreign) } }
+        val closed = GitRemoteFailure.ProtocolViolation("service_url")
+        assertEquals(closed, assertFailsWith<GitRemoteFailure> { blocking { client.fetchPack(head, emptyList(), foreign) } })
+        assertEquals(closed, assertFailsWith<GitRemoteFailure> { blocking { client.push(head, head, ByteArray(4), foreign) } })
         assertTrue(engine.requests.isEmpty())
     }
 
@@ -216,8 +219,82 @@ class GitSmartHttpClientPolicyTest {
         assertFailsWith<CancellationException> { blocking { failing(CancellationException("stop")).discover(GitService.UPLOAD_PACK) } }
     }
 
+    /** Review finding 9: whatever a host answers, the caller sees a value or one of the closed failures. */
+    @Test fun arbitraryAnswersNeverEscapeTheClosedFailures() {
+        val random = java.util.Random(20261127)
+        val statuses = listOf(200, 200, 200, 200, 0, -1, 100, 199, 201, 204, 206, 300, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 408, 413, 421, 429, 500, 503, 599, 600, 999, Int.MAX_VALUE)
+        val types = listOf(
+            null, "", ";", "application/x-git-upload-pack-advertisement", "application/x-git-receive-pack-advertisement",
+            "APPLICATION/X-GIT-UPLOAD-PACK-ADVERTISEMENT ; charset=x", "application/x-git-upload-pack-result", "application/x-git-receive-pack-result",
+            "text/html", "\u0000", "application/x-git-upload-pack-advertisement\r\nX: y",
+        )
+        val locations = listOf(
+            null, "", "/", "//", "///x", "?", "#", "https://git.example/owner/repo.git/info/refs", "https://git.example:99999/x", "https://[::1/x",
+            "https://git.example\\@evil.example/x", "http://git.example/x", "\u0000", "%", "https://git.example/%zz", "ht tp://x", "\ud83d", "x".repeat(10_000),
+        )
+        val retries = listOf(null, "", "0", "-1", "1e400", "NaN", "0x10", " 5 ", "5,5", "\u0663", "9".repeat(400))
+        val bodies = listOf(
+            ByteArray(0), GitPktLine.flush, advertisementBody(GitService.UPLOAD_PACK, "side-band-64k", "shallow"),
+            advertisementBody(GitService.RECEIVE_PACK, "report-status", "side-band-64k"),
+            GitPktLine.line("NAK") + GitPktLine.encode(byteArrayOf(1) + "PACK".toByteArray()) + GitPktLine.flush,
+            GitPktLine.line("unpack ok") + GitPktLine.line("ok refs/heads/main") + GitPktLine.flush,
+            "ffff".toByteArray(), "-001".toByteArray(), ByteArray(70_000) { 0x30 },
+        )
+        fun mutated(bytes: ByteArray): ByteArray {
+            if (bytes.isEmpty() || random.nextInt(3) == 0) return bytes
+            val copy = bytes.copyOf(random.nextInt(bytes.size + 1))
+            if (copy.isNotEmpty()) copy[random.nextInt(copy.size)] = random.nextInt(256).toByte()
+            return copy
+        }
+        var values = 0
+        repeat(6_000) { round ->
+            val engine = ScriptedEngine { request ->
+                // Every fifth exchange gets the answer a real host would give.
+                if (round % 5 == 0) {
+                    return@ScriptedEngine when {
+                        request.url.endsWith("service=git-upload-pack") -> advertisement(GitService.UPLOAD_PACK, "side-band-64k")
+                        request.url.endsWith("service=git-receive-pack") -> advertisement(GitService.RECEIVE_PACK, "report-status")
+                        request.url.endsWith("/git-upload-pack") -> GitHttpResponse(200, mapOf("Content-Type" to "application/x-git-upload-pack-result"), bodies[4])
+                        else -> GitHttpResponse(200, mapOf("Content-Type" to "application/x-git-receive-pack-result"), bodies[5])
+                    }
+                }
+                val headers = HashMap<String, String>()
+                types[random.nextInt(types.size)]?.let { headers[if (random.nextBoolean()) "Content-Type" else "content-type"] = it }
+                locations[random.nextInt(locations.size)]?.let { headers["Location"] = it }
+                retries[random.nextInt(retries.size)]?.let { headers["Retry-After"] = it }
+                GitHttpResponse(statuses[random.nextInt(statuses.size)], headers, mutated(bodies[random.nextInt(bodies.size)]))
+            }
+            val client = GitSmartHttpClient(remote, engine)
+            val given = GitRefAdvertisement(
+                mapOf("refs/heads/main" to head),
+                mapOf("report-status" to null, "side-band-64k" to null, "shallow" to null),
+                serviceUrl = listOf(null, "https://git.example/owner/repo.git", "https://evil.example/x", "", "\u0000", "https://git.example")[random.nextInt(6)],
+            )
+            val calls = listOf<suspend () -> Any>(
+                { client.discover(GitService.UPLOAD_PACK) },
+                { client.discover(GitService.RECEIVE_PACK) },
+                { client.fetchPack(head, listOf(head), given) },
+                { client.push(head, head, "PACK".toByteArray(), given) },
+            )
+            try {
+                blocking { calls[round % calls.size]() }
+                values += 1
+            } catch (_: GitRemoteFailure) {
+            } catch (_: GitFormatException) {
+            } catch (error: Throwable) {
+                kotlin.test.fail("round $round: ${error.javaClass.name}: ${error.message}")
+            }
+            // However it ends, the client did not wander off: never more than the redirect cap.
+            assertTrue(engine.requests.size <= 17, "round $round: ${engine.requests.size} requests")
+            assertTrue(engine.requests.all { it.url.startsWith("https://git.example/") || it.url.startsWith("https://GIT.example/") }, "round $round: ${engine.requests.map { it.url.take(80) }}")
+        }
+        // Not vacuous either way: plenty of values, plenty of failures.
+        assertTrue(values in 300..5_000, "$values exchanges ended in a value")
+    }
+
     @Test fun anSshRemoteHasNoHttpClient() {
         val ssh = GitRemote.ssh(GitSshLocation("git", "h", null, "r", scpStyle = true), "main")
-        assertFailsWith<IllegalArgumentException> { GitSmartHttpClient(ssh, ScriptedEngine { redirect(500, null) }) }
+        val failure = assertFailsWith<GitRemoteConfigurationException> { GitSmartHttpClient(ssh, ScriptedEngine { redirect(500, null) }) }
+        assertEquals(GitRemote.Failure.INVALID_URL, failure.failure)
     }
 }

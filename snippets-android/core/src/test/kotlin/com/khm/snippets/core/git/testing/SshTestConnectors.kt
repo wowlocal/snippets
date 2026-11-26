@@ -168,11 +168,34 @@ class FakeSshConnector(
     private val opened = AtomicInteger()
     private val closed = AtomicInteger()
 
+    private val users = java.util.concurrent.ConcurrentHashMap.newKeySet<Thread>()
+
     val commands: List<String> get() = log.toList()
     val channelsOpened: Int get() = opened.get()
     val channelsClosed: Int get() = closed.get()
 
+    /** Every thread that opened, read, wrote or closed a channel. */
+    val clientThreads: Set<Thread> get() = users.toSet()
+
+    private fun touched() {
+        users.add(Thread.currentThread())
+    }
+
+    private fun recording(stream: InputStream): InputStream = object : InputStream() {
+        override fun read(): Int = touched().let { stream.read() }
+        override fun read(target: ByteArray, offset: Int, length: Int): Int = touched().let { stream.read(target, offset, length) }
+        override fun close() = touched().let { stream.close() }
+    }
+
+    private fun recording(stream: OutputStream): OutputStream = object : OutputStream() {
+        override fun write(value: Int) = touched().let { stream.write(value) }
+        override fun write(source: ByteArray, offset: Int, length: Int) = touched().let { stream.write(source, offset, length) }
+        override fun flush() = touched().let { stream.flush() }
+        override fun close() = touched().let { stream.close() }
+    }
+
     override suspend fun open(command: String, location: GitSshLocation): GitSshChannel {
+        touched()
         log.add(command)
         opened.incrementAndGet()
         val toService = BlockingPipe(pipeCapacity)
@@ -190,13 +213,14 @@ class FakeSshConnector(
         }
         return object : GitSshChannel {
             private var isClosed = false
-            override val stdout: InputStream = fromService.input
-            override val stderr: InputStream = errors.input
-            override val stdin: OutputStream = toService.output
+            override val stdout: InputStream = recording(fromService.input)
+            override val stderr: InputStream = recording(errors.input)
+            override val stdin: OutputStream = recording(toService.output)
             override suspend fun exitStatus(): Int? = status.await()
 
             @Synchronized
             override fun close() {
+                touched()
                 if (isClosed) return
                 isClosed = true
                 closed.incrementAndGet()

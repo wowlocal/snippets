@@ -246,6 +246,83 @@ class GitObjectCacheTest {
         assertEquals(listOf(second.id), cache().snapshotCommits)
     }
 
+    /** Review finding 11: one call stores and retains, so nothing can prune in between. */
+    @Test fun installStoresAndRetainsASnapshotInOneStep() {
+        val cache = cache()
+        val first = snapshot("dir/a" to "1", "b" to "2")
+        assertTrue(cache.install(first.objects, first.id, first.tree))
+        assertEquals(listOf(first.id), cache.snapshotCommits)
+        assertEquals(first.objects.map { it.id.hex }.toSet(), storedIds())
+
+        // Only what changed needs to be handed over; the rest is found in the cache.
+        val second = snapshot("dir/a" to "1", "b" to "3", parent = first.id)
+        val known = first.objects.map { it.id }.toSet()
+        assertTrue(cache.install(second.objects.filter { it.id !in known }, second.id, second.tree))
+        assertEquals(listOf(second.id, first.id), cache.snapshotCommits)
+
+        // A snapshot that is not complete is not retained, whatever is missing.
+        val third = snapshot("dir/a" to "9", "c" to "4", parent = second.id)
+        for (missing in third.objects) {
+            val incomplete = third.objects.filter { it !== missing && it.id !in known }
+            if (missing.id in known) continue
+            // Drop what an earlier attempt left behind, so that the object really is missing.
+            cache.prune()
+            assertFalse(cache.install(incomplete, third.id, third.tree), "without ${missing.type.typeName}")
+            assertEquals(listOf(second.id, first.id), cache.snapshotCommits)
+            assertNull(cache.retainedTree(third.id))
+        }
+        // Not a commit under the commit's name.
+        assertFalse(cache.install(third.objects, third.tree, third.tree))
+        // What the failed attempts stored is unreferenced and goes with the next prune.
+        cache.prune()
+        assertEquals((first.objects + second.objects).map { it.id.hex }.toSet(), storedIds())
+        assertTrue(cache.install(third.objects, third.id, third.tree))
+        assertEquals(third.commit, cache().get(third.id))
+    }
+
+    /**
+     * Installs racing with pins, releases and prunes on other threads: every install
+     * that reported success left a snapshot that is still complete, or one that a
+     * later release or eviction removed whole. With `store` + `retain` as separate
+     * calls a prune in between deleted the objects just stored.
+     */
+    @Test fun installIsAtomicAgainstConcurrentPruning() {
+        val cache = cache()
+        val snapshots = (0 until 16).map { index -> snapshot("shared" to "same", "dir/file" to "version $index", "other/$index" to "x$index") }
+        val failures = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
+        val threads = (0 until 6).map { worker ->
+            kotlin.concurrent.thread(name = "cache-install-$worker") {
+                val random = java.util.Random(worker.toLong())
+                try {
+                    repeat(250) {
+                        val chosen = snapshots[random.nextInt(snapshots.size)]
+                        when (random.nextInt(5)) {
+                            0, 1 -> if (!cache.install(chosen.objects, chosen.id, chosen.tree)) {
+                                failures.add(AssertionError("a complete snapshot was not installed"))
+                            }
+                            2 -> cache.pin(listOf(chosen.id to chosen.tree))
+                            3 -> cache.release(chosen.id)
+                            else -> cache.prune()
+                        }
+                        // The invariant, checked atomically with respect to the cache's lock.
+                        synchronized(cache) {
+                            for (commit in cache.snapshotCommits) {
+                                val tree = cache.retainedTree(commit)
+                                if (tree == null || cache.get(commit) == null || cache.reachableObjects(tree) == null) {
+                                    failures.add(AssertionError("listed snapshot ${commit.hex} is incomplete"))
+                                }
+                            }
+                        }
+                    }
+                } catch (error: Throwable) {
+                    failures.add(error)
+                }
+            }
+        }
+        threads.forEach { it.join(120_000) }
+        assertTrue(failures.isEmpty(), failures.take(3).joinToString { it.stackTraceToString().take(500) })
+    }
+
     @Test fun directoriesArePrivateToTheOwner() {
         val cache = cache()
         val view = Files.getFileAttributeView(directory.toPath(), java.nio.file.attribute.PosixFileAttributeView::class.java)

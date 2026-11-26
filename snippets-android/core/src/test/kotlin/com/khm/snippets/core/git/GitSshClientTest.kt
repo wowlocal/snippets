@@ -3,6 +3,7 @@ package com.khm.snippets.core.git
 import com.khm.snippets.core.git.testing.FakeSshConnector
 import com.khm.snippets.core.git.testing.GitCommandFailed
 import com.khm.snippets.core.git.testing.GitFixture
+import com.khm.snippets.core.git.testing.MainThreadWatch
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.coroutines.cancellation.CancellationException
@@ -14,6 +15,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -333,6 +335,107 @@ class GitSshClientTest {
         val failure = assertFailsWith<GitRemoteFailure> { blocking { client(GitUnavailableSshConnector()).discover(GitService.UPLOAD_PACK) } }
         assertEquals(GitRemoteFailure.UnsupportedServer("ssh"), failure)
     }
+
+    /** Review finding 9: whatever a connector or its streams throw, the caller sees a closed failure. */
+    @Test fun whateverAConnectorThrowsEndsAsAClosedFailure() {
+        val closed = GitRemoteFailure.Unreachable("ssh_channel")
+        val refusing = object : GitSshConnector {
+            override suspend fun open(command: String, location: GitSshLocation): GitSshChannel = throw IllegalStateException("pool is gone: git@secret-host")
+        }
+        val failure = assertFailsWith<GitRemoteFailure> { blocking { client(refusing).discover(GitService.UPLOAD_PACK) } }
+        assertEquals(closed, failure)
+        assertTrue(!failure.stackTraceToString().contains("secret-host"))
+
+        // A stream that fails with something other than an `IOException`.
+        fun breaking(read: Boolean) = object : GitSshConnector {
+            val inner = FakeSshConnector { server ->
+                server.send(advertisement(head, "report-status"))
+                server.readRequest()
+                0
+            }
+
+            override suspend fun open(command: String, location: GitSshLocation): GitSshChannel {
+                val channel = inner.open(command, location)
+                return object : GitSshChannel by channel {
+                    override val stdout = if (read) object : java.io.InputStream() {
+                        override fun read(): Int = throw UnsupportedOperationException("stdout")
+                    } else channel.stdout
+                    override val stdin = if (read) channel.stdin else object : java.io.OutputStream() {
+                        override fun write(value: Int) = throw IndexOutOfBoundsException("stdin")
+                    }
+                }
+            }
+        }
+        for (read in listOf(true, false)) {
+            val connector = breaking(read)
+            val given = GitRefAdvertisement(mapOf("refs/heads/main" to head), mapOf("report-status" to null))
+            assertEquals(closed, assertFailsWith<GitRemoteFailure> { blocking { client(connector).push(head, other, utf8("PACK"), given) } })
+            assertEquals(1, connector.inner.channelsClosed, "the channel is released")
+        }
+        // A request callback that fails with a programming error.
+        val connector = FakeSshConnector { server ->
+            server.send(advertisement(head))
+            server.readRequest()
+            0
+        }
+        val broken = assertFailsWith<GitRemoteFailure> {
+            blocking { GitSshExchangeRunner.exchange(connector, "git-upload-pack 'r.git'", location, 1024) { throw IllegalArgumentException("bug") } }
+        }
+        assertEquals(closed, broken)
+    }
+
+    /** Review finding 10: the channel is opened, read, written and closed off the caller's thread. */
+    @Test fun everySshEntryPointIsMainSafe() {
+        MainThreadWatch().use { main ->
+            val payload = ByteArray(16 * 1024 * 1024).also { java.util.Random(4).nextBytes(it) }
+            val connector = FakeSshConnector(pipeCapacity = 256 * 1024) { server ->
+                server.send(advertisement(head, "report-status", "side-band-64k"))
+                val request = server.readRequest()
+                if (request.size > 100) {
+                    // A push: answer with a long side-band stream ending in the report.
+                    var offset = 0
+                    while (offset < 6 * 1024 * 1024) {
+                        val count = minOf(60_000, payload.size - offset)
+                        server.send(GitPktLine.encode(byteArrayOf(2) + payload.copyOfRange(offset, offset + count)))
+                        offset += count
+                    }
+                    val report = GitPktLine.line("unpack ok") + GitPktLine.line("ok refs/heads/main") + GitPktLine.flush
+                    server.send(GitPktLine.encode(byteArrayOf(1) + report) + GitPktLine.flush)
+                }
+                0
+            }
+            val client = client(connector)
+            val given = GitRefAdvertisement(mapOf("refs/heads/main" to head), emptyMap())
+            main.onMain {
+                assertEquals(1, client.discover(GitService.UPLOAD_PACK).refs.size)
+                assertEquals(GitPushResult.UPDATED, client.push(head, other, payload, given))
+                assertTrue(main.isOnMain)
+            }
+            // Cancelling closes the channel: not on the caller's thread either.
+            val stalled = FakeSshConnector { Thread.sleep(30_000); 0 }
+            main.onMain {
+                coroutineScope {
+                    val task = async { client(stalled).discover(GitService.UPLOAD_PACK) }
+                    delay(300)
+                    task.cancel()
+                    assertFailsWith<CancellationException> { task.await() }
+                }
+            }
+            // And so does the idle timeout.
+            assertEquals(
+                GitRemoteFailure.Unreachable("ssh_timeout"),
+                assertFailsWith<GitRemoteFailure> { main.onMain { client(FakeSshConnector { Thread.sleep(30_000); 0 }.also { timedOut = it }, idleTimeoutMillis = 300).discover(GitService.UPLOAD_PACK) } },
+            )
+            assertEquals(emptySet(), main.heavyWork)
+            for (used in listOf(connector, stalled, timedOut!!)) {
+                assertTrue(used.clientThreads.isNotEmpty())
+                assertTrue(main.thread !in used.clientThreads, used.clientThreads.toString())
+                assertEquals(used.channelsOpened, used.channelsClosed)
+            }
+        }
+    }
+
+    private var timedOut: FakeSshConnector? = null
 
     // MARK: Real git services
 

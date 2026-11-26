@@ -43,6 +43,9 @@ object GitZlib {
      */
     fun inflate(input: ByteArray, offset: Int, expectedSize: Int): Inflated {
         if (offset < 0 || offset >= input.size || expectedSize < 0) throw GitFormatException.compression()
+        // The output is allocated before the stream is read: no caller may ask for
+        // more than the largest object this client ever accepts.
+        if (expectedSize > GitPack.Limits.MAXIMUM_OBJECT_BYTES) throw GitFormatException.limitExceeded("zlib_size")
         val inflater = Inflater()
         try {
             val available = input.size - offset
@@ -75,7 +78,10 @@ object GitZlib {
 
 /** Git's binary delta format (`gitformat-pack(5)`, "Deltified representation"). */
 object GitDelta {
-    fun apply(delta: ByteArray, base: ByteArray, maximumSize: Int): ByteArray {
+    fun apply(delta: ByteArray, base: ByteArray, maximumSize: Int): ByteArray = apply(delta, base, maximumSize) {}
+
+    /** `beforeAllocating` sees the declared target size once it has passed `maximumSize`, and may refuse it. */
+    internal fun apply(delta: ByteArray, base: ByteArray, maximumSize: Int, beforeAllocating: (Int) -> Unit): ByteArray {
         var index = 0
         fun size(): Long {
             var value = 0L
@@ -91,8 +97,11 @@ object GitDelta {
         }
         if (size() != base.size.toLong()) throw GitFormatException.invalidDelta()
         val declared = size()
-        if (declared < 0 || declared > maximumSize) throw GitFormatException.limitExceeded("delta_target")
+        if (declared < 0 || declared > minOf(maximumSize, GitPack.Limits.MAXIMUM_OBJECT_BYTES)) {
+            throw GitFormatException.limitExceeded("delta_target")
+        }
         val targetSize = declared.toInt()
+        beforeAllocating(targetSize)
         val output = ByteArray(targetSize)
         var written = 0
         while (index < delta.size) {
@@ -137,13 +146,55 @@ object GitDelta {
 
 /** Reads and writes version-2 packfiles. */
 object GitPack {
-    /** The iOS values of the Swift implementation: a phone's memory, not a Mac's. */
+    /**
+     * How much a pack may hold. The defaults are the iOS values of the Swift
+     * implementation, and the most this client ever allows.
+     *
+     * An Android app's heap is far smaller than an iPhone's memory (256 MiB is
+     * typical, without `largeHeap`), and everything here is held in memory at once:
+     * the pack, every object in it, and the bookkeeping per object. [forHeap] scales
+     * the limits to the heap, and [parse] uses [current] unless told otherwise, so a
+     * pack that would not fit ends as the closed `limit` failure and not as an
+     * `OutOfMemoryError`.
+     */
     data class Limits(
-        val maximumObjects: Int = 2_000_000,
-        val maximumObjectBytes: Int = 64 * 1024 * 1024,
-        val maximumTotalInflatedBytes: Long = 384L * 1024 * 1024,
+        val maximumObjects: Int = MAXIMUM_OBJECTS,
+        val maximumObjectBytes: Int = MAXIMUM_OBJECT_BYTES,
+        val maximumTotalInflatedBytes: Long = MAXIMUM_TOTAL_INFLATED_BYTES,
         val maximumDeltaDepth: Int = 10_000,
-    )
+        /** The largest pack a client downloads; see `GitWire.MAXIMUM_PACK_BYTES`. */
+        val maximumPackBytes: Long = GitWire.MAXIMUM_PACK_BYTES,
+    ) {
+        companion object {
+            const val MAXIMUM_OBJECTS = 2_000_000
+            const val MAXIMUM_OBJECT_BYTES = 64 * 1024 * 1024
+            const val MAXIMUM_TOTAL_INFLATED_BYTES = 384L * 1024 * 1024
+
+            /** What one parsed object costs besides its content: the object, its id, its place in the result. */
+            private const val BOOKKEEPING_BYTES_PER_OBJECT = 256L
+            private const val FLOOR_BYTES = 1024L * 1024
+
+            /**
+             * The limits for a heap of `maxMemory` bytes (`Runtime.maxMemory()`): a
+             * pack and a single object may each take an eighth of it, all objects of
+             * a pack together three eighths, and the bookkeeping for them another
+             * eighth, each capped at the default. That leaves the pack, its objects
+             * and one delta being applied inside three quarters of the heap.
+             */
+            fun forHeap(maxMemory: Long): Limits {
+                val eighth = (maxOf(maxMemory, 0L) / 8).coerceAtLeast(FLOOR_BYTES)
+                return Limits(
+                    maximumObjects = minOf(MAXIMUM_OBJECTS.toLong(), eighth / BOOKKEEPING_BYTES_PER_OBJECT).toInt(),
+                    maximumObjectBytes = minOf(MAXIMUM_OBJECT_BYTES.toLong(), eighth).toInt(),
+                    maximumTotalInflatedBytes = minOf(MAXIMUM_TOTAL_INFLATED_BYTES, eighth * 3),
+                    maximumPackBytes = minOf(GitWire.MAXIMUM_PACK_BYTES, eighth),
+                )
+            }
+
+            /** [forHeap] for this process. */
+            fun current(): Limits = forHeap(Runtime.getRuntime().maxMemory())
+        }
+    }
 
     private sealed interface Entry {
         class Whole(val type: GitObjectType, val content: ByteArray) : Entry
@@ -162,11 +213,16 @@ object GitPack {
      * so production callers pass the local cache only as a defensive fallback.
      *
      * The pack is untrusted: every count, size and offset is checked before it is
-     * used to allocate or index.
+     * used to allocate or index, and the running total is checked before each
+     * object is inflated, not after. (So an entry that is both over the total and
+     * corrupt reports the limit, where Swift reports the corruption.)
+     *
+     * This is CPU-bound and holds everything in memory: call it from a background
+     * dispatcher, and let go of `pack` as soon as it returns.
      */
     fun parse(
         pack: ByteArray,
-        limits: Limits = Limits(),
+        limits: Limits = Limits.current(),
         externalBase: (GitObjectId) -> GitObject? = { null },
     ): Map<GitObjectId, GitObject> {
         if (pack.size < HEADER_BYTES + GitObjectId.BYTE_COUNT || !pack.startsWithBytes(SIGNATURE)) {
@@ -189,6 +245,10 @@ object GitPack {
         // Entries are read front to back, so their offsets are already sorted.
         var offsets = IntArray(minOf(count, 65_536))
         var inflatedTotal = 0L
+        /** Refuses an allocation that would take the total over its limit. */
+        fun reserve(size: Int) {
+            if (inflatedTotal + size > limits.maximumTotalInflatedBytes) throw GitFormatException.limitExceeded("pack_inflated")
+        }
         var offset = HEADER_BYTES
         repeat(count) {
             val entryOffset = offset
@@ -210,6 +270,7 @@ object GitPack {
             val entry: Entry
             when (typeCode) {
                 1, 2, 3, 4 -> {
+                    reserve(size)
                     val inflated = GitZlib.inflate(pack, offset, size)
                     offset += inflated.consumed
                     entry = Entry.Whole(GitObjectType.fromCode(typeCode)!!, inflated.content)
@@ -229,6 +290,7 @@ object GitPack {
                     }
                     val baseOffset = entryOffset - distance
                     if (distance <= 0 || baseOffset < HEADER_BYTES) throw GitFormatException.invalidPack("offset")
+                    reserve(size)
                     val inflated = GitZlib.inflate(pack, offset, size)
                     offset += inflated.consumed
                     entry = Entry.OffsetDelta(baseOffset.toInt(), inflated.content)
@@ -237,6 +299,7 @@ object GitPack {
                     if (trailerStart - offset < GitObjectId.BYTE_COUNT) throw GitFormatException.invalidPack("reference")
                     val base = GitObjectId.fromBytes(pack, offset)
                     offset += GitObjectId.BYTE_COUNT
+                    reserve(size)
                     val inflated = GitZlib.inflate(pack, offset, size)
                     offset += inflated.consumed
                     entry = Entry.ReferenceDelta(base, inflated.content)
@@ -288,7 +351,7 @@ object GitPack {
 
         fun enqueueChildren(children: List<Int>, base: GitObject, depth: Int) {
             for (child in children) {
-                val content = GitDelta.apply(takeDelta(child), base.content, limits.maximumObjectBytes)
+                val content = GitDelta.apply(takeDelta(child), base.content, limits.maximumObjectBytes, ::reserve)
                 inflatedTotal += content.size
                 if (inflatedTotal > limits.maximumTotalInflatedBytes) {
                     throw GitFormatException.limitExceeded("pack_inflated")
@@ -325,7 +388,10 @@ object GitPack {
      */
     fun build(objects: List<GitObject>): ByteArray {
         // Ciphertext does not compress, so the content size is a good first capacity.
-        val capacity = objects.sumOf { it.content.size.toLong() + 16 }.coerceAtMost(64L * 1024 * 1024).toInt() + 64
+        val total = objects.sumOf { it.content.size.toLong() + 16 }
+        // Far beyond anything a push holds, and beyond what one array could.
+        if (total > Limits.MAXIMUM_TOTAL_INFLATED_BYTES) throw GitFormatException.limitExceeded("pack_build")
+        val capacity = total.coerceAtMost(64L * 1024 * 1024).toInt() + 64
         val out = ExposedByteArrayOutputStream(capacity)
         out.write(SIGNATURE)
         writeBigEndian32(2, out)

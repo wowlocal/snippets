@@ -214,13 +214,91 @@ class GitRepositoryLocationTest {
         assertEquals("https://h/p%C3%A4th/lib", unicode.toString())
         assertEquals("h/päth/lib", GitRepositoryLocation.Https(unicode).canonicalIdentity)
         assertEquals("https://[::1]:8443/r", GitRemote.normalizedUrl("https://[::1]:8443/r").toString())
+        // An empty port is no port, and leading zeros are dropped, as in Swift.
+        assertEquals("https://h/a", GitRemote.normalizedUrl("https://h:/a").toString())
+        assertEquals("https://h:8443/a", GitRemote.normalizedUrl("https://h:08443/a").toString())
+        // Brackets stay where they were written, IPv6 literal or not.
+        assertEquals("https://[h]/r", GitRemote.normalizedUrl("https://[H]/r").toString())
         for (refused in listOf(
             "https://h/a/../b", "https://h/./a", "https://h/a/%2e%2E/b", "https://h/100%", "https://h/a\\b",
-            "https://h:0/a", "https://h:x/a", "https://h:/a", "https://@h/a", "https:///a", "https://h a/b",
-            "https://h/a b", "https://[::1/a", "https://ho%73t/a", "//h/a", "h/a",
+            "https://h:0/a", "https://h:65536/a", "https://h:x/a", "https://@h/a", "https:///a", "https://h a/b",
+            "https://h/a b", "https://[::1/a", "https://[]/a", "https://[::1]:/a", "https://[fe80::1%25en0]/a",
+            "https://ho%73t/a", "https://h/a%FFb", "//h/a", "h/a",
         )) {
             assertFailsWith<GitRemoteConfigurationException>(refused) { GitRemote.normalizedUrl(refused) }
         }
+    }
+
+    /** Review finding 1: the host an international name converts to is the one Apple devices use. */
+    @Test fun internationalHostsConvertAsOnAppleDevicesOrAreRefused() {
+        fun identity(text: String) = parse(text).canonicalIdentity
+        // UTS #46 without the transitional mappings: sharp s and final sigma stay.
+        assertEquals("xn--strae-oqa.de/me/lib", identity("https://stra\u00dfe.de/me/lib"))
+        assertEquals("https://xn--strae-oqa.de/me/lib", parse("https://stra\u00dfe.de/me/lib").spec)
+        assertEquals("xn--nxasmm1c.example/a", identity("https://\u03b2\u03cc\u03bb\u03bf\u03c2.example/a"))
+        assertEquals("xn--bcher-kva.example/me/lib", identity("https://B\u00dcCHER.example/me/lib"))
+        // The name and its `xn--` spelling are one host and one identity.
+        assertEquals(identity("https://b\u00fccher.example/r"), identity("https://XN--BCHER-KVA.example/r"))
+        // Compatibility forms of ASCII are that ASCII, in HTTPS and in ssh:// alike.
+        assertEquals("h.example/a", identity("https://\uff48.example/a"))
+        assertEquals("ssh://git@h.example/r", parse("ssh://git@\uff28.Example/r").spec)
+        // An international name has no SSH form in Swift, in either spelling; scp-like text is not a URL.
+        assertInvalid("ssh://git@b\u00fccher.example/r")
+        assertInvalid("ssh://git@xn--bcher-kva.example/r")
+        assertEquals("xn--bcher-kva.example/r", identity("git@xn--bcher-kva.example:r"))
+        // Not valid as international names: bad Punycode, joiners, the bidi rule,
+        // hyphens and empty labels (which a plain ASCII name may have).
+        for (refused in listOf(
+            "https://xn--a.example/a", "https://xn--ss-.example/a", "https://xn--.example/a", "https://a\u200db.example/a",
+            "https://\u0663.example/a", "https://1\u05d0.example/a", "https://\u05d0.1a.example/a", "https://\u00e9.-a.example/a",
+            "https://\u00e9..a/a", "https://\u00e9.ab--c.example/a", "https://a.\u0301b.example/a",
+        )) {
+            assertInvalid(refused)
+        }
+        // A character that merely lowercases to ASCII (the Kelvin sign) is not ASCII
+        // where Foundation does no IDNA mapping, and not guessed at next to an escape.
+        assertInvalid("https://[\u212ah]/lib")
+        assertInvalid("ssh://\u212a%41/r")
+        assertEquals("ssh://k/r", parse("ssh://\u212a/r").spec)
+        assertEquals("-a.ab--c..example/a", identity("https://-a.ab--c..example/a"))
+        assertEquals("xn--4db.a1.example/a", identity("https://\u05d0.a1.example/a"))
+    }
+
+    /** Review finding 6: an IPv6 literal needs its brackets. */
+    @Test fun anUnbracketedIpv6LiteralIsRefused() {
+        for (refused in listOf("ssh://git@2001:db8::5/srv/r", "ssh://::1/r", "ssh://git@host:22:22/r", "https://::1/a", "https://a:b:c/a")) {
+            assertInvalid(refused)
+        }
+        assertEquals("ssh://git@[2001:db8::5]/srv/r", parse("ssh://git@[2001:db8::5]/srv/r").spec)
+        assertEquals("ssh://git@h/abs", parse("ssh://git@h:/abs").spec)
+        assertEquals("ssh://git@h:22/r", parse("ssh://git@h:022/r").spec)
+    }
+
+    /** Swift looks for `://`, `:`, `@` and `/` as whole characters; what it would read differently is refused. */
+    @Test fun aDelimiterInsideACombiningSequenceIsRefused() {
+        for (refused in listOf(
+            "https://\u0301a.example/a", "git@h:\u0301r", "git@h:r/\u0301x", "git@h\u0600:x", "git@h:x\u0600/", "git@h:x\u0600.git",
+            "https://h/\u0e33", "https://h/%CC%81a", "ssh://h/%CC%81a", "https://h/a/\ud83c\udffb",
+        )) {
+            assertInvalid(refused)
+        }
+        // A mark after a letter is an ordinary decomposed character.
+        assertEquals("h/e\u0301/lib", parse("git@h:e\u0301/lib.git").canonicalIdentity)
+        assertEquals("h/e\u0301/lib", parse("https://h/e\u0301/lib.git").canonicalIdentity)
+    }
+
+    /** Foundation's own quirks, reproduced because they decide the identity. */
+    @Test fun pathsAreEscapedAndUnescapedAsFoundationDoes() {
+        // A path that needs escaping is escaped whole, `%` included.
+        assertEquals("https://h/%2541/%5Bx%5D", parse("https://h/%41/[x]").spec)
+        assertEquals("h/%41/[x]", parse("https://h/%41/[x]").canonicalIdentity)
+        assertEquals("h/A", parse("https://h/%41").canonicalIdentity)
+        // `URL.path` drops trailing slashes, escaped ones too, before `.git` is looked for.
+        assertEquals("h/a", parse("https://h/a.git%2F%2F").canonicalIdentity)
+        assertEquals("h/a.git", parse("https://h/a.git/%2F.git").canonicalIdentity)
+        // In ssh:// the escaped `%` then makes the path one Swift refuses.
+        assertInvalid("ssh://h/%41/\u00e4")
+        assertEquals("ssh://h/A", parse("ssh://h/%41").spec)
     }
 
     @Test fun credentialRulesMatchSwift() {

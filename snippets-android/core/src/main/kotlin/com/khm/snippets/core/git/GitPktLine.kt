@@ -57,6 +57,10 @@ object GitPktLine {
         var offset: Int = offset
             private set
 
+        init {
+            if (offset < 0) throw GitFormatException.invalidPktLine()
+        }
+
         private var payloadStart = 0
         private var payloadLength = 0
 
@@ -155,8 +159,10 @@ object GitPktLine {
      * The index just past the first top-level flush packet, null while incomplete.
      * Only the first `length` bytes are examined.
      */
-    fun advertisementEnd(bytes: ByteArray, length: Int = bytes.size): Int? =
-        AdvertisementScanner().end(bytes, length)
+    fun advertisementEnd(bytes: ByteArray, length: Int = bytes.size): Int? {
+        if (length < 0 || length > bytes.size) throw GitFormatException.invalidPktLine()
+        return AdvertisementScanner().end(bytes, length)
+    }
 
     /**
      * [advertisementEnd] for a buffer that grows: it remembers the frames already

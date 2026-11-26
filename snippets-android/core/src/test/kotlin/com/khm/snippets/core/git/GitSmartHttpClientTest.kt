@@ -606,7 +606,11 @@ class GitSmartHttpClientTest {
             val client = fixture.client()
             fun answer(status: Int, headers: Map<String, String> = emptyMap(), body: String = "<html>secret-path</html>"): GitRemoteFailure {
                 fixture.server.intercept = { GitTestServer.Response(status, headers, utf8(body)) }
-                return failure<GitRemoteFailure> { client.discover(GitService.UPLOAD_PACK) }
+                fixture.server.clearRequests()
+                val failure = failure<GitRemoteFailure> { client.discover(GitService.UPLOAD_PACK) }
+                // Whatever the answer, the HTTP stack asked once: no retry, no follow-up of its own.
+                assertEquals(listOf("GET refs?git-upload-pack"), fixture.server.requests, "status $status $headers")
+                return failure
             }
             assertEquals(GitRemoteFailure.AuthenticationRequired(401), answer(401))
             assertEquals(GitRemoteFailure.AuthenticationRequired(403), answer(403))
@@ -618,6 +622,12 @@ class GitSmartHttpClientTest {
             assertEquals(GitRemoteFailure.RateLimited(3_600.0), answer(503, mapOf("Retry-After" to "99999")))
             assertEquals(GitRemoteFailure.RateLimited(1.0), answer(503, mapOf("Retry-After" to "0")))
             assertEquals(GitRemoteFailure.RateLimited(30.0), answer(503, mapOf("Retry-After" to "Wed, 21 Oct 2026 07:28:00 GMT")))
+            // The two answers OkHttp would re-send a request for by itself.
+            assertEquals(GitRemoteFailure.RateLimited(1.0), answer(503, mapOf("Retry-After" to "0")))
+            assertEquals(GitRemoteFailure.RateLimited(30.0), answer(503))
+            assertEquals(GitRemoteFailure.ProtocolViolation("http_408"), answer(408))
+            assertEquals(GitRemoteFailure.ProtocolViolation("http_408"), answer(408, mapOf("Retry-After" to "0")))
+            assertEquals(GitRemoteFailure.ProtocolViolation("http_421"), answer(421))
             assertEquals(GitRemoteFailure.ServerError(500), answer(500))
             assertEquals(GitRemoteFailure.ServerError(502), answer(502))
             assertEquals(GitRemoteFailure.ProtocolViolation("http_418"), answer(418))

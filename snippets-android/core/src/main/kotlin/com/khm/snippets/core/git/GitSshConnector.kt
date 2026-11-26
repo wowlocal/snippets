@@ -6,20 +6,23 @@ import java.io.OutputStream
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * One SSH exec channel running a git service.
  *
- * The streams block; [GitSshExchangeRunner] reads and writes them on I/O threads.
- * [close] must be safe to call at any time and from any thread, and must make every
- * blocked read and write on the channel return or throw promptly: it is how an
- * exchange is cancelled or timed out.
+ * The streams block; [GitSshExchangeRunner] reads, writes and closes them on its I/O
+ * dispatcher only, never on the caller's thread. [close] must be safe to call at any
+ * time and from any thread, and must make every blocked read and write on the
+ * channel return or throw promptly: it is how an exchange is cancelled or timed out.
  */
 interface GitSshChannel {
     /** What the service writes. */
@@ -51,7 +54,7 @@ interface GitSshChannel {
  *
  * Failures are [GitRemoteFailure]s (`SshHostKeyUnknown`, `SshHostKeyChanged`,
  * `SshPermissionDenied`, `Unreachable("ssh_connection")`, …). Nothing a server says is
- * ever returned or logged.
+ * ever returned or logged. [open] is called on the runner's I/O dispatcher.
  */
 interface GitSshConnector {
     suspend fun open(command: String, location: GitSshLocation): GitSshChannel
@@ -97,7 +100,13 @@ object GitSshExchangeRunner {
      * @param idleTimeoutMillis fails the exchange with `Unreachable("ssh_timeout")`
      *   after this long without a byte read or written. A slow but moving transfer
      *   never times out.
+     * @param ioDispatcher where the channel is opened, read, written and closed.
+     *   The function is main-safe: nothing touches the channel on the caller's thread.
      * @param request called once, with the advertisement, on an I/O thread.
+     *
+     * Fails with a [GitRemoteFailure] or a [GitFormatException] (a malformed
+     * advertisement); whatever else a connector or `request` throws is reported as
+     * `Unreachable("ssh_channel")`.
      */
     suspend fun exchange(
         connector: GitSshConnector,
@@ -105,20 +114,33 @@ object GitSshExchangeRunner {
         location: GitSshLocation,
         maximumBytes: Long,
         idleTimeoutMillis: Long = DEFAULT_IDLE_TIMEOUT_MILLIS,
+        ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
         request: (ByteArray) -> GitWireBody?,
-    ): GitSshExchange {
-        val channel = connector.open(command, location)
-        try {
-            return Run(channel, maximumBytes, idleTimeoutMillis, request).await()
-        } finally {
-            channel.close()
+    ): GitSshExchange = try {
+        withContext(ioDispatcher) {
+            val channel = connector.open(command, location)
+            try {
+                Run(channel, maximumBytes, idleTimeoutMillis, ioDispatcher, request).await()
+            } finally {
+                // Still on the I/O dispatcher, also when the caller was cancelled.
+                withContext(NonCancellable) { channel.close() }
+            }
         }
+    } catch (failure: GitRemoteFailure) {
+        throw failure
+    } catch (failure: GitFormatException) {
+        throw failure
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (_: Exception) {
+        throw GitRemoteFailure.Unreachable("ssh_channel")
     }
 
     private class Run(
         private val channel: GitSshChannel,
         private val maximumBytes: Long,
         private val idleTimeoutMillis: Long,
+        private val ioDispatcher: CoroutineDispatcher,
         /** Released once used: for a push it holds the pack. */
         private var request: ((ByteArray) -> GitWireBody?)?,
     ) {
@@ -147,9 +169,9 @@ object GitSshExchangeRunner {
                     }
                 }
             }
-            val errors = async(Dispatchers.IO) { readErrors() }
-            val output = async(Dispatchers.IO) {
-                coroutineScope { readOutput { body -> launch(Dispatchers.IO) { write(body) } } }
+            val errors = async(ioDispatcher) { readErrors() }
+            val output = async(ioDispatcher) {
+                coroutineScope { readOutput { body -> launch(ioDispatcher) { write(body) } } }
             }
             try {
                 // `readOutput` returns once stdout has ended and the request is written
@@ -247,7 +269,7 @@ object GitSshExchangeRunner {
                 // Written off the reader thread: a large pack must not stall reading.
                 startWriter(body)
             }
-            return Output(advertisement, response.toByteArray())
+            return Output(advertisement, response.drain())
         }
 
         private fun write(body: GitWireBody) {
@@ -256,10 +278,14 @@ object GitSshExchangeRunner {
                 channel.stdin.flush()
             } catch (_: IOException) {
                 // The service ended before reading its request; its exit status tells why.
+            } catch (error: Exception) {
+                // Not an I/O failure: nothing more will be written, so the service
+                // would wait for ever. Stop the exchange and let the reader return.
+                abort(error)
             } finally {
                 try {
                     channel.stdin.close()
-                } catch (_: IOException) {
+                } catch (_: Exception) {
                     // Already closed from the far side.
                 }
             }
@@ -273,7 +299,8 @@ object GitSshExchangeRunner {
             while (true) {
                 val count = try {
                     channel.stderr.read(chunk)
-                } catch (_: IOException) {
+                } catch (_: Exception) {
+                    // Diagnostics only: whatever went wrong, what was read so far will do.
                     -1
                 }
                 if (count < 0) break

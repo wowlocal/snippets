@@ -54,7 +54,8 @@ class GitWireBody internal constructor(private val parts: List<ByteArray>) {
 
     /** One contiguous copy, for tests and small requests. */
     fun toByteArray(): ByteArray {
-        val out = ByteArray(Math.toIntExact(size))
+        if (size > Int.MAX_VALUE - 16) throw GitFormatException.limitExceeded("request_body")
+        val out = ByteArray(size.toInt())
         var position = 0
         for (part in parts) {
             System.arraycopy(part, 0, out, position, part.size)
@@ -101,7 +102,11 @@ interface GitWireClient {
 object GitWire {
     const val MAXIMUM_ADVERTISEMENT_BYTES: Long = 8L * 1024 * 1024
 
-    /** The iOS value of the Swift implementation (macOS allows 512 MiB). */
+    /**
+     * The most a pack may ever be: the iOS value of the Swift implementation (macOS
+     * allows 512 MiB). What a client accepts is [GitPack.Limits.maximumPackBytes],
+     * which is this or less, as the heap allows.
+     */
     const val MAXIMUM_PACK_BYTES: Long = 128L * 1024 * 1024
 
     private const val AGENT = "agent=snippets/1"

@@ -29,9 +29,12 @@ class GitHttpResponse(val status: Int, headers: Map<String, String>, val body: B
  * policy decision (credentials, redirects, status handling).
  *
  * An implementation must:
- * - send the request as given: no redirect following, no retry, and no header added
- *   to or removed from it that concerns credentials or caching (`Authorization` is
- *   sent exactly when the request carries it; no cookies, no cache);
+ * - send the request as given: no redirect following, and no header added to or
+ *   removed from it that concerns credentials or caching (`Authorization` is sent
+ *   exactly when the request carries it; no cookies, no cache);
+ * - answer one call with one answer: it may open a new connection when a pooled one
+ *   turns out to be dead, but it never acts on an answer by asking again (408, 503),
+ *   and it never sends a request body a second time, whatever went wrong;
  * - send the body with a declared length, written from [GitWireBody] without
  *   buffering a second copy;
  * - read a response body **only for status 200**, counting the decoded bytes (after
@@ -42,7 +45,9 @@ class GitHttpResponse(val status: Int, headers: Map<String, String>, val body: B
  * - fail an exchange that is idle for 60 s, and any exchange after 600 s in total: a
  *   large first upload must not be cut off by a short whole-request timeout;
  * - report transport failures as [GitRemoteFailure.Unreachable] with a closed
- *   `network…` detail, and cancellation as `CancellationException`;
+ *   `network…` detail, and cancellation as `CancellationException`; nothing else
+ *   may be thrown, whatever the host sends;
+ * - be main-safe: no blocking I/O, and no closing of a socket, on the caller's thread;
  * - never log the address, a header or any server text.
  */
 interface GitHttpEngine {

@@ -1,10 +1,12 @@
 package com.khm.snippets.core.git
 
 import java.net.URI
-import java.net.URISyntaxException
 import java.util.Base64
 import java.util.Locale
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The two smart-HTTP services, using protocol v0/v1 framing. Every host still speaks
@@ -13,14 +15,19 @@ import kotlin.coroutines.cancellation.CancellationException
  *
  * Authentication is the same for every host: HTTP Basic with the remote's user name
  * and token, sent pre-emptively on every request.
+ *
+ * Main-safe: the engine does the network I/O on its own threads, and requests are
+ * built and responses parsed on `cpuDispatcher`. Constructing it for an SSH remote
+ * throws [GitRemoteConfigurationException].
  */
 class GitSmartHttpClient(
     val remote: GitRemote,
     private val engine: GitHttpEngine,
-    private val maximumPackBytes: Long = GitWire.MAXIMUM_PACK_BYTES,
+    private val maximumPackBytes: Long = GitPack.Limits.current().maximumPackBytes,
+    private val cpuDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : GitWireClient {
     private val baseUrl: GitHttpsUrl =
-        requireNotNull(remote.url) { "GitSmartHttpClient needs an HTTPS remote" }
+        remote.url ?: throw GitRemoteConfigurationException(GitRemote.Failure.INVALID_URL)
 
     private class Sent(val response: GitHttpResponse, val finalUrl: String)
 
@@ -38,8 +45,10 @@ class GitSmartHttpClient(
             // A "dumb" HTTP server, a login page, or a proxy error document.
             throw GitRemoteFailure.UnsupportedServer("not_smart_http")
         }
-        return GitWire.parseAdvertisement(sent.response.body, service)
-            .copy(serviceUrl = serviceUrl(sent.finalUrl) ?: baseUrl.toString())
+        return withContext(cpuDispatcher) {
+            GitWire.parseAdvertisement(sent.response.body, service)
+                .copy(serviceUrl = serviceUrl(sent.finalUrl) ?: baseUrl.toString())
+        }
     }
 
     // MARK: Fetch
@@ -49,7 +58,7 @@ class GitSmartHttpClient(
         haves: List<GitObjectId>,
         advertisement: GitRefAdvertisement,
     ): ByteArray {
-        val request = GitWire.uploadRequest(want, haves, advertisement)
+        val request = withContext(cpuDispatcher) { GitWire.uploadRequest(want, haves, advertisement) }
         val sent = send(
             method = "POST",
             url = serviceBase(advertisement) + "/git-upload-pack",
@@ -63,7 +72,7 @@ class GitSmartHttpClient(
         if (mediaType(sent.response) != "application/x-git-upload-pack-result") {
             throw GitRemoteFailure.ProtocolViolation("upload_pack_content_type")
         }
-        return GitWire.extractPack(sent.response.body, request.shallow, request.sideBand)
+        return withContext(cpuDispatcher) { GitWire.extractPack(sent.response.body, request.shallow, request.sideBand) }
     }
 
     // MARK: Push
@@ -74,7 +83,7 @@ class GitSmartHttpClient(
         pack: ByteArray,
         advertisement: GitRefAdvertisement,
     ): GitPushResult {
-        val request = GitWire.pushRequest(old, new, remote.refName, pack, advertisement)
+        val request = withContext(cpuDispatcher) { GitWire.pushRequest(old, new, remote.refName, pack, advertisement) }
         val sent = send(
             method = "POST",
             url = serviceBase(advertisement) + "/git-receive-pack",
@@ -88,7 +97,7 @@ class GitSmartHttpClient(
         if (mediaType(sent.response) != "application/x-git-receive-pack-result") {
             throw GitRemoteFailure.ProtocolViolation("receive_pack_content_type")
         }
-        return GitWire.parseReportStatus(sent.response.body, remote.refName, request.sideBand)
+        return withContext(cpuDispatcher) { GitWire.parseReportStatus(sent.response.body, remote.refName, request.sideBand) }
     }
 
     // MARK: HTTP
@@ -96,14 +105,15 @@ class GitSmartHttpClient(
     /**
      * The advertisement's redirected base, or the configured URL. The redirect guard
      * pinned scheme, host and port when discovery ran; an advertisement that names
-     * another origin did not come from this client's discovery.
+     * another origin did not come from this client's discovery, and using it would
+     * send the credential there: `ProtocolViolation("service_url")`.
      */
     private fun serviceBase(advertisement: GitRefAdvertisement): String {
         val service = advertisement.serviceUrl ?: return baseUrl.toString()
         val source = HttpUrlParts.parse(baseUrl.toString())
         val target = HttpUrlParts.parse(service)
-        require(source != null && target != null && sameOrigin(source, target)) {
-            "advertisement belongs to another origin"
+        if (source == null || target == null || !sameOrigin(source, target)) {
+            throw GitRemoteFailure.ProtocolViolation("service_url")
         }
         return service
     }
@@ -198,9 +208,8 @@ class GitSmartHttpClient(
             val location = response.header("Location") ?: return null
             val resolved = try {
                 URI(current).resolve(URI(location)).toString()
-            } catch (_: URISyntaxException) {
-                return null
-            } catch (_: IllegalArgumentException) {
+            } catch (_: Exception) {
+                // Not an address `java.net.URI` reads (`URISyntaxException` and friends).
                 return null
             }
             return resolved.takeIf { permitsRedirect(method, original, it) }

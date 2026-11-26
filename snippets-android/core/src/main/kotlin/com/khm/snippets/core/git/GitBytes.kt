@@ -100,7 +100,10 @@ internal fun String.utf8Size(): Int = toByteArray(Charsets.UTF_8).size
  * Foundation's `removingPercentEncoding` with the fallback the Apple and Linux code
  * share: a malformed escape or a result that is not UTF-8 leaves the text as it was.
  */
-internal fun percentDecoded(text: String): String {
+internal fun percentDecoded(text: String): String = percentDecodedStrictly(text) ?: text
+
+/** The text with every escape decoded, or null for a malformed escape or a result that is not UTF-8. */
+internal fun percentDecodedStrictly(text: String): String? {
     if (!text.contains('%')) return text
     val source = text.toByteArray(Charsets.UTF_8)
     val out = ByteArray(source.size)
@@ -111,7 +114,7 @@ internal fun percentDecoded(text: String): String {
         if (byte == '%'.code.toByte()) {
             val high = if (index + 1 < source.size) hexValue(source[index + 1].toInt()) else -1
             val low = if (index + 2 < source.size) hexValue(source[index + 2].toInt()) else -1
-            if (high < 0 || low < 0) return text
+            if (high < 0 || low < 0) return null
             out[length++] = (high * 16 + low).toByte()
             index += 3
         } else {
@@ -119,7 +122,7 @@ internal fun percentDecoded(text: String): String {
             index += 1
         }
     }
-    return out.copyOf(length).decodeUtf8Strict() ?: text
+    return out.copyOf(length).decodeUtf8Strict()
 }
 
 /** Accumulates a stream of unknown length without the doubling copies of a growing array. */
@@ -149,16 +152,29 @@ internal class ByteAccumulator(private val blockSize: Int = 64 * 1024) {
         size += length
     }
 
-    /** One contiguous copy. The accumulator must hold less than 2 GiB. */
-    fun toByteArray(): ByteArray {
-        check(size <= Int.MAX_VALUE) { "accumulated bytes exceed one array" }
-        val out = ByteArray(size.toInt())
+    /**
+     * One contiguous copy, after which the accumulator is empty. Each block is let go
+     * as soon as it is copied, so the bytes are held twice only while the copy runs.
+     * The accumulator must hold less than 2 GiB (callers enforce far smaller limits).
+     */
+    fun drain(): ByteArray {
+        val out = ByteArray(Math.toIntExact(size))
         var position = 0
-        for ((index, block) in blocks.withIndex()) {
+        for (index in blocks.indices) {
+            val block = blocks[index]
             val count = if (index == blocks.lastIndex) used else block.size
             System.arraycopy(block, 0, out, position, count)
             position += count
+            blocks[index] = EMPTY
         }
+        blocks.clear()
+        current = EMPTY
+        used = 0
+        size = 0
         return out
+    }
+
+    private companion object {
+        val EMPTY = ByteArray(0)
     }
 }
