@@ -145,7 +145,7 @@ fun TagFilterRow(
             modifier = Modifier.padding(start = Spacing.xs),
         )
         LazyRow(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).testTag(TestTags.LIBRARY_TAG_ROW),
             state = listState,
             contentPadding = PaddingValues(start = Spacing.xs, end = Dimens.marginCompact),
             horizontalArrangement = Arrangement.spacedBy(Dimens.chipGap),

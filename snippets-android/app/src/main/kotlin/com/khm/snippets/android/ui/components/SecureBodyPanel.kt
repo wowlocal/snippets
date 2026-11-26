@@ -75,6 +75,7 @@ import com.khm.snippets.android.ui.theme.Spacing
  * @param onLock `Lock` in the revealed header.
  * @param onBodyChange Edits of the revealed body.
  * @param onUnavailableAction The button of the unavailable state (`Open Settings`, …).
+ * @param bodyModifier Added to the revealed body field: a focus requester, focus observation.
  */
 @Composable
 fun SecureBodyPanel(
@@ -84,6 +85,7 @@ fun SecureBodyPanel(
     onBodyChange: (String) -> Unit,
     modifier: Modifier = Modifier,
     onUnavailableAction: () -> Unit = {},
+    bodyModifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
     val protectedMessage = (state as? SecurePanelState.Protected)?.let {
@@ -138,7 +140,7 @@ fun SecureBodyPanel(
             when (state) {
                 is SecurePanelState.Locked -> LockedContent(reason = state.reason, unlocking = false, onReveal = onReveal)
                 SecurePanelState.Unlocking -> LockedContent(reason = null, unlocking = true, onReveal = onReveal)
-                is SecurePanelState.Revealed -> RevealedContent(body = state.body, onLock = onLock, onBodyChange = onBodyChange)
+                is SecurePanelState.Revealed -> RevealedContent(body = state.body, onLock = onLock, onBodyChange = onBodyChange, fieldModifier = bodyModifier)
                 is SecurePanelState.Protected -> CenteredPanelContent {
                     Glyph(SnippetsIcon.VisibilityOff, contentDescription = null, tint = colors.onSurfaceVariant, size = Dimens.iconPanel)
                     PanelMessage(text = protectedMessage.orEmpty())
@@ -255,6 +257,7 @@ private fun RevealedContent(
     body: String,
     onLock: () -> Unit,
     onBodyChange: (String) -> Unit,
+    fieldModifier: Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
     val secure = SnippetsTheme.colors.secure
@@ -287,7 +290,7 @@ private fun RevealedContent(
             BasicTextField(
                 value = body,
                 onValueChange = onBodyChange,
-                modifier = Modifier
+                modifier = fieldModifier
                     .fillMaxWidth()
                     .padding(Spacing.l)
                     .sensitiveContent()

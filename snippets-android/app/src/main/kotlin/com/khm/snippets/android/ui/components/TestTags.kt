@@ -40,6 +40,7 @@ object TestTags {
     const val LIBRARY_SYNC_CARD_ACTION = "library.sync-card.action"
 
     /** `library.tag-chip.<foldedTag>`. */
+    const val LIBRARY_TAG_ROW = "library.tag-row"
     fun tagChip(foldedTag: String): String = "library.tag-chip.$foldedTag"
 
     /** `library.row.<id>`; parts append [Row] suffixes. */

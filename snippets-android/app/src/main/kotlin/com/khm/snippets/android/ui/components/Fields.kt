@@ -260,25 +260,17 @@ fun LabeledField(
     prefix: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
-    val source = interactionSource ?: remember { MutableInteractionSource() }
-    val colors = MaterialTheme.colorScheme
-    val isError = errorText != null
-    val message = errorText ?: supportingText
-    val resolvedStyle = textStyle.copy(color = colors.onSurface)
-    val fieldDescription = description ?: caption
-    Column(modifier = modifier) {
-        FieldCaption(caption = caption, tag = tag)
+    LabeledFieldFrame(
+        text = value, caption = caption, modifier = modifier, tag = tag, placeholder = placeholder,
+        supportingText = supportingText, errorText = errorText, supportingColor = supportingColor,
+        enabled = enabled, readOnly = readOnly, singleLine = singleLine, minHeight = minHeight,
+        textStyle = textStyle, visualTransformation = visualTransformation, description = description,
+        interactionSource = interactionSource, prefix = prefix, trailing = trailing,
+    ) { fieldModifier, resolvedStyle, cursor, source, decorationBox ->
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = minHeight)
-                .then(if (tag != null) Modifier.testTag(tag) else Modifier)
-                .semantics {
-                    contentDescription = fieldDescription
-                    if (errorText != null) error(errorText)
-                },
+            modifier = fieldModifier,
             enabled = enabled,
             readOnly = readOnly,
             textStyle = resolvedStyle,
@@ -288,27 +280,135 @@ fun LabeledField(
             minLines = minLines,
             visualTransformation = visualTransformation,
             interactionSource = source,
-            cursorBrush = SolidColor(if (isError) colors.error else colors.primary),
-            decorationBox = { innerTextField ->
-                FieldDecoration(
-                    value = value,
-                    innerTextField = innerTextField,
-                    enabled = enabled,
-                    readOnly = readOnly,
-                    singleLine = singleLine,
-                    visualTransformation = visualTransformation,
-                    interactionSource = source,
-                    textStyle = resolvedStyle,
-                    placeholder = placeholder,
-                    message = message?.let {
-                        { FieldMessage(text = it, isError = isError, tag = tag, color = if (isError) Color.Unspecified else supportingColor) }
-                    },
-                    isError = isError,
-                    prefix = prefix,
-                    trailing = trailing,
-                )
-            },
+            cursorBrush = cursor,
+            decorationBox = decorationBox,
         )
+    }
+}
+
+/**
+ * [LabeledField] on a [TextFieldValue], for a field whose caller moves the caret (the keyword
+ * field after a completion).
+ */
+@Composable
+fun LabeledField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    caption: String,
+    modifier: Modifier = Modifier,
+    tag: String? = null,
+    placeholder: String? = null,
+    supportingText: String? = null,
+    errorText: String? = null,
+    supportingColor: Color = Color.Unspecified,
+    enabled: Boolean = true,
+    readOnly: Boolean = false,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
+    minHeight: Dp = Dimens.fieldMinHeight,
+    textStyle: TextStyle = MaterialTheme.typography.bodyLarge,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    description: String? = null,
+    interactionSource: MutableInteractionSource? = null,
+    prefix: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    LabeledFieldFrame(
+        text = value.text, caption = caption, modifier = modifier, tag = tag, placeholder = placeholder,
+        supportingText = supportingText, errorText = errorText, supportingColor = supportingColor,
+        enabled = enabled, readOnly = readOnly, singleLine = singleLine, minHeight = minHeight,
+        textStyle = textStyle, visualTransformation = visualTransformation, description = description,
+        interactionSource = interactionSource, prefix = prefix, trailing = trailing,
+    ) { fieldModifier, resolvedStyle, cursor, source, decorationBox ->
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = fieldModifier,
+            enabled = enabled,
+            readOnly = readOnly,
+            textStyle = resolvedStyle,
+            keyboardOptions = keyboardOptions,
+            keyboardActions = keyboardActions,
+            singleLine = singleLine,
+            minLines = minLines,
+            visualTransformation = visualTransformation,
+            interactionSource = source,
+            cursorBrush = cursor,
+            decorationBox = decorationBox,
+        )
+    }
+}
+
+/** What both [LabeledField] overloads share: caption, semantics, decoration. */
+@Composable
+private fun LabeledFieldFrame(
+    text: String,
+    caption: String,
+    modifier: Modifier,
+    tag: String?,
+    placeholder: String?,
+    supportingText: String?,
+    errorText: String?,
+    supportingColor: Color,
+    enabled: Boolean,
+    readOnly: Boolean,
+    singleLine: Boolean,
+    minHeight: Dp,
+    textStyle: TextStyle,
+    visualTransformation: VisualTransformation,
+    description: String?,
+    interactionSource: MutableInteractionSource?,
+    prefix: (@Composable () -> Unit)?,
+    trailing: (@Composable () -> Unit)?,
+    field: @Composable (
+        fieldModifier: Modifier,
+        resolvedStyle: TextStyle,
+        cursor: SolidColor,
+        source: MutableInteractionSource,
+        decorationBox: @Composable (innerTextField: @Composable () -> Unit) -> Unit,
+    ) -> Unit,
+) {
+    val source = interactionSource ?: remember { MutableInteractionSource() }
+    val colors = MaterialTheme.colorScheme
+    val isError = errorText != null
+    val message = errorText ?: supportingText
+    val resolvedStyle = textStyle.copy(color = colors.onSurface)
+    val fieldDescription = description ?: caption
+    Column(modifier = modifier) {
+        FieldCaption(caption = caption, tag = tag)
+        field(
+            Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = minHeight)
+                .then(if (tag != null) Modifier.testTag(tag) else Modifier)
+                .semantics {
+                    contentDescription = fieldDescription
+                    if (errorText != null) error(errorText)
+                },
+            resolvedStyle,
+            SolidColor(if (isError) colors.error else colors.primary),
+            source,
+        ) { innerTextField ->
+            FieldDecoration(
+                value = text,
+                innerTextField = innerTextField,
+                enabled = enabled,
+                readOnly = readOnly,
+                singleLine = singleLine,
+                visualTransformation = visualTransformation,
+                interactionSource = source,
+                textStyle = resolvedStyle,
+                placeholder = placeholder,
+                message = message?.let {
+                    { FieldMessage(text = it, isError = isError, tag = tag, color = if (isError) Color.Unspecified else supportingColor) }
+                },
+                isError = isError,
+                prefix = prefix,
+                trailing = trailing,
+            )
+        }
     }
 }
 
@@ -336,57 +436,128 @@ fun KeywordField(
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     helpWhileFocused: (@Composable () -> Unit)? = null,
 ) {
+    KeywordFieldFrame(caption, modifier, tag, message, messageIsWarning, helpWhileFocused) { look ->
+        LabeledField(
+            value = value,
+            onValueChange = onValueChange,
+            caption = caption,
+            tag = tag,
+            placeholder = look.placeholder,
+            supportingText = look.supportingText,
+            supportingColor = look.supportingColor,
+            enabled = enabled,
+            textStyle = look.textStyle,
+            keyboardOptions = KeywordKeyboardOptions,
+            keyboardActions = keyboardActions,
+            description = look.description,
+            interactionSource = look.interactionSource,
+            prefix = look.prefix,
+            trailing = look.trailing,
+        )
+    }
+}
+
+/** [KeywordField] on a [TextFieldValue], so the caller can put the caret after a completion. */
+@Composable
+fun KeywordField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    caption: String,
+    modifier: Modifier = Modifier,
+    tag: String = "editor.keyword",
+    message: String? = null,
+    messageIsWarning: Boolean = false,
+    enabled: Boolean = true,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+    helpWhileFocused: (@Composable () -> Unit)? = null,
+) {
+    KeywordFieldFrame(caption, modifier, tag, message, messageIsWarning, helpWhileFocused) { look ->
+        LabeledField(
+            value = value,
+            onValueChange = onValueChange,
+            caption = caption,
+            tag = tag,
+            placeholder = look.placeholder,
+            supportingText = look.supportingText,
+            supportingColor = look.supportingColor,
+            enabled = enabled,
+            textStyle = look.textStyle,
+            keyboardOptions = KeywordKeyboardOptions,
+            keyboardActions = keyboardActions,
+            description = look.description,
+            interactionSource = look.interactionSource,
+            prefix = look.prefix,
+            trailing = look.trailing,
+        )
+    }
+}
+
+private val KeywordKeyboardOptions = KeyboardOptions(
+    capitalization = KeyboardCapitalization.None,
+    autoCorrectEnabled = false,
+    keyboardType = KeyboardType.Ascii,
+    imeAction = ImeAction.Next,
+)
+
+/** How the keyword field looks in its current focus and message state. */
+private class KeywordFieldLook(
+    val placeholder: String,
+    val supportingText: String?,
+    val supportingColor: Color,
+    val textStyle: TextStyle,
+    val description: String?,
+    val interactionSource: MutableInteractionSource,
+    val prefix: @Composable () -> Unit,
+    val trailing: (@Composable () -> Unit)?,
+)
+
+@Composable
+private fun KeywordFieldFrame(
+    caption: String,
+    modifier: Modifier,
+    tag: String,
+    message: String?,
+    messageIsWarning: Boolean,
+    helpWhileFocused: (@Composable () -> Unit)?,
+    field: @Composable (KeywordFieldLook) -> Unit,
+) {
     val warning = SnippetsTheme.colors.warning
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
     val showMessage = message != null && !focused
     val showWarning = showMessage && messageIsWarning
     val tokenStyle = SnippetsTheme.typography.monoToken
+    val prefixColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val prefixText = stringResource(R.string.field_keyword_prefix)
     Column(modifier = modifier) {
-        LabeledField(
-            value = value,
-            onValueChange = onValueChange,
-            caption = caption,
-            tag = tag,
-            placeholder = stringResource(R.string.field_keyword_placeholder),
-            supportingText = if (showMessage) message else null,
-            supportingColor = if (showWarning) warning else Color.Unspecified,
-            enabled = enabled,
-            textStyle = tokenStyle,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.None,
-                autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Ascii,
-                imeAction = ImeAction.Next,
-            ),
-            keyboardActions = keyboardActions,
-            description = if (message != null && messageIsWarning) {
-                stringResource(R.string.field_keyword_warning_description, message)
-            } else {
-                null
-            },
-            interactionSource = interactionSource,
-            prefix = {
-                Text(
-                    text = stringResource(R.string.field_keyword_prefix),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = tokenStyle,
-                )
-            },
-            trailing = if (showWarning) {
-                {
-                    Box(modifier = Modifier.size(Dimens.touchTarget), contentAlignment = Alignment.Center) {
-                        Glyph(
-                            icon = SnippetsIcon.Warning,
-                            contentDescription = null,
-                            modifier = Modifier.testTag(tag + TestTags.Field.WARNING_ICON),
-                            tint = warning,
-                        )
+        field(
+            KeywordFieldLook(
+                placeholder = stringResource(R.string.field_keyword_placeholder),
+                supportingText = if (showMessage) message else null,
+                supportingColor = if (showWarning) warning else Color.Unspecified,
+                textStyle = tokenStyle,
+                description = if (message != null && messageIsWarning) {
+                    stringResource(R.string.field_keyword_warning_description, message)
+                } else {
+                    caption
+                },
+                interactionSource = interactionSource,
+                prefix = { Text(text = prefixText, color = prefixColor, style = tokenStyle) },
+                trailing = if (showWarning) {
+                    {
+                        Box(modifier = Modifier.size(Dimens.touchTarget), contentAlignment = Alignment.Center) {
+                            Glyph(
+                                icon = SnippetsIcon.Warning,
+                                contentDescription = null,
+                                modifier = Modifier.testTag(tag + TestTags.Field.WARNING_ICON),
+                                tint = warning,
+                            )
+                        }
                     }
-                }
-            } else {
-                null
-            },
+                } else {
+                    null
+                },
+            ),
         )
         if (focused && helpWhileFocused != null) {
             Box(modifier = Modifier.padding(top = Dimens.fieldCaptionGap)) {
@@ -612,9 +783,12 @@ fun CodeField(
  * - [onCommitInput]: IME `Done`, Enter, or focus leaving the input: commit the pending text.
  * - [onRemoveLastTag]: Backspace in an empty input.
  * - [onRemoveTag]: the `×` of a chip.
+ * - [onEnterKey]: a hardware Enter. By default it commits; the editor accepts the first
+ *   completion there when one exists.
  *
  * @param tag Test tag of the container; the input is `<tag>.input`, chips are
  *   `editor.tag.<foldedTag>` with `.remove`.
+ * @param inputModifier Added to the text input, for a focus requester of the screen.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -629,6 +803,8 @@ fun TagField(
     modifier: Modifier = Modifier,
     tag: String = "editor.tags",
     enabled: Boolean = true,
+    inputModifier: Modifier = Modifier,
+    onEnterKey: () -> Unit = onCommitInput,
 ) {
     val colors = MaterialTheme.colorScheme
     val focusRequester = remember { FocusRequester() }
@@ -678,14 +854,15 @@ fun TagField(
                                 true
                             }
                             event.key == Key.Enter || event.key == Key.NumPadEnter -> {
-                                if (event.type == KeyEventType.KeyUp) onCommitInput()
+                                if (event.type == KeyEventType.KeyUp) onEnterKey()
                                 true
                             }
                             else -> false
                         }
                     }
                     .testTag(tag + TestTags.Field.INPUT)
-                    .semantics { contentDescription = caption },
+                    .semantics { contentDescription = caption }
+                    .then(inputModifier),
                 enabled = enabled,
                 textStyle = textStyle,
                 keyboardOptions = KeyboardOptions(

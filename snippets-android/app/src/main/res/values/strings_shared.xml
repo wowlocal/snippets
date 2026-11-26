@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Strings shared by several screens: dialogs, error sentences, snackbars, prompts, shortcuts. -->
+<resources>
+    <string name="action_back">Back</string>
+    <string name="action_undo">Undo</string>
+
+    <!-- Placeholder for a route whose screen is not built yet (Android development aid). -->
+    <string name="placeholder_title">Not Built Yet</string>
+    <string name="placeholder_message">The screen for the route %1$s is not part of this build yet.</string>
+
+    <!-- Time (components.md §1.1) -->
+    <string name="time_yesterday">Yesterday</string>
+    <string name="time_date_and_time">%1$s at %2$s</string>
+
+    <!-- Error dialog titles (screens-library-editor.md §7.4) -->
+    <string name="error_title_copy">Couldn’t Copy Snippet</string>
+    <string name="error_title_pin">Couldn’t Update Pin</string>
+    <string name="error_title_update">Couldn’t Update Snippet</string>
+    <string name="error_title_delete">Couldn’t Delete Snippet</string>
+    <string name="error_title_copy_link">Couldn’t Copy Link</string>
+    <string name="error_title_share">Couldn’t Share Snippet</string>
+    <string name="error_title_secure_setup">Couldn’t Set Up Secure Snippets</string>
+    <string name="error_title_make_secure">Couldn’t Make Snippet Secure</string>
+    <string name="error_title_make_ordinary">Couldn’t Make Snippet Ordinary</string>
+    <string name="error_title_reveal">Couldn’t Reveal Secure Content</string>
+    <string name="error_title_recovery_required">Library Recovery Required</string>
+
+    <!-- Error sentences (screens-secure.md §9, D16) -->
+    <string name="error_generic">Something went wrong. Nothing was changed. Try again.</string>
+    <string name="error_snippet_missing">The snippet no longer exists.</string>
+    <string name="error_library_recovery_required">The ordinary snippet library could not be read and remains preserved. Import a complete Snippets JSON export to recover it.</string>
+    <string name="error_library_write_failed">The change is kept on this device, but it could not be saved yet. Snippets keeps trying.</string>
+    <string name="error_vault_locked">The vault is locked.</string>
+    <string name="error_vault_no_key">No vault key is available on this device.</string>
+    <string name="error_vault_key_not_on_device">The key for your secure snippets is not on this device yet. Restore it with your recovery key under Secure Snippets, or, for a Git library, choose Set Up Secure Snippets in the Git repository screen.</string>
+    <string name="error_vault_git_setup_required">Secure snippets are not set up for your Git library on this device yet. Open Sync settings, then the Git repository, and choose Set Up Secure Snippets. If it isn’t offered there, finish connecting the repository first.</string>
+    <string name="error_vault_newer_metadata">This secure snippet contains metadata from a newer version. Update Snippets before making it ordinary.</string>
+    <string name="error_vault_keyword_exists">That keyword already exists.</string>
+    <string name="error_vault_invalid_text">The secure snippet does not contain valid text.</string>
+    <string name="error_vault_sync_is_on">Turn off sync first.</string>
+    <string name="error_auth_not_approved">Snippets couldn’t confirm it’s you. Nothing was changed.</string>
+    <string name="error_recovery_key_typo">That recovery key has a typo in it.</string>
+    <string name="error_recovery_key_character">“%1$s” is not part of a recovery key.</string>
+    <string name="error_recovery_key_length">A recovery key is %1$d characters. This one has %2$d.</string>
+    <string name="error_recovery_key_none">This vault has no recovery key.</string>
+    <string name="error_recovery_key_mismatch">That recovery key does not open this vault.</string>
+
+    <!-- Shared dialogs (screens-library-editor.md §7, screens-secure.md §4.2, §10) -->
+    <string name="dialog_delete_secure_title">Delete “%1$s”?</string>
+    <string name="dialog_delete_secure_message">This permanently removes the encrypted snippet from this device and, when sync is on, from your other devices.</string>
+    <string name="dialog_clipboard_empty_title">Clipboard Is Empty</string>
+    <string name="dialog_clipboard_empty_message">Copy some text, then try again.</string>
+    <string name="dialog_screen_lock_title">Set a Screen Lock First</string>
+    <string name="dialog_screen_lock_message">Secure snippets use this device’s screen lock: fingerprint, face, PIN, pattern or password. Set one in system settings, then try again.</string>
+    <string name="dialog_make_ordinary_title">Make This Snippet Ordinary?</string>
+    <string name="dialog_make_ordinary_message">Its content will be decrypted into the ordinary library, where it can be copied, shared, and exported.</string>
+    <string name="dialog_make_ordinary_plain_text">This is a plain-text library: the content will be readable in the repository and stay in its history.</string>
+    <string name="dialog_sync_opt_in_title">Turn On %1$s Sync?</string>
+    <string name="dialog_sync_opt_in_message">Pull to refresh uses %1$s. Snippets encrypts records before uploading them, and you can turn sync off later in Settings.</string>
+    <string name="dialog_sync_opt_in_plain_message">Pull to refresh uses Git. Ordinary snippets are saved as readable Markdown files in your repository; secure snippets stay encrypted. You can turn sync off later in Settings.</string>
+    <string name="dialog_sync_opt_in_confirm">Turn On</string>
+    <string name="dialog_sync_set_up_title">Set Up Sync?</string>
+    <string name="dialog_sync_set_up_message">Pull to refresh syncs this library with your other devices. No sync provider is set up on this device yet.</string>
+    <string name="dialog_switch_start_title">Start Syncing with %1$s?</string>
+    <string name="dialog_switch_start_message">The %1$s on this device will be merged with %2$s, and sync will turn on.</string>
+    <string name="dialog_switch_plain_text">This is a plain-text library: ordinary snippets will be readable in the repository.</string>
+    <string name="dialog_switch_confirm">Switch and Sync</string>
+
+    <!-- Snackbars (screens-library-editor.md §2.7, screens-secure.md §4) -->
+    <string name="snackbar_copied">Copied “%1$s”.</string>
+    <string name="snackbar_nothing_to_copy">“%1$s” has no content to copy.</string>
+    <string name="snackbar_swipe_tip">Tip: swipe right to edit, swipe left to pin. Touch and hold for more.</string>
+    <string name="snackbar_deleted">Deleted “%1$s”.</string>
+    <string name="snackbar_secure_deleted">Secure snippet deleted.</string>
+    <string name="snackbar_deleted_elsewhere">“%1$s” was deleted on another device.</string>
+    <string name="snackbar_syncing">Syncing…</string>
+    <string name="snackbar_connecting">Connecting to %1$s…</string>
+    <string name="snackbar_copied_share_link">Copied share link.</string>
+    <string name="snackbar_made_secure">The body is now in the encrypted vault.</string>
+    <string name="snackbar_made_ordinary">The body is now in the ordinary library.</string>
+
+    <!-- System authentication prompts (screens-secure.md §2) -->
+    <string name="auth_copy_title">Copy “%1$s”</string>
+    <string name="auth_copy_subtitle">Clears from the clipboard after 60 seconds</string>
+    <string name="auth_insert_title">Insert “%1$s”</string>
+    <string name="auth_insert_subtitle">Replaces the selected text</string>
+    <string name="auth_reveal_title">Reveal “%1$s”</string>
+    <string name="auth_reveal_subtitle">Locks after 5 minutes without use, or when you leave</string>
+    <string name="auth_make_secure_title">Make this snippet secure</string>
+    <string name="auth_make_secure_subtitle">The body moves into the encrypted vault</string>
+    <string name="auth_make_ordinary_title">Make this secure snippet ordinary</string>
+    <string name="auth_make_ordinary_subtitle">The body will be stored unencrypted</string>
+    <string name="auth_recovery_key_title">Create and display a recovery key</string>
+    <string name="auth_recovery_key_subtitle">Shown once on the next screen</string>
+    <string name="auth_export_backup_title">Export an encrypted backup</string>
+    <string name="auth_import_backup_title">Import an encrypted backup</string>
+    <string name="auth_backup_subtitle">Includes secure snippets</string>
+    <string name="auth_git_create_title">Create the library’s recovery code</string>
+    <string name="auth_git_create_subtitle">Includes your secure snippets</string>
+    <string name="auth_git_new_code_title">Create a new recovery code for your Git library</string>
+    <string name="auth_git_new_code_subtitle">The old code stops working in Snippets</string>
+    <string name="auth_git_replace_keys_title">Replace the keys of your Git library</string>
+    <string name="auth_git_replace_keys_subtitle">Other devices must reconnect</string>
+    <string name="auth_git_move_title">Move your secure snippets to the library’s new key</string>
+    <string name="auth_git_move_subtitle">Nothing is deleted</string>
+
+    <!-- Vault recovery key, shown once (screens-secure.md §5) -->
+    <string name="recovery_key_title">Recovery Key</string>
+    <string name="recovery_key_heading">Save Your Recovery Key</string>
+    <string name="recovery_key_body">Store this somewhere safe. It is the only way to recover secure snippets if the vault key on this device is lost. Snippets can’t show it again.</string>
+    <string name="recovery_key_copied">Copied. It clears from the clipboard in 5 minutes.</string>
+    <string name="recovery_key_done">I’ve Saved It</string>
+
+    <!-- Hardware keyboard shortcuts, published to the Keyboard Shortcuts Helper (§8) -->
+    <string name="shortcut_group">Snippets</string>
+    <string name="shortcut_copy">Copy Snippet</string>
+    <string name="shortcut_search">Search</string>
+    <string name="shortcut_new">Create New Snippet</string>
+    <string name="shortcut_new_from_clipboard">New from Clipboard</string>
+    <string name="shortcut_edit">Edit Snippet</string>
+    <string name="shortcut_delete">Delete Snippet</string>
+    <string name="shortcut_next_field">Next Field</string>
+    <string name="shortcut_previous_field">Previous Field</string>
+    <string name="shortcut_return_to_list">Return to Snippet List</string>
+    <string name="shortcut_import">Import</string>
+    <string name="shortcut_export">Export</string>
+    <string name="shortcut_undo">Undo</string>
+    <string name="shortcut_redo">Redo</string>
+    <string name="shortcut_next_snippet">Next Snippet</string>
+    <string name="shortcut_previous_snippet">Previous Snippet</string>
+    <string name="shortcut_settings">Settings</string>
+</resources>

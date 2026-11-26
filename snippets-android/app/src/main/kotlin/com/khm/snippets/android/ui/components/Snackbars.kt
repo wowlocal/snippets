@@ -44,6 +44,9 @@ enum class SnackbarKind {
 
     /** A progress note (`Reading import…`): stays until its result replaces it. */
     Progress,
+
+    /** A one-time hint (the swipe tip): stays 5 s. */
+    Tip,
 }
 
 /** Timings of the snackbar rules. */
@@ -51,6 +54,7 @@ object SnackbarTiming {
     const val WITHOUT_ACTION_MILLIS = 4_000L
     const val WITH_ACTION_MILLIS = 10_000L
     const val TOUCH_EXPLORATION_FLOOR_MILLIS = 20_000L
+    const val TIP_MILLIS = 5_000L
 
     /**
      * How long a snackbar with an action stays: 10 s, or with touch exploration on the
@@ -101,6 +105,9 @@ class SnackbarController internal constructor(
             hostState.currentSnackbarData?.dismiss()
             val result = when {
                 kind == SnackbarKind.Progress -> hostState.showSnackbar(message, duration = SnackbarDuration.Indefinite)
+                kind == SnackbarKind.Tip -> withTimeoutOrNull(SnackbarTiming.TIP_MILLIS) {
+                    hostState.showSnackbar(message, duration = SnackbarDuration.Indefinite)
+                }
                 actionLabel == null -> hostState.showSnackbar(message, duration = SnackbarDuration.Short)
                 else -> withTimeoutOrNull(actionTimeoutMillis()) {
                     hostState.showSnackbar(message, actionLabel = actionLabel, duration = SnackbarDuration.Indefinite)
@@ -171,9 +178,11 @@ fun SnippetsSnackbarHost(
                 ),
             contentAlignment = if (compact) Alignment.Center else Alignment.CenterStart,
         ) {
+            // No fillMaxWidth: M3's snackbar already takes the available width (up to 600 dp),
+            // and tight width constraints make its one-row layout place the action at the start.
             SnippetsSnackbar(
                 data = data,
-                modifier = if (compact) Modifier.fillMaxWidth() else Modifier.widthIn(max = Dimens.snackbarMaxWidth),
+                modifier = if (compact) Modifier else Modifier.widthIn(max = Dimens.snackbarMaxWidth),
             )
         }
     }

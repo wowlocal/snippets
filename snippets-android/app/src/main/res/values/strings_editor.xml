@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The editor (screens-library-editor.md §6). -->
+<resources>
+    <string name="editor_tab_content">Content</string>
+    <string name="editor_tab_details">Details</string>
+    <string name="editor_tab_details_warning">Details, keyword warning</string>
+    <string name="editor_copy">Copy</string>
+    <string name="editor_copy_secure">Authenticate and Copy</string>
+
+    <!-- Content tab -->
+    <string name="editor_name_caption">Name</string>
+    <string name="editor_body_caption">Snippet</string>
+    <string name="editor_body_placeholder">Paste or type</string>
+    <string name="editor_preview_toggle">Preview Placeholders</string>
+    <string name="editor_preview_caption">Preview</string>
+    <string name="editor_preview_description">Placeholder preview</string>
+    <string name="editor_preview_clipboard">[Clipboard content]</string>
+    <string name="editor_footer_saved">Saved %1$s at %2$s</string>
+    <string name="editor_save_error">Couldn’t save: %1$s</string>
+    <string name="editor_secure_save_error">Secure edit wasn’t saved: %1$s</string>
+
+    <!-- Details tab: keyword (§6.5) -->
+    <string name="editor_keyword_caption">Keyword</string>
+    <string name="editor_keyword_missing">Add a keyword to make this available for expansion on Mac.</string>
+    <string name="editor_keyword_disabled">Disabled — \\%1$s won’t expand.</string>
+    <string name="editor_keyword_invalid">\\%1$s needs letters, digits, or hyphens.</string>
+    <string name="editor_keyword_duplicate">\\%1$s is already used by %2$s.</string>
+    <string name="editor_keyword_blocked">\\%1$s is blocked by \\%2$s.</string>
+    <string name="editor_keyword_blocks">This prevents \\%1$s from expanding.</string>
+    <string name="editor_keyword_suggestion_description">Use keyword %1$s</string>
+    <string name="editor_keyword_existing">Existing · %1$s</string>
+    <string name="editor_keyword_existing_separator">"  ·  "</string>
+    <plurals name="editor_keyword_existing_more">
+        <item quantity="one">+%1$d more</item>
+        <item quantity="other">+%1$d more</item>
+    </plurals>
+    <string name="editor_keyword_existing_description">Existing keywords: %1$s</string>
+    <string name="editor_keyword_existing_hint">Space or Tab completes the next unambiguous keyword part.</string>
+
+    <!-- Details tab: tags and switches -->
+    <string name="editor_tags_caption">Tags</string>
+    <string name="editor_tags_completion_description">Complete tag %1$s</string>
+    <string name="editor_enabled_title">Enabled</string>
+    <string name="editor_enabled_supporting">Allow this keyword to expand on Mac.</string>
+    <string name="editor_enabled_click_label">Controls whether this keyword can expand on Mac.</string>
+    <string name="editor_secure_title">Secure</string>
+    <string name="editor_secure_supporting">Encrypt the body and require fingerprint, face or screen lock to reveal or copy it.</string>
+    <string name="editor_secure_click_label">move the content between the encrypted vault and the ordinary library</string>
+
+    <!-- More menu (§6.8) -->
+    <string name="editor_menu_share_text">Share Text</string>
+    <string name="editor_menu_share_link">Share Link</string>
+</resources>

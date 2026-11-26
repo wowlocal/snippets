@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The library screen (screens-library-editor.md §1 to §5). -->
+<resources>
+    <string name="library_pane_title">Snippets</string>
+    <string name="library_loading">Loading library</string>
+    <plurals name="library_results_announcement">
+        <item quantity="one">%d result</item>
+        <item quantity="other">%d results</item>
+    </plurals>
+
+    <!-- Empty states (§2.4) -->
+    <string name="library_empty_title">Your Library Is Empty</string>
+    <string name="library_empty_first_run_message">Create a snippet, import a library, or set up sync to fetch the library from your other devices.</string>
+    <string name="library_empty_new">New Snippet</string>
+    <string name="library_empty_import">Import…</string>
+    <string name="library_empty_note">Sync is optional. Everything works on this device without an account.</string>
+    <string name="library_empty_synced_message">%1$s You can also create a snippet on this device.</string>
+    <string name="library_fetching_title">Fetching Your Library</string>
+    <string name="library_fetching_message">Checking %1$s for the library from your other devices.</string>
+    <string name="library_fetching_preparing_message">Preparing the first %1$s fetch. Your local library will stay empty until it finishes.</string>
+    <string name="library_stalled_title">Library Hasn’t Been Fetched</string>
+    <string name="library_stalled_message">The first fetch has not finished. %1$s</string>
+    <string name="library_quarantined_title">Library Recovery Required</string>
+    <string name="library_quarantined_message">The ordinary snippet library could not be read and remains preserved. Import a complete Snippets JSON export, then review Sync and choose Check Again. %1$s</string>
+    <string name="library_no_results_title">No Results</string>
+    <string name="library_no_results_message">Try a different search.</string>
+    <string name="library_no_results_filtered_message">Try changing the search or clearing a tag filter.</string>
+    <string name="library_no_results_note">Secure snippet bodies are not searched.</string>
+    <string name="library_no_match_title">No Snippets Match</string>
+    <string name="library_no_match_message">Clear a tag filter to see more snippets.</string>
+    <string name="library_clear_filters">Clear Filters</string>
+
+    <!-- More menu (§3) -->
+    <string name="library_menu_new_from_clipboard">New from Clipboard</string>
+    <string name="library_menu_import">Import</string>
+    <string name="library_menu_export">Export for Sharing</string>
+    <string name="library_menu_backup">Encrypted Backup</string>
+    <string name="library_menu_shortcuts">Keyboard Shortcuts</string>
+    <string name="library_menu_settings">Settings</string>
+
+    <!-- Two-pane placeholder (§1.2) -->
+    <string name="editor_empty_title">Select a snippet</string>
+    <string name="editor_empty_message">Choose a snippet from the list or create a new one.</string>
+</resources>

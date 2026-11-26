@@ -122,7 +122,7 @@ Swift, fixes, re-test.
 Paused at the user's request after finishing the interrupted pieces; resume on 2026-11-27 after
 the usage limit resets. Agents now run on Opus 5.5.
 
-Finishing before the pause: crypto review fixes (D1-D7), merge (complete), state/base/library
+Finished before the pause (all committed and pushed): crypto review fixes (D1-D7), merge (complete), state/base/library
 (complete), vault/backup (audit and complete), app shell + library + editor (complete).
 
 Next on resume, in order: commit what finished; independent reviews of merge, state/base/library,
@@ -144,6 +144,11 @@ end-to-end emulator runs, interop with the Mac app's formats, replacing the old 
 - PBKDF2 is 1.88x faster (317 ms per 600k rounds on this Mac); measure on a device before deciding
   on a hand-written SHA-512 compression.
 - Deep-link host with a raw leading BOM keeps it (Swift's `URL.host` drops it).
+- App: the one-time library swipe tip snackbar shows up over the editor after navigating; the
+  search field still gets IME word suggestions (spec: no autocorrect or suggestions).
+- App: date+time placeholders on device join with ", " where Apple writes " at " (148 of the 173
+  remaining L05 differences on ICU); Android has no public API for the "at" pattern.
+- App: release APK still contains the component library's preview sample text.
 - `core.json`: list an object's keys and read a number as written; then fold `core.vault.LenientJson`
   (about 170 duplicated lines) into it.
 - `tools/swift-interop/README.md`: the vault millisecond formula rounds halves toward the later

@@ -49,6 +49,14 @@ object Dimens {
     val sheetMaxWidth = 640.dp
     val twoPaneMinWidth = 840.dp
     val twoPaneMinHeight = 480.dp
+    val largeMinWidth = 1200.dp
+    val listPaneWidth = 360.dp
+    val listPaneWidthWide = 400.dp
+    val settingsPaneWidth = 320.dp
+
+    /** The window assumed before the shell measures the real one (a small phone). */
+    val defaultWindowWidth = 360.dp
+    val defaultWindowHeight = 800.dp
     val compactMaxWidth = 600.dp
     val listBottomPaddingWithFab = 88.dp
     val listBottomPadding = 16.dp
@@ -124,6 +132,7 @@ object Dimens {
     val fieldGap = 16.dp
     val formSectionGap = 24.dp
     val bodyFieldMinHeight = 200.dp
+    val bodyFieldMinHeightTwoPane = 240.dp
 
     // Settings rows, progress steps
     val settingsRowMinHeight = 56.dp
@@ -138,4 +147,7 @@ object Dimens {
     val snackbarMaxWidth = 400.dp
     val warningDot = 6.dp
     val menuMaxItems = 7
+
+    // Motion distances
+    val sharedAxisOffset = 30.dp
 }
