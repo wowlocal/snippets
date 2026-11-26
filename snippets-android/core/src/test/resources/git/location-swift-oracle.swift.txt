@@ -1,0 +1,23 @@
+import Foundation
+
+// Reads one JSON string per line on stdin, prints {"spec":..,"identity":..} or null per line.
+func escape(_ text: String) -> String {
+    let data = try! JSONSerialization.data(withJSONObject: [text], options: [])
+    let array = String(decoding: data, as: UTF8.self)
+    return String(array.dropFirst().dropLast())
+}
+
+let loopback = CommandLine.arguments.contains("--loopback")
+while let line = readLine(strippingNewline: true) {
+    guard let data = line.data(using: .utf8),
+          let input = (try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])) as? String else {
+        print("\"BADINPUT\"")
+        continue
+    }
+    do {
+        let location = try GitRepositoryLocation.parse(input, allowsInsecureLoopback: loopback)
+        print("{\"spec\":\(escape(location.spec)),\"identity\":\(escape(location.canonicalIdentity))}")
+    } catch {
+        print("null")
+    }
+}
