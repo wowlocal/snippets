@@ -109,3 +109,64 @@ Swift, fixes, re-test.
   orchestrator's helper script. Commit each piece when its agent reports tests green.
 - Vectors: `core/src/test/resources/vectors/swift/{sealed,open}`, tool `tools/swift-interop`.
 - App UI is built against contracts with fakes first, then wired to `:core`.
+
+## Pause point (2026-11-26)
+
+Paused at the user's request after finishing the interrupted pieces; resume on 2026-11-27 after
+the usage limit resets. Agents now run on Opus 5.5.
+
+Finishing before the pause: crypto review fixes (D1-D7), merge (complete), state/base/library
+(complete), vault/backup (audit and complete), app shell + library + editor (complete).
+
+Next on resume, in order: commit what finished; independent reviews of merge, state/base/library,
+vault/backup, utilities and wire; then journal + projection, engine, store/bridge/coordinator, Git
+layout/key files/plain text/transport/setup/JSch, remaining app screens (secure, settings, Git,
+system entry points), integration of fakes with core, Snippets Cloud, on-device core tests,
+end-to-end emulator runs, interop with the Mac app's formats, replacing the old app.
+
+## Follow-ups queue (small, do in a consolidation pass)
+
+- FIRST on resume: move `SecureSnippetStore` onto `core.library.LibraryTransaction` (state agent's
+  report). Today the promote/demote crash marker is never saved (`MoveMarkerStore.None`), so an
+  interrupted demotion would be silently undone, and `LibraryVaultTransaction` can delete a vault
+  that still holds records. Then delete `LibraryVaultTransaction`, `MoveMarker*`,
+  `RecordingMarkers` and their test; use `transaction.pendingMarker()` in
+  `reconcileInterruptedMove`.
+- `core.json`: list an object's keys and read a number as written; then fold `core.vault.LenientJson`
+  (about 170 duplicated lines) into it.
+- `tools/swift-interop/README.md`: the vault millisecond formula rounds halves toward the later
+  instant, not `round(...)` (differs only before 1970).
+
+- `core.json`: raw-text accessor on `FoundationJsonNode.Number`; compact mode in
+  `FoundationJsonWriter`. Then fix the share-link `version` edge in `core.interchange`.
+- Move `core.search.SwiftStrings` (hasPrefix, contains, split) into `core.text`.
+- App: `android.icu`-backed `DateRenderer` (ICU pattern semantics, CLDR closer to Apple's) and
+  re-run the L05 allow-list on device.
+- App: call `FoundationTables.warmUp()` off the main thread at start.
+- Git transport must use the cache's atomic install and serialise cache access.
+- Utilities review (independent) still owed; wire review still owed.
+- On-device (instrumented) runs of core: Inflater, IDN, Normalizer, AES-GCM/PBKDF2 providers,
+  fsync/atomic move, PBKDF2 600k timing.
+- Crypto review: instrumented tests of `core` crypto on API 28 and API 36 devices/emulators
+  (`androidTest`, no app UI), each asserting the provider it ran on:
+  - V01-V10 and every `fixtures/review-crypto` fixture (`SwiftDifferentialTest`,
+    `HostileInputTest`, `LeadingByteOrderMarkTest`, `ClosedKeyringTest`) under Conscrypt;
+    assert `Cipher.getInstance("AES/GCM/NoPadding").provider` and the `Mac`/`MessageDigest`
+    providers are `AndroidOpenSSL`, and that a bad tag throws `AEADBadTagException` (not another
+    `GeneralSecurityException`, which would now surface as `CryptoUnavailable`).
+  - PBKDF2-HMAC-SHA512 at 600,000 rounds for both `MacPbkdf2HmacSha512` (keyed `MessageDigest`
+    clones; confirm Conscrypt's SHA-512 clones, else the `Mac` fallback is taken) and
+    `macDerive`/`JcaPbkdf2HmacSha512`: wall time and allocations/peak memory per derivation on a
+    slow phone; cancellation latency of `PassphraseKdf.deriveSuspending`.
+  - UTF-8 encode/decode edge cases on ART: unpaired surrogates, U+FFFD, astral scalars,
+    over-long and truncated sequences, a leading U+FEFF (`Utf8.decodeStrict` drops one).
+  - Normalisation fixtures on API 28: `fixtures/foundation/precomposed-*` (Foundation's
+    precomposition, must be device-independent) and the NFC-based ones (`nfc`, canonical
+    equality), whose results follow the runtime's Unicode version.
+  - Canonical JSON and `SwiftDouble` fixtures (`canonical.tsv.gz`, `doubles.tsv.gz`,
+    `double-digests.txt`) on ART.
+  - Recovery-key fixtures (`recovery.tsv.gz`) on ART.
+  - HMAC with an empty key (`SecretKeySpec` refuses one; the one-zero-byte substitution and the
+    keyed-digest path must agree on Conscrypt).
+  - Seal/open of bodies near the 674,815-byte canonical ceiling (`SyncMerge.maximumWireCanonicalBytes`):
+    time and memory, padding to the next block, round trip.
